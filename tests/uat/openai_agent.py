@@ -18,9 +18,12 @@ import argparse
 import asyncio
 import json
 import sys
+import traceback
 from pathlib import Path
 
 import openai
+from fastmcp import Client as MCPClient
+from mcp.types import Tool as MCPTool
 
 DEFAULT_API_KEY = "no-key"
 DEFAULT_TIMEOUT = 120
@@ -32,7 +35,7 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def mcp_tool_to_openai(tool) -> dict:
+def mcp_tool_to_openai(tool: MCPTool) -> dict:
     """Convert an MCP tool definition to OpenAI function-calling format."""
     parameters = tool.inputSchema or {"type": "object", "properties": {}}
     return {
@@ -45,9 +48,9 @@ def mcp_tool_to_openai(tool) -> dict:
     }
 
 
-def detect_model(client: openai.OpenAI) -> str:
+async def detect_model(client: openai.AsyncOpenAI) -> str:
     """Query /v1/models and return the first available model ID."""
-    models = client.models.list()
+    models = await client.models.list()
     if not models.data:
         raise RuntimeError("No models available at the API endpoint")
     model_id = models.data[0].id
@@ -103,14 +106,21 @@ def extract_tool_result_text(result) -> str:
 
 
 async def tool_call_loop(
-    client: openai.OpenAI,
+    client: openai.AsyncOpenAI,
     model: str,
     messages: list[dict],
     tools: list[dict],
-    mcp_client,
+    mcp_client: MCPClient,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    tool_trace_sink: list[str] | None = None,
 ) -> dict:
-    """Run the LLM tool-call loop until a final text response or iteration limit."""
+    """Run the LLM tool-call loop until a final text response or iteration limit.
+
+    If ``tool_trace_sink`` is provided, every tool invocation (including
+    malformed-arguments and call failures) is appended as a stripped copy
+    of the corresponding ``[tool]`` stderr line, so callers on the inline
+    (non-subprocess) path can collect the trace without parsing stderr.
+    """
     num_turns = 0
     total_calls = 0
     total_success = 0
@@ -124,7 +134,7 @@ async def tool_call_loop(
         if tools:
             kwargs["tools"] = tools
 
-        response = client.chat.completions.create(**kwargs)
+        response = await client.chat.completions.create(**kwargs)
         num_turns += 1
 
         # Accumulate running token totals; also capture first-turn prompt size as
@@ -187,10 +197,13 @@ async def tool_call_loop(
             try:
                 tool_args = json.loads(tc.function.arguments)
             except json.JSONDecodeError as e:
-                log(
+                malformed_line = (
                     f"  [tool] {tool_name}: malformed arguments: "
                     f"{tc.function.arguments!r}"
                 )
+                log(malformed_line)
+                if tool_trace_sink is not None:
+                    tool_trace_sink.append(malformed_line.strip())
                 total_fail += 1
                 messages.append(
                     {
@@ -201,7 +214,10 @@ async def tool_call_loop(
                 )
                 continue
 
-            log(f"  [tool] {tool_name}({tool_args})")
+            call_line = f"  [tool] {tool_name}({tool_args})"
+            log(call_line)
+            if tool_trace_sink is not None:
+                tool_trace_sink.append(call_line.strip())
 
             try:
                 result = await mcp_client.call_tool(tool_name, tool_args)
@@ -210,7 +226,10 @@ async def tool_call_loop(
             except Exception as e:
                 result_text = f"Error: {str(e)}"
                 total_fail += 1
-                log(f"  [tool] {tool_name} failed: {e}")
+                fail_line = f"  [tool] {tool_name} failed: {e}"
+                log(fail_line)
+                if tool_trace_sink is not None:
+                    tool_trace_sink.append(fail_line.strip())
 
             messages.append(
                 {
@@ -220,9 +239,12 @@ async def tool_call_loop(
                 }
             )
 
-    # Max iterations reached
+    # Max iterations reached without a final message. Flag it so callers can
+    # surface it as a test failure — otherwise a model stuck in a tool-call
+    # loop looks identical to a clean run.
     return {
         "result": "Max tool-call iterations reached",
+        "hit_iteration_limit": True,
         "num_turns": num_turns,
         "tool_stats": {
             "totalCalls": total_calls,
@@ -237,71 +259,140 @@ async def tool_call_loop(
 
 
 async def run_agent(
-    client: openai.OpenAI, model: str, args: argparse.Namespace
+    client: openai.AsyncOpenAI, model: str, args: argparse.Namespace
 ) -> dict:
     """Connect to MCP server and run the tool-call loop."""
-    from fastmcp import Client
-
     # Read MCP config — same format as Claude's --mcp-config
     config = json.loads(Path(args.mcp_config).read_text())  # noqa: ASYNC240
 
     log("Starting MCP server...")
 
     # fastmcp.Client accepts a config dict (same format as Claude's --mcp-config)
-    async with Client(config) as mcp_client:
-        mcp_tools = await mcp_client.list_tools()
-        if args.max_tools is not None:
-            mcp_tools = mcp_tools[: args.max_tools]
-        openai_tools = [mcp_tool_to_openai(t) for t in mcp_tools]
+    async with MCPClient(config) as mcp_client:
+        return await run_scenario_inline(
+            client,
+            mcp_client,
+            model,
+            args.prompt,
+            max_tokens=args.max_tokens,
+            no_think=args.no_think,
+            max_tools=args.max_tools,
+        )
+
+
+async def fetch_openai_tools(
+    mcp_client: MCPClient, max_tools: int | None = None
+) -> list[dict]:
+    """Fetch the MCP tool catalog and convert it to OpenAI function-calling format.
+
+    Safe to call once per MCP client and reuse the result across multiple
+    scenarios — the catalog doesn't change mid-session.
+    """
+    mcp_tools = await mcp_client.list_tools()
+    if max_tools is not None:
+        mcp_tools = mcp_tools[:max_tools]
+    return [mcp_tool_to_openai(t) for t in mcp_tools]
+
+
+async def run_scenario_inline(
+    openai_client: openai.AsyncOpenAI,
+    mcp_client: MCPClient,
+    model: str,
+    prompt: str,
+    *,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    no_think: bool = False,
+    max_tools: int | None = None,
+    tool_trace_sink: list[str] | None = None,
+    openai_tools: list[dict] | None = None,
+) -> dict:
+    """Run one scenario against an already-connected MCP client.
+
+    Returns the dict from ``tool_call_loop`` with a ``model`` key added.
+    If ``openai_tools`` is supplied, ``max_tools`` is ignored — the caller
+    is responsible for any truncation.
+    """
+    if openai_tools is None:
+        openai_tools = await fetch_openai_tools(mcp_client, max_tools=max_tools)
         log(f"Loaded {len(openai_tools)} MCP tools")
 
-        prompt = ("/no_think\n\n" + args.prompt) if args.no_think else args.prompt
-        messages = [{"role": "user", "content": prompt}]
-        result = await tool_call_loop(client, model, messages, openai_tools, mcp_client, max_tokens=args.max_tokens)
-        result["model"] = model
-        return result
+    agent_prompt = ("/no_think\n\n" + prompt) if no_think else prompt
+    messages = [{"role": "user", "content": agent_prompt}]
+    result = await tool_call_loop(
+        openai_client,
+        model,
+        messages,
+        openai_tools,
+        mcp_client,
+        max_tokens=max_tokens,
+        tool_trace_sink=tool_trace_sink,
+    )
+    result["model"] = model
+    return result
 
 
-def main() -> None:
-    args = parse_args()
+async def create_and_warm_openai_client(
+    base_url: str,
+    api_key: str = DEFAULT_API_KEY,
+    timeout: int = DEFAULT_TIMEOUT,
+    model: str | None = None,
+) -> tuple[openai.AsyncOpenAI, str]:
+    """Construct an OpenAI client, resolve the model, and warm it up once.
 
+    Returns ``(client, model)``. Issues a 1-token completion to force
+    backends like LM Studio and Ollama to load the model into VRAM
+    before the first real request (otherwise that request can stall
+    30-120s while the model is copied in). Raises on failure.
+    """
+    client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+    resolved_model = model or await detect_model(client)
+    log(f"Using model: {resolved_model}")
+    log("Warming up model (may take a minute if not loaded)...")
+    await client.chat.completions.create(
+        model=resolved_model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=1,
+    )
+    log("Model ready")
+    return client, resolved_model
+
+
+async def _main_async(args: argparse.Namespace) -> None:
     try:
-        client = openai.OpenAI(
+        client, model = await create_and_warm_openai_client(
             base_url=args.base_url,
             api_key=args.api_key,
             timeout=args.timeout,
+            model=args.model,
         )
-        model = args.model or detect_model(client)
+    except openai.BadRequestError as e:
+        log(f"ERROR: Model warmup failed (BadRequestError): {e}")
+        sys.exit(1)
     except Exception as e:
-        log(f"ERROR: Failed to connect to API at {args.base_url}: {e}")
+        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
-    log(f"Using model: {model}")
     log(f"MCP config: {args.mcp_config}")
 
-    # Warm up: load the model into memory before starting the MCP server.
-    # Ollama loads models lazily — without this, the first chat request hangs
-    # silently for 30-120s while the model is copied into VRAM.
     try:
-        log("Warming up model (may take a minute if not loaded)...")
-        client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
-        )
-        log("Model ready")
+        try:
+            result = await run_agent(client, model, args)
+        finally:
+            await client.close()
     except Exception as e:
-        log(f"ERROR: Model warmup failed ({type(e).__name__}): {e}")
-        sys.exit(1)
-
-    try:
-        result = asyncio.run(run_agent(client, model, args))
-    except Exception as e:
-        log(f"ERROR ({type(e).__name__}): {e}")
+        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
     json.dump(result, sys.stdout, indent=2)
     print()
+    if result.get("hit_iteration_limit"):
+        log("ERROR: hit max tool-call iterations without a final response")
+        sys.exit(1)
+
+
+def main() -> None:
+    args = parse_args()
+    asyncio.run(_main_async(args))
 
 
 if __name__ == "__main__":
