@@ -443,13 +443,18 @@ class AreaTools:
             #   - unassigned: no floor_id at all
             # Orphaned is surfaced as a separate key so the LLM can diagnose
             # registry drift without introspecting individual area fields.
-            valid_floor_ids = {f.get("floor_id") for f in floors if f.get("floor_id")}
+            # Use `is None` rather than falsy-check so that a floor_id of ""
+            # (valid but unusual) is treated as orphaned if it does not resolve,
+            # not as unassigned.
+            valid_floor_ids = {
+                f.get("floor_id") for f in floors if f.get("floor_id") is not None
+            }
             floor_map: dict[str, list[dict[str, Any]]] = {}
             unassigned_areas: list[dict[str, Any]] = []
             orphaned_areas: list[dict[str, Any]] = []
             for area in areas:
                 fid = area.get("floor_id")
-                if not fid:
+                if fid is None:
                     unassigned_areas.append(area)
                 elif fid in valid_floor_ids:
                     floor_map.setdefault(fid, []).append(area)
