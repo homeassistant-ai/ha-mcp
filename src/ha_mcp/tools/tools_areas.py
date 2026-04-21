@@ -401,7 +401,7 @@ class AreaTools:
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Pre-joins the two registries on floor_id so the agent does not need to join in context.
 
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads — for example, an area whose floor_id no longer exists in the floors list will appear in unassigned_areas.
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads — for example, an area whose floor_id no longer exists in the floors list will appear in orphaned_areas.
         """
         try:
             areas_result = await self._client.send_websocket_message(
@@ -435,19 +435,26 @@ class AreaTools:
             areas = areas_result["result"]
             floors = floors_result["result"]
 
-            # Guard against area.floor_id references that do not exist in the
-            # floors list (race between the two sequential reads, or manual
-            # .storage inconsistency). Such areas are routed to unassigned_areas
-            # rather than silently dropped from the response.
+            # Partition areas into three disjoint sets:
+            #   - nested:    floor_id present AND points to a known floor
+            #   - orphaned:  floor_id present BUT points to a non-existent floor
+            #                (race between the two sequential reads, or manual
+            #                .storage inconsistency)
+            #   - unassigned: no floor_id at all
+            # Orphaned is surfaced as a separate key so the LLM can diagnose
+            # registry drift without introspecting individual area fields.
             valid_floor_ids = {f.get("floor_id") for f in floors if f.get("floor_id")}
             floor_map: dict[str, list[dict[str, Any]]] = {}
             unassigned_areas: list[dict[str, Any]] = []
+            orphaned_areas: list[dict[str, Any]] = []
             for area in areas:
                 fid = area.get("floor_id")
-                if fid and fid in valid_floor_ids:
+                if not fid:
+                    unassigned_areas.append(area)
+                elif fid in valid_floor_ids:
                     floor_map.setdefault(fid, []).append(area)
                 else:
-                    unassigned_areas.append(area)
+                    orphaned_areas.append(area)
 
             # Build nested hierarchy, preserving all floor-registry fields for
             # forward compatibility with future HA Core additions
@@ -464,11 +471,14 @@ class AreaTools:
                 "floor_count": len(topology),
                 "area_count": len(areas),
                 "unassigned_count": len(unassigned_areas),
+                "orphaned_count": len(orphaned_areas),
                 "floors": topology,
                 "unassigned_areas": unassigned_areas,
+                "orphaned_areas": orphaned_areas,
                 "message": (
                     f"Found {len(topology)} floor(s), {len(areas)} area(s), "
-                    f"{len(unassigned_areas)} unassigned"
+                    f"{len(unassigned_areas)} unassigned, "
+                    f"{len(orphaned_areas)} orphaned"
                 ),
             }
 
