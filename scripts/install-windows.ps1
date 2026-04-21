@@ -37,7 +37,7 @@ if ($uvInstalled) {
         Write-Host "  Please install manually:" -ForegroundColor Red
         Write-Host "  winget install astral-sh.uv" -ForegroundColor Cyan
         Write-Host "  OR download from: https://docs.astral.sh/uv/" -ForegroundColor Cyan
-        exit 1
+        throw
     }
 }
 Write-Host ""
@@ -154,5 +154,3 @@ Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
 
-# Exit successfully
-exit 0
