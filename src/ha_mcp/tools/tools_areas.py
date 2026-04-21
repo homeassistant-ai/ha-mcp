@@ -399,9 +399,9 @@ class AreaTools:
 
         Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
 
-        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Pre-joins the two registries on floor_id so the agent does not need to join in context.
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
 
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas instead of under any floor. The two registries are read sequentially; a topology snapshot may diverge from individual list calls if the registries change between reads — for example, an area whose floor_id no longer exists in the floors list will appear in orphaned_areas.
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
         """
         try:
             areas_result = await self._client.send_websocket_message(
