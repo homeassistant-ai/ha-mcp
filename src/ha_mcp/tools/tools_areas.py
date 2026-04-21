@@ -411,13 +411,20 @@ class AreaTools:
                 {"type": "config/floor_registry/list"}
             )
 
-            if not (areas_result.get("success") and floors_result.get("success")):
+            # A response with success=True but no "result" key is malformed —
+            # treat it as a service call failure rather than silently returning
+            # floor_count=0, area_count=0 on a populated instance.
+            areas_ok = areas_result.get("success") and "result" in areas_result
+            floors_ok = floors_result.get("success") and "result" in floors_result
+            if not (areas_ok and floors_ok):
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Failed to retrieve area or floor registry",
                     context={
                         "areas_success": areas_result.get("success"),
                         "floors_success": floors_result.get("success"),
+                        "areas_response_keys": sorted(areas_result.keys()),
+                        "floors_response_keys": sorted(floors_result.keys()),
                     },
                     suggestions=[
                         "Check Home Assistant connection",
@@ -425,8 +432,8 @@ class AreaTools:
                     ],
                 ))
 
-            areas = areas_result.get("result", [])
-            floors = floors_result.get("result", [])
+            areas = areas_result["result"]
+            floors = floors_result["result"]
 
             # Guard against area.floor_id references that do not exist in the
             # floors list (race between the two sequential reads, or manual
