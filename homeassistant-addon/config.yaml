@@ -29,8 +29,6 @@ options:
   enable_skills: true
   enable_skills_as_tools: true
   enable_tool_search: false
-  enable_filesystem_tools: false
-  enable_custom_component_integration: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
