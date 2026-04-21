@@ -869,6 +869,12 @@ async def test_home_topology_schema(mcp_client):
     assert isinstance(topo_data["floor_count"], int)
     assert isinstance(topo_data["area_count"], int)
     assert isinstance(topo_data["unassigned_count"], int)
+    assert "orphaned_count" in topo_data, f"Missing orphaned_count: {topo_data}"
+    assert "orphaned_areas" in topo_data, f"Missing orphaned_areas: {topo_data}"
+    assert isinstance(topo_data["orphaned_areas"], list), (
+        f"orphaned_areas should be list: {type(topo_data['orphaned_areas'])}"
+    )
+    assert isinstance(topo_data["orphaned_count"], int)
     # Each floor entry must carry its floor-registry fields plus the areas list
     for floor in topo_data["floors"]:
         assert "floor_id" in floor, f"Floor entry missing floor_id: {floor}"
@@ -878,5 +884,6 @@ async def test_home_topology_schema(mcp_client):
     logger.info(
         f"Schema ok: {topo_data['floor_count']} floor(s), "
         f"{topo_data['area_count']} area(s), "
-        f"{topo_data['unassigned_count']} unassigned"
+        f"{topo_data['unassigned_count']} unassigned, "
+        f"{topo_data['orphaned_count']} orphaned"
     )
