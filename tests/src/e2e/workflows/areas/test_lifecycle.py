@@ -12,6 +12,7 @@ This test suite validates:
 
 import logging
 import uuid
+from typing import Any
 
 import pytest
 
@@ -603,6 +604,117 @@ class TestAreaFloorIntegration:
         logger.info(f"Verified {area_id} is in unassigned_areas only")
 
         await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+
+    async def test_home_topology_empty_floor(self, mcp_client, cleanup_tracker):
+        """
+        Test: Create floor with no areas -> ha_list_floors_areas ->
+              Verify floor appears in floors with "areas": [], not filtered out
+              and not crashing a downstream iterator.
+        """
+        floor_name = generate_unique_name("test_topo_empty")
+        logger.info(f"Testing topology with empty floor: {floor_name}")
+
+        floor_result = await mcp_client.call_tool(
+            "ha_config_set_floor",
+            {"name": floor_name, "level": 3, "icon": "mdi:home-floor-3"},
+        )
+        floor_data = parse_mcp_result(floor_result)
+        assert floor_data.get("success"), f"Failed to create floor: {floor_data}"
+        floor_id = floor_data.get("floor_id")
+        cleanup_tracker.track("floor", floor_id)
+
+        topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+        topo_data = parse_mcp_result(topo_result)
+
+        assert topo_data.get("success"), f"Topology call failed: {topo_data}"
+
+        floor_ids = [f.get("floor_id") for f in topo_data["floors"]]
+        assert floor_id in floor_ids, (
+            f"Empty floor {floor_id} not found in floors list: {floor_ids}"
+        )
+
+        empty_floor = next(
+            (f for f in topo_data["floors"] if f.get("floor_id") == floor_id),
+            None,
+        )
+        assert empty_floor is not None, f"Empty floor entry missing: {floor_id}"
+        assert "areas" in empty_floor, (
+            f"Empty floor has no 'areas' key — downstream iterators would crash: {empty_floor}"
+        )
+        assert empty_floor["areas"] == [], (
+            f"Empty floor 'areas' should be [], got: {empty_floor['areas']}"
+        )
+
+        # Downstream-iterator smoke: must not raise
+        for _area in empty_floor["areas"]:
+            pass
+
+        logger.info(f"Verified empty floor {floor_id} has areas=[]")
+
+        await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": floor_id})
+
+    async def test_home_topology_sort_order(self, mcp_client, cleanup_tracker):
+        """
+        Test: Create floors with level=[-1, 0, None, 2] -> ha_list_floors_areas ->
+              Verify sort order: -1 first, 2 last, 0 and None adjacent
+              (both map to sort key 0 via `level or 0`; stable sort preserves
+              insertion order within the tie).
+        """
+        prefix = generate_unique_name("test_topo_sort")
+        logger.info(f"Testing topology sort order with levels [-1, 0, None, 2]: {prefix}")
+
+        levels = [-1, 0, None, 2]
+        floor_ids_by_level: dict[str, Any] = {}
+        for lvl in levels:
+            payload: dict[str, Any] = {"name": f"{prefix}_lvl_{lvl}"}
+            if lvl is not None:
+                payload["level"] = lvl
+            floor_result = await mcp_client.call_tool("ha_config_set_floor", payload)
+            floor_data = parse_mcp_result(floor_result)
+            assert floor_data.get("success"), (
+                f"Failed to create floor level={lvl}: {floor_data}"
+            )
+            fid = floor_data.get("floor_id")
+            cleanup_tracker.track("floor", fid)
+            floor_ids_by_level[str(lvl)] = fid
+
+        topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+        topo_data = parse_mcp_result(topo_result)
+        assert topo_data.get("success"), f"Topology call failed: {topo_data}"
+
+        # Extract only our floors in the order returned by the tool
+        our_ids = set(floor_ids_by_level.values())
+        returned_order = [
+            f for f in topo_data["floors"] if f.get("floor_id") in our_ids
+        ]
+        assert len(returned_order) == 4, (
+            f"Expected 4 floors, got {len(returned_order)}: {returned_order}"
+        )
+
+        # Sort key in the implementation is `level or 0`, so:
+        #   -1 -> -1, 0 -> 0, None -> 0, 2 -> 2
+        # Position 0 must be level=-1, position 3 must be level=2.
+        # Positions 1 and 2 are the 0/None tie — either order is valid.
+        assert returned_order[0].get("floor_id") == floor_ids_by_level["-1"], (
+            f"First floor should be level=-1, got: {returned_order[0]}"
+        )
+        assert returned_order[3].get("floor_id") == floor_ids_by_level["2"], (
+            f"Last floor should be level=2, got: {returned_order[3]}"
+        )
+
+        middle_ids = {returned_order[1].get("floor_id"), returned_order[2].get("floor_id")}
+        expected_middle = {floor_ids_by_level["0"], floor_ids_by_level["None"]}
+        assert middle_ids == expected_middle, (
+            f"Middle positions should contain level=0 and level=None floors, "
+            f"got: {middle_ids} vs expected {expected_middle}"
+        )
+
+        logger.info(
+            "Verified sort order: -1 first, 2 last, 0/None tied in middle"
+        )
+
+        for fid in floor_ids_by_level.values():
+            await mcp_client.call_tool("ha_config_remove_floor", {"floor_id": fid})
 
     @pytest.mark.slow
     async def test_multiple_areas_on_floor(self, mcp_client, cleanup_tracker):
