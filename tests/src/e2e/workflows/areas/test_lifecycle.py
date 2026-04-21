@@ -519,7 +519,7 @@ class TestAreaFloorIntegration:
 
     async def test_home_topology_with_assignment(self, mcp_client, cleanup_tracker):
         """
-        Test: Create floor -> Create area on floor -> ha_get_home_topology ->
+        Test: Create floor -> Create area on floor -> ha_list_floors_areas ->
               Verify area appears nested under floor, not in unassigned_areas.
         """
         floor_name = generate_unique_name("test_topo_floor")
@@ -543,7 +543,7 @@ class TestAreaFloorIntegration:
         area_id = area_data.get("area_id")
         cleanup_tracker.track("area", area_id)
 
-        topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+        topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         topo_data = parse_mcp_result(topo_result)
 
         assert topo_data.get("success"), f"Topology call failed: {topo_data}"
@@ -571,7 +571,7 @@ class TestAreaFloorIntegration:
 
     async def test_home_topology_unassigned_area(self, mcp_client, cleanup_tracker):
         """
-        Test: Create area without floor_id -> ha_get_home_topology ->
+        Test: Create area without floor_id -> ha_list_floors_areas ->
               Verify area appears in unassigned_areas, not nested under any floor.
         """
         area_name = generate_unique_name("test_topo_unassigned")
@@ -585,7 +585,7 @@ class TestAreaFloorIntegration:
         area_id = area_data.get("area_id")
         cleanup_tracker.track("area", area_id)
 
-        topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+        topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         topo_data = parse_mcp_result(topo_result)
 
         assert topo_data.get("success"), f"Topology call failed: {topo_data}"
@@ -734,12 +734,12 @@ async def test_floor_list_empty_or_populated(mcp_client):
 @pytest.mark.floor
 async def test_home_topology_schema(mcp_client):
     """
-    Test: ha_get_home_topology returns a well-formed response on any HA instance
+    Test: ha_list_floors_areas returns a well-formed response on any HA instance
     (populated or empty). Validates schema only, not content.
     """
-    logger.info("Testing ha_get_home_topology schema")
+    logger.info("Testing ha_list_floors_areas schema")
 
-    topo_result = await mcp_client.call_tool("ha_get_home_topology", {})
+    topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
     topo_data = parse_mcp_result(topo_result)
 
     assert topo_data.get("success"), f"Topology call failed: {topo_data}"

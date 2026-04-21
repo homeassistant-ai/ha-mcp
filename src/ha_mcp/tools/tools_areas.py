@@ -388,14 +388,14 @@ class AreaTools:
             ])
 
     @tool(
-        name="ha_get_home_topology",
+        name="ha_list_floors_areas",
         tags={"Areas & Floors"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Home Topology"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors and Areas"},
     )
     @log_tool_usage
-    async def ha_get_home_topology(self) -> dict[str, Any]:
+    async def ha_list_floors_areas(self) -> dict[str, Any]:
         """
-        Get floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+        List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
         Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
 
@@ -468,8 +468,8 @@ class AreaTools:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error getting home topology: {e}")
-            exception_to_structured_error(e, context={"operation": "get_home_topology"}, suggestions=[
+            logger.error(f"Error listing floors and areas: {e}")
+            exception_to_structured_error(e, context={"operation": "list_floors_areas"}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify WebSocket connection is active",
             ])
