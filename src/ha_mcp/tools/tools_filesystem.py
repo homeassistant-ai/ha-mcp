@@ -73,8 +73,7 @@ async def _is_mcp_tools_available(client: Any) -> bool:
     # This format has been stable since before HA 0.7 (the first public release).
     services = await client.get_services()
     return any(
-        isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN
-        for s in services
+        isinstance(s, dict) and s.get("domain") == MCP_TOOLS_DOMAIN for s in services
     )
 
 
@@ -86,11 +85,13 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     correctly rather than masked as COMPONENT_NOT_INSTALLED.
     """
     if not await _is_mcp_tools_available(client):
-        raise_tool_error(create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
-            "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant.",
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                f"The {MCP_TOOLS_DOMAIN} custom component is not installed. "
+                "Use ha_install_mcp_tools() to install it via HACS, then restart Home Assistant.",
+            )
+        )
 
 
 class FilesystemTools:
@@ -101,7 +102,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_list_files",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "readOnlyHint": True,
             "title": "List Files",
@@ -195,7 +196,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_read_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "readOnlyHint": True,
             "title": "Read File",
@@ -308,7 +309,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_write_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "destructiveHint": True,
             "title": "Write File",
@@ -397,7 +398,9 @@ class FilesystemTools:
         try:
             # Coerce boolean parameters
             overwrite_bool = coerce_bool_param(overwrite, "overwrite", default=False)
-            create_dirs_bool = coerce_bool_param(create_dirs, "create_dirs", default=True)
+            create_dirs_bool = coerce_bool_param(
+                create_dirs, "create_dirs", default=True
+            )
 
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
@@ -439,7 +442,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_delete_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "destructiveHint": True,
             "title": "Delete File",
@@ -556,9 +559,7 @@ def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable.
     """
     if not is_filesystem_tools_enabled():
-        logger.debug(
-            f"Filesystem tools disabled (set {FEATURE_FLAG}=true to enable)"
-        )
+        logger.debug(f"Filesystem tools disabled (set {FEATURE_FLAG}=true to enable)")
         return
 
     logger.info("Filesystem tools enabled via feature flag")

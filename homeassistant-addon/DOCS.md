@@ -244,7 +244,7 @@ Replaces the full tool catalog (~85 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
-### enable_filesystem_tools
+### enable_filesystem_tools (Beta)
 
 **Default:** `false`
 
@@ -252,7 +252,7 @@ Enables filesystem tools (ha_list_files, ha_read_file, ha_write_file, ha_delete_
 
 Requires add-on restart to take effect.
 
-### enable_custom_component_integration
+### enable_custom_component_integration (Beta)
 
 **Default:** `false`
 
@@ -398,10 +398,10 @@ The add-on provides 85+ MCP tools for controlling Home Assistant:
 - `ha_set_entity` — Update entity properties in the entity registry.
 
 ### Files
-- `ha_delete_file` — Delete a file from allowed directories in the Home Assistant config.
-- `ha_list_files` — List files in a directory within the Home Assistant config directory.
-- `ha_read_file` — Read a file from the Home Assistant config directory.
-- `ha_write_file` — Write a file to allowed directories in the Home Assistant config.
+- `ha_delete_file` **(beta)** — Delete a file from allowed directories in the Home Assistant config.
+- `ha_list_files` **(beta)** — List files in a directory within the Home Assistant config directory.
+- `ha_read_file` **(beta)** — Read a file from the Home Assistant config directory.
+- `ha_write_file` **(beta)** — Write a file to allowed directories in the Home Assistant config.
 
 ### Groups
 - `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
