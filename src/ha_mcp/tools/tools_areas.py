@@ -403,13 +403,19 @@ class AreaTools:
 
         Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
         """
+        progress: dict[str, Any] = {
+            "operation": "list_floors_areas",
+            "phase": "start",
+        }
         try:
             areas_result = await self._client.send_websocket_message(
                 {"type": "config/area_registry/list"}
             )
+            progress["phase"] = "areas_fetched"
             floors_result = await self._client.send_websocket_message(
                 {"type": "config/floor_registry/list"}
             )
+            progress["phase"] = "floors_fetched"
 
             # A response with success=True but no "result" key is malformed —
             # treat it as a service call failure rather than silently returning
@@ -460,6 +466,7 @@ class AreaTools:
                     floor_map.setdefault(fid, []).append(area)
                 else:
                     orphaned_areas.append(area)
+            progress["phase"] = "partitioned"
 
             # Build nested hierarchy, preserving all floor-registry fields for
             # forward compatibility with future HA Core additions
@@ -468,8 +475,24 @@ class AreaTools:
                 for floor in floors
             ]
 
-            # Sort by level ascending; None treated as 0 (Python sort fails on None/int mix)
-            topology.sort(key=lambda f: f.get("level") or 0)
+            # Sort by level ascending; coerce defensively so a malformed
+            # string `level` cannot raise TypeError mid-sort and get
+            # flattened by the broad `except Exception` below.
+            def _floor_sort_key(floor: dict[str, Any]) -> int:
+                raw = floor.get("level")
+                if raw is None:
+                    return 0
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Floor {floor.get('floor_id')!r} has non-numeric "
+                        f"level {raw!r}; treating as 0 for sort"
+                    )
+                    return 0
+
+            topology.sort(key=_floor_sort_key)
+            progress["phase"] = "sorted"
 
             return {
                 "success": True,
@@ -490,11 +513,18 @@ class AreaTools:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error listing floors and areas: {e}")
-            exception_to_structured_error(e, context={"operation": "list_floors_areas"}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-            ])
+            logger.error(
+                f"Error listing floors and areas in phase {progress['phase']!r}: {e} "
+                f"(progress={progress})"
+            )
+            exception_to_structured_error(
+                e,
+                context=progress,
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
     @tool(
         name="ha_config_set_floor",
