@@ -65,22 +65,6 @@ $HaMcpConfig = @{
     }
 }
 
-# The properly formatted JSON config
-$JsonConfig = @"
-{
-  "mcpServers": {
-    "Home Assistant": {
-      "command": "uvx",
-      "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"],
-      "env": {
-        "HOMEASSISTANT_URL": "$DemoUrl",
-        "HOMEASSISTANT_TOKEN": "$DemoToken"
-      }
-    }
-  }
-}
-"@
-
 # Check if config file exists
 if (Test-Path $ConfigFile) {
     # Backup existing config
