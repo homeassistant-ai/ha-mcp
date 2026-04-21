@@ -49,10 +49,10 @@ configuration:
   enable_custom_component_integration:
     name: Enable custom component integration
     description: >-
-      Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Required for the MCP
-      server to load and interact with the ha_mcp_tools custom component. Without
-      this flag enabled, the MCP server will not load the custom integration even
-      if it is installed. Also required for filesystem tools to function.
-      WARNING: This gives the MCP server sensitive direct access to your system
-      via the custom component. Only enable if you trust the AI assistant with
-      this level of access. Requires restart to take effect.
+      Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the
+      ha_install_mcp_tools installer tool, which can help install the
+      ha_mcp_tools custom component. This setting does not control whether the
+      MCP server loads or interacts with the custom component, and it is not
+      required for filesystem tools to function. Only enable if you want to
+      allow the AI assistant to use the installer tool. Requires restart to
+      take effect.
