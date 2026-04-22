@@ -47,7 +47,7 @@ configuration:
       trust the AI assistant with file operations. Requires restart to take
       effect.
   enable_custom_component_integration:
-    name: Enable custom component integration
+    name: Enable custom component integration (beta)
     description: >-
       Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the
       ha_install_mcp_tools installer tool, which can help install the
