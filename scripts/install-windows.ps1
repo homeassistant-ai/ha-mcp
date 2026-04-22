@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 # Configuration
 # Claude Desktop installed from the Microsoft Store uses a virtualized/sandboxed path
 # under LocalPackages; the traditional installer uses the real %APPDATA% path.
-$MsixPackage = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter "Claude_*" -ErrorAction SilentlyContinue | Select-Object -First 1
+$MsixPackage = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter "Claude_*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($MsixPackage) {
     $ConfigDir = "$($MsixPackage.FullName)\LocalCache\Roaming\Claude"
 } else {
