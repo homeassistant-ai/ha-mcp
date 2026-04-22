@@ -79,16 +79,25 @@ jobs:
           TAG_SHA=$(git rev-list -n 1 "$LATEST_TAG")
           HEAD_SHA=$(git rev-parse HEAD)
 
-          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+          # Normal release weeks: semver-release tags the release commit, then
+          # pushes follow-up housekeeping commits to master (changelog sync,
+          # addon version bump — all `[skip ci]`). HEAD != tag in that case,
+          # but the release IS current. Mirror semver-release.yml's check-changes
+          # logic: block only if there are releasable (feat/fix/perf) commits
+          # on master since the tag that would have produced a new version.
+          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline \
+            --grep='^feat' --grep='^fix' --grep='^perf' || true)
+
+          if [ -n "$RELEASABLE" ]; then
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "::notice::Manual dispatch: master HEAD ($HEAD_SHA) is ahead of $LATEST_TAG ($TAG_SHA). Forcing republish of $LATEST_TAG from the tag ref."
+              echo "::notice::Manual dispatch: unreleased feat/fix/perf commits exist on master since $LATEST_TAG. Forcing republish of $LATEST_TAG from the tag ref (master HEAD $HEAD_SHA is being ignored)."
               echo "## Release Publish — forced republish" >> "$GITHUB_STEP_SUMMARY"
-              echo "Building \`$LATEST_TAG\` ($TAG_SHA); master HEAD ($HEAD_SHA) is ahead but was ignored." >> "$GITHUB_STEP_SUMMARY"
+              echo "Building \`$LATEST_TAG\` ($TAG_SHA); unreleased commits on master were ignored." >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::notice::master HEAD ($HEAD_SHA) is ahead of $LATEST_TAG ($TAG_SHA); no new release to publish — skipping."
+              echo "::notice::Unreleased feat/fix/perf commits exist on master since $LATEST_TAG; no new release to publish — skipping."
               echo "should_publish=false" >> "$GITHUB_OUTPUT"
               echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
-              echo "master HEAD is ahead of the latest stable tag \`$LATEST_TAG\`, so there is no new release to publish." >> "$GITHUB_STEP_SUMMARY"
+              echo "master has releasable commits since the latest stable tag \`$LATEST_TAG\` but no new tag was cut, so republishing \`$LATEST_TAG\` would be misleading." >> "$GITHUB_STEP_SUMMARY"
               echo "This is expected on biweekly-gate odd weeks; the re-triggered \`workflow_run\` is being correctly ignored." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -98,6 +107,9 @@ jobs:
           echo "Release version: $VERSION (tag $LATEST_TAG)"
           echo "## Release Publish — $VERSION" >> "$GITHUB_STEP_SUMMARY"
           echo "Building from tag \`$LATEST_TAG\` ($TAG_SHA)." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "(master HEAD is $HEAD_SHA — post-tag housekeeping commits only, no releasable changes.)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   publish_pypi:
     name: Publish PyPI package
