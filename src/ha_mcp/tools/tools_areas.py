@@ -388,6 +388,145 @@ class AreaTools:
             ])
 
     @tool(
+        name="ha_list_floors_areas",
+        tags={"Areas & Floors"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors and Areas"},
+    )
+    @log_tool_usage
+    async def ha_list_floors_areas(self) -> dict[str, Any]:
+        """
+        List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+
+        Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
+
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
+
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
+        """
+        progress: dict[str, Any] = {
+            "operation": "list_floors_areas",
+            "phase": "start",
+        }
+        try:
+            areas_result = await self._client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            )
+            progress["phase"] = "areas_fetched"
+            floors_result = await self._client.send_websocket_message(
+                {"type": "config/floor_registry/list"}
+            )
+            progress["phase"] = "floors_fetched"
+
+            # A response with success=True but no "result" key is malformed —
+            # treat it as a service call failure rather than silently returning
+            # floor_count=0, area_count=0 on a populated instance.
+            areas_ok = areas_result.get("success") and "result" in areas_result
+            floors_ok = floors_result.get("success") and "result" in floors_result
+            if not (areas_ok and floors_ok):
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to retrieve area or floor registry",
+                    context={
+                        "areas_success": areas_result.get("success"),
+                        "floors_success": floors_result.get("success"),
+                        "areas_response_keys": sorted(areas_result.keys()),
+                        "floors_response_keys": sorted(floors_result.keys()),
+                    },
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Verify WebSocket connection is active",
+                    ],
+                ))
+
+            areas = areas_result["result"]
+            floors = floors_result["result"]
+
+            # Partition areas into three disjoint sets:
+            #   - nested:    floor_id present AND points to a known floor
+            #   - orphaned:  floor_id present BUT points to a non-existent floor
+            #                (race between the two sequential reads, or manual
+            #                .storage inconsistency)
+            #   - unassigned: no floor_id at all
+            # Orphaned is surfaced as a separate key so the LLM can diagnose
+            # registry drift without introspecting individual area fields.
+            # Use `is None` rather than falsy-check so that a floor_id of ""
+            # (valid but unusual) is treated as orphaned if it does not resolve,
+            # not as unassigned.
+            valid_floor_ids = {
+                f.get("floor_id") for f in floors if f.get("floor_id") is not None
+            }
+            floor_map: dict[str, list[dict[str, Any]]] = {}
+            unassigned_areas: list[dict[str, Any]] = []
+            orphaned_areas: list[dict[str, Any]] = []
+            for area in areas:
+                fid = area.get("floor_id")
+                if fid is None:
+                    unassigned_areas.append(area)
+                elif fid in valid_floor_ids:
+                    floor_map.setdefault(fid, []).append(area)
+                else:
+                    orphaned_areas.append(area)
+            progress["phase"] = "partitioned"
+
+            # Build nested hierarchy, preserving all floor-registry fields for
+            # forward compatibility with future HA Core additions
+            topology = [
+                {**floor, "areas": floor_map.get(floor.get("floor_id"), [])}
+                for floor in floors
+            ]
+
+            # Sort by level ascending; coerce defensively so a malformed
+            # string `level` cannot raise TypeError mid-sort and get
+            # flattened by the broad `except Exception` below.
+            def _floor_sort_key(floor: dict[str, Any]) -> int:
+                raw = floor.get("level")
+                if raw is None:
+                    return 0
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Floor {floor.get('floor_id')!r} has non-numeric "
+                        f"level {raw!r}; treating as 0 for sort"
+                    )
+                    return 0
+
+            topology.sort(key=_floor_sort_key)
+            progress["phase"] = "sorted"
+
+            return {
+                "success": True,
+                "floor_count": len(topology),
+                "area_count": len(areas),
+                "unassigned_count": len(unassigned_areas),
+                "orphaned_count": len(orphaned_areas),
+                "floors": topology,
+                "unassigned_areas": unassigned_areas,
+                "orphaned_areas": orphaned_areas,
+                "message": (
+                    f"Found {len(topology)} floor(s), {len(areas)} area(s), "
+                    f"{len(unassigned_areas)} unassigned, "
+                    f"{len(orphaned_areas)} orphaned"
+                ),
+            }
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error listing floors and areas in phase {progress['phase']!r}: {e} "
+                f"(progress={progress})"
+            )
+            exception_to_structured_error(
+                e,
+                context=progress,
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
+
+    @tool(
         name="ha_config_set_floor",
         tags={"Areas & Floors"},
         annotations={"destructiveHint": True, "title": "Create or Update Floor"},
