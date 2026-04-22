@@ -383,10 +383,10 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_set_entity` — Update entity properties in the entity registry.
 
 ### Files
-- `ha_delete_file` **(beta)** — Delete a file from allowed directories in the Home Assistant config.
-- `ha_list_files` **(beta)** — List files in a directory within the Home Assistant config directory.
-- `ha_read_file` **(beta)** — Read a file from the Home Assistant config directory.
-- `ha_write_file` **(beta)** — Write a file to allowed directories in the Home Assistant config.
+- `ha_delete_file` **(beta — dev channel only)** — Delete a file from allowed directories in the Home Assistant config.
+- `ha_list_files` **(beta — dev channel only)** — List files in a directory within the Home Assistant config directory.
+- `ha_read_file` **(beta — dev channel only)** — Read a file from the Home Assistant config directory.
+- `ha_write_file` **(beta — dev channel only)** — Write a file to allowed directories in the Home Assistant config.
 
 ### Groups
 - `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
@@ -457,7 +457,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
-- `ha_install_mcp_tools` — Install the ha_mcp_tools custom component via HACS.
+- `ha_install_mcp_tools` **(beta — dev channel only)** — Install the ha_mcp_tools custom component via HACS.
 - `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
 
 ### Zones

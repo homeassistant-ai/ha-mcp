@@ -1028,7 +1028,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1054,7 +1055,8 @@
       "readOnlyHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1080,7 +1082,8 @@
       "readOnlyHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1114,7 +1117,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -2718,7 +2722,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Utilities"
+      "Utilities",
+      "beta"
     ],
     "source_file": "tools_mcp_component.py"
   },
