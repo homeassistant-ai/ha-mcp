@@ -52,17 +52,25 @@ class TestGetVersion:
         assert get_version() == "7.3.0.dev42"
 
     def test_returns_unknown_when_not_installed(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """When neither env var nor package metadata resolves, return 'unknown'
-        rather than raising — a missing version shouldn't crash startup."""
+        rather than raising — a missing version shouldn't crash startup — but
+        emit a WARNING so the broken install is visible in logs."""
         monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
 
         def always_missing(pkg_name: str) -> str:
             raise importlib.metadata.PackageNotFoundError(pkg_name)
 
         monkeypatch.setattr(importlib.metadata, "version", always_missing)
-        assert get_version() == "unknown"
+        with caplog.at_level(logging.WARNING, logger="ha_mcp._version"):
+            result = get_version()
+        assert result == "unknown"
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "metadata not found" in warnings[0].getMessage()
 
     def test_empty_env_var_falls_through_to_metadata(
         self, monkeypatch: pytest.MonkeyPatch

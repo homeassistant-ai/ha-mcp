@@ -40,33 +40,64 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "pyproject version: $VERSION"
 
-          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*dev*' 2>/dev/null || echo "")
-          if [ -z "$LATEST_TAG" ]; then
+          # Resolve the latest stable tag. A real failure (corrupt repo, shallow
+          # clone missing tags, etc.) should fail loudly — only exit-code 128
+          # from `git describe` means "no matching tags exist in history" and is
+          # benign for a fresh repo with no stable releases yet.
+          set +e
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*dev*' 2>&1)
+          DESCRIBE_RC=$?
+          set -e
+          if [ "$DESCRIBE_RC" -eq 128 ]; then
             echo "::warning::No stable tag found; skipping Release Publish."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
             echo "release_tag=" >> "$GITHUB_OUTPUT"
+            echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "No stable tag found in repository." >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          elif [ "$DESCRIBE_RC" -ne 0 ]; then
+            echo "::error::git describe failed (rc=$DESCRIBE_RC): $LATEST_TAG"
+            exit "$DESCRIBE_RC"
           fi
           echo "release_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           echo "Latest stable tag: $LATEST_TAG"
 
+          # Read the version from pyproject.toml AT THE TAG, not master HEAD, so
+          # we publish what was tagged even if master has advanced. Prevents the
+          # "workflow_dispatch bumped pyproject ahead of tag" corner case.
+          VERSION=$(git show "$LATEST_TAG:pyproject.toml" \
+            | grep '^version = ' | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not parse version from $LATEST_TAG:pyproject.toml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tagged pyproject version: $VERSION"
+
           TAG_SHA=$(git rev-list -n 1 "$LATEST_TAG")
           HEAD_SHA=$(git rev-parse HEAD)
-          if [ "$TAG_SHA" != "$HEAD_SHA" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            echo "::notice::master HEAD ($HEAD_SHA) is ahead of $LATEST_TAG ($TAG_SHA); no new release to publish — skipping."
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
+
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::notice::Manual dispatch: master HEAD ($HEAD_SHA) is ahead of $LATEST_TAG ($TAG_SHA). Forcing republish of $LATEST_TAG from the tag ref."
+              echo "## Release Publish — forced republish" >> "$GITHUB_STEP_SUMMARY"
+              echo "Building \`$LATEST_TAG\` ($TAG_SHA); master HEAD ($HEAD_SHA) is ahead but was ignored." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::notice::master HEAD ($HEAD_SHA) is ahead of $LATEST_TAG ($TAG_SHA); no new release to publish — skipping."
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
+              echo "master HEAD is ahead of the latest stable tag \`$LATEST_TAG\`, so there is no new release to publish." >> "$GITHUB_STEP_SUMMARY"
+              echo "This is expected on biweekly-gate odd weeks; the re-triggered \`workflow_run\` is being correctly ignored." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           fi
 
-          # Manual dispatch is allowed to force-republish even without a new tag
-          # (emergency rebuild), but downstream jobs still check out the tag ref
-          # so the build is reproducible from the tagged source, not master HEAD.
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
           echo "Release version: $VERSION (tag $LATEST_TAG)"
+          echo "## Release Publish — $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "Building from tag \`$LATEST_TAG\` ($TAG_SHA)." >> "$GITHUB_STEP_SUMMARY"
 
   publish_pypi:
     name: Publish PyPI package
