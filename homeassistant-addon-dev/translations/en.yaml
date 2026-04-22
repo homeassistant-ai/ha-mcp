@@ -39,7 +39,7 @@ configuration:
       limitations. Dedicated tools (automations, scripts, scenes, helpers,
       template sensors) should be preferred when available.
   enable_filesystem_tools:
-    name: Enable filesystem tools
+    name: Enable filesystem tools (beta)
     description: >-
       Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
       access to your Home Assistant filesystem. WARNING: This gives the MCP
