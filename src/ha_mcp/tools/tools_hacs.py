@@ -40,6 +40,15 @@ CATEGORY_DISPLAY["plugin"] = "lovelace"  # Display as lovelace for users
 
 
 async def _assert_hacs_available() -> None:
+    """Raise ToolError if HACS is not installed or not responding.
+
+    Distinguishes "unknown command" (HACS not installed) from other failures
+    (HACS installed but broken) so the error message is accurate.
+
+    Must be called within a try block that handles API errors via
+    exception_to_structured_error, so connection failures are classified
+    correctly rather than masked as COMPONENT_NOT_INSTALLED.
+    """
     from ..client.websocket_client import get_websocket_client
 
     ws_client = await get_websocket_client()
