@@ -7,6 +7,11 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 | Tool | Toggle / env var | Description |
 |---|---|---|
 | `ha_config_set_yaml` | `enable_yaml_config_editing` (dev add-on) / `ENABLE_YAML_CONFIG_EDITING=true` (env var) | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
+| `ha_list_files` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | List files in allowed directories (www/, themes/, custom_templates/). Requires `ha_mcp_tools` custom component. |
+| `ha_read_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
+| `ha_write_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_delete_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on) / `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` (env var) | Installs the `ha_mcp_tools` custom component via HACS. |
 
 ## How to enable
 
@@ -53,7 +58,9 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 ### `ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`
 
-These tools provide direct file access to your Home Assistant filesystem and require both `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` and `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` to be set, as well as the `ha_mcp_tools` custom component installed and active.
+These tools provide direct file access to your Home Assistant filesystem and require `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` and the `ha_mcp_tools` custom component installed and active.
+
+`HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` is only needed if you want to allow the `ha_install_mcp_tools` installer tool; it is not required for the filesystem tools themselves.
 
 **Access is restricted but sensitive.** Only `www/`, `themes/`, and `custom_templates/` are writable. `ha_read_file` additionally allows reading config YAML files, logs, and `custom_components/`. An AI assistant with these tools enabled has meaningful read access to your HA configuration.
 

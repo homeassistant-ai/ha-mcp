@@ -244,22 +244,6 @@ Replaces the full tool catalog (~85 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
-### enable_filesystem_tools (Beta)
-
-**Default:** `false`
-
-Enables filesystem tools (ha_list_files, ha_read_file, ha_write_file, ha_delete_file) for managing files in the Home Assistant configuration directory.
-
-Requires add-on restart to take effect.
-
-### enable_custom_component_integration (Beta)
-
-**Default:** `false`
-
-Enables the ha_install_mcp_tools tool, which allows installing the required custom component via HACS. This component is necessary for advanced features like filesystem access.
-
-Requires add-on restart to take effect.
-
 **Example Configuration:**
 
 ```yaml
