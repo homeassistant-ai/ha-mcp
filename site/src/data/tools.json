@@ -267,6 +267,20 @@
     "source_file": "tools_areas.py"
   },
   {
+    "name": "ha_list_floors_areas",
+    "title": "List Floors and Areas",
+    "description": "List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.\n\nDo not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.\n\nUse for location-based reasoning where floor-to-area relationships matter, such as \"which rooms are on the ground floor\" or operations scoped to a level.\n\nFloors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.",
+    "inputSchema": {},
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
     "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.",
