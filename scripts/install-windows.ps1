@@ -55,16 +55,6 @@ if (-not (Test-Path $ConfigDir)) {
     New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 }
 
-# The MCP server config
-$HaMcpConfig = @{
-    command = "uvx"
-    args = @("--python", "3.13", "--refresh", "ha-mcp@latest")
-    env = @{
-        HOMEASSISTANT_URL = $DemoUrl
-        HOMEASSISTANT_TOKEN = $DemoToken
-    }
-}
-
 # The properly formatted JSON config
 $JsonConfig = @"
 {
