@@ -45,7 +45,8 @@ LABEL \
 
 # Propagate dev build version into the runtime so startup logs / bug reports can
 # surface e.g. '7.3.0.dev229' instead of the bare pyproject base version.
-# ha_mcp._version.get_version() reads HA_MCP_BUILD_VERSION first.
+# Stable addon builds leave BUILD_VERSION unset; ha_mcp._version.get_version()
+# then falls back to package metadata.
 ENV HA_MCP_BUILD_VERSION=${BUILD_VERSION}
 
 CMD ["python3", "/start.py"]

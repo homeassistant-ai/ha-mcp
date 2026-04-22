@@ -1,8 +1,9 @@
-"""Unit tests for ha_mcp._version."""
+"""Unit tests for ha_mcp._version and the __main__ startup log helper."""
 
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 
 import pytest
 
@@ -110,3 +111,75 @@ class TestIsRunningInAddon:
         """Guard against a spurious empty-string env var masquerading as the addon."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "")
         assert is_running_in_addon() is False
+
+
+class TestLogStartupVersion:
+    """Tests for _log_startup_version() — the behavioral payload of the PR.
+
+    Covers the log emission plus the dev-banner gating logic: banner must fire
+    on standalone dev installs and must be suppressed under HA Supervisor so
+    add-on users don't get noise (they already see the channel in the HAOS UI).
+    """
+
+    def _call(self, caplog: pytest.LogCaptureFixture) -> None:
+        from ha_mcp.__main__ import _log_startup_version
+
+        # _log_startup_version uses the module-level ``logger`` in __main__.
+        with caplog.at_level(logging.INFO, logger="ha_mcp.__main__"):
+            _log_startup_version()
+
+    def test_logs_version_at_info(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        self._call(caplog)
+        info_messages = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.INFO
+        ]
+        assert any("ha-mcp 7.3.0" in msg for msg in info_messages), info_messages
+
+    def test_dev_version_emits_stable_banner_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0.dev42")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        msg = warnings[0].getMessage()
+        assert ":stable" in msg
+        assert "dev channel" in msg
+
+    def test_dev_banner_suppressed_under_supervisor_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The banner must NOT fire inside an HA add-on (noisy, redundant with HAOS UI)."""
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0.dev42")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
+        info_messages = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.INFO
+        ]
+        # Version line still fires — add-on users should still see what they're running.
+        assert any("7.3.0.dev42" in msg for msg in info_messages), info_messages
+
+    def test_stable_version_never_emits_banner(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Guard against an inverted is_dev_version check leaking the banner to stable users."""
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
