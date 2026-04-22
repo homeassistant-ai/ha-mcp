@@ -281,6 +281,7 @@ def _setup_standard_mode() -> None:
     settings = get_settings()
     _validate_standard_credentials(settings)
     _setup_logging(settings.log_level)
+    _log_startup_version()
 
 
 def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
@@ -376,6 +377,25 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
+
+
+def _log_startup_version() -> None:
+    """Log ha-mcp version at startup, plus a dev-channel banner when relevant.
+
+    The dev banner only fires for standalone dev installs (Docker ``:dev`` /
+    ``:latest``, or ``pip install ha-mcp-dev``). It is suppressed under the HA
+    Supervisor because add-on users already pick dev vs stable in the HAOS UI.
+    """
+    from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
+
+    version = get_version()
+    logger.info(f"ha-mcp {version}")
+    if is_dev_version(version) and not is_running_in_addon():
+        logger.warning(
+            "This is the dev channel. For the stable release use the "
+            "'ghcr.io/homeassistant-ai/ha-mcp:stable' Docker tag "
+            "(or 'pip install ha-mcp' on PyPI)."
+        )
 
 
 def _get_timestamped_uvicorn_log_config() -> dict:
@@ -547,9 +567,9 @@ def main() -> None:
     """Run server via CLI using FastMCP's stdio transport."""
     # Handle --version flag early, before server creation requires config
     if "--version" in sys.argv or "-V" in sys.argv:
-        from importlib.metadata import version
+        from ha_mcp._version import get_version
 
-        print(f"ha-mcp {version('ha-mcp')}")
+        print(f"ha-mcp {get_version()}")
         sys.exit(0)
 
     # Check for smoke test flag
@@ -572,6 +592,7 @@ def main() -> None:
         sys.exit(1)
 
     _setup_logging(settings.log_level)
+    _log_startup_version()
 
     _run_entrypoint(_run_with_graceful_shutdown(), "Server")
 
@@ -747,6 +768,7 @@ def main_oauth() -> None:
     for logger_name in ["ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider"]:
         logging.getLogger(logger_name).setLevel(getattr(logging, log_level))
     logger.info(f"OAuth mode logging configured at {log_level} level")
+    _log_startup_version()
 
     port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")

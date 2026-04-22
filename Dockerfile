@@ -46,6 +46,13 @@ USER mcpuser
 # Activate virtual environment via PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Propagate dev build version into the runtime so startup logs / bug reports can
+# surface e.g. '7.3.0.dev390' instead of the bare pyproject base version.
+# Stable builds leave BUILD_VERSION unset; ha_mcp._version.get_version() then
+# falls back to package metadata.
+ARG BUILD_VERSION=""
+ENV HA_MCP_BUILD_VERSION=${BUILD_VERSION}
+
 # Environment variables (can be overridden)
 ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
