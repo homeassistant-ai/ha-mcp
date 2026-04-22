@@ -28,5 +28,7 @@ schema:
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
   enable_yaml_config_editing: bool?
+  enable_filesystem_tools: bool?
+  enable_custom_component_integration: bool?
 ports:
   9583/tcp: 9583

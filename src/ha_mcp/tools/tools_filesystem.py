@@ -101,7 +101,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_list_files",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "readOnlyHint": True,
             "title": "List Files",
@@ -195,7 +195,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_read_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "readOnlyHint": True,
             "title": "Read File",
@@ -308,7 +308,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_write_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "destructiveHint": True,
             "title": "Write File",
@@ -439,7 +439,7 @@ class FilesystemTools:
 
     @tool(
         name="ha_delete_file",
-        tags={"Files"},
+        tags={"Files", "beta"},
         annotations={
             "destructiveHint": True,
             "title": "Delete File",

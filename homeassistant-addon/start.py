@@ -190,6 +190,8 @@ def main() -> int:
     enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    enable_filesystem_tools = False  # default
+    enable_custom_component_integration = False  # default
     config_read_ok = True
 
     if config_file.exists():
@@ -206,6 +208,10 @@ def main() -> int:
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            raw_filesystem_tools = config.get("enable_filesystem_tools", False)
+            enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
+            raw_custom_component = config.get("enable_custom_component_integration", False)
+            enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -231,6 +237,8 @@ def main() -> int:
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
+    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
+    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
 
     # Validate Supervisor token
     supervisor_token = os.environ.get("SUPERVISOR_TOKEN")

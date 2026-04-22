@@ -163,7 +163,7 @@ class McpComponentTools:
 
     @tool(
         name="ha_install_mcp_tools",
-        tags={"Utilities"},
+        tags={"Utilities", "beta"},
         annotations={
             "destructiveHint": True,
             "title": "Install MCP Tools Component"
