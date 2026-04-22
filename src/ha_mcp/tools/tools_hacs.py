@@ -83,15 +83,15 @@ class HacsTools:
         self._client = client
 
     @tool(
-        name="ha_hacs",
+        name="ha_manage_hacs",
         tags={"HACS"},
         annotations={
             "destructiveHint": True,
-            "title": "HACS Manager",
+            "title": "Set HACS",
         },
     )
     @log_tool_usage
-    async def ha_hacs(
+    async def ha_manage_hacs(
         self,
         action: Annotated[
             Literal["search", "info", "download", "add_repository"],
@@ -142,10 +142,13 @@ class HacsTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Unified tool to manage HACS (Home Assistant Community Store).
+        """Manage HACS (Home Assistant Community Store).
 
         Use this tool to search the store, get repository info, download/install packages,
-        or add custom repositories. This consolidates functionality to reduce token usage.
+        or add custom repositories. This tool handles both installation and updates of repositories.
+
+        Do NOT use this tool for general Home Assistant configuration or entity control;
+        use domain-specific tools instead.
 
         **Actions:**
         1. `search`: Search for repositories or list installed ones.
@@ -157,12 +160,16 @@ class HacsTools:
         4. `add_repository`: Add a custom GitHub repository.
            - Requires `repository` (e.g. 'owner/repo') and `category`.
 
+        **Caveats:**
+        - For integrations, a restart of Home Assistant may be required after installation.
+        - For Lovelace cards, clear your browser cache to see the new card.
+
         **Examples:**
-        - Search: `ha_hacs(action="search", query="mushroom", category="lovelace")`
-        - List installed: `ha_hacs(action="search", installed_only=True)`
-        - Get Info: `ha_hacs(action="info", repository_id="441028036")`
-        - Install/Download: `ha_hacs(action="download", repository_id="piitaya/lovelace-mushroom")`
-        - Add Custom Repo: `ha_hacs(action="add_repository", repository="owner/my-card", category="lovelace")`
+        - Search: ha_manage_hacs(action='search', query='mushroom', category='lovelace')
+        - List installed: ha_manage_hacs(action='search', installed_only=True)
+        - Get Info: ha_manage_hacs(action='info', repository_id='441028036')
+        - Install/Download: ha_manage_hacs(action='download', repository_id='piitaya/lovelace-mushroom')
+        - Add Custom Repo: ha_manage_hacs(action='add_repository', repository='owner/my-card', category='lovelace')
         """
         try:
             await _assert_hacs_available()
@@ -188,13 +195,20 @@ class HacsTools:
             else:
                 raise ValueError(f"Unknown action: {action}")
 
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    str(e),
+                )
+            )
         except ToolError:
             raise
         except Exception as e:
             exception_to_structured_error(
                 e,
                 context={
-                    "tool": "ha_hacs",
+                    "tool": "ha_manage_hacs",
                     "action": action,
                 },
                 suggestions=[
@@ -231,7 +245,12 @@ class HacsTools:
         response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
 
         if not response.get("success"):
-            raise Exception(f"HACS search request failed: {response}")
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    f"HACS search request failed: {response.get('error', response)}",
+                )
+            )
 
         all_repositories = response.get("result", [])
         matches = _filter_and_score_repos(all_repositories, query, installed_only_bool)
@@ -267,7 +286,12 @@ class HacsTools:
         )
 
         if not response.get("success"):
-            raise Exception(f"HACS repository info request failed: {response}")
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    f"HACS repository info request failed: {response.get('error', response)}",
+                )
+            )
 
         result = response.get("result", {})
         return await add_timezone_metadata(
@@ -313,7 +337,12 @@ class HacsTools:
         )
 
         if not response.get("success"):
-            raise Exception(f"HACS download request failed: {response}")
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    f"HACS download request failed: {response.get('error', response)}",
+                )
+            )
 
         return await add_timezone_metadata(
             self._client,
@@ -347,7 +376,12 @@ class HacsTools:
         )
 
         if not response.get("success"):
-            raise Exception(f"HACS add repository request failed: {response}")
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    f"HACS add repository request failed: {response.get('error', response)}",
+                )
+            )
 
         return await add_timezone_metadata(
             self._client,
@@ -442,4 +476,15 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
             if repo.get("full_name", "").lower() == repository_id.lower():
                 return str(repo.get("id")), repo.get("name") or repository_id
 
-    raise Exception(f"Repository '{repository_id}' not found in HACS")
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"Repository '{repository_id}' not found in HACS",
+            suggestions=[
+                "Use ha_manage_hacs(action='search') to find the repository",
+                "Check the repository name is correct (case-insensitive)",
+                "The repository may need to be added to HACS first",
+            ],
+        )
+    )
+    return repository_id, repository_id
