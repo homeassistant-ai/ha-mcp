@@ -191,7 +191,14 @@ class TestCategoryCRUD:
         logger.info("Non-existent category properly returned error")
 
     async def test_delete_nonexistent_category(self, mcp_client):
-        """Test deleting a non-existent category."""
+        """
+        Test deleting a non-existent category returns a structured error,
+        not success=True.
+
+        Source path: WebSocket result.success=False →
+        raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete category: ...").
+        Hardened from if/else-log pattern to explicit assertions.
+        """
         logger.info("Testing delete non-existent category")
 
         data = await safe_call_tool(
@@ -200,11 +207,16 @@ class TestCategoryCRUD:
             {"scope": "automation", "category_id": "nonexistent_category_xyz_12345"},
         )
 
-        # Should return error or handle gracefully
-        if data.get("success"):
-            logger.info("Delete returned success (idempotent)")
-        else:
-            logger.info("Non-existent category delete properly returned error")
+        assert not data.get("success"), (
+            f"Expected failure for nonexistent category, got success=True: {data}"
+        )
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        )
+        error_msg = str(data.get("error", "")).lower()
+        assert "doesn't exist" in error_msg or "not found" in error_msg, (
+            f"Expected 'doesn't exist'/'not found' in error message, got: {data.get('error')}"
+        )
 
 
 @pytest.mark.asyncio
