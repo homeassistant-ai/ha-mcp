@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-85-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-86-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -151,12 +151,12 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (85 tools)</b></summary>
+<summary><b>Complete Tool List (86 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
 | **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor` |
+| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor`, `ha_list_floors_areas` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
@@ -164,7 +164,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard` |
 | **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_update_device` |
 | **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
-| **Files** | `ha_delete_file`, `ha_list_files`, `ha_read_file`, `ha_write_file` |
+| **Files** | `ha_delete_file` *(beta)*, `ha_list_files` *(beta)*, `ha_read_file` *(beta)*, `ha_write_file` *(beta)* |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
 | **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_remove_helper`, `ha_config_set_helper`, `ha_get_helper_schema` |
@@ -176,7 +176,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
 | **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
-| **Utilities** | `ha_eval_template`, `ha_install_mcp_tools`, `ha_report_issue` |
+| **Utilities** | `ha_eval_template`, `ha_install_mcp_tools` *(beta)*, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
 
 <!-- TOOLS_TABLE_END -->
@@ -184,7 +184,7 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
-## 🔌 Custom Component (ha_mcp_tools)
+## 🔌 Custom Component (ha_mcp_tools) *(beta)*
 
 Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.
 
@@ -192,11 +192,11 @@ Some tools require a companion custom component installed in Home Assistant. Sta
 
 | Tool | Description |
 |------|-------------|
-| `ha_config_set_yaml` | Safely add, replace, or remove top-level YAML keys in `configuration.yaml` and package files (automatic backup, validation, and config check) |
-| `ha_list_files` | List files in allowed directories (www/, themes/, custom_templates/) |
-| `ha_read_file` | Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/) |
-| `ha_write_file` | Write files to allowed directories |
-| `ha_delete_file` | Delete files from allowed directories |
+| `ha_config_set_yaml` *(beta)* | Safely add, replace, or remove top-level YAML keys in `configuration.yaml` and package files (automatic backup, validation, and config check) |
+| `ha_list_files` *(beta)* | List files in allowed directories (www/, themes/, custom_templates/) |
+| `ha_read_file` *(beta)* | Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/) |
+| `ha_write_file` *(beta)* | Write files to allowed directories |
+| `ha_delete_file` *(beta)* | Delete files from allowed directories |
 
 All other tools work without the component. These five return an error with installation instructions if the component is missing.
 

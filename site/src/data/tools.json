@@ -267,6 +267,20 @@
     "source_file": "tools_areas.py"
   },
   {
+    "name": "ha_list_floors_areas",
+    "title": "List Floors and Areas",
+    "description": "List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.\n\nDo not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.\n\nUse for location-based reasoning where floor-to-area relationships matter, such as \"which rooms are on the ground floor\" or operations scoped to a level.\n\nFloors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.",
+    "inputSchema": {},
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
     "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.",
@@ -1014,7 +1028,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1040,7 +1055,8 @@
       "readOnlyHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1066,7 +1082,8 @@
       "readOnlyHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1100,7 +1117,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Files"
+      "Files",
+      "beta"
     ],
     "source_file": "tools_filesystem.py"
   },
@@ -1121,7 +1139,7 @@
   {
     "name": "ha_config_remove_group",
     "title": "Remove Group",
-    "description": "Remove a Home Assistant entity group.\n\nUses the group.remove service to delete the group.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but will reappear after restart.\n- This only removes old-style groups, not platform-specific groups.",
+    "description": "Remove a service-based Home Assistant entity group via the group.remove service.\n\n**When NOT to use:** for groups created through `ha_config_set_helper(helper_type=\"group\", ...)`,\nuse `ha_delete_config_entry`. Those config-entry-backed groups are not reachable via the\ngroup.remove service, and `ha_config_remove_helper` does not support helper_type=\"group\".\n\n**When to use:** removing groups created with `ha_config_set_group` or defined in YAML\nvia `group:` configuration. Config-entry-backed deletion tools cannot find these.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but will reappear after restart.\n- This only removes old-style groups, not platform-specific groups.",
     "inputSchema": {
       "properties": {
         "object_id": {
@@ -1148,7 +1166,7 @@
   {
     "name": "ha_config_set_group",
     "title": "Create or Update Group",
-    "description": "Create or update a Home Assistant entity group.\n\nUses the group.set service to create a new group or update an existing one.\nGroups are useful for organizing entities and controlling them together.\n\n**For NEW groups:** Provide object_id and entities (required).\n**For EXISTING groups:** Provide object_id and any fields to update.\n\nEXAMPLES:\n- Create group: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"])\n- Create with name: ha_config_set_group(\"sensors\", entities=[\"sensor.temp\"], name=\"All Sensors\")\n- Update name: ha_config_set_group(\"lights\", name=\"Living Room Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])\n- Remove entities: ha_config_set_group(\"lights\", remove_entities=[\"light.old\"])\n- Replace all entities: ha_config_set_group(\"lights\", entities=[\"light.new1\", \"light.new2\"])\n\n**NOTE:** entities, add_entities, and remove_entities are mutually exclusive.",
+    "description": "Create or update a service-based Home Assistant entity group via the group.set service.\n\n**When NOT to use:** for typical \"combine these entities into one controllable group\"\nrequests, prefer `ha_config_set_helper(helper_type=\"group\", ...)`. Config-entry-backed\ngroups are registered in the entity registry, so `ha_set_entity` can assign them to\nareas and they are deletable via `ha_delete_config_entry`.\n\n**When to use:** compatibility with existing groups already configured via group.set\nor YAML, or the rare case where entity-registry membership is explicitly unwanted.\nGroups created here are only removable via `ha_config_remove_group` — neither\n`ha_config_remove_helper` nor `ha_delete_config_entry` will find them.\n\n**For NEW groups:** Provide object_id and entities (required).\n**For EXISTING groups:** Provide object_id and any fields to update.\n\nEXAMPLES:\n- Create group: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"])\n- Create with name: ha_config_set_group(\"sensors\", entities=[\"sensor.temp\"], name=\"All Sensors\")\n- Update name: ha_config_set_group(\"lights\", name=\"Living Room Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])\n- Remove entities: ha_config_set_group(\"lights\", remove_entities=[\"light.old\"])\n- Replace all entities: ha_config_set_group(\"lights\", entities=[\"light.new1\", \"light.new2\"])\n\n**NOTE:** entities, add_entities, and remove_entities are mutually exclusive.",
     "inputSchema": {
       "properties": {
         "object_id": {
@@ -2704,7 +2722,8 @@
       "destructiveHint": true
     },
     "tags": [
-      "Utilities"
+      "Utilities",
+      "beta"
     ],
     "source_file": "tools_mcp_component.py"
   },

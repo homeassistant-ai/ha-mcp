@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "7.3.0.dev228"
+version: "7.3.0.dev231"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -28,5 +28,7 @@ schema:
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
   enable_yaml_config_editing: bool?
+  enable_filesystem_tools: bool?
+  enable_custom_component_integration: bool?
 ports:
   9583/tcp: 9583

@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 85+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -231,7 +231,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Default:** `false`
 
-Replaces the full tool catalog (~85 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -329,7 +329,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 85+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
@@ -344,6 +344,7 @@ The add-on provides 85+ MCP tools for controlling Home Assistant:
 - `ha_config_remove_floor` — Delete a Home Assistant floor.
 - `ha_config_set_area` — Create or update a Home Assistant area (room).
 - `ha_config_set_floor` — Create or update a Home Assistant floor.
+- `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
 ### Automations
 - `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
@@ -382,15 +383,15 @@ The add-on provides 85+ MCP tools for controlling Home Assistant:
 - `ha_set_entity` — Update entity properties in the entity registry.
 
 ### Files
-- `ha_delete_file` — Delete a file from allowed directories in the Home Assistant config.
-- `ha_list_files` — List files in a directory within the Home Assistant config directory.
-- `ha_read_file` — Read a file from the Home Assistant config directory.
-- `ha_write_file` — Write a file to allowed directories in the Home Assistant config.
+- `ha_delete_file` **(beta — dev channel only)** — Delete a file from allowed directories in the Home Assistant config.
+- `ha_list_files` **(beta — dev channel only)** — List files in a directory within the Home Assistant config directory.
+- `ha_read_file` **(beta — dev channel only)** — Read a file from the Home Assistant config directory.
+- `ha_write_file` **(beta — dev channel only)** — Write a file to allowed directories in the Home Assistant config.
 
 ### Groups
 - `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
-- `ha_config_remove_group` — Remove a Home Assistant entity group.
-- `ha_config_set_group` — Create or update a Home Assistant entity group.
+- `ha_config_remove_group` — Remove a service-based Home Assistant entity group via the group.remove service.
+- `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
 - `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
@@ -456,7 +457,7 @@ The add-on provides 85+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
-- `ha_install_mcp_tools` — Install the ha_mcp_tools custom component via HACS.
+- `ha_install_mcp_tools` **(beta — dev channel only)** — Install the ha_mcp_tools custom component via HACS.
 - `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
 
 ### Zones

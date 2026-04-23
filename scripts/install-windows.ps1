@@ -37,7 +37,7 @@ if ($uvInstalled) {
         Write-Host "  Please install manually:" -ForegroundColor Red
         Write-Host "  winget install astral-sh.uv" -ForegroundColor Cyan
         Write-Host "  OR download from: https://docs.astral.sh/uv/" -ForegroundColor Cyan
-        exit 1
+        throw
     }
 }
 Write-Host ""
@@ -53,16 +53,6 @@ if (-not (Test-Path $ConfigDir)) {
 # Create config directory if needed
 if (-not (Test-Path $ConfigDir)) {
     New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
-}
-
-# The MCP server config
-$HaMcpConfig = @{
-    command = "uvx"
-    args = @("--python", "3.13", "--refresh", "ha-mcp@latest")
-    env = @{
-        HOMEASSISTANT_URL = $DemoUrl
-        HOMEASSISTANT_TOKEN = $DemoToken
-    }
 }
 
 # The properly formatted JSON config
@@ -154,5 +144,3 @@ Write-Host "  Replace HOMEASSISTANT_TOKEN with your token"
 Write-Host "  (Generate token in HA: Profile > Security > Long-lived tokens)"
 Write-Host ""
 
-# Exit successfully
-exit 0
