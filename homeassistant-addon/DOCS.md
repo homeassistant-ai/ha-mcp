@@ -390,8 +390,8 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Groups
 - `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
-- `ha_config_remove_group` — Remove a Home Assistant entity group.
-- `ha_config_set_group` — Create or update a Home Assistant entity group.
+- `ha_config_remove_group` — Remove a service-based Home Assistant entity group via the group.remove service.
+- `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
 - `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
