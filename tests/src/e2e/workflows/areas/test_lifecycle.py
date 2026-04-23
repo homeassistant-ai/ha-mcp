@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +889,8 @@ async def test_home_topology_schema(mcp_client):
     )
 
 
+@pytest.mark.area
+@pytest.mark.floor
 @pytest.mark.asyncio
 class TestAreaFloorDestructiveNegativeInputs:
     """
@@ -913,8 +915,6 @@ class TestAreaFloorDestructiveNegativeInputs:
         Source path: WebSocket result.success=False →
         raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete area: ...").
         """
-        from ...utilities.assertions import safe_call_tool
-
         data = await safe_call_tool(
             mcp_client,
             "ha_config_remove_area",
@@ -940,8 +940,6 @@ class TestAreaFloorDestructiveNegativeInputs:
         Source path: WebSocket result.success=False →
         raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete floor: ...").
         """
-        from ...utilities.assertions import safe_call_tool
-
         data = await safe_call_tool(
             mcp_client,
             "ha_config_remove_floor",
