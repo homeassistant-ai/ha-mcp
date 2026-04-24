@@ -801,7 +801,7 @@ async def run_stories(
                     await _run_mcp_steps(shared_mcp, setup_steps, "setup")
 
                 logger.info(f"[{agent}/{sid}] Running test prompt...")
-                run_start = time.time()
+                prompt_start = time.time()
                 summary: dict | None
                 if use_inline:
                     assert (
@@ -844,7 +844,7 @@ async def run_stories(
                 if claude_session_id:
                     session_file = _find_session_file_by_id(claude_session_id)
                 if not session_file:
-                    session_file = _find_latest_session_file(agent, after=run_start)
+                    session_file = _find_latest_session_file(agent, after=prompt_start)
 
                 verify_results = None
                 ha_checks = (story.get("verify") or {}).get("ha_checks")
