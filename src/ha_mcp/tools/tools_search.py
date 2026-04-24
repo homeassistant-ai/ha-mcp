@@ -666,6 +666,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "safe_mode": config.get("safe_mode", False),
                         "internal_url": config.get("internal_url"),
                         "external_url": config.get("external_url"),
+                        "allowlist_external_dirs": config.get(
+                            "allowlist_external_dirs", []
+                        ),
                     }
                 )
             result["system_info"] = system_info

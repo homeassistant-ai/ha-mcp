@@ -299,10 +299,16 @@ class TestSystemTools:
             "location_name",
             "time_zone",
             "components_loaded",
+            "allowlist_external_dirs",
         ]
 
         for field in expected_fields:
             assert field in system_info, f"Missing expected field in system_info: {field}"
+
+        # allowlist_external_dirs is always a list (possibly empty)
+        assert isinstance(system_info["allowlist_external_dirs"], list), (
+            "allowlist_external_dirs should be a list"
+        )
 
         # Log key information
         logger.info(f"Home Assistant version: {system_info.get('version')}")
