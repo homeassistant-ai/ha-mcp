@@ -659,6 +659,7 @@ async def run_stories(
     For each agent: start container -> run all stories -> stop container.
     When --ha-url is provided, all agents share the external instance.
     """
+    run_start = time.time()
     sha, describe = get_git_info()
     agent_list = [a.strip() for a in args.agents.split(",")]
     using_external_ha = bool(args.ha_url)
@@ -903,7 +904,10 @@ async def run_stories(
         session_info = f" (session: {session_file})" if session_file else ""
         logger.info(f"  [{status}] {agent}/{sid}: {story['title']}{session_info}")
 
-    logger.info(f"\nResults appended to {args.results_file}")
+    elapsed = time.time() - run_start
+    mins, secs = divmod(int(elapsed), 60)
+    logger.info(f"\nTotal time: {mins}m {secs}s")
+    logger.info(f"Results appended to {args.results_file}")
 
     failed = sum(1 for *_, passed in all_results if not passed)
     total = len(all_results)
