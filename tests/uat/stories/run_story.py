@@ -69,13 +69,12 @@ sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # for scripts/ subdirectory imports
 
 from scripts.verify_story import verify_ha_checks  # noqa: E402
+from uat._inprocess import inprocess_mcp_client  # noqa: E402
+from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
+from uat.run_uat import SuggestingArgumentParser  # noqa: E402
 
-logger = logging.getLogger(__name__)
-
-
-def log(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+logger = logging.getLogger("uat.stories.run_story")
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +130,10 @@ def _start_container(*, keep_alive: bool = False) -> dict:
     try:
         port = container.get_exposed_port(8123)
         url = f"http://localhost:{port}"
-        log(f"HA container started on {url}")
+        logger.info(f"HA container started on {url}")
 
         # Wait for HA to be fully ready (API + components + entities)
-        wait_for_ha_ready(url, TEST_TOKEN, log=log)
+        wait_for_ha_ready(url, TEST_TOKEN)
     except Exception:
         container.stop()
         shutil.rmtree(config_dir, ignore_errors=True)
@@ -152,7 +151,7 @@ def _stop_container(ha: dict) -> None:
     """Stop HA container and clean up."""
     import shutil
 
-    log("Stopping HA container...")
+    logger.info("Stopping HA container...")
     ha["container"].stop()
     shutil.rmtree(ha["config_dir"], ignore_errors=True)
 
@@ -194,7 +193,7 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
                     ) + usage.get("cache_creation_input_tokens", 0)
             return totals
     except Exception as exc:
-        log(f"  Token extraction failed: {exc}")
+        logger.warning(f"  Token extraction failed: {exc}")
         return None
 
     return None
@@ -223,7 +222,7 @@ def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
                             count += 1
             return count
     except Exception as exc:
-        log(f"  Tool call extraction failed: {exc}")
+        logger.warning(f"  Tool call extraction failed: {exc}")
         return None
 
     return None
@@ -274,50 +273,19 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# FastMCP in-memory setup
-# ---------------------------------------------------------------------------
-async def _run_mcp_steps(
-    ha_url: str, ha_token: str, steps: list[dict], phase: str
-) -> None:
-    """Execute setup or teardown steps via FastMCP in-memory client."""
-    if not steps:
-        return
-
-    import os
-
-    import ha_mcp.config
-    from ha_mcp.client import HomeAssistantClient
-    from ha_mcp.client.websocket_client import websocket_manager
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    # Point global settings at the test HA instance before resetting.
-    # The WebSocket client uses get_global_settings() (reads env vars), not the
-    # HomeAssistantClient base_url, so we must set env vars explicitly.
-    os.environ["HOMEASSISTANT_URL"] = ha_url
-    os.environ["HOMEASSISTANT_TOKEN"] = ha_token
-    ha_mcp.config._settings = None
-
-    # Disconnect any cached WebSocket so it reconnects to the test instance.
-    await websocket_manager.disconnect()
-
-    client = HomeAssistantClient(base_url=ha_url, token=ha_token)
-    server = HomeAssistantSmartMCPServer(client=client)
-
-    from fastmcp import Client
-
-    async with Client(server.mcp) as mcp_client:
-        for step in steps:
-            tool_name = step["tool"]
-            args = step.get("args", {})
-            log(f"  [{phase}] {tool_name}({args})")
-            try:
-                await mcp_client.call_tool(tool_name, args)
-            except Exception as e:
-                if phase == "setup":
-                    log(f"  [{phase}] {tool_name} FAILED: {e}")
-                    raise
-                else:
-                    log(f"  [{phase}] {tool_name} failed (ok): {e}")
+async def _run_mcp_steps(mcp_client, steps: list[dict], phase: str) -> None:
+    """Execute setup or teardown steps via a shared in-memory MCP client."""
+    for step in steps:
+        tool_name = step["tool"]
+        args = step.get("args", {})
+        logger.info(f"  [{phase}] {tool_name}({args})")
+        try:
+            await mcp_client.call_tool(tool_name, args)
+        except Exception:
+            if phase == "setup":
+                logger.info(f"  [{phase}] {tool_name} FAILED (see server log)")
+                raise
+            logger.info(f"  [{phase}] {tool_name} failed, ignored")
 
 
 # ---------------------------------------------------------------------------
@@ -379,8 +347,8 @@ def _run_test_prompt(
         timeout=600,
     )
 
-    if result.stderr:
-        print(result.stderr, file=sys.stderr, end="")
+    for line in result.stderr.splitlines():
+        logger.info(line)
 
     summary = None
     if result.stdout.strip():
@@ -431,9 +399,8 @@ async def _run_test_prompt_inline(
             openai_tools=openai_tools,
         )
     except Exception as e:
-        log(f"  [{agent_name}] inline run failed ({type(e).__name__}): {e}")
+        logger.exception(f"  [{agent_name}] inline run failed")
         tb = traceback.format_exc()
-        log(tb)
         duration_ms = int((time.time() - start) * 1000)
         return 1, _inline_failure_summary(
             agent_name,
@@ -531,7 +498,7 @@ def _record_setup_failure(
     """
     for _path, story in filtered:
         summary = _inline_failure_summary(agent, error_msg=error_msg)
-        all_results.append((agent, story["id"], story, 1, summary, None))
+        all_results.append((agent, story["id"], story, 1, summary, None, False))
         append_result(
             results_file,
             story,
@@ -541,7 +508,7 @@ def _record_setup_failure(
             branch,
             summary,
             None,
-            exit_code=1,
+            passed=False,
             verify_results=None,
         )
 
@@ -610,7 +577,7 @@ def append_result(
     branch: str | None,
     bat_summary: dict,
     session_file: str | None = None,
-    exit_code: int = 0,
+    passed: bool = False,
     verify_results: list[dict] | None = None,
 ) -> None:
     """Append a single story result as one JSONL line."""
@@ -627,11 +594,7 @@ def append_result(
         "story": story["id"],
         "category": story["category"],
         "weight": story["weight"],
-        "passed": _compute_passed(
-            exit_code=exit_code,
-            tool_calls=aggregate.get("total_tool_calls"),
-            verify_results=verify_results,
-        ),
+        "passed": passed,
         "test_duration_ms": test_phase.get("duration_ms"),
         "total_duration_ms": aggregate.get("total_duration_ms"),
         "tool_calls": aggregate.get("total_tool_calls"),
@@ -710,28 +673,28 @@ async def run_stories(
     if not using_external_ha:
         err = preflight_check_docker()
         if err:
-            log(f"FATAL: {err}")
+            logger.critical(err)
             return 2
     if args.base_url and "openai" in agent_list:
         err = preflight_check_base_url(args.base_url)
         if err:
-            log(f"FATAL: {err}")
+            logger.critical(err)
             return 2
 
-    all_results: list[tuple[str, str, dict, int, dict | None, str | None]] = []
-    # Each entry: (agent, story_id, story, exit_code, summary, session_file)
+    all_results: list[tuple[str, str, dict, int, dict | None, str | None, bool]] = []
+    # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
 
     mcp_env_dict = parse_mcp_env(
         getattr(args, "mcp_env", None),
         base_url=args.base_url,
-        on_default_applied=log,
+        on_default_applied=logger.info,
     )
     effective_mcp_env: list[str] = [f"{k}={v}" for k, v in mcp_env_dict.items()]
 
     for agent in agent_list:
-        log(f"\n{'#' * 60}")
-        log(f"Agent: {agent}")
-        log(f"{'#' * 60}")
+        logger.info(f"\n{'#' * 60}")
+        logger.info(f"Agent: {agent}")
+        logger.info(f"{'#' * 60}")
 
         ha = None
         ha_url = args.ha_url
@@ -774,7 +737,7 @@ async def run_stories(
                     agent_stack.push_async_callback(openai_client.close)
                 except Exception as e:
                     error_msg = f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
-                    log(f"[{agent}] {error_msg}")
+                    logger.error(f"[{agent}] {error_msg}")
                     _record_setup_failure(
                         filtered,
                         agent,
@@ -787,16 +750,18 @@ async def run_stories(
                     )
                     continue
                 try:
+                    source = f"uvx download @ {args.branch}" if args.branch else "local"
+                    logger.info(f"[{agent}] Starting MCP server ({source})...")
                     inline_mcp_client = await agent_stack.enter_async_context(
                         _MCPClient(config)
                     )
                     openai_tools = await fetch_openai_tools(
                         inline_mcp_client, max_tools=args.max_tools
                     )
-                    log(f"[{agent}] MCP server ready ({len(openai_tools)} tools)")
+                    logger.info(f"[{agent}] MCP server ready ({len(openai_tools)} tools)")
                 except Exception as e:
                     error_msg = f"Failed to start MCP server: {type(e).__name__}: {e}"
-                    log(f"[{agent}] {error_msg}")
+                    logger.error(f"[{agent}] {error_msg}")
                     _record_setup_failure(
                         filtered,
                         agent,
@@ -810,25 +775,29 @@ async def run_stories(
                     continue
 
             if ha and args.keep_container:
-                log(f"\n[{agent}] Container kept alive: {ha['url']}")
-                log(f"[{agent}] Token: {ha['token']}")
-                log(f"[{agent}] Config dir: {ha['config_dir']}")
-                log(f"[{agent}] Stop manually: docker stop <container>")
+                logger.info(f"\n[{agent}] Container kept alive: {ha['url']}")
+                logger.info(f"[{agent}] Token: {ha['token']}")
+                logger.info(f"[{agent}] Config dir: {ha['config_dir']}")
+                logger.info(f"[{agent}] Stop manually: docker stop <container>")
+
+            shared_mcp = await agent_stack.enter_async_context(
+                inprocess_mcp_client(ha_url, ha_token)
+            )
 
             for _path, story in filtered:
                 sid = story["id"]
-                log(f"\n{'=' * 60}")
-                log(f"[{agent}] Story {sid}: {story['title']}")
-                log(f"{'=' * 60}")
+                logger.info(f"\n{'=' * 60}")
+                logger.info(f"[{agent}] Story {sid}: {story['title']}")
+                logger.info(f"{'=' * 60}")
 
                 setup_steps = story.get("setup") or []
                 if setup_steps:
-                    log(
+                    logger.info(
                         f"[{agent}/{sid}] Setup ({len(setup_steps)} steps via FastMCP)..."
                     )
-                    await _run_mcp_steps(ha_url, ha_token, setup_steps, "setup")
+                    await _run_mcp_steps(shared_mcp, setup_steps, "setup")
 
-                log(f"[{agent}/{sid}] Running test prompt...")
+                logger.info(f"[{agent}/{sid}] Running test prompt...")
                 run_start = time.time()
                 summary: dict | None
                 if use_inline:
@@ -884,19 +853,29 @@ async def run_stories(
                         .get("test", {})
                         .get("output", "")
                     )
-                    log(f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)...")
+                    logger.info(f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)...")
                     verify_results = await verify_ha_checks(
-                        ha_url, ha_token, ha_checks, agent_output
+                        ha_url, ha_token, ha_checks, agent_output, shared_mcp
                     )
                     failed_checks = [r for r in verify_results if not r["passed"]]
                     if failed_checks:
-                        log(f"[{agent}/{sid}] {len(failed_checks)}/{len(ha_checks)} check(s) FAILED")
+                        logger.warning(
+                            f"[{agent}/{sid}] {len(failed_checks)}/{len(ha_checks)} check(s) FAILED"
+                        )
                         for r in failed_checks:
-                            log(f"  FAIL [{r['type']}] {r['detail']}")
+                            logger.warning(f"  FAIL [{r['type']}] {r['detail']}")
                     else:
-                        log(f"[{agent}/{sid}] All checks passed")
+                        logger.info(f"[{agent}/{sid}] All checks passed")
 
-                all_results.append((agent, sid, story, rc, summary, session_file))
+                agg = (summary or {}).get("agents", {}).get(agent, {}).get("aggregate", {})
+                passed = _compute_passed(
+                    exit_code=rc,
+                    tool_calls=agg.get("total_tool_calls"),
+                    verify_results=verify_results,
+                )
+                all_results.append(
+                    (agent, sid, story, rc, summary, session_file, passed)
+                )
 
                 if summary or verify_results is not None:
                     append_result(
@@ -908,36 +887,35 @@ async def run_stories(
                         args.branch,
                         summary or {},
                         session_file,
-                        exit_code=rc,
+                        passed=passed,
                         verify_results=verify_results,
                     )
 
                 if session_file:
-                    log(f"[{agent}/{sid}] Session file: {session_file}")
+                    logger.info(f"[{agent}/{sid}] Session file: {session_file}")
 
     # Summary
-    log(f"\n{'=' * 60}")
-    log("Summary")
-    log(f"{'=' * 60}")
-    for agent, sid, story, rc, _, session_file in all_results:
-        status = "PASS" if rc == 0 else "FAIL"
+    logger.info(f"\n{'=' * 60}")
+    logger.info("Summary")
+    logger.info(f"{'=' * 60}")
+    for agent, sid, story, _rc, _, session_file, passed in all_results:
+        status = "PASS" if passed else "FAIL"
         session_info = f" (session: {session_file})" if session_file else ""
-        log(f"  [{status}] {agent}/{sid}: {story['title']}{session_info}")
+        logger.info(f"  [{status}] {agent}/{sid}: {story['title']}{session_info}")
 
-    log(f"\nResults appended to {args.results_file}")
+    logger.info(f"\nResults appended to {args.results_file}")
 
-    failed = sum(1 for _, _, _, rc, _, _ in all_results if rc != 0)
+    failed = sum(1 for *_, passed in all_results if not passed)
     total = len(all_results)
     if failed:
-        log(f"\n{failed}/{total} story runs failed")
+        logger.warning(f"\n{failed}/{total} story runs failed")
         return 1
-    else:
-        log(f"\nAll {total} story runs passed")
-        return 0
+    logger.info(f"\nAll {total} story runs passed")
+    return 0
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    parser = SuggestingArgumentParser(
         description="Run user acceptance stories via BAT",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1014,7 +992,7 @@ def main() -> None:
     if "openai" in agent_list and not args.base_url:
         parser.error("--base-url is required when using the openai agent")
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_cli_logging()
 
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))
@@ -1045,7 +1023,7 @@ def main() -> None:
     try:
         exit_code = asyncio.run(run_stories(args, filtered))
     except KeyboardInterrupt:
-        log("\nInterrupted")
+        logger.info("\nInterrupted")
         sys.exit(130)
     sys.exit(exit_code)
 

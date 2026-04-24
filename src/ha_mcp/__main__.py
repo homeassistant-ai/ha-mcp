@@ -365,6 +365,37 @@ class StatelessSessionLogFilter(logging.Filter):
         return True
 
 
+class ToolValidationLogFilter(logging.Filter):
+    """Demote fastmcp tool-failure tracebacks to single-line warnings.
+
+    Pydantic ValidationError and tool-raised FastMCPError aren't server bugs,
+    so the traceback through fastmcp/pydantic internals is just noise.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "fastmcp.server.server" or not record.exc_info:
+            return True
+
+        from fastmcp.exceptions import FastMCPError
+        from pydantic import ValidationError
+
+        msg = record.getMessage()
+        err = record.exc_info[1]
+        if "Error validating tool" in msg and isinstance(err, ValidationError):
+            record.msg = f"{msg}: {err.errors(include_url=False)}"
+        elif "Error calling tool" in msg and isinstance(err, FastMCPError):
+            record.msg = f"{msg}: {err}"
+        else:
+            return True
+
+        record.args = ()
+        record.levelno = logging.WARNING
+        record.levelname = "WARNING"
+        record.exc_info = None
+        record.exc_text = None
+        return True
+
+
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
     """Configure root logger with consistent timestamp format."""
     logging.basicConfig(
@@ -376,6 +407,7 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
+    logging.getLogger("fastmcp.server.server").addFilter(ToolValidationLogFilter())
 
 
 def _get_timestamped_uvicorn_log_config() -> dict:

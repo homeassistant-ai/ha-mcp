@@ -2,6 +2,23 @@
 
 Executes MCP test scenarios on real AI agent CLIs (Claude, Gemini, OpenAI-compatible) against a Home Assistant test instance. Designed to be driven by a calling agent that generates scenarios dynamically, runs them, and evaluates results.
 
+## Quick Start
+
+Two runners, two use cases:
+
+```bash
+# Run the pre-built story catalog (most common)
+uv run python tests/uat/stories/run_story.py --all --agents gemini
+
+# Run one ad-hoc scenario (must pipe JSON via stdin or use --scenario-file)
+echo '{"test_prompt":"Search for light entities. Report how many you found."}' \
+  | uv run python tests/uat/run_uat.py --agents gemini
+```
+
+Commands must be prefixed with `uv run python` — the repo targets Python 3.13 via uv.
+
+For OpenAI-compatible endpoints (LM Studio, Ollama, vLLM), the `--base-url` must include the `/v1` suffix, e.g. `http://172.19.0.1:1234/v1`. LM Studio requires the model to be loaded in its UI first; Ollama auto-loads on demand.
+
 ## Architecture
 
 ```
@@ -48,26 +65,26 @@ Each prompt runs in a separate CLI invocation (fresh context, no PR knowledge).
 ```bash
 # Pipe scenario from stdin
 echo '{"test_prompt":"Search for light entities. Report how many you found."}' | \
-  python tests/uat/run_uat.py --agents gemini
+  uv run python tests/uat/run_uat.py --agents gemini
 
 # From file
-python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
+uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
 
 # Against already-running HA (skip container startup)
-python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
 
 # Test a specific branch
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
 
 # Local code (default) vs branch
-python tests/uat/run_uat.py                    # uses: uv run --project . ha-mcp
-python tests/uat/run_uat.py --branch pr-551    # uses: uvx --from git+...@pr-551 ha-mcp
+uv run python tests/uat/run_uat.py                    # uses: uv run --project . ha-mcp
+uv run python tests/uat/run_uat.py --branch pr-551    # uses: uvx --from git+...@pr-551 ha-mcp
 
 # OpenAI-compatible local LLM (LM Studio, Ollama, vLLM, etc.)
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --agents openai --base-url http://localhost:1234/v1
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --agents openai --base-url http://localhost:1234/v1
 
 # With a specific model and API key
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --agents openai \
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --agents openai \
   --base-url http://localhost:1234/v1 --model my-model --api-key sk-xxx
 ```
 
@@ -176,10 +193,10 @@ To check if a failure is a regression vs pre-existing:
 
 ```bash
 # Test the PR branch
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
 
 # Compare against master
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch master --agents gemini
+echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --branch master --agents gemini
 ```
 
 ## Dependencies
