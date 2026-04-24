@@ -30,6 +30,8 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
+from fastmcp.exceptions import ToolError  # noqa: E402
+from pydantic import ValidationError as PydanticValidationError  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import PlainTextResponse  # noqa: E402
 
@@ -365,6 +367,36 @@ class StatelessSessionLogFilter(logging.Filter):
         return True
 
 
+class ToolValidationLogFilter(logging.Filter):
+    """Demote fastmcp tool-failure tracebacks to single-line warnings.
+
+    Pydantic ValidationError and tool-raised ToolError aren't server bugs,
+    so the traceback through fastmcp/pydantic internals is just noise. The
+    structured error detail is preserved in the WARNING message; stack is
+    intentionally dropped because these are user-input errors, not bugs.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "fastmcp.server.server" or not record.exc_info:
+            return True
+
+        msg = record.getMessage()
+        err = record.exc_info[1]
+        if "Error validating tool" in msg and isinstance(err, PydanticValidationError):
+            record.msg = f"{msg}: {err.errors(include_url=False)}"
+        elif "Error calling tool" in msg and isinstance(err, ToolError):
+            record.msg = f"{msg}: {err}"
+        else:
+            return True
+
+        record.args = ()
+        record.levelno = logging.WARNING
+        record.levelname = "WARNING"
+        record.exc_info = None
+        record.exc_text = None
+        return True
+
+
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
     """Configure root logger with consistent timestamp format."""
     logging.basicConfig(
@@ -376,6 +408,7 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
+    logging.getLogger("fastmcp.server.server").addFilter(ToolValidationLogFilter())
 
 
 def _get_timestamped_uvicorn_log_config() -> dict:
