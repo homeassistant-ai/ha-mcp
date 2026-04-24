@@ -273,7 +273,9 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-async def _run_mcp_steps(mcp_client, steps: list[dict], phase: str) -> None:
+async def _run_mcp_steps(
+    mcp_client: MCPClient, steps: list[dict], phase: str
+) -> None:
     """Execute setup or teardown steps via a shared in-memory MCP client."""
     for step in steps:
         tool_name = step["tool"]

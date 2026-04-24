@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 
 async def _retry(fn, attempts: int = 3, delay: float = 2.0) -> Any | None:
@@ -248,7 +251,7 @@ async def verify_ha_checks(
     ha_token: str,
     checks: list[dict],
     agent_output: str,
-    mcp_client,
+    mcp_client: Client,
 ) -> list[dict]:
     """Run all checks concurrently and return results list [{type, passed, detail, ...}].
 

@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 
 @contextlib.asynccontextmanager
-async def inprocess_mcp_client(ha_url: str, ha_token: str):
+async def inprocess_mcp_client(
+    ha_url: str, ha_token: str
+) -> AsyncIterator[Client]:
     """Build one in-process FastMCP client for setup/verify/teardown.
 
     The env-swap and WebSocket disconnect point ha_mcp's module-level settings
