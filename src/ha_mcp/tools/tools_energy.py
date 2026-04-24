@@ -141,26 +141,54 @@ def _shape_check(config: dict[str, Any]) -> list[dict[str, str]]:
             continue
         for idx, entry in enumerate(value):
             if not isinstance(entry, dict):
-                errors.append({
-                    "path": f"{key}[{idx}]",
-                    "message": "entry must be a dict",
-                })
+                errors.append(
+                    {
+                        "path": f"{key}[{idx}]",
+                        "message": "entry must be a dict",
+                    }
+                )
                 continue
-            if key == "energy_sources" and "type" not in entry:
-                errors.append({
-                    "path": f"{key}[{idx}]",
-                    "message": "energy_sources entries require 'type' (grid|solar|battery|gas)",
-                })
+            if key == "energy_sources":
+                valid_types = {"grid", "solar", "battery", "gas"}
+                requires_stat_from = {"solar", "battery", "gas"}
+                entry_type = entry.get("type")
+                if entry_type is None:
+                    errors.append(
+                        {
+                            "path": f"{key}[{idx}]",
+                            "message": "energy_sources entries require 'type' (grid|solar|battery|gas)",
+                        }
+                    )
+                elif entry_type not in valid_types:
+                    errors.append(
+                        {
+                            "path": f"{key}[{idx}].type",
+                            "message": f"invalid type '{entry_type}' (must be one of grid|solar|battery|gas)",
+                        }
+                    )
+                elif (
+                    entry_type in requires_stat_from and "stat_energy_from" not in entry
+                ):
+                    errors.append(
+                        {
+                            "path": f"{key}[{idx}]",
+                            "message": f"{entry_type} entries require 'stat_energy_from'",
+                        }
+                    )
             if key == "device_consumption" and "stat_consumption" not in entry:
-                errors.append({
-                    "path": f"{key}[{idx}]",
-                    "message": "device_consumption entries require 'stat_consumption'",
-                })
+                errors.append(
+                    {
+                        "path": f"{key}[{idx}]",
+                        "message": "device_consumption entries require 'stat_consumption'",
+                    }
+                )
             if key == "device_consumption_water" and "stat_consumption" not in entry:
-                errors.append({
-                    "path": f"{key}[{idx}]",
-                    "message": "device_consumption_water entries require 'stat_consumption'",
-                })
+                errors.append(
+                    {
+                        "path": f"{key}[{idx}]",
+                        "message": "device_consumption_water entries require 'stat_consumption'",
+                    }
+                )
 
     return errors
 
@@ -185,7 +213,9 @@ class EnergyTools:
         self,
         mode: Annotated[
             Literal["get", "set"],
-            Field(description="Operation mode: 'get' reads the current prefs; 'set' writes a new prefs payload."),
+            Field(
+                description="Operation mode: 'get' reads the current prefs; 'set' writes a new prefs payload."
+            ),
         ],
         config: Annotated[
             dict[str, Any] | None,
@@ -230,7 +260,7 @@ class EnergyTools:
         ] = False,
     ) -> dict[str, Any]:
         """
-        Read or write the Home Assistant Energy Dashboard preferences.
+        Manage the Home Assistant Energy Dashboard preferences.
 
         The Energy Dashboard configuration (grid/solar/battery/gas sources,
         individual device consumption sensors, cost tariffs, water) is stored
@@ -268,28 +298,32 @@ class EnergyTools:
 
         # mode == "set"
         if config is None:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "'config' is required when mode='set'",
-                context={"mode": mode},
-                suggestions=[
-                    "Call ha_manage_energy_prefs(mode='get') first, mutate the returned config, pass it back",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'config' is required when mode='set'",
+                    context={"mode": mode},
+                    suggestions=[
+                        "Call ha_manage_energy_prefs(mode='get') first, mutate the returned config, pass it back",
+                    ],
+                )
+            )
 
         if dry_run:
             return await self._dry_run(config)
 
         if config_hash is None:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "'config_hash' is required when mode='set' and dry_run=False",
-                context={"mode": mode},
-                suggestions=[
-                    "Call ha_manage_energy_prefs(mode='get') to obtain a fresh config_hash",
-                    "Or call again with dry_run=True to validate without a hash",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'config_hash' is required when mode='set' and dry_run=False",
+                    context={"mode": mode},
+                    suggestions=[
+                        "Call ha_manage_energy_prefs(mode='get') to obtain a fresh config_hash",
+                        "Or call again with dry_run=True to validate without a hash",
+                    ],
+                )
+            )
 
         return await self._set_prefs(config, config_hash)
 
@@ -307,9 +341,11 @@ class EnergyTools:
         on fresh installations.
         """
         try:
-            result = await self._client.send_websocket_message({
-                "type": "energy/get_prefs",
-            })
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "energy/get_prefs",
+                }
+            )
 
             if not result.get("success"):
                 error_msg = str(result.get("error", ""))
@@ -325,11 +361,13 @@ class EnergyTools:
                             "this instance; returning empty default."
                         ),
                     }
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
-                    context={"mode": "get"},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
+                        context={"mode": "get"},
+                    )
+                )
 
             prefs = result.get("result", {})
             return {
@@ -343,10 +381,14 @@ class EnergyTools:
             raise
         except Exception as e:
             logger.error(f"Error getting energy prefs: {e}")
-            exception_to_structured_error(e, context={"mode": "get"}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"mode": "get"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Shape-check the proposed config and fetch current-state validate.
@@ -358,9 +400,11 @@ class EnergyTools:
         try:
             shape_errors = _shape_check(config)
 
-            validate_result = await self._client.send_websocket_message({
-                "type": "energy/validate",
-            })
+            validate_result = await self._client.send_websocket_message(
+                {
+                    "type": "energy/validate",
+                }
+            )
             if validate_result.get("success"):
                 current_state_errors = _flatten_validation_errors(
                     validate_result.get("result", {})
@@ -414,35 +458,41 @@ class EnergyTools:
             # 1. Shape check (fast local, fail closed)
             shape_errors = _shape_check(config)
             if shape_errors:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    f"Config shape invalid: {len(shape_errors)} error(s)",
-                    context={
-                        "mode": "set",
-                        "shape_errors": shape_errors,
-                    },
-                    suggestions=[
-                        "Fix the listed errors and retry",
-                        "Call with dry_run=True to re-check without writing",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        f"Config shape invalid: {len(shape_errors)} error(s)",
+                        context={
+                            "mode": "set",
+                            "shape_errors": shape_errors,
+                        },
+                        suggestions=[
+                            "Fix the listed errors and retry",
+                            "Call with dry_run=True to re-check without writing",
+                        ],
+                    )
+                )
 
             # 2. Fresh read for hash comparison. Map "No prefs" (never
             # configured) to empty default so the hash-check works on
             # fresh installations too.
-            current_result = await self._client.send_websocket_message({
-                "type": "energy/get_prefs",
-            })
+            current_result = await self._client.send_websocket_message(
+                {
+                    "type": "energy/get_prefs",
+                }
+            )
             if not current_result.get("success"):
                 error_msg = str(current_result.get("error", ""))
                 if _is_no_prefs_error(error_msg):
                     current_prefs: dict[str, Any] = _default_prefs()
                 else:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to re-read prefs for hash check: {current_result.get('error', 'Unknown error')}",
-                        context={"mode": "set"},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Failed to re-read prefs for hash check: {current_result.get('error', 'Unknown error')}",
+                            context={"mode": "set"},
+                        )
+                    )
                     # unreachable; appeases type checkers
                     current_prefs = {}
             else:
@@ -451,16 +501,18 @@ class EnergyTools:
             current_hash = compute_config_hash(current_prefs)
 
             if current_hash != config_hash:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Energy prefs modified since last read (conflict)",
-                    context={"mode": "set"},
-                    suggestions=[
-                        "Call ha_manage_energy_prefs(mode='get') again",
-                        "Re-apply your changes to the fresh config",
-                        "Pass the new config_hash back in",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_LOCKED,
+                        "Energy prefs modified since last read (conflict)",
+                        context={"mode": "set"},
+                        suggestions=[
+                            "Call ha_manage_energy_prefs(mode='get') again",
+                            "Re-apply your changes to the fresh config",
+                            "Pass the new config_hash back in",
+                        ],
+                    )
+                )
 
             # 3. Save
             save_payload: dict[str, Any] = {"type": "energy/save_prefs"}
@@ -470,22 +522,26 @@ class EnergyTools:
 
             save_result = await self._client.send_websocket_message(save_payload)
             if not save_result.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save energy prefs: {save_result.get('error', 'Unknown error')}",
-                    context={"mode": "set"},
-                    suggestions=[
-                        "Verify the token has admin privileges (energy/save_prefs is admin-only)",
-                        "Check config shape against the energy/get_prefs response",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to save energy prefs: {save_result.get('error', 'Unknown error')}",
+                        context={"mode": "set"},
+                        suggestions=[
+                            "Verify the token has admin privileges (energy/save_prefs is admin-only)",
+                            "Check config shape against the energy/get_prefs response",
+                        ],
+                    )
+                )
 
             # 4. Post-save validation against the newly-persisted state
             post_save_errors: list[dict[str, str]] = []
             try:
-                validate_result = await self._client.send_websocket_message({
-                    "type": "energy/validate",
-                })
+                validate_result = await self._client.send_websocket_message(
+                    {
+                        "type": "energy/validate",
+                    }
+                )
                 if validate_result.get("success"):
                     post_save_errors = _flatten_validation_errors(
                         validate_result.get("result", {})

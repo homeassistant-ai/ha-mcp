@@ -82,9 +82,7 @@ class TestFlattenValidationErrors:
             "device_consumption_water": [],
         }
         errors = _flatten_validation_errors(raw)
-        assert errors == [
-            {"path": "energy_sources[0]", "message": "stat not found"}
-        ]
+        assert errors == [{"path": "energy_sources[0]", "message": "stat not found"}]
 
     def test_dict_per_entry_with_field_paths(self):
         raw = {
@@ -95,8 +93,14 @@ class TestFlattenValidationErrors:
             "device_consumption_water": [],
         }
         errors = _flatten_validation_errors(raw)
-        assert {"path": "device_consumption[0].stat_consumption", "message": "unit mismatch"} in errors
-        assert {"path": "device_consumption[0].stat_consumption", "message": "stat missing"} in errors
+        assert {
+            "path": "device_consumption[0].stat_consumption",
+            "message": "unit mismatch",
+        } in errors
+        assert {
+            "path": "device_consumption[0].stat_consumption",
+            "message": "stat missing",
+        } in errors
         assert len(errors) == 2
 
 
@@ -118,15 +122,19 @@ class TestShapeCheck:
         assert {"path": "device_consumption", "message": "must be a list"} in errors
 
     def test_energy_source_missing_type(self):
-        errors = _shape_check({
-            "energy_sources": [{"stat_energy_from": "sensor.x"}],
-        })
+        errors = _shape_check(
+            {
+                "energy_sources": [{"stat_energy_from": "sensor.x"}],
+            }
+        )
         assert any("type" in e["message"] for e in errors)
 
     def test_device_consumption_missing_stat_consumption(self):
-        errors = _shape_check({
-            "device_consumption": [{"name": "anonymous"}],
-        })
+        errors = _shape_check(
+            {
+                "device_consumption": [{"name": "anonymous"}],
+            }
+        )
         assert any("stat_consumption" in e["message"] for e in errors)
 
     def test_entry_not_a_dict(self):
@@ -245,7 +253,9 @@ class TestDryRun:
             "result": _empty_validate_result(),
         }
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=_sample_prefs(), dry_run=True,
+            mode="set",
+            config=_sample_prefs(),
+            dry_run=True,
         )
         assert result["success"] is True
         assert result["shape_errors"] == []
@@ -258,11 +268,88 @@ class TestDryRun:
         }
         bad_config = {"energy_sources": [{"stat_energy_from": "sensor.x"}]}
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=bad_config, dry_run=True,
+            mode="set",
+            config=bad_config,
+            dry_run=True,
         )
         assert result["success"] is False
         assert len(result["shape_errors"]) > 0
         assert any("type" in e["message"] for e in result["shape_errors"])
+
+    async def test_shape_errors_energy_sources_enum_and_conditional(self, tools):
+        """G1b + G1c coverage:
+        - invalid type reports as '.type' path with enum message
+        - solar/battery/gas without stat_energy_from reports required
+        - grid without stat_energy_from is valid (HA core schema: Optional)
+        """
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": _empty_validate_result(),
+        }
+
+        # Invalid type
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "wind", "stat_energy_from": "s.x"}]},
+            dry_run=True,
+        )
+        assert result["success"] is False
+        assert any(
+            e["path"].endswith(".type") and "invalid type 'wind'" in e["message"]
+            for e in result["shape_errors"]
+        )
+
+        # Solar without stat_energy_from
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "solar"}]},
+            dry_run=True,
+        )
+        assert result["success"] is False
+        assert any(
+            "solar entries require 'stat_energy_from'" in e["message"]
+            for e in result["shape_errors"]
+        )
+
+        # Battery without stat_energy_from
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "battery"}]},
+            dry_run=True,
+        )
+        assert result["success"] is False
+        assert any(
+            "battery entries require 'stat_energy_from'" in e["message"]
+            for e in result["shape_errors"]
+        )
+
+        # Gas without stat_energy_from
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "gas"}]},
+            dry_run=True,
+        )
+        assert result["success"] is False
+        assert any(
+            "gas entries require 'stat_energy_from'" in e["message"]
+            for e in result["shape_errors"]
+        )
+
+        # Grid without stat_energy_from (valid per HA core schema)
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "grid"}]},
+            dry_run=True,
+        )
+        # Grid is valid: no shape errors about stat_energy_from on grid.
+        # (Other fields may still be complained about, but stat_energy_from
+        # must NOT appear in shape_errors for type=grid.)
+        grid_stat_errors = [
+            e
+            for e in result.get("shape_errors", [])
+            if "stat_energy_from" in e["message"]
+        ]
+        assert grid_stat_errors == []
 
     async def test_current_state_errors_surfaced_separately(self, tools):
         tools._client.send_websocket_message.return_value = {
@@ -274,7 +361,9 @@ class TestDryRun:
             },
         }
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=_sample_prefs(), dry_run=True,
+            mode="set",
+            config=_sample_prefs(),
+            dry_run=True,
         )
         assert result["success"] is True  # shape is fine
         assert result["shape_errors"] == []
@@ -291,7 +380,9 @@ class TestSetPrefs:
         bad_config = {"device_consumption": [{"name": "no-stat"}]}
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
-                mode="set", config=bad_config, config_hash="abc",
+                mode="set",
+                config=bad_config,
+                config_hash="abc",
             )
         err = json.loads(str(exc_info.value))
         assert "VALIDATION_FAILED" in json.dumps(err)
@@ -308,29 +399,40 @@ class TestSetPrefs:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
-                mode="set", config=current_prefs, config_hash=stale_hash,
+                mode="set",
+                config=current_prefs,
+                config_hash=stale_hash,
             )
         err = json.loads(str(exc_info.value))
         assert "modified since last read" in json.dumps(err).lower()
+        assert "RESOURCE_LOCKED" in json.dumps(err)
         # Only ONE WS call (the fresh read); no save
         assert tools._client.send_websocket_message.call_count == 1
 
     async def test_happy_path_writes_and_validates(self, tools):
         current_prefs = _sample_prefs()
         hash_ = compute_config_hash(current_prefs)
-        new_config = {**current_prefs, "device_consumption": [
-            {"stat_consumption": "sensor.fridge_energy"},
-            {"stat_consumption": "sensor.tv_energy"},
-        ]}
+        new_config = {
+            **current_prefs,
+            "device_consumption": [
+                {"stat_consumption": "sensor.fridge_energy"},
+                {"stat_consumption": "sensor.tv_energy"},
+            ],
+        }
 
         tools._client.send_websocket_message.side_effect = [
-            {"success": True, "result": current_prefs},         # 1. fresh read
-            {"success": True, "result": None},                   # 2. save_prefs
-            {"success": True, "result": _empty_validate_result()},  # 3. post-save validate
+            {"success": True, "result": current_prefs},  # 1. fresh read
+            {"success": True, "result": None},  # 2. save_prefs
+            {
+                "success": True,
+                "result": _empty_validate_result(),
+            },  # 3. post-save validate
         ]
 
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=new_config, config_hash=hash_,
+            mode="set",
+            config=new_config,
+            config_hash=hash_,
         )
         assert result["success"] is True
         assert result["mode"] == "set"
@@ -349,7 +451,9 @@ class TestSetPrefs:
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
-                mode="set", config=current_prefs, config_hash=hash_,
+                mode="set",
+                config=current_prefs,
+                config_hash=hash_,
             )
         err = json.loads(str(exc_info.value))
         assert "SERVICE_CALL_FAILED" in json.dumps(err)
@@ -361,15 +465,20 @@ class TestSetPrefs:
         tools._client.send_websocket_message.side_effect = [
             {"success": True, "result": current_prefs},
             {"success": True, "result": None},
-            {"success": True, "result": {
-                "energy_sources": [["stat not found"]],
-                "device_consumption": [],
-                "device_consumption_water": [],
-            }},
+            {
+                "success": True,
+                "result": {
+                    "energy_sources": [["stat not found"]],
+                    "device_consumption": [],
+                    "device_consumption_water": [],
+                },
+            },
         ]
 
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=current_prefs, config_hash=hash_,
+            mode="set",
+            config=current_prefs,
+            config_hash=hash_,
         )
         assert result["success"] is True  # save succeeded
         assert "post_save_validation_errors" in result
@@ -388,7 +497,9 @@ class TestSetPrefs:
         ]
 
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=current_prefs, config_hash=hash_,
+            mode="set",
+            config=current_prefs,
+            config_hash=hash_,
         )
         assert result["success"] is True
         assert "post_save_validation_errors" not in result
@@ -409,7 +520,9 @@ class TestSetPrefs:
         # Hash must be fresh of the current prefs, not the partial config —
         # that's the agent's responsibility. For this test we use the right hash.
         await tools.ha_manage_energy_prefs(
-            mode="set", config=partial_config, config_hash=hash_,
+            mode="set",
+            config=partial_config,
+            config_hash=hash_,
         )
         save_call = tools._client.send_websocket_message.call_args_list[1]
         save_payload = save_call.args[0]
@@ -437,12 +550,17 @@ class TestSetPrefs:
 
         tools._client.send_websocket_message.side_effect = [
             {"success": False, "error": "Command failed: No prefs"},  # 1. get
-            {"success": True, "result": None},                         # 2. save
-            {"success": True, "result": _empty_validate_result()},     # 3. post-save validate
+            {"success": True, "result": None},  # 2. save
+            {
+                "success": True,
+                "result": _empty_validate_result(),
+            },  # 3. post-save validate
         ]
 
         result = await tools.ha_manage_energy_prefs(
-            mode="set", config=new_config, config_hash=default_hash,
+            mode="set",
+            config=new_config,
+            config_hash=default_hash,
         )
         assert result["success"] is True
         assert "config_hash" in result
@@ -475,12 +593,12 @@ class TestRegistration:
         import inspect
 
         from ha_mcp.tools.tools_energy import register_energy_tools
+
         sig = inspect.signature(register_energy_tools)
         params = list(sig.parameters.keys())
         assert params[0] == "mcp"
         assert params[1] == "client"
         # kwargs-accepting for registry compatibility
         assert any(
-            p.kind == inspect.Parameter.VAR_KEYWORD
-            for p in sig.parameters.values()
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
