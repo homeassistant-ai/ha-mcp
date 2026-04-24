@@ -21,22 +21,100 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      should_publish: ${{ steps.version.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
 
-      - name: Extract version from pyproject.toml
+      # Guard against the workflow_run trigger firing on odd-week SemVer Release
+      # runs that were correctly gated out. A SemVer Release whose biweekly-gate
+      # / check-changes / semantic-release jobs all skipped still ends with
+      # conclusion=success (skipped != failed), which would otherwise republish
+      # the existing stable version from master HEAD with whatever post-tag
+      # commits have accumulated — same :stable / :latest label, different bits.
+      # Publish only when master HEAD is at the latest stable tag's commit.
+      - name: Verify master is at the latest stable tag
         id: version
         run: |
-          VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Release version: $VERSION"
+          set -euo pipefail
+
+          # Resolve the latest stable tag. A real failure (corrupt repo, shallow
+          # clone missing tags, etc.) should fail loudly — only exit-code 128
+          # from `git describe` means "no matching tags exist in history" and is
+          # benign for a fresh repo with no stable releases yet.
+          set +e
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*dev*' 2>&1)
+          DESCRIBE_RC=$?
+          set -e
+          if [ "$DESCRIBE_RC" -eq 128 ]; then
+            echo "::warning::No stable tag found; skipping Release Publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+            echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "No stable tag found in repository." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [ "$DESCRIBE_RC" -ne 0 ]; then
+            echo "::error::git describe failed (rc=$DESCRIBE_RC): $LATEST_TAG"
+            exit "$DESCRIBE_RC"
+          fi
+          echo "release_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest stable tag: $LATEST_TAG"
+
+          # Read the version from pyproject.toml AT THE TAG, not master HEAD, so
+          # we publish what was tagged even if master has advanced. Prevents the
+          # "workflow_dispatch bumped pyproject ahead of tag" corner case.
+          VERSION=$(git show "$LATEST_TAG:pyproject.toml" \
+            | grep '^version = ' | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not parse version from $LATEST_TAG:pyproject.toml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tagged pyproject version: $VERSION"
+
+          TAG_SHA=$(git rev-list -n 1 "$LATEST_TAG")
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # Normal release weeks: semver-release tags the release commit, then
+          # pushes follow-up housekeeping commits to master (changelog sync,
+          # addon version bump — all `[skip ci]`). HEAD != tag in that case,
+          # but the release IS current. Mirror semver-release.yml's check-changes
+          # logic: block only if there are releasable (feat/fix/perf) commits
+          # on master since the tag that would have produced a new version.
+          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline \
+            --grep='^feat' --grep='^fix' --grep='^perf' || true)
+
+          if [ -n "$RELEASABLE" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::notice::Manual dispatch: unreleased feat/fix/perf commits exist on master since $LATEST_TAG. Forcing republish of $LATEST_TAG from the tag ref (master HEAD $HEAD_SHA is being ignored)."
+              echo "## Release Publish — forced republish" >> "$GITHUB_STEP_SUMMARY"
+              echo "Building \`$LATEST_TAG\` ($TAG_SHA); unreleased commits on master were ignored." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::notice::Unreleased feat/fix/perf commits exist on master since $LATEST_TAG; no new release to publish — skipping."
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
+              echo "master has releasable commits since the latest stable tag \`$LATEST_TAG\` but no new tag was cut, so republishing \`$LATEST_TAG\` would be misleading." >> "$GITHUB_STEP_SUMMARY"
+              echo "This is expected on biweekly-gate odd weeks; the re-triggered \`workflow_run\` is being correctly ignored." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION (tag $LATEST_TAG)"
+          echo "## Release Publish — $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "Building from tag \`$LATEST_TAG\` ($TAG_SHA)." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "(master HEAD is $HEAD_SHA — post-tag housekeeping commits only, no releasable changes.)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   publish_pypi:
     name: Publish PyPI package
     needs: prepare
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -49,7 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: master
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
       - name: Install uv
@@ -67,6 +145,7 @@ jobs:
   publish_docker:
     name: Publish Docker image
     needs: prepare
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -76,7 +155,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: master
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
       - name: Set up Docker Buildx
@@ -121,7 +200,7 @@ jobs:
     name: Publish MCP server manifest
     needs: [publish_pypi, publish_docker, prepare]
     runs-on: ubuntu-latest
-    if: ${{ always() }}
+    if: ${{ always() && needs.prepare.outputs.should_publish == 'true' }}
     permissions:
       contents: read
       id-token: write  # Required for MCP Registry OIDC authentication
@@ -137,7 +216,7 @@ jobs:
       - uses: actions/checkout@v6
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         with:
-          ref: master
+          ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
       - name: Install MCP Publisher CLI
