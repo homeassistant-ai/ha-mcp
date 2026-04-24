@@ -1,0 +1,539 @@
+"""
+Energy Dashboard preference management tools for Home Assistant.
+
+This module provides a single tool to read and write Home Assistant's Energy
+Dashboard configuration through the ``energy/get_prefs`` / ``energy/save_prefs``
+WebSocket commands. The underlying API has destructive full-replace semantics
+per top-level key (``energy_sources``, ``device_consumption``,
+``device_consumption_water``) — sending a key with a partial list silently
+deletes everything else the user had configured. Optimistic locking via
+``config_hash`` prevents concurrent-modification data loss; a local shape
+check catches the most common agent-side errors; and a server-side
+``energy/validate`` call after every write surfaces residual issues
+(missing stats, wrong unit classes, etc.) in the response.
+
+Note: ``energy/validate`` in Home Assistant Core takes no payload — it
+validates the currently-persisted config. Pre-write validation of an
+unsubmitted payload is therefore not possible; this tool validates the
+post-save state instead.
+
+Note: On a fresh Home Assistant instance that has never had the Energy
+Dashboard configured, ``energy/get_prefs`` returns
+``ERR_NOT_FOUND "No prefs"`` rather than an empty default. The tool
+transparently maps that case to the documented default preferences
+structure (all three top-level keys present, empty lists) so agents
+get uniform behavior on fresh and configured instances alike.
+"""
+
+import logging
+from typing import Annotated, Any, Literal
+
+from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
+from pydantic import Field
+
+from ..errors import ErrorCode, create_error_response
+from ..utils.config_hash import compute_config_hash
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# Top-level keys in the energy prefs payload. Each is an independent
+# full-replace slot in ``energy/save_prefs``.
+_PREFS_TOP_LEVEL_KEYS = (
+    "energy_sources",
+    "device_consumption",
+    "device_consumption_water",
+)
+
+
+def _default_prefs() -> dict[str, Any]:
+    """Return the default empty prefs structure used by HA Core.
+
+    Mirrors ``EnergyManager.default_preferences()`` in
+    ``homeassistant/components/energy/data.py``. A Home Assistant instance
+    that has never had the Energy Dashboard configured returns
+    ``ERR_NOT_FOUND "No prefs"`` from ``energy/get_prefs``; this helper
+    provides the canonical empty structure so the tool can transparently
+    treat the two cases (never-configured vs. configured-but-empty) the
+    same way.
+    """
+    return {
+        "energy_sources": [],
+        "device_consumption": [],
+        "device_consumption_water": [],
+    }
+
+
+def _is_no_prefs_error(error_msg: str) -> bool:
+    """True if an error string from send_websocket_message indicates
+    ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
+
+    HA Core wraps the error as ``f"Command failed: {message}"``; the
+    underlying sentinel we key on is the literal ``"No prefs"`` message
+    emitted by ``ws_get_prefs`` when ``manager.data is None``.
+    """
+    return "No prefs" in error_msg
+
+
+def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
+    """Convert the raw ``energy/validate`` response into a flat error list.
+
+    The raw response mirrors the prefs structure: a dict with the three
+    top-level keys, each mapping to a list of per-entry error lists (empty
+    inner list = that entry is valid). This function walks that structure and
+    returns a flat list of ``{"path", "message"}`` dicts, suitable for agent
+    consumption.
+
+    A successful validation returns an empty list.
+    """
+    if not isinstance(raw, dict):
+        return []
+
+    errors: list[dict[str, str]] = []
+    for key in _PREFS_TOP_LEVEL_KEYS:
+        entries = raw.get(key, [])
+        if not isinstance(entries, list):
+            continue
+        for idx, entry_errors in enumerate(entries):
+            if not entry_errors:
+                continue
+            if isinstance(entry_errors, list):
+                errors.extend(
+                    {"path": f"{key}[{idx}]", "message": str(msg)}
+                    for msg in entry_errors
+                )
+            elif isinstance(entry_errors, dict):
+                for field, msgs in entry_errors.items():
+                    msg_list = msgs if isinstance(msgs, list) else [msgs]
+                    errors.extend(
+                        {"path": f"{key}[{idx}].{field}", "message": str(msg)}
+                        for msg in msg_list
+                    )
+    return errors
+
+
+def _shape_check(config: dict[str, Any]) -> list[dict[str, str]]:
+    """Cheap local shape check before sending to the server.
+
+    Validates that top-level keys have the expected list-of-dicts shape and
+    that required identifying fields are present. Does NOT validate semantic
+    correctness (stat IDs existing, units matching, etc.) — that's surfaced
+    by the post-save server-side ``energy/validate`` call.
+    """
+    errors: list[dict[str, str]] = []
+
+    if not isinstance(config, dict):
+        return [{"path": "config", "message": "must be a dict"}]
+
+    for key in _PREFS_TOP_LEVEL_KEYS:
+        if key not in config:
+            continue
+        value = config[key]
+        if not isinstance(value, list):
+            errors.append({"path": key, "message": "must be a list"})
+            continue
+        for idx, entry in enumerate(value):
+            if not isinstance(entry, dict):
+                errors.append({
+                    "path": f"{key}[{idx}]",
+                    "message": "entry must be a dict",
+                })
+                continue
+            if key == "energy_sources" and "type" not in entry:
+                errors.append({
+                    "path": f"{key}[{idx}]",
+                    "message": "energy_sources entries require 'type' (grid|solar|battery|gas)",
+                })
+            if key == "device_consumption" and "stat_consumption" not in entry:
+                errors.append({
+                    "path": f"{key}[{idx}]",
+                    "message": "device_consumption entries require 'stat_consumption'",
+                })
+            if key == "device_consumption_water" and "stat_consumption" not in entry:
+                errors.append({
+                    "path": f"{key}[{idx}]",
+                    "message": "device_consumption_water entries require 'stat_consumption'",
+                })
+
+    return errors
+
+
+class EnergyTools:
+    """Energy Dashboard preference management tools for Home Assistant."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_manage_energy_prefs",
+        tags={"Energy"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "title": "Manage Energy Dashboard Preferences",
+        },
+    )
+    @log_tool_usage
+    async def ha_manage_energy_prefs(
+        self,
+        mode: Annotated[
+            Literal["get", "set"],
+            Field(description="Operation mode: 'get' reads the current prefs; 'set' writes a new prefs payload."),
+        ],
+        config: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Full prefs payload for mode='set'. Must contain the "
+                    "top-level keys you intend to replace: 'energy_sources', "
+                    "'device_consumption', 'device_consumption_water'. Any "
+                    "top-level key present in this payload REPLACES the "
+                    "existing list entirely; any omitted key is preserved. "
+                    "Call with mode='get' first, mutate the returned config, "
+                    "then pass the whole object back."
+                ),
+                default=None,
+            ),
+        ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Hash returned by the previous mode='get' call. REQUIRED "
+                    "for mode='set' unless dry_run=True. Rejected if the "
+                    "server-side config has changed since that read — re-read "
+                    "and retry."
+                ),
+                default=None,
+            ),
+        ] = None,
+        dry_run: Annotated[
+            bool,
+            Field(
+                description=(
+                    "For mode='set' only. If True, runs a local shape check "
+                    "on the proposed config AND calls the server's "
+                    "energy/validate against the CURRENT persisted state "
+                    "(Home Assistant's validate endpoint cannot validate "
+                    "an unsubmitted payload). Returns both error lists "
+                    "without writing. Default False."
+                ),
+                default=False,
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """
+        Read or write the Home Assistant Energy Dashboard preferences.
+
+        The Energy Dashboard configuration (grid/solar/battery/gas sources,
+        individual device consumption sensors, cost tariffs, water) is stored
+        in ``.storage/energy`` and not otherwise reachable via REST, services,
+        or helper flows — this tool is the only way for agents to inspect or
+        modify it.
+
+        WHEN TO USE:
+        - To inspect or modify the Energy Dashboard config programmatically.
+
+        WHEN NOT TO USE:
+        - To create the underlying statistics themselves — they must already
+          exist as HA entities before being referenced here; create them via
+          the relevant integration's config flow first.
+
+        CAVEATS:
+        - ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing
+          ``{"device_consumption": [<one entry>]}`` deletes every other device
+          the user had configured — silently, with no error. Always call
+          mode='get' first, mutate the returned config, pass the whole object
+          back, and include the returned ``config_hash`` so the tool can
+          reject concurrent modifications.
+        - A local shape check runs before every write; malformed payloads
+          are rejected with a ``shape_errors`` list.
+        - After a successful write, the tool calls ``energy/validate`` and
+          returns any residual issues as ``post_save_validation_errors`` in
+          the response. These reflect semantic problems (missing stats, unit
+          mismatches) that shape checks can't catch; the save persists
+          regardless — correct the config and write again if needed.
+        - The underlying save endpoint is admin-only. Non-admin tokens will
+          receive an authorization error from Home Assistant.
+        """
+        if mode == "get":
+            return await self._get_prefs()
+
+        # mode == "set"
+        if config is None:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "'config' is required when mode='set'",
+                context={"mode": mode},
+                suggestions=[
+                    "Call ha_manage_energy_prefs(mode='get') first, mutate the returned config, pass it back",
+                ],
+            ))
+
+        if dry_run:
+            return await self._dry_run(config)
+
+        if config_hash is None:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "'config_hash' is required when mode='set' and dry_run=False",
+                context={"mode": mode},
+                suggestions=[
+                    "Call ha_manage_energy_prefs(mode='get') to obtain a fresh config_hash",
+                    "Or call again with dry_run=True to validate without a hash",
+                ],
+            ))
+
+        return await self._set_prefs(config, config_hash)
+
+    # ------------------------------------------------------------------
+    # Internal handlers
+    # ------------------------------------------------------------------
+
+    async def _get_prefs(self) -> dict[str, Any]:
+        """Fetch current prefs and return them with a config_hash.
+
+        On a Home Assistant instance that has never had the Energy Dashboard
+        configured, ``energy/get_prefs`` returns ``ERR_NOT_FOUND "No prefs"``
+        rather than an empty default. This method maps that case to the
+        documented default preferences structure so the tool works uniformly
+        on fresh installations.
+        """
+        try:
+            result = await self._client.send_websocket_message({
+                "type": "energy/get_prefs",
+            })
+
+            if not result.get("success"):
+                error_msg = str(result.get("error", ""))
+                if _is_no_prefs_error(error_msg):
+                    prefs = _default_prefs()
+                    return {
+                        "success": True,
+                        "mode": "get",
+                        "config": prefs,
+                        "config_hash": compute_config_hash(prefs),
+                        "note": (
+                            "Energy Dashboard has never been configured on "
+                            "this instance; returning empty default."
+                        ),
+                    }
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
+                    context={"mode": "get"},
+                ))
+
+            prefs = result.get("result", {})
+            return {
+                "success": True,
+                "mode": "get",
+                "config": prefs,
+                "config_hash": compute_config_hash(prefs),
+            }
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting energy prefs: {e}")
+            exception_to_structured_error(e, context={"mode": "get"}, suggestions=[
+                "Check Home Assistant connection",
+                "Verify WebSocket connection is active",
+            ])
+
+    async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Shape-check the proposed config and fetch current-state validate.
+
+        Returns both error lists clearly labelled so agents can distinguish
+        problems they're about to introduce (shape_errors) from pre-existing
+        issues in the persisted state (current_state_validation_errors).
+        """
+        try:
+            shape_errors = _shape_check(config)
+
+            validate_result = await self._client.send_websocket_message({
+                "type": "energy/validate",
+            })
+            if validate_result.get("success"):
+                current_state_errors = _flatten_validation_errors(
+                    validate_result.get("result", {})
+                )
+            else:
+                current_state_errors = []
+
+            return {
+                "success": len(shape_errors) == 0,
+                "mode": "set",
+                "dry_run": True,
+                "shape_errors": shape_errors,
+                "current_state_validation_errors": current_state_errors,
+                "message": (
+                    "Shape OK. Note: HA's energy/validate cannot validate an "
+                    "unsubmitted payload — current_state_validation_errors "
+                    "reflects the CURRENT persisted config, not your proposal. "
+                    "Semantic issues in the proposed config (missing stats, "
+                    "wrong units) will surface in post_save_validation_errors "
+                    "after an actual mode='set' write."
+                    if not shape_errors
+                    else f"{len(shape_errors)} shape error(s) — fix before writing."
+                ),
+            }
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in energy prefs dry_run: {e}")
+            exception_to_structured_error(
+                e,
+                context={"mode": "set", "dry_run": True},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify config shape matches energy/get_prefs response",
+                ],
+            )
+
+    async def _set_prefs(
+        self,
+        config: dict[str, Any],
+        config_hash: str,
+    ) -> dict[str, Any]:
+        """Shape-check → hash-check → save → post-save validate.
+
+        Shape errors and hash mismatch fail closed. Post-save validation
+        errors are reported in the response as a non-fatal warning; the
+        save already succeeded.
+        """
+        try:
+            # 1. Shape check (fast local, fail closed)
+            shape_errors = _shape_check(config)
+            if shape_errors:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    f"Config shape invalid: {len(shape_errors)} error(s)",
+                    context={
+                        "mode": "set",
+                        "shape_errors": shape_errors,
+                    },
+                    suggestions=[
+                        "Fix the listed errors and retry",
+                        "Call with dry_run=True to re-check without writing",
+                    ],
+                ))
+
+            # 2. Fresh read for hash comparison. Map "No prefs" (never
+            # configured) to empty default so the hash-check works on
+            # fresh installations too.
+            current_result = await self._client.send_websocket_message({
+                "type": "energy/get_prefs",
+            })
+            if not current_result.get("success"):
+                error_msg = str(current_result.get("error", ""))
+                if _is_no_prefs_error(error_msg):
+                    current_prefs: dict[str, Any] = _default_prefs()
+                else:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to re-read prefs for hash check: {current_result.get('error', 'Unknown error')}",
+                        context={"mode": "set"},
+                    ))
+                    # unreachable; appeases type checkers
+                    current_prefs = {}
+            else:
+                current_prefs = current_result.get("result", {}) or {}
+
+            current_hash = compute_config_hash(current_prefs)
+
+            if current_hash != config_hash:
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Energy prefs modified since last read (conflict)",
+                    context={"mode": "set"},
+                    suggestions=[
+                        "Call ha_manage_energy_prefs(mode='get') again",
+                        "Re-apply your changes to the fresh config",
+                        "Pass the new config_hash back in",
+                    ],
+                ))
+
+            # 3. Save
+            save_payload: dict[str, Any] = {"type": "energy/save_prefs"}
+            for key in _PREFS_TOP_LEVEL_KEYS:
+                if key in config:
+                    save_payload[key] = config[key]
+
+            save_result = await self._client.send_websocket_message(save_payload)
+            if not save_result.get("success"):
+                raise_tool_error(create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to save energy prefs: {save_result.get('error', 'Unknown error')}",
+                    context={"mode": "set"},
+                    suggestions=[
+                        "Verify the token has admin privileges (energy/save_prefs is admin-only)",
+                        "Check config shape against the energy/get_prefs response",
+                    ],
+                ))
+
+            # 4. Post-save validation against the newly-persisted state
+            post_save_errors: list[dict[str, str]] = []
+            try:
+                validate_result = await self._client.send_websocket_message({
+                    "type": "energy/validate",
+                })
+                if validate_result.get("success"):
+                    post_save_errors = _flatten_validation_errors(
+                        validate_result.get("result", {})
+                    )
+            except Exception as e:
+                # Post-save validate failure is non-fatal — the save itself
+                # succeeded. Log and continue.
+                logger.warning(f"Post-save energy/validate failed: {e}")
+
+            # 5. Compute new hash from the effective new state (current
+            # merged with the submitted keys; save_prefs does not echo it
+            # back).
+            new_prefs = {**current_prefs}
+            for key in _PREFS_TOP_LEVEL_KEYS:
+                if key in config:
+                    new_prefs[key] = config[key]
+            new_hash = compute_config_hash(new_prefs)
+
+            response: dict[str, Any] = {
+                "success": True,
+                "mode": "set",
+                "config_hash": new_hash,
+                "message": "Energy prefs updated.",
+            }
+            if post_save_errors:
+                response["post_save_validation_errors"] = post_save_errors
+                response["warning"] = (
+                    f"Save succeeded, but the persisted config has "
+                    f"{len(post_save_errors)} validation error(s). Review "
+                    "and re-write if any relate to this change."
+                )
+            return response
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error setting energy prefs: {e}")
+            exception_to_structured_error(
+                e,
+                context={"mode": "set"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify token has admin privileges",
+                    "Re-read prefs and retry with a fresh config_hash",
+                ],
+            )
+
+
+def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register Home Assistant energy preference management tools."""
+    register_tool_methods(mcp, EnergyTools(client))
