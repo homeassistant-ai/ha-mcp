@@ -143,6 +143,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
+        # Enrich tool descriptions with BM25 keyword boosts. Runs
+        # unconditionally so Claude's native deferred-tool search
+        # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
+        # Must come before _apply_tool_search so CategorizedSearchTransform
+        # indexes the enriched descriptions.
+        self._apply_search_keyword_enrichment()
+
         # Apply tool search transform (must come after all tools and
         # ResourcesAsTools are registered so it can wrap everything)
         self._apply_tool_search()
@@ -336,8 +343,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     )
 
     # Extra keywords appended to tool descriptions for BM25 ranking.
-    # Only active behind enable_tool_search — the original docstrings
-    # are unchanged; these keywords are appended by SearchKeywordsTransform.
+    # Applied unconditionally via SearchKeywordsTransform so they also
+    # improve retrieval for Claude's native deferred-tool search on
+    # claude.ai, which indexes tool names and descriptions with BM25
+    # (no semantic matching). Original tool docstrings stay unchanged;
+    # these keywords are appended by the transform at list-tools time.
     _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
         # s02: "find entities" → ha_search_entities should outrank ha_deep_search
         "ha_search_entities": (
@@ -390,8 +400,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     }
 
     # Description overrides that REPLACE the original description for BM25.
-    # Used to narrow overly broad tools so they stop matching generic queries.
-    # Only active behind enable_tool_search via SearchKeywordsTransform.
+    # Used to narrow overly broad tools so they stop matching generic queries
+    # against ha-mcp's internal BM25 search tool. Only applied when
+    # enable_tool_search=True, because they are tuned specifically for the
+    # categorized search transform and replacing the base description would
+    # unnecessarily trim context for other clients.
     _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {
         "ha_deep_search": (
             "Search INSIDE automation, script, and helper YAML configurations. "
@@ -402,6 +415,53 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ),
     }
 
+    def _apply_search_keyword_enrichment(self) -> None:
+        """Append BM25 keyword boosts to tool descriptions.
+
+        Applied unconditionally so Claude's native deferred-tool search
+        (claude.ai uses BM25 over tool names and descriptions) can find
+        ha-mcp tools for common natural-language queries like "create
+        automation" — the scenario in #940. The original tool docstrings
+        in ``src/ha_mcp/tools/`` are unchanged; keywords are appended at
+        list-tools time via ``SearchKeywordsTransform``.
+
+        Description overrides (``_SEARCH_DESCRIPTION_OVERRIDES``) are only
+        applied when ``enable_tool_search`` is also set, because they
+        REPLACE the original description and are tuned specifically for
+        ha-mcp's internal BM25 search tool.
+
+        Runs before ``_apply_tool_search`` so downstream transforms
+        index the enriched descriptions.
+        """
+        try:
+            from .transforms import SearchKeywordsTransform
+        except ImportError:
+            logger.warning(
+                "SearchKeywordsTransform not available; skipping description "
+                "enrichment (tool discoverability on claude.ai may be degraded)."
+            )
+            return
+
+        overrides = (
+            self._SEARCH_DESCRIPTION_OVERRIDES
+            if self.settings.enable_tool_search
+            else None
+        )
+        try:
+            self.mcp.add_transform(
+                SearchKeywordsTransform(
+                    keywords=self._SEARCH_KEYWORDS,
+                    overrides=overrides,
+                )
+            )
+            logger.info(
+                "Search keyword enrichment applied (%d boosts%s)",
+                len(self._SEARCH_KEYWORDS),
+                f", {len(overrides)} overrides" if overrides else "",
+            )
+        except Exception:
+            logger.exception("Failed to apply SearchKeywordsTransform")
+
     def _apply_tool_search(self) -> None:
         """Apply the CategorizedSearchTransform if enabled.
 
@@ -410,6 +470,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         remain directly visible in list_tools() for individual permission
         gating. ResourcesAsTools (list_resources/read_resource) are also
         pinned when enabled.
+
+        Note: ``_apply_search_keyword_enrichment`` already ran before this
+        method and installed ``SearchKeywordsTransform`` — the enriched
+        catalog is what the categorized transform indexes.
         """
         if not self.settings.enable_tool_search:
             return
@@ -447,18 +511,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
 
         try:
-            # Enrich tool descriptions for BM25 ranking (innermost transform).
-            # Added first so the search transform indexes enriched descriptions.
-            # Original tool docstrings are unchanged.
-            from .transforms import SearchKeywordsTransform
-
-            self.mcp.add_transform(
-                SearchKeywordsTransform(
-                    keywords=self._SEARCH_KEYWORDS,
-                    overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
-                )
-            )
-
             self.mcp.add_transform(
                 CategorizedSearchTransform(
                     max_results=5,
@@ -623,7 +675,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 if not f.resolve().is_relative_to(resolved_root):
                     continue
                 rel = f.relative_to(skill_dir)
-                ref_files.append({"name": str(rel), "uri": f"skill://{skill_name}/{rel}"})
+                ref_files.append(
+                    {"name": str(rel), "uri": f"skill://{skill_name}/{rel}"}
+                )
         except OSError:
             logger.warning("Error reading skill files in %s", skill_dir)
         return ref_files
