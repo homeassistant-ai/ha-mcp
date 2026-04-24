@@ -865,6 +865,41 @@
     "source_file": "tools_registry.py"
   },
   {
+    "name": "ha_manage_energy_prefs",
+    "title": "Manage Energy Dashboard Preferences",
+    "description": "Manage the Home Assistant Energy Dashboard preferences.\n\nThe Energy Dashboard configuration (grid/solar/battery/gas sources,\nindividual device consumption sensors, cost tariffs, water) is stored\nin ``.storage/energy`` and not otherwise reachable via REST, services,\nor helper flows — this tool is the only way for agents to inspect or\nmodify it.\n\nWHEN TO USE:\n- To inspect or modify the Energy Dashboard config programmatically.\n\nWHEN NOT TO USE:\n- To create the underlying statistics themselves — they must already\n  exist as HA entities before being referenced here; create them via\n  the relevant integration's config flow first.\n\nCAVEATS:\n- ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing\n  ``{\"device_consumption\": [<one entry>]}`` deletes every other device\n  the user had configured — silently, with no error. Always call\n  mode='get' first, mutate the returned config, pass the whole object\n  back, and include the returned ``config_hash`` so the tool can\n  reject concurrent modifications.\n- A local shape check runs before every write; malformed payloads\n  are rejected with a ``shape_errors`` list.\n- After a successful write, the tool calls ``energy/validate`` and\n  returns any residual issues as ``post_save_validation_errors`` in\n  the response. These reflect semantic problems (missing stats, unit\n  mismatches) that shape checks can't catch; the save persists\n  regardless — correct the config and write again if needed.\n- The underlying save endpoint is admin-only. Non-admin tokens will\n  receive an authorization error from Home Assistant.",
+    "inputSchema": {
+      "properties": {
+        "mode": {
+          "type": "Annotated[Literal['get', 'set'], Field(description=\"Operation mode: 'get' reads the current prefs; 'set' writes a new prefs payload.\")]"
+        },
+        "config": {
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Full prefs payload for mode='set'. Must contain the top-level keys you intend to replace: 'energy_sources', 'device_consumption', 'device_consumption_water'. Any top-level key present in this payload REPLACES the existing list entirely; any omitted key is preserved. Call with mode='get' first, mutate the returned config, then pass the whole object back.\", default=None)]",
+          "default": null
+        },
+        "config_hash": {
+          "type": "Annotated[str | None, Field(description=\"Hash returned by the previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Rejected if the server-side config has changed since that read — re-read and retry.\", default=None)]",
+          "default": null
+        },
+        "dry_run": {
+          "type": "Annotated[bool, Field(description=\"For mode='set' only. If True, runs a local shape check on the proposed config AND calls the server's energy/validate against the CURRENT persisted state (Home Assistant's validate endpoint cannot validate an unsubmitted payload). Returns both error lists without writing. Default False.\", default=False)]",
+          "default": false
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false
+    },
+    "tags": [
+      "Energy"
+    ],
+    "source_file": "tools_energy.py"
+  },
+  {
     "name": "ha_get_entity",
     "title": "Get Entity",
     "description": "Get entity registry information for one or more entities.\n\nReturns detailed entity registry metadata including area assignment,\ncustom name/icon, enabled/hidden state, aliases, labels, and more.\n\nRELATED TOOLS:\n- ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)\n- ha_get_state(): Get current state/attributes (on/off, temperature, etc.)\n- ha_search_entities(): Find entities by name, domain, or area\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n\nRESPONSE FIELDS:\n- entity_id: Full entity identifier\n- name: Custom display name (null if using original_name)\n- original_name: Default name from integration\n- icon: Custom icon (null if using default)\n- area_id: Assigned area/room ID (null if unassigned)\n- disabled_by: Why disabled (null=enabled, \"user\"/\"integration\"/etc)\n- hidden_by: Why hidden (null=visible, \"user\"/\"integration\"/etc)\n- enabled: Boolean shorthand (True if disabled_by is null)\n- hidden: Boolean shorthand (True if hidden_by is not null)\n- aliases: Voice assistant aliases\n- labels: Assigned label IDs\n- categories: Category assignments (dict mapping scope to category_id)\n- platform: Integration platform (e.g., \"hue\", \"zwave_js\")\n- device_id: Associated device ID (null if standalone)\n- unique_id: Integration's unique identifier",
