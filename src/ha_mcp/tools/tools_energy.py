@@ -79,7 +79,7 @@ def _is_no_prefs_error(error_msg: str) -> bool:
     underlying sentinel we key on is the literal ``"No prefs"`` message
     emitted by ``ws_get_prefs`` when ``manager.data is None``.
     """
-    return "No prefs" in error_msg
+    return error_msg.endswith("No prefs")
 
 
 def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
@@ -369,7 +369,7 @@ class EnergyTools:
                     )
                 )
 
-            prefs = result.get("result", {})
+            prefs = result.get("result") or _default_prefs()
             return {
                 "success": True,
                 "mode": "get",
@@ -405,14 +405,23 @@ class EnergyTools:
                     "type": "energy/validate",
                 }
             )
+            validate_warning: str | None = None
             if validate_result.get("success"):
                 current_state_errors = _flatten_validation_errors(
                     validate_result.get("result", {})
                 )
             else:
+                validate_error = validate_result.get("error") or "unknown error"
+                logger.warning(
+                    f"energy/validate (current state) failed: {validate_error}"
+                )
                 current_state_errors = []
+                validate_warning = (
+                    f"energy/validate failed: {validate_error} — "
+                    "current-state validation skipped"
+                )
 
-            return {
+            response: dict[str, Any] = {
                 "success": len(shape_errors) == 0,
                 "mode": "set",
                 "dry_run": True,
@@ -429,6 +438,10 @@ class EnergyTools:
                     else f"{len(shape_errors)} shape error(s) — fix before writing."
                 ),
             }
+            if validate_warning is not None:
+                response["partial"] = True
+                response["warning"] = validate_warning
+            return response
 
         except ToolError:
             raise
@@ -482,7 +495,9 @@ class EnergyTools:
                 }
             )
             if current_result.get("success"):
-                current_prefs: dict[str, Any] = current_result.get("result") or {}
+                current_prefs: dict[str, Any] = (
+                    current_result.get("result") or _default_prefs()
+                )
             else:
                 error = current_result.get("error") or "Unknown error"
                 if _is_no_prefs_error(str(error)):
@@ -536,6 +551,7 @@ class EnergyTools:
 
             # 4. Post-save validation against the newly-persisted state
             post_save_errors: list[dict[str, str]] = []
+            post_save_validate_error: str | None = None
             try:
                 validate_result = await self._client.send_websocket_message(
                     {
@@ -546,10 +562,18 @@ class EnergyTools:
                     post_save_errors = _flatten_validation_errors(
                         validate_result.get("result", {})
                     )
+                else:
+                    post_save_validate_error = (
+                        validate_result.get("error") or "unknown error"
+                    )
+                    logger.warning(
+                        f"energy/validate (post-save) failed: {post_save_validate_error}"
+                    )
             except Exception as e:
                 # Post-save validate failure is non-fatal — the save itself
                 # succeeded. Log and continue.
                 logger.warning(f"Post-save energy/validate failed: {e}")
+                post_save_validate_error = str(e)
 
             # 5. Compute new hash from the effective new state (current
             # merged with the submitted keys; save_prefs does not echo it
@@ -572,6 +596,13 @@ class EnergyTools:
                     f"Save succeeded, but the persisted config has "
                     f"{len(post_save_errors)} validation error(s). Review "
                     "and re-write if any relate to this change."
+                )
+            elif post_save_validate_error is not None:
+                response["partial"] = True
+                response["warning"] = (
+                    f"Save succeeded, but post-save energy/validate "
+                    f"failed: {post_save_validate_error}. The persisted "
+                    "config has not been re-validated."
                 )
             return response
 

@@ -369,6 +369,31 @@ class TestDryRun:
         assert result["shape_errors"] == []
         assert len(result["current_state_validation_errors"]) == 1
 
+    async def test_validate_failure_surfaced_as_warning(self, tools, caplog):
+        """If energy/validate returns success=false in dry_run, the caller
+        sees partial/warning rather than a silent empty current_state_errors
+        list."""
+        import logging
+
+        tools._client.send_websocket_message.return_value = {
+            "success": False,
+            "error": "websocket timeout",
+        }
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_energy"):
+            result = await tools.ha_manage_energy_prefs(
+                mode="set",
+                config=_sample_prefs(),
+                dry_run=True,
+            )
+        assert result["success"] is True  # shape is fine
+        assert result["current_state_validation_errors"] == []
+        assert result["partial"] is True
+        assert "websocket timeout" in result["warning"]
+        assert any(
+            "energy/validate (current state) failed" in rec.message
+            for rec in caplog.records
+        )
+
 
 # -----------------------------------------------------------------------------
 # ha_manage_energy_prefs — mode="set" write path
@@ -486,7 +511,11 @@ class TestSetPrefs:
         assert "warning" in result
 
     async def test_post_save_validation_failure_non_fatal(self, tools):
-        """If the post-save validate itself fails, the save still succeeded."""
+        """If the post-save validate itself fails, the save still succeeded.
+
+        The exception-branch sets post_save_validate_error, which surfaces
+        as partial/warning in the response.
+        """
         current_prefs = _sample_prefs()
         hash_ = compute_config_hash(current_prefs)
 
@@ -503,6 +532,37 @@ class TestSetPrefs:
         )
         assert result["success"] is True
         assert "post_save_validation_errors" not in result
+        assert result["partial"] is True
+        assert "validate blew up" in result["warning"]
+
+    async def test_post_save_validate_failure_surfaced_as_warning(self, tools, caplog):
+        """If post-save energy/validate returns success=false, the caller sees
+        partial/warning rather than a silent empty post_save_errors list."""
+        import logging
+
+        current_prefs = _sample_prefs()
+        hash_ = compute_config_hash(current_prefs)
+
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": False, "error": "validate endpoint missing"},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_energy"):
+            result = await tools.ha_manage_energy_prefs(
+                mode="set",
+                config=current_prefs,
+                config_hash=hash_,
+            )
+        assert result["success"] is True
+        assert "post_save_validation_errors" not in result
+        assert result["partial"] is True
+        assert "validate endpoint missing" in result["warning"]
+        assert any(
+            "energy/validate (post-save) failed" in rec.message
+            for rec in caplog.records
+        )
 
     async def test_save_payload_contains_only_submitted_keys(self, tools):
         """Full-replace only affects keys explicitly in the submitted payload."""
