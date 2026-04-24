@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result
+from ...utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -887,3 +887,72 @@ async def test_home_topology_schema(mcp_client):
         f"{topo_data['unassigned_count']} unassigned, "
         f"{topo_data['orphaned_count']} orphaned"
     )
+
+
+@pytest.mark.area
+@pytest.mark.floor
+@pytest.mark.asyncio
+class TestAreaFloorDestructiveNegativeInputs:
+    """
+    A7 negative-input tests for ha_config_remove_area and ha_config_remove_floor.
+
+    Covers the nonexistent-identifier failure path, which is not exercised by
+    the existing lifecycle tests (which only call remove on identifiers they
+    just created).
+
+    Methodology: source-verified against tools_areas.py. Both tools call the
+    respective registry delete WebSocket (config/area_registry/delete,
+    config/floor_registry/delete). When the registry returns a failure result,
+    raise_tool_error is invoked with ErrorCode.SERVICE_CALL_FAILED. Live-probed
+    response shape against a fresh HA testcontainer before test authoring.
+    """
+
+    async def test_remove_area_nonexistent(self, mcp_client):
+        """
+        Test: ha_config_remove_area with a nonexistent area_id returns a
+        structured error, not success=True.
+
+        Source path: WebSocket result.success=False →
+        raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete area: ...").
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_area",
+            {"area_id": "nonexistent_area_a7_e2e_xyz_404"},
+        )
+
+        assert not data.get("success"), (
+            f"Expected failure for nonexistent area, got success=True: {data}"
+        )
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        )
+        error_msg = str(data.get("error", "")).lower()
+        assert "doesn't exist" in error_msg or "not found" in error_msg, (
+            f"Expected 'doesn't exist'/'not found' in error message, got: {data.get('error')}"
+        )
+
+    async def test_remove_floor_nonexistent(self, mcp_client):
+        """
+        Test: ha_config_remove_floor with a nonexistent floor_id returns a
+        structured error, not success=True.
+
+        Source path: WebSocket result.success=False →
+        raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete floor: ...").
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_floor",
+            {"floor_id": "nonexistent_floor_a7_e2e_xyz_404"},
+        )
+
+        assert not data.get("success"), (
+            f"Expected failure for nonexistent floor, got success=True: {data}"
+        )
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
+            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        )
+        error_msg = str(data.get("error", "")).lower()
+        assert "doesn't exist" in error_msg or "not found" in error_msg, (
+            f"Expected 'doesn't exist'/'not found' in error message, got: {data.get('error')}"
+        )
