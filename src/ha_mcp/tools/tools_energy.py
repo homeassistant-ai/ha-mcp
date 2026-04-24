@@ -481,22 +481,22 @@ class EnergyTools:
                     "type": "energy/get_prefs",
                 }
             )
-            if not current_result.get("success"):
-                error_msg = str(current_result.get("error", ""))
-                if _is_no_prefs_error(error_msg):
-                    current_prefs: dict[str, Any] = _default_prefs()
+            if current_result.get("success"):
+                current_prefs: dict[str, Any] = current_result.get("result") or {}
+            else:
+                error = current_result.get("error") or "Unknown error"
+                if _is_no_prefs_error(str(error)):
+                    current_prefs = _default_prefs()
                 else:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Failed to re-read prefs for hash check: {current_result.get('error', 'Unknown error')}",
+                            f"Failed to re-read prefs for hash check: {error}",
                             context={"mode": "set"},
                         )
                     )
                     # unreachable; appeases type checkers
                     current_prefs = {}
-            else:
-                current_prefs = current_result.get("result", {}) or {}
 
             current_hash = compute_config_hash(current_prefs)
 
