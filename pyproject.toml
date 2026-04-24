@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "7.2.0"
+version = "7.3.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -24,9 +24,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.2.0",
+    "fastmcp==3.2.4",
     "httpx[socks]==0.28.1",
-    "pydantic==2.12.5",
+    "pydantic==2.13.2",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
@@ -134,12 +134,6 @@ ignore = [
 "tests/**/*" = ["E501", "B011"]
 # C901 ignores for tools files with complex methods (see #925).
 # Remove lines as individual methods are simplified below threshold.
-"src/ha_mcp/tools/backup.py" = ["C901"]
-"src/ha_mcp/tools/best_practice_checker.py" = ["C901"]
-"src/ha_mcp/tools/device_control.py" = ["C901"]
-"src/ha_mcp/tools/helpers.py" = ["C901"]
-"src/ha_mcp/tools/registry.py" = ["C901"]
-"src/ha_mcp/tools/smart_search.py" = ["C901"]
 "src/ha_mcp/tools/tools_addons.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_dashboards.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_helpers.py" = ["C901"]
@@ -147,6 +141,7 @@ ignore = [
 "src/ha_mcp/tools/tools_registry.py" = ["C901"]
 "src/ha_mcp/tools/tools_search.py" = ["C901"]
 "src/ha_mcp/tools/tools_utility.py" = ["C901"]
+"src/ha_mcp/tools/smart_search.py" = ["C901"]
 "src/ha_mcp/tools/util_helpers.py" = ["C901"]
 
 [tool.pytest.ini_options]

@@ -204,9 +204,7 @@ class TestYamlConfigValidation:
             },
         )
         inner = data
-        assert inner.get("success") is False, (
-            f"Null content should be rejected: {data}"
-        )
+        assert inner.get("success") is False, f"Null content should be rejected: {data}"
         logger.info("Correctly rejected null content")
 
     async def test_invalid_yaml_rejected(self, mcp_client_with_yaml_config):
@@ -224,9 +222,7 @@ class TestYamlConfigValidation:
             },
         )
         inner = data
-        assert inner.get("success") is False, (
-            f"Invalid YAML should be rejected: {data}"
-        )
+        assert inner.get("success") is False, f"Invalid YAML should be rejected: {data}"
         logger.info("Correctly rejected invalid YAML")
 
     async def test_missing_content_for_add(self, mcp_client_with_yaml_config):
@@ -242,9 +238,7 @@ class TestYamlConfigValidation:
             },
         )
         inner = data
-        assert inner.get("success") is False, (
-            f"Missing content should fail: {data}"
-        )
+        assert inner.get("success") is False, f"Missing content should fail: {data}"
         logger.info("Correctly rejected missing content")
 
 
@@ -406,9 +400,7 @@ class TestYamlConfigOperations:
             },
         )
         inner = data
-        assert inner.get("success") is False, (
-            f"Type mismatch should error: {data}"
-        )
+        assert inner.get("success") is False, f"Type mismatch should error: {data}"
         assert "type mismatch" in inner.get("error", "").lower()
         logger.info("Correctly errored on type mismatch")
 
@@ -453,9 +445,7 @@ class TestYamlConfigSafeguards:
             )
             inner = data
             assert inner.get("success") is True, f"Replace should succeed: {data}"
-            assert inner.get("backup_path"), (
-                f"Backup path should be present: {data}"
-            )
+            assert inner.get("backup_path"), f"Backup path should be present: {data}"
             assert "yaml_backups" in inner.get("backup_path", "")
             logger.info(f"Backup created at: {inner.get('backup_path')}")
 
@@ -512,7 +502,9 @@ class TestYamlConfigSafeguards:
                 f"reload_service={inner.get('reload_service')}"
             )
 
-    async def test_post_action_restart_for_shell_command(self, mcp_client_with_yaml_config):
+    async def test_post_action_restart_for_shell_command(
+        self, mcp_client_with_yaml_config
+    ):
         """shell_command key should return post_action=restart_required."""
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
@@ -546,9 +538,7 @@ class TestYamlConfigSafeguards:
 class TestYamlConfigCommentPreservation:
     """Test that YAML comments and HA tags (e.g. !secret) survive edits."""
 
-    async def test_comments_preserved_after_add(
-        self, mcp_client_with_yaml_config
-    ):
+    async def test_comments_preserved_after_add(self, mcp_client_with_yaml_config):
         """Comments and !secret tags in one key survive when a different key is added."""
 
         test_file = "packages/_e2e_test_comments.yaml"
@@ -596,9 +586,7 @@ class TestYamlConfigCommentPreservation:
             {"path": test_file},
         )
         if read_data.get("success") is not True:
-            pytest.skip(
-                f"ha_read_file not functional for packages: {read_data}"
-            )
+            pytest.skip(f"ha_read_file not functional for packages: {read_data}")
 
         content = read_data.get("content", "")
         assert "# Sensor configuration" in content, (
@@ -607,26 +595,18 @@ class TestYamlConfigCommentPreservation:
         assert "# inline comment" in content, (
             f"Inline comment lost after add: {content!r}"
         )
-        assert "!secret" in content, (
-            f"!secret tag lost after add: {content!r}"
-        )
+        assert "!secret" in content, f"!secret tag lost after add: {content!r}"
         assert "sensor_api_key" in content, (
             f"Secret key name lost after add: {content!r}"
         )
-        logger.info(
-            "Comments and !secret tags preserved after adding a second key"
-        )
+        logger.info("Comments and !secret tags preserved after adding a second key")
 
-    async def test_ha_tags_preserved_after_edit(
-        self, mcp_client_with_yaml_config
-    ):
+    async def test_ha_tags_preserved_after_edit(self, mcp_client_with_yaml_config):
         """HA-specific YAML tags like !secret must survive when a different key is edited."""
 
         test_file = "packages/_e2e_test_tags.yaml"
         initial_content = (
-            "api_key: !secret my_api_key\n"
-            "name: Tagged Sensor\n"
-            "state: 'active'"
+            "api_key: !secret my_api_key\nname: Tagged Sensor\nstate: 'active'"
         )
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
@@ -665,9 +645,7 @@ class TestYamlConfigCommentPreservation:
             {"path": test_file},
         )
         if read_data.get("success") is not True:
-            pytest.skip(
-                f"ha_read_file not functional for packages: {read_data}"
-            )
+            pytest.skip(f"ha_read_file not functional for packages: {read_data}")
 
         content = read_data.get("content", "")
         assert "!secret" in content, (

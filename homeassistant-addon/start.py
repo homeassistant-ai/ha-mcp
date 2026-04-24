@@ -6,9 +6,11 @@ import os
 import re
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
@@ -97,6 +99,154 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         return new_path
 
 
+def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> None:
+    """POST the full addon options dict to the Supervisor.
+
+    The endpoint is a full-replace validated against the addon schema, so
+    callers must pass the complete options dict (not a partial patch).
+
+    Used after auto-generating the secret path so other addons (the
+    webhook proxy) can read it from `GET /addons/{slug}/info → options`
+    instead of scraping it from addon logs (#941).
+
+    Raises the underlying `urllib.error.HTTPError` / `URLError` / `OSError`
+    on failure — callers decide how loudly to surface the problem.
+    """
+    payload = json.dumps({"options": options}).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {supervisor_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def maybe_persist_secret_path(
+    config: dict[str, Any], secret_path: str, supervisor_token: str
+) -> None:
+    """Persist `secret_path` into the addon's stored options when needed.
+
+    Only calls `persist_addon_options` when all of these hold:
+    - `config` is non-empty. If `/data/options.json` was missing or failed
+      to parse, `config` is `{}` and the addon is running off hardcoded
+      defaults. Sending a bare `{"secret_path": ...}` in that state would
+      be rejected by Supervisor's schema validation (missing required
+      `backup_hint`), producing a second misleading error line on top of
+      the "Failed to read config" we already logged.
+    - The resolved `secret_path` differs from the stored one. Otherwise
+      the write is a pure no-op and we'd just add noise on every restart.
+
+    Errors from the POST are caught and logged with an actionable recovery
+    message — the addon keeps running, but the user is told exactly which
+    value to paste into the Configuration tab if they hit it.
+    """
+    if not config:
+        return
+    if secret_path == config.get("secret_path", ""):
+        return
+    try:
+        persist_addon_options({**config, "secret_path": secret_path}, supervisor_token)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        detail = (
+            f"HTTP {e.code}: {e.reason}"
+            if isinstance(e, urllib.error.HTTPError)
+            else str(e)
+        )
+        log_error(
+            f"Failed to persist secret_path to addon options ({detail}). "
+            f"This addon will still run with secret_path={secret_path!r}, "
+            "but other addons (e.g. the webhook proxy) cannot auto-discover "
+            "it via Supervisor. Workaround: open this addon's Configuration "
+            "tab and paste the secret_path above into the 'Secret path override' "
+            "field, then save."
+        )
+
+
+SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
+
+
+def migrate_skills_as_tools_default(
+    data_dir: Path,
+    config_file: Path,
+    stored_value: bool,
+    config_read_ok: bool,
+) -> bool:
+    """One-time migration to force enable_skills_as_tools=true for existing users.
+
+    The Pydantic default in src/ha_mcp/config.py was flipped to True in
+    #806, but the add-on's config.yaml was never updated at the same time.
+    For add-on installs the env var is written from options.json before
+    ha-mcp reads its Pydantic settings, so the new Python default never
+    took effect for existing users. This runs exactly once per install
+    (guarded by a marker file in /data) and forces the flag on for users
+    who still have False stored, then persists the new value to
+    options.json so the supervisor UI reflects it. On subsequent boots the
+    marker is present and the stored value is respected, so users who
+    deliberately toggle it off will not be re-forced.
+
+    config_read_ok must be False when the caller could not load
+    options.json (file unreadable or malformed JSON). In that case the
+    marker is not created, so the migration can run again on a later
+    boot once options.json is readable and expose the user's real
+    stored value.
+    """
+    marker = data_dir / SKILLS_AS_TOOLS_MIGRATION_MARKER
+    if marker.exists():
+        return stored_value
+
+    # First run after this update. Force-on + persist only if the user is
+    # currently on False, then create the marker so the migration does
+    # not loop — but skip marker creation when the caller could not
+    # verify the stored value (see config_read_ok in the docstring).
+    if not stored_value:
+        log_info(
+            "One-time migration: forcing enable_skills_as_tools=true. "
+            "The Pydantic default was set to True in #806 but the add-on's "
+            "config.yaml was not updated alongside it, so this value stayed "
+            "False for existing add-on installs. Future user-initiated "
+            "changes to this setting will be respected."
+        )
+        if config_file.exists():
+            try:
+                with open(config_file, encoding="utf-8") as f:
+                    opts = json.load(f)
+                if isinstance(opts, dict):
+                    opts["enable_skills_as_tools"] = True
+                    with open(config_file, "w", encoding="utf-8") as f:
+                        json.dump(opts, f, indent=2)
+                        f.write("\n")
+                    log_info("Persisted enable_skills_as_tools=true to options.json")
+                else:
+                    log_error(
+                        "Cannot persist migration to options.json: top-level "
+                        f"is {type(opts).__name__}, expected dict. Runtime "
+                        "override still applied for this session."
+                    )
+            except (OSError, json.JSONDecodeError) as e:
+                log_error(
+                    f"Failed to persist migration to options.json "
+                    f"(operation: persist_skills_as_tools_migration): {e}. "
+                    "Runtime override still applied for this session."
+                )
+        stored_value = True
+
+    if config_read_ok:
+        try:
+            marker.touch()
+        except OSError as e:
+            log_error(
+                f"Failed to create migration marker "
+                f"(operation: create_skills_as_tools_marker): {e}"
+            )
+
+    return stored_value
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -104,12 +254,16 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
-    enable_skills_as_tools = False  # default
+    enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    enable_filesystem_tools = False  # default
+    enable_custom_component_integration = False  # default
+    config_read_ok = True
 
     if config_file.exists():
         try:
@@ -119,17 +273,44 @@ def main() -> int:
             custom_secret_path = config.get("secret_path", "")
             raw_skills = config.get("enable_skills", True)
             enable_skills = raw_skills if isinstance(raw_skills, bool) else True
-            raw_skills_as_tools = config.get("enable_skills_as_tools", False)
-            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else False
+            raw_skills_as_tools = config.get("enable_skills_as_tools", True)
+            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            raw_filesystem_tools = config.get("enable_filesystem_tools", False)
+            enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
+            raw_custom_component = config.get("enable_custom_component_integration", False)
+            enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
+            config_read_ok = False
+
+    # One-time migration: add-on users whose stored value is False predate
+    # this release's config.yaml default flip. See migrate_skills_as_tools_default.
+    enable_skills_as_tools = migrate_skills_as_tools_default(
+        data_dir=data_dir,
+        config_file=config_file,
+        stored_value=enable_skills_as_tools,
+        config_read_ok=config_read_ok,
+    )
+
+    # Validate Supervisor token (needed for both ha-mcp auth below and the
+    # options-persist call right after secret path resolution)
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
+        return 1
 
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
+
+    # Persist secret path back to addon options so other addons (e.g. the
+    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
+    # instead of scraping it from this addon's logs (#941). Details and
+    # the skip/retry rules live in maybe_persist_secret_path().
+    maybe_persist_secret_path(config, secret_path, supervisor_token)
 
     log_info(f"Backup hint mode: {backup_hint}")
 
@@ -140,12 +321,8 @@ def main() -> int:
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
-
-    # Validate Supervisor token
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
-        return 1
+    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
+    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 

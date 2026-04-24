@@ -27,11 +27,32 @@ configuration:
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
   enable_yaml_config_editing:
-    name: Enable YAML config editing
+    name: Enable YAML config editing (beta)
     description: >-
-      Allow AI assistants to add, replace, or remove top-level keys in
-      configuration.yaml and packages/*.yaml. Only whitelisted keys are
-      allowed (e.g., template, sensor, command_line, mqtt). Core keys
-      like homeassistant, http, and recorder are blocked. A backup is
-      created before every edit. Use for YAML-only features that have no
-      UI or API alternative. Requires restart to take effect.
+      Beta feature — disabled by default. Allows AI assistants to add,
+      replace, or remove top-level keys in configuration.yaml and
+      packages/*.yaml. Only whitelisted keys are allowed (e.g., template,
+      sensor, command_line, mqtt); core keys like homeassistant, http,
+      and recorder are blocked. Each edit validates YAML syntax, runs a
+      config check, and creates an automatic backup. Changes to most keys
+      require a full HA restart to take effect. See docs/beta.md for known
+      limitations. Dedicated tools (automations, scripts, scenes, helpers,
+      template sensors) should be preferred when available.
+  enable_filesystem_tools:
+    name: Enable filesystem tools (beta)
+    description: >-
+      Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
+      access to your Home Assistant filesystem. WARNING: This gives the MCP
+      server sensitive direct file access to your system. Only enable if you
+      trust the AI assistant with file operations. Requires restart to take
+      effect.
+  enable_custom_component_integration:
+    name: Enable custom component integration (beta)
+    description: >-
+      Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the
+      ha_install_mcp_tools installer tool, which can help install the
+      ha_mcp_tools custom component. This setting does not control whether the
+      MCP server loads or interacts with the custom component, and it is not
+      required for filesystem tools to function. Only enable if you want to
+      allow the AI assistant to use the installer tool. Requires restart to
+      take effect.

@@ -62,14 +62,17 @@ class OAuthProxyClient:
         """Get the OAuth client for the current request context."""
         from fastmcp.server.dependencies import get_access_token
 
-        from ha_mcp.client.rest_client import HomeAssistantClient
+        from ha_mcp.client.rest_client import (
+            HomeAssistantAuthError,
+            HomeAssistantClient,
+        )
 
         # Get the access token from the current request context
         token = get_access_token()
 
         if not token:
             logger.warning("No access token in context")
-            raise RuntimeError("No OAuth token in request context")
+            raise HomeAssistantAuthError("No OAuth token in request context")
 
         # Extract HA token from claims (URL is server-side config)
         claims = token.claims
@@ -78,7 +81,7 @@ class OAuthProxyClient:
             logger.error(
                 f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}"
             )
-            raise RuntimeError("No Home Assistant credentials in OAuth token claims")
+            raise HomeAssistantAuthError("No Home Assistant credentials in OAuth token claims")
 
         ha_token = claims["ha_token"]
 
