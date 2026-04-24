@@ -30,6 +30,8 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
+from fastmcp.exceptions import ToolError  # noqa: E402
+from pydantic import ValidationError as PydanticValidationError  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import PlainTextResponse  # noqa: E402
 
@@ -368,22 +370,21 @@ class StatelessSessionLogFilter(logging.Filter):
 class ToolValidationLogFilter(logging.Filter):
     """Demote fastmcp tool-failure tracebacks to single-line warnings.
 
-    Pydantic ValidationError and tool-raised FastMCPError aren't server bugs,
-    so the traceback through fastmcp/pydantic internals is just noise.
+    Pydantic ValidationError and tool-raised ToolError aren't server bugs,
+    so the traceback through fastmcp/pydantic internals is just noise. The
+    structured error detail is preserved in the WARNING message; stack is
+    intentionally dropped because these are user-input errors, not bugs.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name != "fastmcp.server.server" or not record.exc_info:
             return True
 
-        from fastmcp.exceptions import FastMCPError
-        from pydantic import ValidationError
-
         msg = record.getMessage()
         err = record.exc_info[1]
-        if "Error validating tool" in msg and isinstance(err, ValidationError):
+        if "Error validating tool" in msg and isinstance(err, PydanticValidationError):
             record.msg = f"{msg}: {err.errors(include_url=False)}"
-        elif "Error calling tool" in msg and isinstance(err, FastMCPError):
+        elif "Error calling tool" in msg and isinstance(err, ToolError):
             record.msg = f"{msg}: {err}"
         else:
             return True

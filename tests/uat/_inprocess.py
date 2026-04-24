@@ -22,9 +22,17 @@ async def inprocess_mcp_client(
 ) -> AsyncIterator[Client]:
     """Build one in-process FastMCP client for setup/verify/teardown.
 
-    The env-swap and WebSocket disconnect point ha_mcp's module-level settings
-    at the target HA instance; the websocket client reads env, not the passed
-    HomeAssistantClient's base_url.
+    Clearing ``ha_mcp.config._settings`` forces the next ``get_global_settings()``
+    call to re-read the env vars we just set. The WebSocket disconnect tears
+    down any cached connection to the previous URL so the next tool call
+    reconnects to ``ha_url``.
+
+    One client is shared across many tool calls to amortize the ~1s server
+    construction cost. The tradeoff: if the shared client's WebSocket gets into
+    a bad state mid-run, every subsequent call through it inherits the problem.
+
+    Not safe for concurrent use: ``os.environ`` and ``ha_mcp.config._settings``
+    are process-global, so overlapping callers would race on both.
     """
     from fastmcp import Client
 
@@ -47,6 +55,7 @@ async def inprocess_mcp_client(
         async with Client(server.mcp) as mcp_client:
             yield mcp_client
     finally:
+        await websocket_manager.disconnect()
         if prev_url is None:
             os.environ.pop("HOMEASSISTANT_URL", None)
         else:

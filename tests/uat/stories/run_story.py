@@ -287,7 +287,10 @@ async def _run_mcp_steps(
             if phase == "setup":
                 logger.info(f"  [{phase}] {tool_name} FAILED (see server log)")
                 raise
-            logger.info(f"  [{phase}] {tool_name} failed, ignored")
+            logger.warning(
+                f"  [{phase}] {tool_name} failed, ignored (may poison shared client "
+                "for next story; see server log)"
+            )
 
 
 # ---------------------------------------------------------------------------
