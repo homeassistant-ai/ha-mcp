@@ -556,3 +556,89 @@ async def test_logs_logbook_with_search(mcp_client):
     assert "entries" in data
 
     logger.info(f"Logbook search returned {data.get('returned_entries', 0)} entries")
+
+
+# -------------------- source="logger" (logger/log_info) --------------------
+
+
+@pytest.mark.asyncio
+async def test_logs_logger_source_basic(mcp_client):
+    """ha_get_logs(source='logger') returns per-integration log levels."""
+    result = await mcp_client.call_tool("ha_get_logs", {"source": "logger"})
+    raw_data = assert_mcp_success(result, "Logger source retrieval")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "logger"
+    assert "loggers" in data, "Logger source should return a 'loggers' list"
+    assert isinstance(data["loggers"], list)
+    assert "total_entries" in data
+    assert "returned_entries" in data
+
+    # Every entry has domain + level string
+    for entry in data["loggers"]:
+        assert "domain" in entry and isinstance(entry["domain"], str)
+        assert "level" in entry and isinstance(entry["level"], str)
+        # level_raw is int or None
+        assert "level_raw" in entry
+
+    logger.info(f"Retrieved {data['returned_entries']} logger entries")
+
+
+@pytest.mark.asyncio
+async def test_logs_logger_source_reflects_set_level(mcp_client):
+    """After logger.set_level, source='logger' shows the new level for the target domain."""
+    target_domain = "homeassistant"
+
+    await mcp_client.call_tool(
+        "ha_call_service",
+        {
+            "domain": "logger",
+            "service": "set_level",
+            "data": {target_domain: "debug"},
+            "wait": False,
+        },
+    )
+
+    try:
+        result = await mcp_client.call_tool(
+            "ha_get_logs",
+            {"source": "logger", "search": target_domain},
+        )
+        raw_data = assert_mcp_success(result, "Logger source with search filter")
+        data = get_logbook_data(raw_data)
+
+        assert data.get("source") == "logger"
+        filters = data.get("filters_applied") or {}
+        assert filters.get("search") == target_domain
+
+        matching = [e for e in data["loggers"] if e["domain"] == target_domain]
+        assert matching, f"Expected an entry for domain={target_domain}"
+        assert matching[0]["level"] == "DEBUG"
+    finally:
+        # Restore default
+        await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "logger",
+                "service": "set_level",
+                "data": {target_domain: "info"},
+                "wait": False,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_logs_logger_search_empty_result(mcp_client):
+    """Unknown search string returns 0 loggers but still succeeds."""
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "logger", "search": "nonexistent_xyz_integration_12345"},
+    )
+    raw_data = assert_mcp_success(result, "Logger source with empty search")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "logger"
+    assert data.get("returned_entries") == 0
+    assert data.get("loggers") == []

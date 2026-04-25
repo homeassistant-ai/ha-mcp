@@ -149,11 +149,42 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
 
     Returns:
         Dictionary with add-on details including ingress info, state, options, etc.
+        Top-level ``log_level`` is surfaced when the add-on exposes one via its
+        Supervisor options or schema (e.g., ``"debug"``, ``"info"``, etc.).
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
         return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
-    return {"success": True, "addon": response["result"]}
+
+    addon = response["result"] if isinstance(response["result"], dict) else {}
+    result: dict[str, Any] = {"success": True, "addon": addon}
+
+    log_level = _extract_addon_log_level(addon)
+    if log_level is not None:
+        result["log_level"] = log_level
+
+    return result
+
+
+def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
+    """Return the add-on's configured log level, if any.
+
+    Checks the add-on's current options first (``options.log_level`` — what the
+    user set), then falls back to the schema defaults (``schema.log_level``)
+    so add-ons that ship a default-but-unset value still surface something
+    meaningful. Returns ``None`` when the add-on exposes no log-level option.
+    """
+    options = addon.get("options")
+    if isinstance(options, dict):
+        level = options.get("log_level")
+        if isinstance(level, str) and level.strip():
+            return level
+
+    schema = addon.get("schema")
+    if isinstance(schema, dict) and "log_level" in schema:
+        return "default"
+
+    return None
 
 
 async def list_addons(
@@ -913,7 +944,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **Note:** This tool only works with Home Assistant OS or Supervised installations.
 
         **SINGLE ADD-ON (slug provided):**
-        Returns comprehensive details including ingress entry, ports, options, and state.
+        Returns comprehensive details including ingress entry, ports, options, state,
+        and (when the add-on exposes one) a top-level ``log_level`` reflecting the
+        current Supervisor option — useful for confirming ha_manage_addon log_level changes.
         Useful for discovering what APIs an add-on exposes before calling ha_manage_addon.
 
         **INSTALLED ADD-ONS (source='installed'):**
