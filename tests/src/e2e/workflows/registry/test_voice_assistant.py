@@ -126,8 +126,8 @@ class TestVoiceAssistantExposure:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": "test_exposure_check"},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": "test_exposure_check", "confirm": True},
         )
 
     async def test_expose_entity_to_conversation(self, mcp_client, cleanup_tracker):
@@ -183,8 +183,8 @@ class TestVoiceAssistantExposure:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": "test_expose_entity"},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": "test_expose_entity", "confirm": True},
         )
 
     async def test_hide_entity_from_assistant(self, mcp_client, cleanup_tracker):
@@ -225,8 +225,8 @@ class TestVoiceAssistantExposure:
 
         # Cleanup
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": "test_hide_entity"},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": "test_hide_entity", "confirm": True},
         )
 
     async def test_expose_entity_invalid_assistant(self, mcp_client):

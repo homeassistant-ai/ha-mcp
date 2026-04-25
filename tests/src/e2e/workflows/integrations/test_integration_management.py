@@ -102,8 +102,8 @@ class TestIntegrationManagement:
         """Test deletion safety check."""
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_config_entry",
-            {"entry_id": "fake_id", "confirm": False},
+            "ha_delete_helpers_integrations",
+            {"target": "fake_id", "confirm": False},
         )
         assert not data.get("success"), "Delete without confirm should fail"
         error = data.get("error", {})
@@ -117,8 +117,8 @@ class TestIntegrationManagement:
         # Test with string "false" - should fail
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_config_entry",
-            {"entry_id": "fake_id", "confirm": "false"},
+            "ha_delete_helpers_integrations",
+            {"target": "fake_id", "confirm": "false"},
         )
         assert not data.get("success"), "Delete with string false should fail"
         error = data.get("error", {})
@@ -165,8 +165,8 @@ class TestIntegrationManagement:
 
         # Delete the entry
         delete_result = await mcp_client.call_tool(
-            "ha_delete_config_entry",
-            {"entry_id": entry_id, "confirm": True},
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
         delete_data = assert_mcp_success(delete_result, "Delete config entry")
         assert delete_data.get("success") is True
@@ -208,8 +208,8 @@ class TestIntegrationManagement:
         """
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_config_entry",
-            {"entry_id": "nonexistent_entry_a7_e2e_xyz", "confirm": True},
+            "ha_delete_helpers_integrations",
+            {"target": "nonexistent_entry_a7_e2e_xyz", "confirm": True},
         )
         assert not data.get("success", False), (
             f"Expected failure for nonexistent entry_id with confirm=True, "

@@ -124,10 +124,11 @@ class TestEntityRename:
         # 6. CLEANUP: Delete renamed entity
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": new_name,
+                "target": new_name,
+                "confirm": True,
             },
         )
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
@@ -198,10 +199,11 @@ class TestEntityRename:
         # 4. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": new_name,
+                "target": new_name,
+                "confirm": True,
             },
         )
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
@@ -347,10 +349,11 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
-        "ha_config_remove_helper",
+        "ha_delete_helpers_integrations",
         {
             "helper_type": "input_button",
-            "helper_id": "test_quick_renamed",
+            "target": "test_quick_renamed",
+            "confirm": True,
         },
     )
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
@@ -436,8 +439,8 @@ class TestEntityRenameVoiceExposure:
         # 5. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -510,8 +513,8 @@ class TestRenameEntityWithDevice:
         # 4. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -561,8 +564,8 @@ class TestRenameEntityWithDevice:
         # 3. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -612,8 +615,8 @@ class TestRenameEntityWithDevice:
         # 3. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -660,10 +663,11 @@ async def test_rename_entity_with_device_basic(mcp_client, cleanup_tracker):
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
-        "ha_config_remove_helper",
+        "ha_delete_helpers_integrations",
         {
             "helper_type": "input_button",
-            "helper_id": "test_combo_quick_new",
+            "target": "test_combo_quick_new",
+            "confirm": True,
         },
     )
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"

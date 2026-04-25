@@ -72,8 +72,8 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
 
     async def test_rename_with_device_name_returns_combined_format(
@@ -132,8 +132,8 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
 
     async def test_rename_with_empty_device_name_treated_as_entity_only(
@@ -184,6 +184,6 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
