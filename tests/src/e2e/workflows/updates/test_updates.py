@@ -534,3 +534,45 @@ async def test_update_tools_discovery(mcp_client):
     )
 
     logger.info("Update tools discovery test passed")
+
+
+@pytest.mark.updates
+class TestUpdatesGetNegativeInputs:
+    """
+    A2 negative-input tests for ha_get_updates' single-entity detail mode.
+
+    Covers the nonexistent-entity_id failure path. Existing tests in this
+    file exercise listing, release-notes inclusion, and edge cases on real
+    update entities, but do not call ha_get_updates with an entity_id that
+    has no matching update.
+
+    Methodology: source-verified against tools_updates.py. _get_update_details
+    fetches the entity state via REST; a 404 from /api/states/<entity_id>
+    raises HomeAssistantAPIError("API error: 404 - Entity not found.").
+    The except-Exception branch in ha_get_updates matches "404" / "not found"
+    in the error message and raises ErrorCode.ENTITY_NOT_FOUND. Live-probed
+    against a real HA instance: GET /api/states/update.<nonexistent> returns
+    HTTP 404 with body {"message": "Entity not found."}.
+    """
+
+    async def test_get_updates_nonexistent_entity_id(self, mcp_client):
+        """
+        Test: ha_get_updates(entity_id="update.<nonexistent>") returns a
+        structured error with code ENTITY_NOT_FOUND, not success=True.
+
+        Source path: REST 404 → HomeAssistantAPIError → except-Exception
+        in ha_get_updates → ENTITY_NOT_FOUND.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_updates",
+                {"entity_id": "update.nonexistent_a2_e2e_xyz_404"},
+                expected_error="not found",
+            )
+
+            assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
+                f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+            )
+            assert "suggestion" in data["error"], (
+                "Error response should include a suggestion"
+            )
