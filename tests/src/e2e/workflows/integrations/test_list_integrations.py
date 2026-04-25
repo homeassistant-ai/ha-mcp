@@ -458,9 +458,9 @@ class TestGetIntegrationNegativeInputs:
             f"Expected failure for nonexistent entry_id, got success=True: {data}"
         )
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            f"Expected error code RESOURCE_NOT_FOUND, got: {data.get('error')}"
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data['error']}"
         )
-        error_msg = str(data.get("error", "")).lower()
+        error_msg = data["error"]["message"].lower()
         assert "not found" in error_msg, (
-            f"Expected 'not found' in error message, got: {data.get('error')}"
+            f"Expected 'not found' in error message, got: {data['error']}"
         )
