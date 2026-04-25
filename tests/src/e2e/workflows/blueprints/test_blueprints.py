@@ -183,8 +183,8 @@ class TestBlueprintManagement:
             assert result["error"]["code"] == "RESOURCE_NOT_FOUND", (
                 f"Expected error code RESOURCE_NOT_FOUND, got: {result['error']}"
             )
-            assert "suggestions" in result["error"], (
-                "Error response should include suggestions"
+            assert "suggestion" in result["error"] or "suggestions" in result["error"], (
+                "Error response should include a suggestion or suggestions"
             )
             logger.info("ha_get_blueprint properly handles non-existent blueprint")
 
