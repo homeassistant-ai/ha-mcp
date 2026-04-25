@@ -181,7 +181,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                 data-tool-size={totalChars}
                 data-original-desc={tool.description}
               >
-                <button class="tool-header w-full text-left px-4 py-3 flex items-start gap-3">
+                <button class="tool-header select-text w-full text-left px-4 py-3 flex items-start gap-3">
                   <svg class="tool-chevron w-4 h-4 mt-1 text-slate-500 transition-transform shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                   </svg>
@@ -522,6 +522,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
 
   document.querySelectorAll('.tool-header').forEach(header => {
     header.addEventListener('click', () => {
+      if (window.getSelection()?.type === 'Range') return;
       const card = header.closest('.tool-card')!;
       const details = card.querySelector('.tool-details')!;
       const chevron = card.querySelector('.tool-chevron')!;
