@@ -49,7 +49,8 @@ async def _get_entry_id_for_flow_helper(
     Args:
         client: HomeAssistantClient instance.
         helper_type: Flow-helper type (must be in FLOW_HELPER_TYPES).
-        target: Entity ID, e.g. "sensor.my_meter" or bare ID "my_meter".
+        target: Full entity_id, e.g. "sensor.my_meter". Bare IDs not
+            supported for flow helpers (caller must provide entity_id).
         warnings: Optional list — appended to on WebSocket failure.
 
     Returns:
@@ -59,13 +60,16 @@ async def _get_entry_id_for_flow_helper(
     if helper_type not in FLOW_HELPER_TYPES:
         return None
 
-    entity_id = target if "." in target else f"{helper_type}.{target}"
+    if "." not in target:
+        return None
+    entity_id = target
 
     try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
     except Exception as e:
+        logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
         if warnings is not None:
             warnings.append(
                 f"entity_registry/get failed for {entity_id}: {e}"

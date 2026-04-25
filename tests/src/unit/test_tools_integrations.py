@@ -43,16 +43,16 @@ class TestGetEntryIdForFlowHelper:
         )
         assert result == "abc123"
 
-    async def test_completes_bare_id_with_helper_type(self) -> None:
-        client = _make_client(
-            {"success": True, "result": {"config_entry_id": "def456"}}
-        )
+    async def test_returns_none_for_bare_id_flow_helper(self) -> None:
+        # Flow helpers require full entity_id — bare IDs cannot be safely
+        # completed because helper_type often differs from entity domain
+        # (e.g. utility_meter → sensor.*, switch_as_x → switch/light.*).
+        client = _make_client()
         result = await _get_entry_id_for_flow_helper(
             client, "template", "my_sensor"
         )
-        assert result == "def456"
-        sent = client.send_websocket_message.await_args.args[0]
-        assert sent["entity_id"] == "template.my_sensor"
+        assert result is None
+        client.send_websocket_message.assert_not_awaited()
 
     async def test_returns_none_for_unknown_helper_type(self) -> None:
         client = _make_client()
