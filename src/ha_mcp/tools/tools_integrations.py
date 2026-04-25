@@ -5,8 +5,9 @@ This module provides tools to list, enable, disable, and delete Home Assistant
 integrations (config entries) via the REST and WebSocket APIs.
 """
 
+import asyncio
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -20,7 +21,16 @@ from .helpers import (
     register_tool_methods,
 )
 from .tools_config_entry_flow import FLOW_HELPER_TYPES
-from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
+from .tools_config_helpers import (
+    SIMPLE_HELPER_TYPES,
+    _get_entities_for_config_entry,
+)
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_bool_param,
+    coerce_int_param,
+    wait_for_entity_removed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -525,6 +535,631 @@ class IntegrationTools:
             logger.error(f"Failed to delete config entry: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
+
+
+    @tool(
+        name="ha_delete_helpers_integrations",
+        tags={"Helpers", "Integrations"},
+        annotations={
+            "destructiveHint": True,
+            "title": "Delete Helper or Integration",
+        },
+    )
+    @log_tool_usage
+    async def ha_delete_helpers_integrations(
+        self,
+        target: Annotated[
+            str,
+            Field(
+                description=(
+                    "What to delete. One of: "
+                    "(a) bare helper_id for SIMPLE helpers (requires helper_type), "
+                    "e.g. 'my_button'; "
+                    "(b) full entity_id (requires helper_type), "
+                    "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
+                    "(c) config entry_id for any integration (helper_type=None), "
+                    "e.g. value from ha_get_integration()."
+                )
+            ),
+        ],
+        helper_type: Annotated[
+            Literal[
+                # 12 SIMPLE
+                "input_button", "input_boolean", "input_select", "input_number",
+                "input_text", "input_datetime", "counter", "timer", "schedule",
+                "zone", "person", "tag",
+                # 15 FLOW
+                "template", "group", "utility_meter", "derivative", "min_max",
+                "threshold", "integration", "statistics", "trend", "random",
+                "filter", "tod", "generic_thermostat", "switch_as_x",
+                "generic_hygrostat",
+            ]
+            | None,
+            Field(
+                description=(
+                    "Helper type. Required when target is a helper_id (bare) "
+                    "or entity_id. Set to None when target is a config entry_id "
+                    "to delete any integration."
+                ),
+                default=None,
+            ),
+        ] = None,
+        confirm: Annotated[
+            bool | str,
+            Field(
+                description="Must be True to confirm deletion.",
+                default=False,
+            ),
+        ] = False,
+        wait: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "Wait for entity removal. Default: True. "
+                    "Ignored when helper_type=None (no entity poll, "
+                    "require_restart returned)."
+                ),
+                default=True,
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
+        """Delete a Home Assistant helper or integration config entry.
+
+        Unifies the previous ha_config_remove_helper (12 SIMPLE helper types)
+        and ha_delete_config_entry (config entries) into a single tool with
+        three routing paths driven by helper_type.
+
+        SUPPORTED HELPER TYPES:
+        - SIMPLE (12, websocket-delete): input_button, input_boolean,
+          input_select, input_number, input_text, input_datetime, counter,
+          timer, schedule, zone, person, tag.
+        - FLOW (15, config-entry-delete via entity lookup): template, group,
+          utility_meter, derivative, min_max, threshold, integration,
+          statistics, trend, random, filter, tod, generic_thermostat,
+          switch_as_x, generic_hygrostat.
+
+        ROUTING:
+        - SIMPLE helper_type + bare helper_id or entity_id → websocket delete.
+        - FLOW helper_type + entity_id → resolve entity_id to config_entry_id
+          via entity_registry, then delete the config entry. All sub-entities
+          (e.g. utility_meter tariffs) are removed together.
+        - helper_type=None + entry_id → direct config entry delete (any
+          integration). Same outcome as the previous ha_delete_config_entry.
+
+        EXAMPLES:
+        - Delete SIMPLE button:
+          ha_delete_helpers_integrations(
+              target="my_button", helper_type="input_button", confirm=True
+          )
+        - Delete FLOW utility_meter (any sub-entity works):
+          ha_delete_helpers_integrations(
+              target="sensor.energy_peak",
+              helper_type="utility_meter",
+              confirm=True,
+          )
+        - Delete any integration by entry_id:
+          ha_delete_helpers_integrations(
+              target="01HXYZ...", confirm=True
+          )
+
+        **WARNING:** Deleting a helper or integration that is referenced by
+        automations, scripts, or other integrations may cause those to fail.
+        Use ha_search_entities() / ha_get_integration() to verify before
+        deletion. Cannot be undone.
+
+        NOTE: YAML-configured helpers cannot be deleted via this tool — they
+        have no storage backend. Edit the YAML file and reload instead.
+        """
+        # === Confirm gate (uniform for all three paths) ===
+        confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
+        if not confirm_bool:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Deletion not confirmed. Set confirm=True to proceed.",
+                    context={
+                        "target": target,
+                        "helper_type": helper_type,
+                        "warning": (
+                            "This will permanently delete the helper or "
+                            "integration. This cannot be undone."
+                        ),
+                    },
+                )
+            )
+
+        wait_bool = coerce_bool_param(wait, "wait", default=True)
+        assert wait_bool is not None  # default=True guarantees non-None
+        client = self._client
+        warnings: list[str] = []
+
+        # === Routing dispatch ===
+        if helper_type is None:
+            # Path 3: Direct config entry delete (any integration)
+            return await self._delete_direct_entry(target)
+
+        if helper_type in SIMPLE_HELPER_TYPES:
+            # Path 1: SIMPLE helper via websocket delete
+            return await self._delete_simple_helper(
+                helper_type, target, wait_bool
+            )
+
+        if helper_type in FLOW_HELPER_TYPES:
+            # Path 2: FLOW helper via entity_id → config_entry_id lookup
+            return await self._delete_flow_helper(
+                helper_type, target, wait_bool, warnings
+            )
+
+        # Should be unreachable due to Literal type — defensive fallback
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Unknown helper_type: {helper_type!r}",
+                context={"target": target, "helper_type": helper_type},
+            )
+        )
+
+    # === Path 3: Direct config entry delete (1:1 from ha_delete_config_entry) ===
+    async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
+        """Delete a config entry directly. Mirrors ha_delete_config_entry."""
+        try:
+            result = await self._client.delete_config_entry(entry_id)
+            require_restart = result.get("require_restart", False)
+            return {
+                "success": True,
+                "action": "delete",
+                "target": entry_id,
+                "helper_type": "config_entry",
+                "method": "config_entry_delete",
+                "entry_id": entry_id,
+                "entity_ids": [],
+                "require_restart": require_restart,
+                "message": (
+                    "Config entry deleted successfully."
+                    if not require_restart
+                    else "Config entry deleted; Home Assistant restart required."
+                ),
+            }
+        except ToolError:
+            raise
+        except Exception as e:
+            error_msg = str(e)
+            if "404" in error_msg or "not found" in error_msg.lower():
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Config entry not found: {entry_id}",
+                        context={"entry_id": entry_id},
+                        suggestions=[
+                            "Use ha_get_integration() without entry_id to "
+                            "see all config entries",
+                        ],
+                    )
+                )
+            logger.error(f"Failed to delete config entry: {e}")
+            exception_to_structured_error(e, context={"entry_id": entry_id})
+
+    # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
+    async def _delete_flow_helper(
+        self,
+        helper_type: str,
+        target: str,
+        wait_bool: bool,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        """Resolve target entity_id to config_entry_id, then delete entry.
+
+        Multi-entity helpers (e.g. utility_meter with tariffs) are handled
+        naturally — any sub-entity resolves to the same entry_id, and all
+        sub-entities are waited for in parallel via asyncio.gather.
+        """
+        client = self._client
+        try:
+            # Step 1: resolve target → entry_id
+            entry_id = await _get_entry_id_for_flow_helper(
+                client, helper_type, target, warnings
+            )
+            if entry_id is None:
+                # Distinguish two failure modes for accurate error reporting
+                # (Z.1860 vs Z.192 convention in this codebase):
+                # - entity not in registry → ENTITY_NOT_FOUND
+                # - entity exists but no config_entry_id (YAML-configured)
+                #   → RESOURCE_NOT_FOUND
+                #
+                # Re-query directly to disambiguate. This is one extra
+                # WebSocket call only on the error path; the happy path
+                # is unaffected.
+                entity_id = (
+                    target
+                    if "." in target
+                    else f"{helper_type}.{target}"
+                )
+                disambiguation = await client.send_websocket_message({
+                    "type": "config/entity_registry/get",
+                    "entity_id": entity_id,
+                })
+                in_registry = (
+                    isinstance(disambiguation, dict)
+                    and disambiguation.get("success")
+                )
+                if in_registry:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            (
+                                f"Helper {target} is not a storage-based "
+                                "helper (no config entry). YAML-configured "
+                                "helpers must be removed by editing the "
+                                "configuration file."
+                            ),
+                            context={
+                                "target": target,
+                                "helper_type": helper_type,
+                                "entity_id": entity_id,
+                            },
+                            suggestions=[
+                                "Edit the YAML file and reload the relevant "
+                                "integration.",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Helper {target} not found in entity registry.",
+                        context={
+                            "target": target,
+                            "helper_type": helper_type,
+                            "entity_id": entity_id,
+                        },
+                        suggestions=[
+                            "Use ha_search_entities() to verify the helper "
+                            "exists.",
+                        ],
+                    )
+                )
+
+            # Step 2: collect sub-entity IDs for the wait phase
+            sub_entities = await _get_entities_for_config_entry(
+                client, entry_id, warnings
+            )
+            entity_ids = [e["entity_id"] for e in sub_entities if "entity_id" in e]
+
+            # Step 3: delete the config entry
+            try:
+                delete_result = await client.delete_config_entry(entry_id)
+            except Exception as e:
+                error_msg = str(e)
+                if "404" in error_msg or "not found" in error_msg.lower():
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Config entry not found: {entry_id}",
+                            context={
+                                "entry_id": entry_id,
+                                "target": target,
+                                "helper_type": helper_type,
+                            },
+                        )
+                    )
+                raise
+
+            require_restart = bool(
+                isinstance(delete_result, dict)
+                and delete_result.get("require_restart", False)
+            )
+
+            # Step 4: wait for all sub-entities to be removed in parallel
+            response: dict[str, Any] = {
+                "success": True,
+                "action": "delete",
+                "target": target,
+                "helper_type": helper_type,
+                "method": "config_flow_delete",
+                "entry_id": entry_id,
+                "entity_ids": entity_ids,
+                "require_restart": require_restart,
+                "message": (
+                    f"Successfully deleted {helper_type} (entry: {entry_id}, "
+                    f"{len(entity_ids)} sub-entities)."
+                ),
+            }
+            if wait_bool and entity_ids:
+                try:
+                    results = await asyncio.gather(
+                        *[
+                            wait_for_entity_removed(client, eid)
+                            for eid in entity_ids
+                        ],
+                        return_exceptions=True,
+                    )
+                    not_removed = [
+                        eid
+                        for eid, res in zip(entity_ids, results, strict=True)
+                        if res is not True
+                    ]
+                    if not_removed:
+                        response["warning"] = (
+                            f"Deletion confirmed but the following entities "
+                            f"may still appear briefly: {not_removed}"
+                        )
+                except Exception as e:
+                    response["warning"] = (
+                        f"Deletion confirmed but removal verification "
+                        f"failed: {e}"
+                    )
+            if warnings:
+                response["warnings"] = warnings
+            return response
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={
+                    "helper_type": helper_type,
+                    "target": target,
+                },
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify the target exists using ha_search_entities() "
+                    "or ha_get_integration()",
+                ],
+            )
+
+    # === Path 1: SIMPLE helper delete (1:1 from ha_config_remove_helper) ===
+    async def _delete_simple_helper(
+        self,
+        helper_type: str,
+        target: str,
+        wait_bool: bool,
+    ) -> dict[str, Any]:
+        """Delete a SIMPLE helper via websocket. Mirrors ha_config_remove_helper.
+
+        Preserves the 3-retry registry lookup with exponential backoff and
+        the two fallback strategies (direct-id-delete, already-deleted check).
+        """
+        client = self._client
+        # Convert to entity_id form
+        entity_id = (
+            target if target.startswith(f"{helper_type}.")
+            else f"{helper_type}.{target}"
+        )
+        # Bare helper_id (without prefix) form for fallback strategies
+        helper_id = (
+            target.split(".", 1)[1]
+            if target.startswith(f"{helper_type}.")
+            else target
+        )
+
+        try:
+            # Try to get unique_id with retry logic (race-condition guard)
+            unique_id = None
+            registry_result: dict[str, Any] | None = None
+            max_retries = 3
+
+            for attempt in range(max_retries):
+                logger.info(
+                    f"Getting entity registry for: {entity_id} "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+
+                # Fast state check first
+                try:
+                    state_check = await client.get_entity_state(entity_id)
+                    if not state_check:
+                        if attempt < max_retries - 1:
+                            wait_time = 0.5 * (2**attempt)
+                            logger.debug(
+                                f"Entity {entity_id} not in state, waiting "
+                                f"{wait_time}s before retry..."
+                            )
+                            await asyncio.sleep(wait_time)
+                            continue
+                except Exception as e:
+                    logger.debug(f"State check failed for {entity_id}: {e}")
+
+                # Registry lookup
+                registry_msg: dict[str, Any] = {
+                    "type": "config/entity_registry/get",
+                    "entity_id": entity_id,
+                }
+                try:
+                    registry_result = await client.send_websocket_message(
+                        registry_msg
+                    )
+                    if registry_result.get("success"):
+                        entity_entry = registry_result.get("result", {})
+                        unique_id = entity_entry.get("unique_id")
+                        if unique_id:
+                            logger.info(
+                                f"Found unique_id: {unique_id} for {entity_id}"
+                            )
+                            break
+                    if attempt < max_retries - 1:
+                        wait_time = 0.5 * (2**attempt)
+                        logger.debug(
+                            f"Registry lookup failed for {entity_id}, "
+                            f"waiting {wait_time}s before retry..."
+                        )
+                        await asyncio.sleep(wait_time)
+                except Exception as e:
+                    logger.warning(
+                        f"Registry lookup attempt {attempt + 1} failed: {e}"
+                    )
+                    if attempt < max_retries - 1:
+                        wait_time = 0.5 * (2**attempt)
+                        await asyncio.sleep(wait_time)
+
+            # Fallback strategy 1: direct-ID delete if unique_id not found
+            if not unique_id:
+                logger.info(
+                    f"Could not find unique_id for {entity_id}, "
+                    "trying direct deletion with helper_id"
+                )
+                delete_msg: dict[str, Any] = {
+                    "type": f"{helper_type}/delete",
+                    f"{helper_type}_id": helper_id,
+                }
+                logger.info(f"Sending fallback WebSocket delete: {delete_msg}")
+                result = await client.send_websocket_message(delete_msg)
+
+                if result.get("success"):
+                    response: dict[str, Any] = {
+                        "success": True,
+                        "action": "delete",
+                        "target": target,
+                        "helper_type": helper_type,
+                        "method": "websocket_delete",
+                        "entry_id": None,
+                        "entity_ids": [entity_id],
+                        "require_restart": False,
+                        "message": (
+                            f"Successfully deleted {helper_type}: {target} "
+                            f"using direct ID (entity: {entity_id})."
+                        ),
+                        "fallback_used": "direct_id",
+                    }
+                    if wait_bool:
+                        try:
+                            removed = await wait_for_entity_removed(
+                                client, entity_id
+                            )
+                            if not removed:
+                                response["warning"] = (
+                                    f"Deletion confirmed but {entity_id} "
+                                    "may still appear briefly."
+                                )
+                        except Exception as e:
+                            response["warning"] = (
+                                "Deletion confirmed but removal verification "
+                                f"failed: {e}"
+                            )
+                    return response
+
+                # Fallback strategy 2: already-deleted check
+                try:
+                    final_state_check = await client.get_entity_state(entity_id)
+                    if not final_state_check:
+                        logger.info(
+                            f"Entity {entity_id} no longer exists; "
+                            "treating as already deleted"
+                        )
+                        return {
+                            "success": True,
+                            "action": "delete",
+                            "target": target,
+                            "helper_type": helper_type,
+                            "method": "websocket_delete",
+                            "entry_id": None,
+                            "entity_ids": [entity_id],
+                            "require_restart": False,
+                            "message": (
+                                f"Helper {target} was already deleted or "
+                                "never properly registered."
+                            ),
+                            "fallback_used": "already_deleted",
+                        }
+                except Exception:
+                    pass
+
+                # All fallbacks exhausted
+                err_detail = (
+                    registry_result.get("error", "Unknown error")
+                    if registry_result
+                    else "No registry response"
+                )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        (
+                            f"Helper not found in entity registry after "
+                            f"{max_retries} attempts: {err_detail}"
+                        ),
+                        suggestions=[
+                            "Helper may not be properly registered or was "
+                            "already deleted. Use ha_search_entities() to "
+                            "verify.",
+                        ],
+                        context={"target": target, "entity_id": entity_id},
+                    )
+                )
+
+            # Standard path: delete using unique_id
+            delete_message: dict[str, Any] = {
+                "type": f"{helper_type}/delete",
+                f"{helper_type}_id": unique_id,
+            }
+            logger.info(f"Sending WebSocket delete: {delete_message}")
+            result = await client.send_websocket_message(delete_message)
+            logger.info(f"WebSocket delete response: {result}")
+
+            if result.get("success"):
+                response = {
+                    "success": True,
+                    "action": "delete",
+                    "target": target,
+                    "helper_type": helper_type,
+                    "method": "websocket_delete",
+                    "entry_id": None,
+                    "entity_ids": [entity_id],
+                    "require_restart": False,
+                    "unique_id": unique_id,
+                    "message": (
+                        f"Successfully deleted {helper_type}: {target} "
+                        f"(entity: {entity_id})."
+                    ),
+                }
+                if wait_bool:
+                    try:
+                        removed = await wait_for_entity_removed(
+                            client, entity_id
+                        )
+                        if not removed:
+                            response["warning"] = (
+                                f"Deletion confirmed but {entity_id} "
+                                "may still appear briefly."
+                            )
+                    except Exception as e:
+                        response["warning"] = (
+                            "Deletion confirmed but removal verification "
+                            f"failed: {e}"
+                        )
+                return response
+
+            # Standard path delete failed → SERVICE_CALL_FAILED
+            error_msg = result.get("error", "Unknown error")
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete helper: {error_msg}",
+                    suggestions=[
+                        "Make sure the helper exists and is not being used "
+                        "by automations or scripts",
+                    ],
+                    context={
+                        "target": target,
+                        "entity_id": entity_id,
+                        "unique_id": unique_id,
+                    },
+                )
+            )
+
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"helper_type": helper_type, "target": target},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify target exists using ha_search_entities()",
+                    "Ensure helper is not used by automations or scripts",
+                ],
+            )
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
