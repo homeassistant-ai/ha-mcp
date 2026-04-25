@@ -111,19 +111,22 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
         "read": (
             f"Execute a read-only tool discovered via {search_tool_name}. "
             f"Safe — does not modify any data or state.\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_read_tool(name="ha_get_history", arguments={{"entity_ids": "light.x", "start_time": "24h"}})'
         ),
         "write": (
             f"Execute a write tool discovered via {search_tool_name}. "
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_write_tool(name="ha_config_set_area", arguments={{"name": "Kitchen"}})'
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
             f"Permanently removes data. Use for tools that delete or "
             f"remove resources (areas, automations, devices, etc.).\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_delete_tool(name="ha_config_remove_area", arguments={{"area_id": "old_area"}})'
         ),
     }
 
