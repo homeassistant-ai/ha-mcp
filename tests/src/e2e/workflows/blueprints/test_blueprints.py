@@ -160,9 +160,15 @@ class TestBlueprintManagement:
 
     async def test_get_blueprint_not_found(self, mcp_client):
         """
-        Test: Get blueprint that doesn't exist
+        Test: ha_get_blueprint with a nonexistent path returns a structured
+        error with code RESOURCE_NOT_FOUND, not success=True.
 
-        Validates proper error handling when blueprint path doesn't exist.
+        Source path: tools_blueprints.py — when the requested path is absent
+        from the blueprints registry, raise_tool_error is invoked with
+        ErrorCode.RESOURCE_NOT_FOUND and the message "Blueprint not found: ...".
+
+        Hardened from suggestions-only check to explicit error-code and
+        message-substring assertions.
         """
         logger.info("Testing ha_get_blueprint with non-existent path...")
 
@@ -170,12 +176,20 @@ class TestBlueprintManagement:
             # Try to get a non-existent blueprint
             result = await mcp.call_tool_failure(
                 "ha_get_blueprint",
-                {"path": "nonexistent/blueprint_xyz.yaml", "domain": "automation"},
+                {"path": "nonexistent/blueprint_a2_e2e_xyz_404.yaml", "domain": "automation"},
                 expected_error="not found",
             )
 
-            # Verify error response includes suggestions (nested under "error")
-            assert "suggestions" in result.get("error", {}), "Error response should include suggestions"
+            assert result["error"]["code"] == "RESOURCE_NOT_FOUND", (
+                f"Expected error code RESOURCE_NOT_FOUND, got: {result.get('error')}"
+            )
+            error_msg = str(result.get("error", "")).lower()
+            assert "not found" in error_msg, (
+                f"Expected 'not found' in error message, got: {result.get('error')}"
+            )
+            assert "suggestions" in result.get("error", {}), (
+                "Error response should include suggestions"
+            )
             logger.info("ha_get_blueprint properly handles non-existent blueprint")
 
     async def test_get_blueprint_invalid_domain(self, mcp_client):

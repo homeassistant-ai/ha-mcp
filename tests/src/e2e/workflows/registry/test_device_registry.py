@@ -625,3 +625,46 @@ async def test_device_entity_independence(mcp_client):
     assert restore_data.get("success"), f"Failed to restore device name: {restore_data}"
 
     logger.info("Device/entity naming independence test completed")
+
+
+@pytest.mark.registry
+class TestDeviceGetNegativeInputs:
+    """
+    A2 negative-input tests for ha_get_device's single-device lookup mode.
+
+    Covers the nonexistent-device_id failure path. Existing tests in this
+    file exercise the list mode, area/manufacturer filters, and the
+    update/remove flows, but never call ha_get_device with a device_id
+    that is absent from the device registry.
+
+    Methodology: source-verified against tools_registry.py. When the
+    requested device_id is not present in the device registry list,
+    raise_tool_error is invoked with ErrorCode.ENTITY_NOT_FOUND and the
+    message "Device not found: ...".
+    """
+
+    async def test_get_device_nonexistent_device_id(self, mcp_client):
+        """
+        Test: ha_get_device(device_id="<nonexistent>") returns a structured
+        error with code ENTITY_NOT_FOUND, not success=True.
+
+        Source path: tools_registry.py — single-device lookup branch returns
+        ENTITY_NOT_FOUND when the device_id is absent from
+        config/device_registry/list.
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_get_device",
+            {"device_id": "nonexistent_device_a2_e2e_xyz_404"},
+        )
+
+        assert not data.get("success"), (
+            f"Expected failure for nonexistent device_id, got success=True: {data}"
+        )
+        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
+            f"Expected error code ENTITY_NOT_FOUND, got: {data.get('error')}"
+        )
+        error_msg = str(data.get("error", "")).lower()
+        assert "not found" in error_msg, (
+            f"Expected 'not found' in error message, got: {data.get('error')}"
+        )
