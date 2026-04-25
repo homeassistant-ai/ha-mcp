@@ -167,8 +167,8 @@ class TestBlueprintManagement:
         from the blueprints registry, raise_tool_error is invoked with
         ErrorCode.RESOURCE_NOT_FOUND and the message "Blueprint not found: ...".
 
-        Hardened from suggestions-only check to explicit error-code and
-        message-substring assertions.
+        Hardened from a single suggestions-presence check to explicit
+        error-code and structured suggestion-presence assertions.
         """
         logger.info("Testing ha_get_blueprint with non-existent path...")
 
