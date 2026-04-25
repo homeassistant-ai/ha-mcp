@@ -41,6 +41,7 @@ from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
+    coerce_to_list,
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
@@ -413,7 +414,7 @@ class AutomationConfigTools:
         BASIC EXAMPLES:
 
         Simple time-based automation:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Morning Lights",
             "description": "Turn on bedroom lights at 7 AM to help wake up",
             "trigger": [{"platform": "time", "at": "07:00:00"}],
@@ -421,7 +422,7 @@ class AutomationConfigTools:
         })
 
         Motion-activated lighting with condition:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light",
             "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
             "condition": [{"condition": "sun", "after": "sunset"}],
@@ -449,7 +450,7 @@ class AutomationConfigTools:
         BLUEPRINT AUTOMATION EXAMPLES:
 
         Create automation from blueprint:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light Kitchen",
             "use_blueprint": {
                 "path": "homeassistant/motion_light.yaml",
@@ -757,10 +758,14 @@ class AutomationConfigTools:
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_validation_error(
-                f"Invalid config parameter: {e}",
-                parameter="config",
-                invalid_json=True,
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_JSON,
+                message=f"Invalid config parameter: {e}",
+                suggestions=[
+                    "Pass 'config' as a dict, not a JSON string, to avoid escaping issues.",
+                    "Check for JSON syntax errors: unquoted keys, trailing commas, or invalid escape sequences.",
+                ],
+                context={"parameter": "config"},
             ))
 
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -788,11 +793,53 @@ class AutomationConfigTools:
 
         missing_fields = [f for f in required_fields if f not in config_dict]
         if missing_fields:
+            # If the caller supplied a 'sequence' key, the config looks like a
+            # script — point them at ha_config_set_script instead of the generic
+            # missing-fields error.
+            if "sequence" in config_dict and (
+                "trigger" in missing_fields or "action" in missing_fields
+            ):
+                context: dict[str, Any] = {"missing_fields": missing_fields}
+                if identifier:
+                    context["identifier"] = identifier
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    message=f"Missing required fields: {', '.join(missing_fields)}",
+                    details=(
+                        "Config contains 'sequence', which belongs to scripts. "
+                        "Automations use 'trigger' and 'action'; scripts use 'sequence'."
+                    ),
+                    suggestions=[
+                        "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
+                        "For an automation, replace 'sequence' with 'action' and add a 'trigger'.",
+                    ],
+                    context=context,
+                ))
             raise_tool_error(create_config_error(
                 f"Missing required fields: {', '.join(missing_fields)}",
                 identifier=identifier,
                 missing_fields=missing_fields,
             ))
+
+        # HA accepts conditions with 'platform' (trigger syntax) but then crashes
+        # with an unhelpful 500 rather than a 400 validation error.
+        for idx, cond in enumerate(coerce_to_list(config_dict.get("condition"))):
+            if not isinstance(cond, dict):
+                continue
+            if "platform" in cond and "condition" not in cond:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        f"Condition at index {idx} uses 'platform' (trigger syntax). "
+                        "Conditions use 'condition', not 'platform'."
+                    ),
+                    suggestions=[
+                        f"Replace 'platform' with 'condition': "
+                        f"{{'condition': '{cond['platform']}', ...}}",
+                        "Triggers use 'platform'; conditions use 'condition'.",
+                    ],
+                    context={"condition_index": idx, "found_key": "platform"},
+                ))
 
         # Prevent duplicate creation when config contains an existing automation id
         if identifier is None and "id" in config_dict:
