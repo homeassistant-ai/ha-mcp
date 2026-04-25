@@ -563,19 +563,16 @@ class TestUpdatesGetNegativeInputs:
         Source path: REST 404 → HomeAssistantAPIError → except-Exception
         in ha_get_updates → ENTITY_NOT_FOUND.
         """
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_updates",
-            {"entity_id": "update.nonexistent_a2_e2e_xyz_404"},
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_updates",
+                {"entity_id": "update.nonexistent_a2_e2e_xyz_404"},
+                expected_error="not found",
+            )
 
-        assert not data.get("success"), (
-            f"Expected failure for nonexistent update entity_id, got success=True: {data}"
-        )
-        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
-            f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
-        )
-        error_msg = data["error"]["message"].lower()
-        assert "not found" in error_msg, (
-            f"Expected 'not found' in error message, got: {data['error']}"
-        )
+            assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
+                f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+            )
+            assert "suggestion" in data["error"] or "suggestions" in data["error"], (
+                "Error response should include a suggestion or suggestions"
+            )
