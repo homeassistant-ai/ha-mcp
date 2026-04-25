@@ -254,12 +254,46 @@ class CategorizedSearchTransform(BM25SearchTransform):
         async def categorized_call(
             name: Annotated[str, "The name of the tool to call"],
             arguments: Annotated[
-                dict[str, Any] | None, "Arguments to pass to the tool"
+                dict[str, Any] | str | None, "Arguments to pass to the tool"
             ] = None,
             ctx: Context = None,  # type: ignore[assignment]
         ) -> Any:
             # Rebuild category cache if catalog has changed
             await transform._rebuild_category_cache(ctx)
+
+            # Tolerate `arguments` passed as a JSON string — small models
+            # sometimes serialize it before sending. Parse once up front so
+            # downstream logic can assume a dict (or None).
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                except json.JSONDecodeError as e:
+                    raise ToolError(json.dumps(create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_JSON,
+                        message=f"'arguments' is a string but not valid JSON: {e}",
+                        suggestions=[
+                            "Pass 'arguments' as an object, not a JSON string.",
+                        ],
+                        context={"proxy_used": proxy_name, "tool_name": name},
+                    ))) from e
+                if not isinstance(parsed, dict):
+                    raise ToolError(json.dumps(create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message=(
+                            "'arguments' must be a JSON object "
+                            f"(got {type(parsed).__name__})."
+                        ),
+                        suggestions=[
+                            "Pass 'arguments' as an object (dict), not a list or scalar.",
+                        ],
+                        context={"proxy_used": proxy_name, "tool_name": name},
+                    )))
+                logger.warning(
+                    "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
+                    proxy_name,
+                    name,
+                )
+                arguments = parsed
 
             # Determine which category set to check
             if category == "read":

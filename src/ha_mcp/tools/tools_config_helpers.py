@@ -801,16 +801,16 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:
-            ha_config_set_helper("template", "Room Temp",
+            ha_config_set_helper(helper_type="template", name="Room Temp",
                 config={"next_step_id": "sensor",
                         "state": "{{ states('sensor.x')|float }}",
                         "unit_of_measurement": "°C"})
         - group (light):
-            ha_config_set_helper("group", "Kitchen Lights",
+            ha_config_set_helper(helper_type="group", name="Kitchen Lights",
                 config={"group_type": "light",
                         "entities": ["light.a", "light.b"]})
         - tod (time-of-day indicator, cross-midnight OK):
-            ha_config_set_helper("tod", "Quiet Hours",
+            ha_config_set_helper(helper_type="tod", name="Quiet Hours",
                 config={"after_time": "22:00:00", "before_time": "07:00:00"})
 
         For complex schemas and per-type parameter details, use ha_get_helper_schema.

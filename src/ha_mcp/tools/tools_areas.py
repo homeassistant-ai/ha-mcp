@@ -222,8 +222,15 @@ class AreaTools:
         """
         Create or update a Home Assistant area (room).
 
-        Provide name only to create a new area. Provide area_id to update existing.
         Areas organize entities by physical location for room-based control.
+
+        Create: provide name only.
+        Update: provide area_id (from ha_config_list_areas) plus any fields to change.
+
+        EXAMPLES:
+        ha_config_set_area(name="Kitchen")
+        ha_config_set_area(name="Living Room", icon="mdi:sofa")
+        ha_config_set_area(area_id="kitchen", name="Kitchen Renamed", floor_id="ground_floor")
         """
         try:
             # Parse aliases if provided as string

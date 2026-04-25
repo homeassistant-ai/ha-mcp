@@ -313,19 +313,20 @@ class ConfigScriptTools:
             - max: Maximum concurrent executions (for queued/parallel modes)
             - fields: Input parameters for the script
 
-        IMPORTANT: The 'config' parameter must be passed as a proper dictionary/object.
+        SCRIPTS vs AUTOMATIONS: Scripts use 'sequence', NOT 'trigger' or 'action'.
+        If you need trigger-based execution, use ha_config_set_automation instead.
 
         EXAMPLES:
 
         Create basic delay script:
-        ha_config_set_script("wait_script", {
+        ha_config_set_script(script_id="wait_script", config={
             "sequence": [{"delay": {"seconds": 5}}],
             "alias": "Wait 5 Seconds",
             "description": "Simple delay script"
         })
 
         Create service call script:
-        ha_config_set_script("blink_light", {
+        ha_config_set_script(script_id="blink_light", config={
             "sequence": [
                 {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
                 {"delay": {"seconds": 2}},
@@ -336,7 +337,7 @@ class ConfigScriptTools:
         })
 
         Create script with parameters:
-        ha_config_set_script("backup_script", {
+        ha_config_set_script(script_id="backup_script", config={
             "alias": "Backup with Reference",
             "description": "Create backup with optional reference parameter",
             "fields": {
@@ -360,7 +361,7 @@ class ConfigScriptTools:
         })
 
         Update script:
-        ha_config_set_script("morning_routine", {
+        ha_config_set_script(script_id="morning_routine", config={
             "sequence": [
                 {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
                 {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
@@ -369,7 +370,7 @@ class ConfigScriptTools:
         })
 
         Create blueprint-based script:
-        ha_config_set_script("notification_script", {
+        ha_config_set_script(script_id="notification_script", config={
             "alias": "My Notification Script",
             "use_blueprint": {
                 "path": "notification_script.yaml",
@@ -381,7 +382,7 @@ class ConfigScriptTools:
         })
 
         Update blueprint script inputs:
-        ha_config_set_script("notification_script", {
+        ha_config_set_script(script_id="notification_script", config={
             "alias": "My Notification Script",
             "use_blueprint": {
                 "path": "notification_script.yaml",
