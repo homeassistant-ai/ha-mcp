@@ -810,15 +810,21 @@ class IntegrationTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
-                        f"Helper {target} not found in entity registry.",
+                        (
+                            f"Helper {target} not found in entity registry "
+                            f"(looked up as {entity_id})."
+                        ),
                         context={
                             "target": target,
                             "helper_type": helper_type,
                             "entity_id": entity_id,
                         },
                         suggestions=[
-                            "Use ha_search_entities() to verify the helper "
-                            "exists.",
+                            "If unsure about the correct entity_id, use "
+                            "ha_search_entities() — flow helper types often "
+                            "expose entities under a different domain than "
+                            "the helper_type itself (e.g. utility_meter → "
+                            "sensor.*, switch_as_x → switch.* / light.*).",
                         ],
                     )
                 )
