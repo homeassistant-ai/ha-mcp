@@ -573,6 +573,6 @@ class TestUpdatesGetNegativeInputs:
             assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
                 f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
             )
-            assert "suggestion" in data["error"] or "suggestions" in data["error"], (
-                "Error response should include a suggestion or suggestions"
+            assert "suggestion" in data["error"], (
+                "Error response should include a suggestion"
             )
