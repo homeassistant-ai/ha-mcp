@@ -19,9 +19,57 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .tools_config_entry_flow import FLOW_HELPER_TYPES
 from .util_helpers import build_pagination_metadata, coerce_bool_param, coerce_int_param
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_entry_id_for_flow_helper(
+    client: Any,
+    helper_type: str,
+    target: str,
+    warnings: list[str] | None = None,
+) -> str | None:
+    """Resolve a flow-helper target to its config_entry_id via entity_registry.
+
+    Used by ha_delete_helpers_integrations when target is an entity_id
+    (contains a '.') and helper_type is a known flow-helper type.
+
+    Args:
+        client: HomeAssistantClient instance.
+        helper_type: Flow-helper type (must be in FLOW_HELPER_TYPES).
+        target: Entity ID, e.g. "sensor.my_meter" or bare ID "my_meter".
+        warnings: Optional list — appended to on WebSocket failure.
+
+    Returns:
+        config_entry_id string on success, or None when the entity is not
+        in the registry, has no config_entry_id, or the lookup failed.
+    """
+    if helper_type not in FLOW_HELPER_TYPES:
+        return None
+
+    entity_id = target if "." in target else f"{helper_type}.{target}"
+
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id}
+        )
+    except Exception as e:
+        if warnings is not None:
+            warnings.append(
+                f"entity_registry/get failed for {entity_id}: {e}"
+            )
+        return None
+
+    if not isinstance(result, dict) or not result.get("success"):
+        return None
+
+    entry = result.get("result") or {}
+    if not isinstance(entry, dict):
+        return None
+
+    return entry.get("config_entry_id")
 
 
 class IntegrationTools:
