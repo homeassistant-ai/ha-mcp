@@ -130,7 +130,7 @@ class TestIntegrationManagement:
     async def test_delete_config_entry_create_delete_cycle(self, mcp_client):
         """Test full create → verify → delete → verify-gone cycle.
 
-        Regression test: ha_delete_config_entry previously used the WebSocket
+        Regression test: the config-entry delete path previously used the WebSocket
         command ``config_entries/delete`` which HA does not support, returning
         "Unknown command".  The fix switches to the REST API endpoint.
         """
@@ -195,8 +195,8 @@ class TestIntegrationManagement:
 
     async def test_delete_config_entry_nonexistent_confirmed(self, mcp_client):
         """
-        Test: ha_delete_config_entry with a nonexistent entry_id and confirm=True
-        returns a structured error, not success=True.
+        Test: ha_delete_helpers_integrations with a nonexistent entry_id and
+        confirm=True returns a structured error, not success=True.
 
         Source path: confirm_bool=True bypasses the guard; delete_config_entry()
         reaches the HA REST API with an unknown entry_id → Exception →

@@ -7,12 +7,17 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -35,12 +40,44 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
+FlowLookupReason = Literal[
+    "ok",
+    "wrong_helper_type",
+    "bare_id_not_supported",
+    "not_in_registry",
+    "no_config_entry",
+    "lookup_failed",
+]
+
+
+# Tool parameter type for ha_delete_helpers_integrations.helper_type.
+# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES exactly — the drift
+# assertion below catches accidental divergence at import time.
+HelperTypeLiteral = Literal[
+    # 12 SIMPLE
+    "input_button", "input_boolean", "input_select", "input_number",
+    "input_text", "input_datetime", "counter", "timer", "schedule",
+    "zone", "person", "tag",
+    # 15 FLOW
+    "template", "group", "utility_meter", "derivative", "min_max",
+    "threshold", "integration", "statistics", "trend", "random",
+    "filter", "tod", "generic_thermostat", "switch_as_x",
+    "generic_hygrostat",
+]
+assert set(get_args(HelperTypeLiteral)) == (
+    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES
+), (
+    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES — "
+    "update the inline list to match."
+)
+
+
 async def _get_entry_id_for_flow_helper(
     client: Any,
     helper_type: str,
     target: str,
     warnings: list[str] | None = None,
-) -> str | None:
+) -> tuple[str | None, FlowLookupReason]:
     """Resolve a flow-helper target to its config_entry_id via entity_registry.
 
     Used by ha_delete_helpers_integrations when target is an entity_id
@@ -54,36 +91,46 @@ async def _get_entry_id_for_flow_helper(
         warnings: Optional list — appended to on WebSocket failure.
 
     Returns:
-        config_entry_id string on success, or None when the entity is not
-        in the registry, has no config_entry_id, or the lookup failed.
+        Tuple of (config_entry_id, reason). On success: (entry_id, "ok").
+        On failure: (None, reason) where reason discriminates the cause so
+        the caller can produce an accurate error response without an extra
+        WebSocket round-trip. HomeAssistantConnectionError and
+        HomeAssistantAuthError propagate; the caller's outer except chain
+        converts them to structured errors.
     """
     if helper_type not in FLOW_HELPER_TYPES:
-        return None
+        return None, "wrong_helper_type"
 
     if "." not in target:
-        return None
+        return None, "bare_id_not_supported"
     entity_id = target
 
     try:
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
+    except (HomeAssistantConnectionError, HomeAssistantAuthError):
+        # Typed errors must reach the outer handler — do not swallow.
+        raise
     except Exception as e:
         logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
         if warnings is not None:
             warnings.append(
                 f"entity_registry/get failed for {entity_id}: {e}"
             )
-        return None
+        return None, "lookup_failed"
 
     if not isinstance(result, dict) or not result.get("success"):
-        return None
+        return None, "not_in_registry"
 
     entry = result.get("result") or {}
     if not isinstance(entry, dict):
-        return None
+        return None, "not_in_registry"
 
-    return entry.get("config_entry_id")
+    config_entry_id = entry.get("config_entry_id")
+    if not config_entry_id:
+        return None, "no_config_entry"
+    return config_entry_id, "ok"
 
 
 class IntegrationTools:
@@ -247,19 +294,14 @@ class IntegrationTools:
         except ToolError:
             raise
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg or "not found" in error_msg.lower():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Config entry not found: {entry_id}",
-                        context={"entry_id": entry_id},
-                        suggestions=[
-                            "Use ha_get_integration() without entry_id to see all config entries",
-                        ],
-                    )
-                )
-            raise
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id},
+                suggestions=[
+                    "Use ha_get_integration() without entry_id to see all "
+                    "config entries",
+                ],
+            )
 
     async def _fetch_options_schema(
         self, entry_id: str, resp: dict[str, Any]
@@ -487,63 +529,8 @@ class IntegrationTools:
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
     @tool(
-        name="ha_delete_config_entry",
-        tags={"Integrations"},
-        annotations={"destructiveHint": True, "title": "Delete Config Entry"},
-    )
-    @log_tool_usage
-    async def ha_delete_config_entry(
-        self,
-        entry_id: Annotated[str, Field(description="Config entry ID")],
-        confirm: Annotated[
-            bool | str, Field(description="Must be True to confirm deletion")
-        ] = False,
-    ) -> dict[str, Any]:
-        """Delete config entry permanently. Requires confirm=True.
-
-        Use ha_get_integration() to find entry IDs.
-        """
-        try:
-            confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
-
-            if not confirm_bool:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Deletion not confirmed. Set confirm=True to proceed.",
-                        context={
-                            "entry_id": entry_id,
-                            "warning": "This will permanently delete the config entry. This cannot be undone.",
-                        },
-                    )
-                )
-
-            result = await self._client.delete_config_entry(entry_id)
-            require_restart = result.get("require_restart", False)
-
-            return {
-                "success": True,
-                "message": "Config entry deleted successfully",
-                "entry_id": entry_id,
-                "require_restart": require_restart,
-                "note": (
-                    "The integration has been permanently removed."
-                    if not require_restart
-                    else "Home Assistant restart required to complete removal."
-                ),
-            }
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to delete config entry: {e}")
-            exception_to_structured_error(e, context={"entry_id": entry_id})
-
-
-
-    @tool(
         name="ha_delete_helpers_integrations",
-        tags={"Helpers", "Integrations"},
+        tags={"Helper Entities", "Integrations"},
         annotations={
             "destructiveHint": True,
             "title": "Delete Helper or Integration",
@@ -567,18 +554,7 @@ class IntegrationTools:
             ),
         ],
         helper_type: Annotated[
-            Literal[
-                # 12 SIMPLE
-                "input_button", "input_boolean", "input_select", "input_number",
-                "input_text", "input_datetime", "counter", "timer", "schedule",
-                "zone", "person", "tag",
-                # 15 FLOW
-                "template", "group", "utility_meter", "derivative", "min_max",
-                "threshold", "integration", "statistics", "trend", "random",
-                "filter", "tod", "generic_thermostat", "switch_as_x",
-                "generic_hygrostat",
-            ]
-            | None,
+            HelperTypeLiteral | None,
             Field(
                 description=(
                     "Helper type. Required when target is a helper_id (bare) "
@@ -591,7 +567,11 @@ class IntegrationTools:
         confirm: Annotated[
             bool | str,
             Field(
-                description="Must be True to confirm deletion.",
+                description=(
+                    "Must be True to confirm deletion. Accepts bool or "
+                    "string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
+                    "case-insensitive) for transport ergonomics."
+                ),
                 default=False,
             ),
         ] = False,
@@ -601,7 +581,9 @@ class IntegrationTools:
                 description=(
                     "Wait for entity removal. Default: True. "
                     "Ignored when helper_type=None (no entity poll, "
-                    "require_restart returned)."
+                    "require_restart returned). Accepts bool or string "
+                    "('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
+                    "case-insensitive)."
                 ),
                 default=True,
             ),
@@ -609,9 +591,14 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a Home Assistant helper or integration config entry.
 
-        Unifies the previous ha_config_remove_helper (12 SIMPLE helper types)
-        and ha_delete_config_entry (config entries) into a single tool with
-        three routing paths driven by helper_type.
+        Combines simple-helper websocket deletion and config-entry deletion
+        under one entry point with three routing paths driven by helper_type.
+
+        WHEN NOT TO USE:
+        - Removing only an entity (without deleting its underlying helper or
+          config entry) — use `ha_remove_entity` instead.
+        - YAML-configured helpers — they have no storage backend. Edit the
+          YAML file and reload the relevant integration.
 
         SUPPORTED HELPER TYPES:
         - SIMPLE (12, websocket-delete): input_button, input_boolean,
@@ -628,7 +615,7 @@ class IntegrationTools:
           via entity_registry, then delete the config entry. All sub-entities
           (e.g. utility_meter tariffs) are removed together.
         - helper_type=None + entry_id → direct config entry delete (any
-          integration). Same outcome as the previous ha_delete_config_entry.
+          integration).
 
         EXAMPLES:
         - Delete SIMPLE button:
@@ -650,9 +637,6 @@ class IntegrationTools:
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search_entities() / ha_get_integration() to verify before
         deletion. Cannot be undone.
-
-        NOTE: YAML-configured helpers cannot be deleted via this tool — they
-        have no storage backend. Edit the YAML file and reload instead.
         """
         # === Confirm gate (uniform for all three paths) ===
         confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
@@ -672,9 +656,8 @@ class IntegrationTools:
                 )
             )
 
-        wait_bool = coerce_bool_param(wait, "wait", default=True)
-        assert wait_bool is not None  # default=True guarantees non-None
-        client = self._client
+        # default=True guarantees a non-None return; cast for mypy.
+        wait_bool = cast(bool, coerce_bool_param(wait, "wait", default=True))
         warnings: list[str] = []
 
         # === Routing dispatch ===
@@ -703,9 +686,9 @@ class IntegrationTools:
             )
         )
 
-    # === Path 3: Direct config entry delete (1:1 from ha_delete_config_entry) ===
+    # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
-        """Delete a config entry directly. Mirrors ha_delete_config_entry."""
+        """Delete a config entry directly via the websocket delete API."""
         try:
             result = await self._client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)
@@ -727,21 +710,15 @@ class IntegrationTools:
         except ToolError:
             raise
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg or "not found" in error_msg.lower():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Config entry not found: {entry_id}",
-                        context={"entry_id": entry_id},
-                        suggestions=[
-                            "Use ha_get_integration() without entry_id to "
-                            "see all config entries",
-                        ],
-                    )
-                )
             logger.error(f"Failed to delete config entry: {e}")
-            exception_to_structured_error(e, context={"entry_id": entry_id})
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id},
+                suggestions=[
+                    "Use ha_get_integration() without entry_id to "
+                    "see all config entries",
+                ],
+            )
 
     # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
     async def _delete_flow_helper(
@@ -759,34 +736,20 @@ class IntegrationTools:
         """
         client = self._client
         try:
-            # Step 1: resolve target → entry_id
-            entry_id = await _get_entry_id_for_flow_helper(
+            # Step 1: resolve target → entry_id (typed reason on failure)
+            entry_id, reason = await _get_entry_id_for_flow_helper(
                 client, helper_type, target, warnings
             )
             if entry_id is None:
-                # Distinguish two failure modes for accurate error reporting
-                # (Z.1860 vs Z.192 convention in this codebase):
-                # - entity not in registry → ENTITY_NOT_FOUND
-                # - entity exists but no config_entry_id (YAML-configured)
-                #   → RESOURCE_NOT_FOUND
-                #
-                # Re-query directly to disambiguate. This is one extra
-                # WebSocket call only on the error path; the happy path
-                # is unaffected.
+                # Reason discriminates the failure mode without a second
+                # WebSocket round-trip. The lookup helper already queried
+                # the registry; the response told us everything we need.
                 entity_id = (
                     target
                     if "." in target
                     else f"{helper_type}.{target}"
                 )
-                disambiguation = await client.send_websocket_message({
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                })
-                in_registry = (
-                    isinstance(disambiguation, dict)
-                    and disambiguation.get("success")
-                )
-                if in_registry:
+                if reason == "no_config_entry":
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.RESOURCE_NOT_FOUND,
@@ -807,6 +770,12 @@ class IntegrationTools:
                             ],
                         )
                     )
+                # All other reasons (not_in_registry, lookup_failed,
+                # bare_id_not_supported, wrong_helper_type) → entity not
+                # found from the caller's perspective. wrong_helper_type
+                # cannot occur here because the dispatcher already checked
+                # SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; it remains in
+                # the reason enum so the helper is reusable.
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
@@ -839,20 +808,14 @@ class IntegrationTools:
             try:
                 delete_result = await client.delete_config_entry(entry_id)
             except Exception as e:
-                error_msg = str(e)
-                if "404" in error_msg or "not found" in error_msg.lower():
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Config entry not found: {entry_id}",
-                            context={
-                                "entry_id": entry_id,
-                                "target": target,
-                                "helper_type": helper_type,
-                            },
-                        )
-                    )
-                raise
+                exception_to_structured_error(
+                    e,
+                    context={
+                        "entry_id": entry_id,
+                        "target": target,
+                        "helper_type": helper_type,
+                    },
+                )
 
             require_restart = bool(
                 isinstance(delete_result, dict)
@@ -875,28 +838,32 @@ class IntegrationTools:
                 ),
             }
             if wait_bool and entity_ids:
-                try:
-                    results = await asyncio.gather(
-                        *[
-                            wait_for_entity_removed(client, eid)
-                            for eid in entity_ids
-                        ],
-                        return_exceptions=True,
-                    )
-                    not_removed = [
-                        eid
-                        for eid, res in zip(entity_ids, results, strict=True)
-                        if res is not True
-                    ]
-                    if not_removed:
-                        response["warning"] = (
-                            f"Deletion confirmed but the following entities "
-                            f"may still appear briefly: {not_removed}"
-                        )
-                except Exception as e:
+                results = await asyncio.gather(
+                    *[
+                        wait_for_entity_removed(client, eid)
+                        for eid in entity_ids
+                    ],
+                    return_exceptions=True,
+                )
+                # Auth/connection errors during polling must surface as
+                # tool errors — wait_for_entity_removed re-raises these
+                # deliberately. Re-raise the first one we find so the
+                # outer except chain converts it to a structured error.
+                for res in results:
+                    if isinstance(
+                        res, HomeAssistantConnectionError | HomeAssistantAuthError
+                    ):
+                        raise res
+                not_removed = [
+                    eid
+                    for eid, res in zip(entity_ids, results, strict=True)
+                    if res is not True
+                ]
+                if not_removed:
                     response["warning"] = (
-                        f"Deletion confirmed but removal verification "
-                        f"failed: {e}"
+                        f"Deletion confirmed but the following entities "
+                        f"are still present after the wait window: "
+                        f"{not_removed}"
                     )
             if warnings:
                 response["warnings"] = warnings
@@ -918,17 +885,18 @@ class IntegrationTools:
                 ],
             )
 
-    # === Path 1: SIMPLE helper delete (1:1 from ha_config_remove_helper) ===
+    # === Path 1: SIMPLE helper delete via websocket ===
     async def _delete_simple_helper(
         self,
         helper_type: str,
         target: str,
         wait_bool: bool,
     ) -> dict[str, Any]:
-        """Delete a SIMPLE helper via websocket. Mirrors ha_config_remove_helper.
+        """Delete a SIMPLE helper via the websocket {type}/delete API.
 
-        Preserves the 3-retry registry lookup with exponential backoff and
-        the two fallback strategies (direct-id-delete, already-deleted check).
+        Uses a 3-retry registry lookup with exponential backoff to find the
+        helper's unique_id, then falls back to direct-id-delete and an
+        already-deleted check if the registry has no record.
         """
         client = self._client
         # Convert to entity_id form
@@ -967,7 +935,10 @@ class IntegrationTools:
                             )
                             await asyncio.sleep(wait_time)
                             continue
-                except Exception as e:
+                except HomeAssistantAPIError as e:
+                    # State check is best-effort here; an APIError (e.g. 404)
+                    # is informational. Auth/connection errors must propagate
+                    # so they're not re-reported as ENTITY_NOT_FOUND below.
                     logger.debug(f"State check failed for {entity_id}: {e}")
 
                 # Registry lookup
@@ -1032,19 +1003,13 @@ class IntegrationTools:
                         "fallback_used": "direct_id",
                     }
                     if wait_bool:
-                        try:
-                            removed = await wait_for_entity_removed(
-                                client, entity_id
-                            )
-                            if not removed:
-                                response["warning"] = (
-                                    f"Deletion confirmed but {entity_id} "
-                                    "may still appear briefly."
-                                )
-                        except Exception as e:
+                        removed = await wait_for_entity_removed(
+                            client, entity_id
+                        )
+                        if not removed:
                             response["warning"] = (
-                                "Deletion confirmed but removal verification "
-                                f"failed: {e}"
+                                f"Deletion confirmed but {entity_id} "
+                                "is still present after the wait window."
                             )
                     return response
 
@@ -1071,8 +1036,14 @@ class IntegrationTools:
                             ),
                             "fallback_used": "already_deleted",
                         }
-                except Exception:
-                    pass
+                except HomeAssistantAPIError as e:
+                    # 404 here means the state-check itself confirmed the
+                    # entity is gone — treat as a soft signal and continue
+                    # to the "all fallbacks exhausted" path. Auth/connection
+                    # errors must propagate (handled by outer except).
+                    logger.debug(
+                        f"State check for {entity_id} raised APIError: {e}"
+                    )
 
                 # All fallbacks exhausted
                 err_detail = (
@@ -1122,19 +1093,13 @@ class IntegrationTools:
                     ),
                 }
                 if wait_bool:
-                    try:
-                        removed = await wait_for_entity_removed(
-                            client, entity_id
-                        )
-                        if not removed:
-                            response["warning"] = (
-                                f"Deletion confirmed but {entity_id} "
-                                "may still appear briefly."
-                            )
-                    except Exception as e:
+                    removed = await wait_for_entity_removed(
+                        client, entity_id
+                    )
+                    if not removed:
                         response["warning"] = (
-                            "Deletion confirmed but removal verification "
-                            f"failed: {e}"
+                            f"Deletion confirmed but {entity_id} "
+                            "is still present after the wait window."
                         )
                 return response
 

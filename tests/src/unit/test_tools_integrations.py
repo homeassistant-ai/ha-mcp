@@ -8,11 +8,15 @@ config/entity_registry/get WebSocket API.
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     _get_entry_id_for_flow_helper,
@@ -38,72 +42,100 @@ class TestGetEntryIdForFlowHelper:
         client = _make_client(
             {"success": True, "result": {"config_entry_id": "abc123"}}
         )
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.peak"
         )
-        assert result == "abc123"
+        assert entry_id == "abc123"
+        assert reason == "ok"
 
     async def test_returns_none_for_bare_id_flow_helper(self) -> None:
         # Flow helpers require full entity_id — bare IDs cannot be safely
         # completed because helper_type often differs from entity domain
         # (e.g. utility_meter → sensor.*, switch_as_x → switch/light.*).
         client = _make_client()
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "template", "my_sensor"
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "bare_id_not_supported"
         client.send_websocket_message.assert_not_awaited()
 
     async def test_returns_none_for_unknown_helper_type(self) -> None:
         client = _make_client()
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "input_button", "my_button"  # SIMPLE, not FLOW
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "wrong_helper_type"
         client.send_websocket_message.assert_not_awaited()
 
     async def test_returns_none_when_entity_not_in_registry(self) -> None:
         client = _make_client({"success": False, "error": "not_found"})
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "template", "template.ghost"
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "not_in_registry"
 
     async def test_returns_none_when_entity_has_no_config_entry_id(self) -> None:
         # YAML-defined helper: entity exists but no config_entry_id
         client = _make_client(
             {"success": True, "result": {"entity_id": "template.x"}}
         )
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "no_config_entry"
 
     async def test_websocket_exception_appends_to_warnings(self) -> None:
         client = _make_client(raises=ConnectionError("ws drop"))
         warnings: list[str] = []
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.x", warnings=warnings
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "lookup_failed"
         assert len(warnings) == 1
         assert "entity_registry/get failed" in warnings[0]
         assert "sensor.x" in warnings[0]
 
     async def test_websocket_exception_without_warnings_is_silent(self) -> None:
         client = _make_client(raises=ConnectionError("ws drop"))
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "utility_meter", "sensor.x", warnings=None
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "lookup_failed"
 
     async def test_unexpected_result_shape_returns_none(self) -> None:
         # success but result is not a dict
         client = _make_client({"success": True, "result": "garbage"})
-        result = await _get_entry_id_for_flow_helper(
+        entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
-        assert result is None
+        assert entry_id is None
+        assert reason == "not_in_registry"
+
+    async def test_connection_error_propagates(self) -> None:
+        # Auth/connection errors must reach the outer handler — they are
+        # not "lookup_failed", they are infrastructure failures.
+        client = _make_client(
+            raises=HomeAssistantConnectionError("network down")
+        )
+        with pytest.raises(HomeAssistantConnectionError):
+            await _get_entry_id_for_flow_helper(
+                client, "utility_meter", "sensor.x"
+            )
+
+    async def test_auth_error_propagates(self) -> None:
+        client = _make_client(
+            raises=HomeAssistantAuthError("token expired")
+        )
+        with pytest.raises(HomeAssistantAuthError):
+            await _get_entry_id_for_flow_helper(
+                client, "utility_meter", "sensor.x"
+            )
 
 
 class TestDeleteHelpersIntegrations:
@@ -177,7 +209,8 @@ class TestDeleteHelpersIntegrations:
         assert "restart required" in result["message"].lower()
 
     async def test_direct_path_entry_not_found(self, tools, mock_client):
-        """404 from delete_config_entry → RESOURCE_NOT_FOUND."""
+        """404 from delete_config_entry → RESOURCE_NOT_FOUND with entry_id
+        spread to the response top level via create_error_response context."""
         mock_client.delete_config_entry.side_effect = Exception(
             "404 Config entry not found"
         )
@@ -188,7 +221,7 @@ class TestDeleteHelpersIntegrations:
             )
         err = json.loads(str(exc_info.value))
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert "ghost_entry" in err["error"]["message"]
+        assert err["entry_id"] == "ghost_entry"
 
     # === Path 1: SIMPLE ===
 
@@ -496,3 +529,127 @@ class TestDeleteHelpersIntegrations:
             wait=False,
         )
         assert result["require_restart"] is True
+
+    # === R7: wait=True coverage (KP13 review #1056) ===
+
+    async def test_simple_path_wait_true_happy(
+        self, tools, mock_client
+    ):
+        """SIMPLE standard wait=True: wait_for_entity_removed returns True
+        → no warning field in response."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-w1"}},
+            {"success": True},
+        ]
+        mock_client.get_entity_state.return_value = {"state": "off"}
+        with patch(
+            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
+            mock_wait.return_value = True
+            result = await tools.ha_delete_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=True,
+            )
+        assert result["success"] is True
+        assert "warning" not in result
+        mock_wait.assert_awaited_once()
+
+    async def test_simple_path_wait_true_timeout_warns(
+        self, tools, mock_client
+    ):
+        """SIMPLE standard wait=True: wait_for_entity_removed returns False
+        (timeout) → warning field set, success still True."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-w2"}},
+            {"success": True},
+        ]
+        mock_client.get_entity_state.return_value = {"state": "off"}
+        with patch(
+            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
+            mock_wait.return_value = False  # timeout
+            result = await tools.ha_delete_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=True,
+            )
+        assert result["success"] is True
+        assert "warning" in result
+        assert "still present" in result["warning"]
+
+    async def test_simple_path_wait_true_propagates_connection_error(
+        self, tools, mock_client
+    ):
+        """SIMPLE standard wait=True: HomeAssistantConnectionError from
+        wait_for_entity_removed must propagate as ToolError, not be
+        masked as a warning (R2 in KP13 review #1056)."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-w3"}},
+            {"success": True},
+        ]
+        mock_client.get_entity_state.return_value = {"state": "off"}
+        with patch(
+            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
+            mock_wait.side_effect = HomeAssistantConnectionError(
+                "network down during poll"
+            )
+            with pytest.raises(ToolError):
+                await tools.ha_delete_helpers_integrations(
+                    target="my_button",
+                    helper_type="input_button",
+                    confirm=True,
+                    wait=True,
+                )
+
+    async def test_flow_path_wait_true_multi_subentity_partial_timeout(
+        self, tools, mock_client
+    ):
+        """FLOW utility_meter wait=True: gather returns mixed True/False —
+        the False entity_ids land in the warning, success still True
+        (KP13 review #1056: highest-value test case)."""
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": True,
+                "result": {"config_entry_id": "entry_um"},
+            },
+            {
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "sensor.energy_peak",
+                        "config_entry_id": "entry_um",
+                    },
+                    {
+                        "entity_id": "sensor.energy_offpeak",
+                        "config_entry_id": "entry_um",
+                    },
+                ],
+            },
+        ]
+        mock_client.delete_config_entry.return_value = {
+            "require_restart": False
+        }
+        with patch(
+            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+        ) as mock_wait:
+            # First entity removed cleanly, second times out
+            mock_wait.side_effect = [True, False]
+            result = await tools.ha_delete_helpers_integrations(
+                target="sensor.energy_peak",
+                helper_type="utility_meter",
+                confirm=True,
+                wait=True,
+            )
+        assert result["success"] is True
+        assert "warning" in result
+        assert "sensor.energy_offpeak" in result["warning"]
+        assert "sensor.energy_peak" not in result["warning"]
+        assert mock_wait.await_count == 2

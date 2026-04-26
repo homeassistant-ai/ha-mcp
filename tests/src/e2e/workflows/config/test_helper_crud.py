@@ -1836,7 +1836,7 @@ class TestHelperRegistryClear:
 
             logger.info("Flow helper area cleared successfully via empty string")
         finally:
-            # Config-entry helpers are cleaned via ha_delete_config_entry (not cleanup_tracker)
+            # Config-entry helpers are cleaned via ha_delete_helpers_integrations (not cleanup_tracker)
             await safe_call_tool(
                 mcp_client,
                 "ha_delete_helpers_integrations",

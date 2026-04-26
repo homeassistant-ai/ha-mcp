@@ -443,49 +443,6 @@ class TestHelperWaitParameter:
             assert result["action"] == "update"
             mock_wait.assert_not_called()
 
-    async def test_remove_helper_wait_default_true(self, register_tools, mock_client):
-        """wait defaults to True for helper removal."""
-        # Setup: entity registry returns unique_id
-        mock_client.send_websocket_message.side_effect = [
-            # Registry get
-            {"success": True, "result": {"unique_id": "abc123"}},
-            # Delete
-            {"success": True},
-        ]
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_removed",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.return_value = True
-            result = await register_tools["ha_config_remove_helper"](
-                helper_type="input_boolean",
-                helper_id="test",
-            )
-            assert result["success"] is True
-            mock_wait.assert_called_once()
-
-    async def test_remove_helper_wait_false_skips_polling(
-        self, register_tools, mock_client
-    ):
-        """wait=False skips removal polling."""
-        mock_client.send_websocket_message.side_effect = [
-            # Registry get
-            {"success": True, "result": {"unique_id": "abc123"}},
-            # Delete
-            {"success": True},
-        ]
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_removed",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            result = await register_tools["ha_config_remove_helper"](
-                helper_type="input_boolean",
-                helper_id="test",
-                wait=False,
-            )
-            assert result["success"] is True
-            mock_wait.assert_not_called()
-
     async def test_set_helper_wait_exception_still_succeeds(
         self, register_tools, mock_client
     ):

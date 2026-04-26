@@ -250,12 +250,12 @@ class GroupTools:
         **When NOT to use:** for typical "combine these entities into one controllable group"
         requests, prefer `ha_config_set_helper(helper_type="group", ...)`. Config-entry-backed
         groups are registered in the entity registry, so `ha_set_entity` can assign them to
-        areas and they are deletable via `ha_delete_config_entry`.
+        areas and they are deletable via `ha_delete_helpers_integrations`.
 
         **When to use:** compatibility with existing groups already configured via group.set
         or YAML, or the rare case where entity-registry membership is explicitly unwanted.
-        Groups created here are only removable via `ha_config_remove_group` — neither
-        `ha_config_remove_helper` nor `ha_delete_config_entry` will find them.
+        Groups created here are only removable via `ha_config_remove_group` —
+        `ha_delete_helpers_integrations` will not find them.
 
         **For NEW groups:** Provide object_id and entities (required).
         **For EXISTING groups:** Provide object_id and any fields to update.
@@ -343,8 +343,8 @@ class GroupTools:
         Remove a service-based Home Assistant entity group via the group.remove service.
 
         **When NOT to use:** for groups created through `ha_config_set_helper(helper_type="group", ...)`,
-        use `ha_delete_config_entry`. Those config-entry-backed groups are not reachable via the
-        group.remove service, and `ha_config_remove_helper` does not support helper_type="group".
+        use `ha_delete_helpers_integrations`. Those config-entry-backed groups are not reachable via the
+        group.remove service.
 
         **When to use:** removing groups created with `ha_config_set_group` or defined in YAML
         via `group:` configuration. Config-entry-backed deletion tools cannot find these.
