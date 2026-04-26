@@ -383,10 +383,11 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": entity_id,
+                "target": entity_id,
+                "confirm": True,
             },
         )
         await mcp_client.call_tool(

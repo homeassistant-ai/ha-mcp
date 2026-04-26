@@ -413,6 +413,6 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
 
     # Cleanup
     await mcp_client.call_tool(
-        "ha_config_remove_helper",
-        {"helper_type": "input_boolean", "helper_id": entity_id},
+        "ha_delete_helpers_integrations",
+        {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
     )

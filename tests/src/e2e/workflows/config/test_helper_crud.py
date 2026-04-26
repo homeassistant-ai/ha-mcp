@@ -147,10 +147,11 @@ class TestInputBooleanCRUD:
 
         # DELETE
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": entity_id,
+                "target": entity_id,
+                "confirm": True,
             },
         )
         delete_data = assert_mcp_success(delete_result, "Delete input_boolean")
@@ -191,8 +192,8 @@ class TestInputBooleanCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
         )
 
 
@@ -259,8 +260,8 @@ class TestInputNumberCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_number", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_number", "target": entity_id, "confirm": True},
         )
         logger.info("Input number cleanup complete")
 
@@ -287,8 +288,8 @@ class TestInputNumberCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_number", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_number", "target": entity_id, "confirm": True},
         )
 
 
@@ -353,8 +354,8 @@ class TestInputSelectCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_select", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_select", "target": entity_id, "confirm": True},
         )
         logger.info("Input select cleanup complete")
 
@@ -426,8 +427,8 @@ class TestInputTextCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_text", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_text", "target": entity_id, "confirm": True},
         )
         logger.info("Input text cleanup complete")
 
@@ -452,8 +453,8 @@ class TestInputTextCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_text", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_text", "target": entity_id, "confirm": True},
         )
 
 
@@ -497,8 +498,8 @@ class TestInputDatetimeCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_datetime", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_datetime", "target": entity_id, "confirm": True},
         )
 
     async def test_input_datetime_time_only(self, mcp_client, cleanup_tracker):
@@ -523,8 +524,8 @@ class TestInputDatetimeCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_datetime", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_datetime", "target": entity_id, "confirm": True},
         )
 
     async def test_input_datetime_both(self, mcp_client, cleanup_tracker):
@@ -549,8 +550,8 @@ class TestInputDatetimeCRUD:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_datetime", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_datetime", "target": entity_id, "confirm": True},
         )
 
 
@@ -614,8 +615,8 @@ class TestInputButtonCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_button", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_button", "target": entity_id, "confirm": True},
         )
         logger.info("Input button cleanup complete")
 
@@ -645,8 +646,8 @@ async def test_helper_with_area_assignment(mcp_client, cleanup_tracker):
 
     # Clean up
     await mcp_client.call_tool(
-        "ha_config_remove_helper",
-        {"helper_type": "input_boolean", "helper_id": entity_id},
+        "ha_delete_helpers_integrations",
+        {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
     )
 
 
@@ -658,10 +659,11 @@ async def test_helper_delete_nonexistent(mcp_client):
 
     data = await safe_call_tool(
         mcp_client,
-        "ha_config_remove_helper",
+        "ha_delete_helpers_integrations",
         {
             "helper_type": "input_boolean",
-            "helper_id": "nonexistent_helper_xyz_12345",
+            "target": "nonexistent_helper_xyz_12345",
+            "confirm": True,
         },
     )
 
@@ -763,8 +765,8 @@ class TestCounterCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "counter", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "counter", "target": entity_id, "confirm": True},
         )
         logger.info("Counter cleanup complete")
 
@@ -850,8 +852,8 @@ class TestTimerCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "timer", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "timer", "target": entity_id, "confirm": True},
         )
         logger.info("Timer cleanup complete")
 
@@ -936,8 +938,8 @@ class TestScheduleCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "schedule", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "schedule", "target": entity_id, "confirm": True},
         )
         logger.info("Schedule cleanup complete")
 
@@ -1022,8 +1024,8 @@ class TestScheduleCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "schedule", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "schedule", "target": entity_id, "confirm": True},
         )
         logger.info("Schedule with data cleanup complete")
 
@@ -1095,8 +1097,8 @@ class TestScheduleCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "schedule", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "schedule", "target": entity_id, "confirm": True},
         )
         logger.info("Schedule update test cleanup complete")
 
@@ -1163,8 +1165,8 @@ class TestZoneCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "zone", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "zone", "target": entity_id, "confirm": True},
         )
         logger.info("Zone cleanup complete")
 
@@ -1256,8 +1258,8 @@ class TestZoneCRUD:
 
         # CLEANUP
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "zone", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "zone", "target": entity_id, "confirm": True},
         )
 
 
@@ -1318,8 +1320,8 @@ class TestPersonCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "person", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "person", "target": entity_id, "confirm": True},
         )
         logger.info("Person cleanup complete")
 
@@ -1377,8 +1379,8 @@ class TestPersonCRUD:
 
         # CLEANUP
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "person", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "person", "target": entity_id, "confirm": True},
         )
         logger.info("Person update test cleanup complete")
 
@@ -1436,8 +1438,8 @@ class TestTagCRUD:
 
         # DELETE
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "tag", "helper_id": tag_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "tag", "target": tag_id, "confirm": True},
         )
         logger.info("Tag cleanup complete")
 
@@ -1504,8 +1506,8 @@ class TestTagCRUD:
 
         # CLEANUP
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "tag", "helper_id": tag_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "tag", "target": tag_id, "confirm": True},
         )
         logger.info("Tag update test cleanup complete")
 
@@ -1834,11 +1836,11 @@ class TestHelperRegistryClear:
 
             logger.info("Flow helper area cleared successfully via empty string")
         finally:
-            # Config-entry helpers are cleaned via ha_delete_config_entry (not cleanup_tracker)
+            # Config-entry helpers are cleaned via ha_delete_helpers_integrations (not cleanup_tracker)
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_config_entry",
-                {"entry_id": entry_id, "confirm": True},
+                "ha_delete_helpers_integrations",
+                {"target": entry_id, "confirm": True},
             )
 
     async def test_helper_clear_area_and_labels_together(
@@ -2017,8 +2019,8 @@ class TestHelperRegistryClear:
         finally:
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_config_entry",
-                {"entry_id": entry_id, "confirm": True},
+                "ha_delete_helpers_integrations",
+                {"target": entry_id, "confirm": True},
             )
 
 
@@ -2117,8 +2119,8 @@ class TestMultiEntityFlowHelper:
             if entry_id:
                 await safe_call_tool(
                     mcp_client,
-                    "ha_delete_config_entry",
-                    {"entry_id": entry_id, "confirm": True},
+                    "ha_delete_helpers_integrations",
+                    {"target": entry_id, "confirm": True},
                 )
             await safe_call_tool(
                 mcp_client,

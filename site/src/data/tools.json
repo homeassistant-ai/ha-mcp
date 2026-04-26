@@ -1174,7 +1174,7 @@
   {
     "name": "ha_config_remove_group",
     "title": "Remove Group",
-    "description": "Remove a service-based Home Assistant entity group via the group.remove service.\n\n**When NOT to use:** for groups created through `ha_config_set_helper(helper_type=\"group\", ...)`,\nuse `ha_delete_config_entry`. Those config-entry-backed groups are not reachable via the\ngroup.remove service, and `ha_config_remove_helper` does not support helper_type=\"group\".\n\n**When to use:** removing groups created with `ha_config_set_group` or defined in YAML\nvia `group:` configuration. Config-entry-backed deletion tools cannot find these.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but will reappear after restart.\n- This only removes old-style groups, not platform-specific groups.",
+    "description": "Remove a service-based Home Assistant entity group via the group.remove service.\n\n**When NOT to use:** for groups created through `ha_config_set_helper(helper_type=\"group\", ...)`,\nuse `ha_delete_helpers_integrations`. Those config-entry-backed groups are not reachable via the\ngroup.remove service.\n\n**When to use:** removing groups created with `ha_config_set_group` or defined in YAML\nvia `group:` configuration. Config-entry-backed deletion tools cannot find these.\n\nEXAMPLES:\n- Remove group: ha_config_remove_group(\"living_room_lights\")\n\nUse ha_config_list_groups() to find existing groups.\n\n**WARNING:**\n- Removing a group used in automations may cause those automations to fail.\n- Groups defined in YAML can be removed at runtime but will reappear after restart.\n- This only removes old-style groups, not platform-specific groups.",
     "inputSchema": {
       "properties": {
         "object_id": {
@@ -1201,7 +1201,7 @@
   {
     "name": "ha_config_set_group",
     "title": "Create or Update Group",
-    "description": "Create or update a service-based Home Assistant entity group via the group.set service.\n\n**When NOT to use:** for typical \"combine these entities into one controllable group\"\nrequests, prefer `ha_config_set_helper(helper_type=\"group\", ...)`. Config-entry-backed\ngroups are registered in the entity registry, so `ha_set_entity` can assign them to\nareas and they are deletable via `ha_delete_config_entry`.\n\n**When to use:** compatibility with existing groups already configured via group.set\nor YAML, or the rare case where entity-registry membership is explicitly unwanted.\nGroups created here are only removable via `ha_config_remove_group` — neither\n`ha_config_remove_helper` nor `ha_delete_config_entry` will find them.\n\n**For NEW groups:** Provide object_id and entities (required).\n**For EXISTING groups:** Provide object_id and any fields to update.\n\nEXAMPLES:\n- Create group: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"])\n- Create with name: ha_config_set_group(\"sensors\", entities=[\"sensor.temp\"], name=\"All Sensors\")\n- Update name: ha_config_set_group(\"lights\", name=\"Living Room Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])\n- Remove entities: ha_config_set_group(\"lights\", remove_entities=[\"light.old\"])\n- Replace all entities: ha_config_set_group(\"lights\", entities=[\"light.new1\", \"light.new2\"])\n\n**NOTE:** entities, add_entities, and remove_entities are mutually exclusive.",
+    "description": "Create or update a service-based Home Assistant entity group via the group.set service.\n\n**When NOT to use:** for typical \"combine these entities into one controllable group\"\nrequests, prefer `ha_config_set_helper(helper_type=\"group\", ...)`. Config-entry-backed\ngroups are registered in the entity registry, so `ha_set_entity` can assign them to\nareas and they are deletable via `ha_delete_helpers_integrations`.\n\n**When to use:** compatibility with existing groups already configured via group.set\nor YAML, or the rare case where entity-registry membership is explicitly unwanted.\nGroups created here are only removable via `ha_config_remove_group` —\n`ha_delete_helpers_integrations` will not find them.\n\n**For NEW groups:** Provide object_id and entities (required).\n**For EXISTING groups:** Provide object_id and any fields to update.\n\nEXAMPLES:\n- Create group: ha_config_set_group(\"bedroom_lights\", entities=[\"light.lamp\", \"light.ceiling\"])\n- Create with name: ha_config_set_group(\"sensors\", entities=[\"sensor.temp\"], name=\"All Sensors\")\n- Update name: ha_config_set_group(\"lights\", name=\"Living Room Lights\")\n- Add entities: ha_config_set_group(\"lights\", add_entities=[\"light.extra\"])\n- Remove entities: ha_config_set_group(\"lights\", remove_entities=[\"light.old\"])\n- Replace all entities: ha_config_set_group(\"lights\", entities=[\"light.new1\", \"light.new2\"])\n\n**NOTE:** entities, add_entities, and remove_entities are mutually exclusive.",
     "inputSchema": {
       "properties": {
         "object_id": {
@@ -1384,37 +1384,6 @@
     "source_file": "tools_config_helpers.py"
   },
   {
-    "name": "ha_config_remove_helper",
-    "title": "Remove Helper",
-    "description": "Delete a Home Assistant helper entity.\n\nSUPPORTED HELPER TYPES:\n- input_button, input_boolean, input_select, input_number, input_text, input_datetime\n- counter, timer, schedule, zone, person, tag\n\nFor flow-based helper types (template, group, utility_meter, derivative,\nmin_max, threshold, integration, statistics, trend, random, filter, tod,\ngeneric_thermostat, switch_as_x, generic_hygrostat) use ha_delete_config_entry.\n\nEXAMPLES:\n- Delete button: ha_config_remove_helper(\"input_button\", \"my_button\")\n- Delete counter: ha_config_remove_helper(\"counter\", \"my_counter\")\n- Delete timer: ha_config_remove_helper(\"timer\", \"my_timer\")\n- Delete schedule: ha_config_remove_helper(\"schedule\", \"work_hours\")\n\n**WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.\nUse ha_search_entities() to verify the helper exists before attempting to delete it.",
-    "inputSchema": {
-      "properties": {
-        "helper_type": {
-          "type": "Annotated[Literal['input_button', 'input_boolean', 'input_select', 'input_number', 'input_text', 'input_datetime', 'counter', 'timer', 'schedule', 'zone', 'person', 'tag'], Field(description='Type of helper entity to delete')]"
-        },
-        "helper_id": {
-          "type": "Annotated[str, Field(description=\"Helper ID to delete (e.g., 'my_button' or 'input_button.my_button')\")]"
-        },
-        "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for helper entity to be fully removed before returning. Default: True.', default=True)]",
-          "default": true
-        }
-      },
-      "required": [
-        "helper_type",
-        "helper_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": true
-    },
-    "tags": [
-      "Helper Entities"
-    ],
-    "source_file": "tools_config_helpers.py"
-  },
-  {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
     "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(helper_type=\"tod\", name=\"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
@@ -1575,6 +1544,41 @@
       "Helper Entities"
     ],
     "source_file": "tools_config_helpers.py"
+  },
+  {
+    "name": "ha_delete_helpers_integrations",
+    "title": "Delete Helper or Integration",
+    "description": "Delete a Home Assistant helper or integration config entry.\n\nCombines simple-helper websocket deletion and config-entry deletion\nunder one entry point with three routing paths driven by helper_type.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n\nSUPPORTED HELPER TYPES:\n- SIMPLE (12, websocket-delete): input_button, input_boolean,\n  input_select, input_number, input_text, input_datetime, counter,\n  timer, schedule, zone, person, tag.\n- FLOW (15, config-entry-delete via entity lookup): template, group,\n  utility_meter, derivative, min_max, threshold, integration,\n  statistics, trend, random, filter, tod, generic_thermostat,\n  switch_as_x, generic_hygrostat.\n\nROUTING:\n- SIMPLE helper_type + bare helper_id or entity_id → websocket delete.\n- FLOW helper_type + entity_id → resolve entity_id to config_entry_id\n  via entity_registry, then delete the config entry. All sub-entities\n  (e.g. utility_meter tariffs) are removed together.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n\nEXAMPLES:\n- Delete SIMPLE button:\n  ha_delete_helpers_integrations(\n      target=\"my_button\", helper_type=\"input_button\", confirm=True\n  )\n- Delete FLOW utility_meter (any sub-entity works):\n  ha_delete_helpers_integrations(\n      target=\"sensor.energy_peak\",\n      helper_type=\"utility_meter\",\n      confirm=True,\n  )\n- Delete any integration by entry_id:\n  ha_delete_helpers_integrations(\n      target=\"01HXYZ...\", confirm=True\n  )\n\n**WARNING:** Deleting a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search_entities() / ha_get_integration() to verify before\ndeletion. Cannot be undone.",
+    "inputSchema": {
+      "properties": {
+        "target": {
+          "type": "Annotated[str, Field(description=\"What to delete. One of: (a) bare helper_id for SIMPLE helpers (requires helper_type), e.g. 'my_button'; (b) full entity_id (requires helper_type), e.g. 'input_button.my_button' or 'sensor.my_meter'; (c) config entry_id for any integration (helper_type=None), e.g. value from ha_get_integration().\")]"
+        },
+        "helper_type": {
+          "type": "Annotated[HelperTypeLiteral | None, Field(description='Helper type. Required when target is a helper_id (bare) or entity_id. Set to None when target is a config entry_id to delete any integration.', default=None)]",
+          "default": null
+        },
+        "confirm": {
+          "type": "Annotated[bool | str, Field(description=\"Must be True to confirm deletion. Accepts bool or string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', case-insensitive) for transport ergonomics.\", default=False)]",
+          "default": false
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description=\"Wait for entity removal. Default: True. Ignored when helper_type=None (no entity poll, require_restart returned). Accepts bool or string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', case-insensitive).\", default=True)]",
+          "default": true
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Helper Entities",
+      "Integrations"
+    ],
+    "source_file": "tools_integrations.py"
   },
   {
     "name": "ha_get_helper_schema",
@@ -1760,32 +1764,6 @@
       "History & Statistics"
     ],
     "source_file": "tools_utility.py"
-  },
-  {
-    "name": "ha_delete_config_entry",
-    "title": "Delete Config Entry",
-    "description": "Delete config entry permanently. Requires confirm=True.\n\nUse ha_get_integration() to find entry IDs.",
-    "inputSchema": {
-      "properties": {
-        "entry_id": {
-          "type": "Annotated[str, Field(description='Config entry ID')]"
-        },
-        "confirm": {
-          "type": "Annotated[bool | str, Field(description='Must be True to confirm deletion')]",
-          "default": false
-        }
-      },
-      "required": [
-        "entry_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Integrations"
-    ],
-    "source_file": "tools_integrations.py"
   },
   {
     "name": "ha_get_integration",

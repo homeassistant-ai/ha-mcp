@@ -308,6 +308,13 @@ def exception_to_structured_error(
     error_response = _classify_exception(error, error_str, error_msg, context)
 
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
+        # Set both `suggestion` (singular, first item) and `suggestions`
+        # (plural, full list). create_error_response (errors.py) sets the
+        # singular key; existing tests for exception_to_structured_error
+        # rely on the plural key being present even for single-item caller
+        # suggestions. Setting both keeps response consumers on both code
+        # paths working.
+        error_response["error"]["suggestion"] = suggestions[0]
         error_response["error"]["suggestions"] = suggestions
 
     # Append macOS-specific hints for connection failures (after all other processing
