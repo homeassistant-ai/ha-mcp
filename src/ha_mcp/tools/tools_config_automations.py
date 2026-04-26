@@ -26,6 +26,9 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .best_practice_checker import (
+    _SKILL_URI_PREFIX,
+)
+from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
 from .best_practice_checker import (
@@ -376,8 +379,6 @@ class AutomationConfigTools:
         - python_transform: Surgical edits. Preferred for updating existing automations.
 
         Blueprint automations use use_blueprint instead of trigger/action.
-
-        For trigger types, condition types, action types, and examples use ha_get_skill_home_assistant_best_practices.
         """
         bp_warnings: list[str] = []
         try:
@@ -813,6 +814,18 @@ class AutomationConfigTools:
             raise_tool_error(error_response)
 
 
+_SET_AUTOMATION_BASE_DOC = AutomationConfigTools.ha_config_set_automation.__doc__ or ""
+
+
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant automation configuration tools."""
+    from ..config import get_global_settings
+    settings = get_global_settings()
+    if settings.enable_skills_as_tools:
+        pointer = "\nFor trigger types, condition types, action types, and examples:\nha_get_skill_home_assistant_best_practices"
+    elif settings.enable_skills:
+        pointer = f"\nFor trigger types, condition types, action types, and examples:\n{_SKILL_URI_PREFIX}/automation-patterns.md"
+    else:
+        pointer = ""
+    AutomationConfigTools.ha_config_set_automation.__doc__ = _SET_AUTOMATION_BASE_DOC + pointer
     register_tool_methods(mcp, AutomationConfigTools(client))
