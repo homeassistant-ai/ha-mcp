@@ -92,18 +92,18 @@ class HacsTools:
         self._client = client
 
     @tool(
-        name="ha_manage_hacs",
+        name="ha_get_hacs",
         tags={"HACS"},
         annotations={
-            "destructiveHint": True,
-            "title": "Set HACS",
+            "readOnlyHint": True,
+            "title": "Get HACS",
         },
     )
     @log_tool_usage
-    async def ha_manage_hacs(
+    async def ha_get_hacs(
         self,
         action: Annotated[
-            Literal["search", "info", "download", "add_repository"],
+            Literal["search", "info"],
             Field(description="The action to perform"),
         ],
         query: Annotated[
@@ -112,49 +112,28 @@ class HacsTools:
         category: Annotated[
             Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
             | None,
-            Field(
-                description="Filter by category (for 'search' or 'add_repository' actions)"
-            ),
+            Field(description="Filter by category (for 'search' action)"),
         ] = None,
         installed_only: Annotated[
             bool | str,
-            Field(
-                description="Only return installed repositories (for 'search' action)"
-            ),
+            Field(description="Only return installed repositories (for 'search' action)"),
         ] = False,
         max_results: Annotated[
             int | str,
-            Field(
-                description="Maximum number of results to return (for 'search' action)"
-            ),
+            Field(description="Maximum number of results to return (for 'search' action)"),
         ] = 10,
         offset: Annotated[
             int | str,
-            Field(
-                description="Number of results to skip for pagination (for 'search' action)"
-            ),
+            Field(description="Number of results to skip for pagination (for 'search' action)"),
         ] = 0,
         repository_id: Annotated[
             str | None,
-            Field(
-                description="Repository numeric ID or GitHub path like 'owner/repo' (for 'info' or 'download' actions)"
-            ),
-        ] = None,
-        version: Annotated[
-            str | None,
-            Field(description="Specific version to install (for 'download' action)"),
-        ] = None,
-        repository: Annotated[
-            str | None,
-            Field(
-                description="GitHub repository in format 'owner/repo' (for 'add_repository' action)"
-            ),
+            Field(description="Repository numeric ID or GitHub path like 'owner/repo' (for 'info' action)"),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage HACS (Home Assistant Community Store).
+        """Get HACS (Home Assistant Community Store) information.
 
-        Use this tool to search the store, get repository info, download/install packages,
-        or add custom repositories. This tool handles both installation and updates of repositories.
+        Use this tool to search the store or get detailed repository info.
 
         Do NOT use this tool for general Home Assistant configuration or entity control;
         use domain-specific tools instead.
@@ -164,21 +143,11 @@ class HacsTools:
            - Provide `query`, `category`, `installed_only`, `max_results`, `offset`.
         2. `info`: Get detailed repository information including README.
            - Requires `repository_id` (numeric ID or 'owner/repo').
-        3. `download`: Install or update a repository.
-           - Requires `repository_id`, optionally `version`.
-        4. `add_repository`: Add a custom GitHub repository.
-           - Requires `repository` (e.g. 'owner/repo') and `category`.
-
-        **Caveats:**
-        - For integrations, a restart of Home Assistant may be required after installation.
-        - For Lovelace cards, clear your browser cache to see the new card.
 
         **Examples:**
-        - Search: ha_manage_hacs(action='search', query='mushroom', category='lovelace')
-        - List installed: ha_manage_hacs(action='search', installed_only=True)
-        - Get Info: ha_manage_hacs(action='info', repository_id='441028036')
-        - Install/Download: ha_manage_hacs(action='download', repository_id='piitaya/lovelace-mushroom')
-        - Add Custom Repo: ha_manage_hacs(action='add_repository', repository='owner/my-card', category='lovelace')
+        - Search: ha_get_hacs(action='search', query='mushroom', category='lovelace')
+        - List installed: ha_get_hacs(action='search', installed_only=True)
+        - Get Info: ha_get_hacs(action='info', repository_id='441028036')
         """
         try:
             await _assert_hacs_available()
@@ -191,7 +160,91 @@ class HacsTools:
                 if not repository_id:
                     raise ValueError("repository_id is required for 'info' action")
                 return await self._hacs_info(repository_id)
-            elif action == "download":
+            else:
+                raise ValueError(f"Unknown action: {action}")
+
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    str(e),
+                )
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={
+                    "tool": "ha_get_hacs",
+                    "action": action,
+                },
+                suggestions=[
+                    "Verify HACS is installed: https://hacs.xyz/",
+                    "Ensure you provide the correct parameters for the chosen action.",
+                ],
+            )
+            return {}  # unreachable
+
+    @tool(
+        name="ha_manage_hacs",
+        tags={"HACS"},
+        annotations={
+            "destructiveHint": True,
+            "title": "Set HACS",
+        },
+    )
+    @log_tool_usage
+    async def ha_manage_hacs(
+        self,
+        action: Annotated[
+            Literal["download", "add_repository"],
+            Field(description="The action to perform"),
+        ],
+        repository_id: Annotated[
+            str | None,
+            Field(description="Repository numeric ID or GitHub path like 'owner/repo' (for 'download' action)"),
+        ] = None,
+        version: Annotated[
+            str | None,
+            Field(description="Specific version to install (for 'download' action)"),
+        ] = None,
+        repository: Annotated[
+            str | None,
+            Field(description="GitHub repository in format 'owner/repo' (for 'add_repository' action)"),
+        ] = None,
+        category: Annotated[
+            Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
+            | None,
+            Field(description="Repository category (for 'add_repository' action)"),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Manage HACS (Home Assistant Community Store) installations.
+
+        Use this tool to download/install packages or add custom repositories.
+        This tool handles both installation and updates of repositories.
+
+        Do NOT use this tool for general Home Assistant configuration or entity control;
+        use domain-specific tools instead.
+
+        **Actions:**
+        1. `download`: Install or update a repository.
+           - Requires `repository_id`, optionally `version`.
+        2. `add_repository`: Add a custom GitHub repository.
+           - Requires `repository` (e.g. 'owner/repo') and `category`.
+
+        **Caveats:**
+        - For integrations, a restart of Home Assistant may be required after installation.
+        - For Lovelace cards, clear your browser cache to see the new card.
+
+        **Examples:**
+        - Install/Download: ha_manage_hacs(action='download', repository_id='piitaya/lovelace-mushroom')
+        - Add Custom Repo: ha_manage_hacs(action='add_repository', repository='owner/my-card', category='lovelace')
+        """
+        try:
+            await _assert_hacs_available()
+
+            if action == "download":
                 if not repository_id:
                     raise ValueError("repository_id is required for 'download' action")
                 return await self._hacs_download(repository_id, version)
