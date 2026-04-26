@@ -152,7 +152,9 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
-        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        return (
+            response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        )
     return {"success": True, "addon": response["result"]}
 
 
@@ -170,7 +172,9 @@ async def list_addons(
     """
     response = await _supervisor_api_call(client, "/addons")
     if not response.get("success"):
-        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        return (
+            response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        )
 
     data = response["result"]
     addons = data.get("addons", [])
@@ -575,17 +579,206 @@ async def _call_addon_ws(
     return result
 
 
+_ARRAY_PATCH_OPS = {"patch", "delete", "add", "delete_where"}
+
+# Sentinel used to distinguish "key absent" from "key explicitly set to None"
+# in array_patch validation. dict.get() with this default lets us detect a
+# missing 'value' field without rejecting legitimate {"value": None} ops.
+_ARRAY_PATCH_MISSING: Any = object()
+
+
+def _apply_array_ops(
+    items: list[Any],
+    operations: list[dict[str, Any]],
+    id_field: str,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Apply a sequence of array_patch operations to a list of resource dicts.
+
+    Operations are applied in order against a working copy. Any validation
+    failure (unknown op, missing reference, id collision, missing required
+    field) raises ToolError before the caller posts anything back, giving
+    fail-fast all-or-nothing semantics from the server's perspective.
+
+    Args:
+        items: Current array fetched from the addon (mutated copy is built here).
+        operations: Ordered list of op dicts. Supported shapes:
+            {"op": "patch", "id": <value>, "patches": {field: value, ...}}
+            {"op": "delete", "id": <value>}
+            {"op": "add", "item": {<id_field>: <value>, ...}}
+            {"op": "delete_where", "field": <name>, "value": <value>}
+        id_field: Field name on each item used as its identifier.
+
+    Returns:
+        Tuple of (new_array, summary). Summary lists what each op touched —
+        IDs only, no full payloads — so the response stays compact even when
+        the underlying array is large.
+    """
+    working = list(items)  # shallow copy of the outer list; items themselves
+    # are mutated in place by patch ops, which is fine
+    # because we're going to POST the working list back
+
+    summary: dict[str, list[Any]] = {
+        "patched": [],
+        "deleted": [],
+        "added": [],
+        "deleted_where": [],
+    }
+
+    for index, op_spec in enumerate(operations):
+        if not isinstance(op_spec, dict):
+            raise_tool_error(
+                create_validation_error(
+                    f"array_patch operation #{index} is not an object",
+                    parameter="array_patch.operations",
+                )
+            )
+
+        op = op_spec.get("op")
+        if op not in _ARRAY_PATCH_OPS:
+            raise_tool_error(
+                create_validation_error(
+                    f"array_patch op '{op}' not recognised "
+                    f"(expected one of: {sorted(_ARRAY_PATCH_OPS)})",
+                    parameter=f"array_patch.operations[{index}].op",
+                )
+            )
+
+        if op == "patch":
+            target_id = op_spec.get("id")
+            patches = op_spec.get("patches")
+            if target_id is None:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch patch op #{index} missing 'id'",
+                        parameter=f"array_patch.operations[{index}].id",
+                    )
+                )
+            if not isinstance(patches, dict):
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch patch op #{index} 'patches' must be an object",
+                        parameter=f"array_patch.operations[{index}].patches",
+                    )
+                )
+            target = next(
+                (
+                    it
+                    for it in working
+                    if isinstance(it, dict) and it.get(id_field) == target_id
+                ),
+                None,
+            )
+            if target is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"No item with {id_field}={target_id!r} for patch op #{index}",
+                        context={"id_field": id_field, "id": target_id},
+                    )
+                )
+            target.update(patches)
+            summary["patched"].append({"id": target_id, "fields": list(patches.keys())})
+
+        elif op == "delete":
+            target_id = op_spec.get("id")
+            if target_id is None:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch delete op #{index} missing 'id'",
+                        parameter=f"array_patch.operations[{index}].id",
+                    )
+                )
+            before = len(working)
+            working = [
+                it
+                for it in working
+                if not (isinstance(it, dict) and it.get(id_field) == target_id)
+            ]
+            if len(working) == before:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"No item with {id_field}={target_id!r} for delete op #{index}",
+                        context={"id_field": id_field, "id": target_id},
+                    )
+                )
+            summary["deleted"].append({"id": target_id})
+
+        elif op == "add":
+            new_item = op_spec.get("item")
+            if not isinstance(new_item, dict):
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch add op #{index} 'item' must be an object",
+                        parameter=f"array_patch.operations[{index}].item",
+                    )
+                )
+            if id_field not in new_item:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch add op #{index} 'item' missing id field "
+                        f"{id_field!r}",
+                        parameter=f"array_patch.operations[{index}].item",
+                    )
+                )
+            new_id = new_item[id_field]
+            if any(
+                isinstance(it, dict) and it.get(id_field) == new_id for it in working
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_ALREADY_EXISTS,
+                        f"Item with {id_field}={new_id!r} already exists "
+                        f"(add op #{index})",
+                        context={"id_field": id_field, "id": new_id},
+                    )
+                )
+            working.append(new_item)
+            summary["added"].append({"id": new_id})
+
+        else:  # delete_where
+            field = op_spec.get("field")
+            value = op_spec.get("value", _ARRAY_PATCH_MISSING)
+            if not isinstance(field, str) or not field:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch delete_where op #{index} missing or empty 'field'",
+                        parameter=f"array_patch.operations[{index}].field",
+                    )
+                )
+            if value is _ARRAY_PATCH_MISSING:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch delete_where op #{index} missing 'value'",
+                        parameter=f"array_patch.operations[{index}].value",
+                    )
+                )
+            before = len(working)
+            working = [
+                it
+                for it in working
+                if not (isinstance(it, dict) and it.get(field) == value)
+            ]
+            removed = before - len(working)
+            summary["deleted_where"].append(
+                {"field": field, "value": value, "count": removed}
+            )
+
+    return working, summary
+
+
 async def _call_addon_api(
     client: HomeAssistantClient,
     slug: str,
     path: str,
     method: str = "GET",
-    body: dict[str, Any] | str | None = None,
+    body: dict[str, Any] | list[Any] | str | None = None,
     timeout: int = 30,
     debug: bool = False,
     port: int | None = None,
     offset: int = 0,
     limit: int | None = None,
+    raw: bool = False,
 ) -> dict[str, Any]:
     """Call an add-on's web API through Home Assistant's Ingress proxy.
 
@@ -594,11 +787,16 @@ async def _call_addon_api(
         slug: Add-on slug (e.g., "a0d7b954_nodered")
         path: API path relative to add-on root (e.g., "/flows")
         method: HTTP method (GET, POST, PUT, DELETE, PATCH)
-        body: Request body for POST/PUT/PATCH
+        body: Request body for POST/PUT/PATCH (dict, list, or pre-encoded JSON string)
         timeout: Request timeout in seconds (default 30)
         port: Override port to connect to (e.g., direct access port instead of ingress port)
         offset: Skip this many items in array responses (default 0)
         limit: Return at most this many items from array responses
+        raw: Internal flag — when True, skip the size-based truncation that
+            otherwise replaces large array/object responses with an error
+            placeholder. Used by array_patch mode in ha_manage_addon, which
+            needs the full parsed response in memory to apply operations
+            even when the JSON is larger than _MAX_RESPONSE_SIZE.
 
     Returns:
         Dictionary with response data, status code, and content type.
@@ -696,7 +894,7 @@ async def _call_addon_api(
         headers["X-Hass-Source"] = "core.ingress"
 
     # Set content type based on body type
-    if isinstance(body, dict):
+    if isinstance(body, dict | list):
         headers["Content-Type"] = "application/json"
         request_content = json.dumps(body).encode()
     elif isinstance(body, str):
@@ -756,43 +954,45 @@ async def _call_addon_api(
             "returned": len(response_data),
         }
 
-    # 9. Truncate large responses
+    # 9. Truncate large responses (skipped in raw mode; array_patch needs the
+    #    full parsed payload in memory regardless of size)
     truncated = False
-    if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
-        response_data = response_data[:_MAX_RESPONSE_SIZE]
-        truncated = True
-    elif isinstance(response_data, list):
-        serialized = json.dumps(response_data, default=str)
-        if len(serialized) > _MAX_RESPONSE_SIZE:
-            total_items = len(response_data)
-            response_data = {
-                "error": "RESPONSE_TOO_LARGE",
-                "message": f"The JSON array ({len(serialized)} bytes, {total_items} items) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-                "total_items": total_items,
-                "hint": "Use offset and limit to paginate. Example: offset=0, limit=20",
-            }
+    if not raw:
+        if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
+            response_data = response_data[:_MAX_RESPONSE_SIZE]
             truncated = True
-    elif isinstance(response_data, dict):
-        serialized = json.dumps(response_data, default=str)
-        if len(serialized) > _MAX_RESPONSE_SIZE:
-            # Show top-level keys and their approximate sizes to help caller
-            # make more targeted API calls
-            key_info = {}
-            for k, v in response_data.items():
-                v_serialized = json.dumps(v, default=str)
-                if isinstance(v, list):
-                    key_info[k] = f"array[{len(v)}] ({len(v_serialized)} bytes)"
-                elif isinstance(v, dict):
-                    key_info[k] = f"object ({len(v_serialized)} bytes)"
-                else:
-                    key_info[k] = f"{type(v).__name__} ({len(v_serialized)} bytes)"
-            response_data = {
-                "error": "RESPONSE_TOO_LARGE",
-                "message": f"The JSON object ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-                "top_level_keys": key_info,
-                "hint": "Use a more specific API path to request individual keys/sections.",
-            }
-            truncated = True
+        elif isinstance(response_data, list):
+            serialized = json.dumps(response_data, default=str)
+            if len(serialized) > _MAX_RESPONSE_SIZE:
+                total_items = len(response_data)
+                response_data = {
+                    "error": "RESPONSE_TOO_LARGE",
+                    "message": f"The JSON array ({len(serialized)} bytes, {total_items} items) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                    "total_items": total_items,
+                    "hint": "Use offset and limit to paginate. Example: offset=0, limit=20",
+                }
+                truncated = True
+        elif isinstance(response_data, dict):
+            serialized = json.dumps(response_data, default=str)
+            if len(serialized) > _MAX_RESPONSE_SIZE:
+                # Show top-level keys and their approximate sizes to help caller
+                # make more targeted API calls
+                key_info = {}
+                for k, v in response_data.items():
+                    v_serialized = json.dumps(v, default=str)
+                    if isinstance(v, list):
+                        key_info[k] = f"array[{len(v)}] ({len(v_serialized)} bytes)"
+                    elif isinstance(v, dict):
+                        key_info[k] = f"object ({len(v_serialized)} bytes)"
+                    else:
+                        key_info[k] = f"{type(v).__name__} ({len(v_serialized)} bytes)"
+                response_data = {
+                    "error": "RESPONSE_TOO_LARGE",
+                    "message": f"The JSON object ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                    "top_level_keys": key_info,
+                    "hint": "Use a more specific API path to request individual keys/sections.",
+                }
+                truncated = True
 
     result: dict[str, Any] = {
         "success": response.status_code < 400,
@@ -1081,19 +1281,41 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        array_patch: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Array-patch mode: atomically GET a JSON array endpoint, "
+                    "apply ordered ops, then POST the mutated array back. "
+                    "Shape: {'id_field': '<key>' (default 'id'), "
+                    "'operations': [{'op': 'patch'|'delete'|'add'|'delete_where', ...}, ...]}. "
+                    "Use for addon APIs that expose 'edit-the-whole-collection' write contracts "
+                    "(Node-RED /flows, similar) — avoids the model holding the full array in context. "
+                    "Requires 'path'; mutually exclusive with body/websocket/offset/limit and config params."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
-        Two mutually exclusive operating modes:
+        Three mutually exclusive operating modes:
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
         Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
         All config parameters are optional; only provided fields are updated — current values
         are fetched and merged automatically (including one level of nested dicts).
 
-        **Proxy mode** (when path is provided):
+        **Proxy mode** (when path is provided without array_patch):
         Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
         Use ha_get_addon(slug="...") to discover available ports and endpoints.
+
+        **Array-patch mode** (when path AND array_patch are provided):
+        Atomic "GET array, mutate, POST array" workflow for addon APIs whose write
+        contract is "send the whole resource collection back". Operations are applied
+        in order to a working copy; if any op fails validation (unknown id, collision,
+        malformed shape) nothing is posted. Returns a compact summary instead of the
+        full array. Designed for Node-RED /flows and similar endpoints.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
@@ -1110,6 +1332,22 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
         - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
         - WebSocket: ha_manage_addon(slug="...", path="/validate", port=6052, websocket=True, body={"type": "spawn", "configuration": "device.yaml"})
+        - Array-patch (Node-RED, rename a node):
+            ha_manage_addon(
+                slug="a0d7b954_nodered", path="/flows",
+                array_patch={"operations": [
+                    {"op": "patch", "id": "abc123", "patches": {"name": "New Name"}},
+                ]},
+            )
+        - Array-patch (Node-RED, replace one tab's nodes atomically):
+            ha_manage_addon(
+                slug="a0d7b954_nodered", path="/flows",
+                array_patch={"operations": [
+                    {"op": "delete_where", "field": "z", "value": "tab-id"},
+                    {"op": "add", "item": {"id": "n1", "type": "inject", "z": "tab-id", ...}},
+                    {"op": "add", "item": {"id": "n2", "type": "function", "z": "tab-id", ...}},
+                ]},
+            )
         """
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
@@ -1169,12 +1407,54 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 proxy_overrides.append(("websocket", "websocket=True"))
             if not wait_for_close:
                 proxy_overrides.append(("wait_for_close", "wait_for_close=False"))
+            if array_patch is not None:
+                proxy_overrides.append(("array_patch", "array_patch"))
             if proxy_overrides:
                 raise_tool_error(
                     create_validation_error(
                         f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
                         "Remove these parameters or switch to proxy mode by providing 'path'.",
                         parameter=proxy_overrides[0][0],
+                    )
+                )
+
+        # array_patch needs its own input shape validation (the field is dict[str, Any]
+        # at the schema level so the model will happily send malformed payloads)
+        if array_patch is not None:
+            if not isinstance(array_patch, dict):
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch must be an object",
+                        parameter="array_patch",
+                    )
+                )
+            if websocket:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch is HTTP-only and cannot be combined with websocket=True",
+                        parameter="array_patch",
+                    )
+                )
+            if body is not None:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch builds the POST body itself; remove the explicit 'body' parameter",
+                        parameter="array_patch",
+                    )
+                )
+            if offset != 0 or limit is not None:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch needs the full array; offset/limit are not supported in this mode",
+                        parameter="array_patch",
+                    )
+                )
+            ops = array_patch.get("operations")
+            if not isinstance(ops, list) or not ops:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch.operations must be a non-empty list",
+                        parameter="array_patch.operations",
                     )
                 )
 
@@ -1208,8 +1488,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 # lets the caller correct mistakes before any state is changed.
                 schema_ui: list | None = addon_info.get("schema")
                 if schema_ui is not None:
-                    allowed_keys = {item["name"] for item in schema_ui if "name" in item}
-                    ignored_fields = [k for k in config_data["options"] if k not in allowed_keys]
+                    allowed_keys = {
+                        item["name"] for item in schema_ui if "name" in item
+                    }
+                    ignored_fields = [
+                        k for k in config_data["options"] if k not in allowed_keys
+                    ]
                     # Remove unknown fields from the merged dict so Supervisor does not
                     # silently strip them after the write succeeds.
                     for k in ignored_fields:
@@ -1267,6 +1551,78 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         # Proxy mode: call add-on container API
         # At this point path is guaranteed non-None (validated above)
         assert path is not None
+
+        # Array-patch mode: GET → mutate → POST atomically.
+        # Done before the websocket/HTTP branches so it can fully own the
+        # response shape and skip the truncation/pagination paths.
+        if array_patch is not None:
+            id_field = array_patch.get("id_field", "id")
+            if not isinstance(id_field, str) or not id_field:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch.id_field must be a non-empty string",
+                        parameter="array_patch.id_field",
+                    )
+                )
+
+            fetch_result = await _call_addon_api(
+                client=client,
+                slug=slug,
+                path=path,
+                method="GET",
+                debug=debug,
+                port=port,
+                raw=True,
+            )
+            if not fetch_result.get("success"):
+                raise_tool_error(fetch_result)
+
+            fetched = fetch_result.get("response")
+            if not isinstance(fetched, list):
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch requires a JSON array at {path!r}; "
+                        f"got {type(fetched).__name__}",
+                        parameter="path",
+                    )
+                )
+
+            # Re-narrow operations for the type checker — the earlier
+            # validation block established this but the narrowing doesn't
+            # carry across the intervening config_data branch.
+            assert isinstance(ops, list)
+            new_array, summary = _apply_array_ops(fetched, ops, id_field)
+
+            post_result = await _call_addon_api(
+                client=client,
+                slug=slug,
+                path=path,
+                method="POST",
+                body=new_array,
+                debug=debug,
+                port=port,
+                raw=True,
+            )
+            if not post_result.get("success"):
+                raise_tool_error(post_result)
+
+            response_payload: dict[str, Any] = {
+                "success": True,
+                "slug": slug,
+                "addon_name": fetch_result.get("addon_name"),
+                "path": path,
+                "id_field": id_field,
+                "items_before": len(fetched),
+                "items_after": len(new_array),
+                "summary": summary,
+            }
+            if debug:
+                response_payload["_debug"] = {
+                    "fetch": fetch_result.get("_debug"),
+                    "post": post_result.get("_debug"),
+                }
+            return response_payload
+
         # WebSocket
         if websocket:
             result = await _call_addon_ws(
