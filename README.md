@@ -281,7 +281,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### Maintainers
 
-- **[@julienld](https://github.com/julienld)** — Project creator & core maintainer.
+- **[@julienld](https://github.com/julienld)** — Project creator.
 - **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
 - **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
 
@@ -296,7 +296,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@maxperron](https://github.com/maxperron)** — Beta testing.
 - **[@kingbear2](https://github.com/kingbear2)** — Windows UV setup guide.
 - **[@konradwalsh](https://github.com/konradwalsh)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
-- **[@knowald](https://github.com/knowald)** — Area resolution via device registry in `ha_get_system_overview` for entities assigned through their parent device.
+- **[@knowald](https://github.com/knowald)** — Area resolution via device registry in `ha_get_system_overview` for entities assigned through their parent device. Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@zorrobyte](https://github.com/zorrobyte)** — Per-client WebSocket credentials in OAuth mode, fixing WebSocket tool failures.
 - **[@deanbenson](https://github.com/deanbenson)** — Fixed `ha_deep_search` timeout on large Home Assistant instances with many automations.
 - **[@saphid](https://github.com/saphid)** — Config entry options flow tools (initial design, #590).
@@ -307,11 +307,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@The-Greg-O](https://github.com/The-Greg-O)** — REST API for config entry deletion.
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
-- **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard.
+- **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard; replaced placeholder logo SVGs with real brand icons on the documentation site.
 - **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
+- **[@gcormier](https://github.com/gcormier)** — Windows installer improvements: removed unused variable and fixed terminal closing after install.
+- **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
+- **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 
 ---
 
