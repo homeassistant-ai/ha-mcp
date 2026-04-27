@@ -30,7 +30,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
-    "cryptography==46.0.7",
+    "cryptography==47.0.0",
 ]
 
 [project.urls]
