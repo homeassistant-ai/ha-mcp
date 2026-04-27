@@ -286,6 +286,35 @@ async def _supervisor_api_call(
                 pass
 
 
+async def _create_ingress_session(client: HomeAssistantClient) -> str:
+    """Create a Supervisor ingress session and return its token.
+
+    Sessions are minted via the WS `supervisor/api` proxy (which HA Core
+    authenticates on our behalf), so this works the same on HAOS, Supervised,
+    and PyPI/uvx hosts. The returned token is set as the `ingress_session`
+    cookie on requests to HA Core's `/api/hassio_ingress/<addon_token>/...`
+    endpoint, which Supervisor validates before proxying to the add-on
+    container. Sessions are valid for ~15 minutes; we mint a fresh one per
+    call to avoid managing lifetime.
+    """
+    response = await _supervisor_api_call(
+        client, "/ingress/session", method="POST", data={}
+    )
+    if not response.get("success"):
+        raise_tool_error(response)
+
+    session = response.get("result", {}).get("session")
+    if not isinstance(session, str) or not session:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Supervisor returned no ingress session token",
+                details=str(response),
+            )
+        )
+    return session
+
+
 async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, Any]:
     """Get detailed info for a specific add-on.
 
@@ -517,6 +546,11 @@ async def _call_addon_ws(
 ) -> dict[str, Any]:
     """Connect to an add-on's WebSocket API and collect messages.
 
+    Routing mirrors the HTTP variant: ingress mode tunnels the WS through HA
+    Core's `/api/hassio_ingress` proxy (works off-host); direct-port mode
+    (`port` set) connects straight to the container and requires the MCP
+    host to share HA's Docker network.
+
     Args:
         client: Home Assistant REST client
         slug: Add-on slug (e.g., "5c53de3b_esphome")
@@ -591,8 +625,13 @@ async def _call_addon_ws(
             )
         )
 
-    # 5. Build WebSocket URL
+    # 5. Build WebSocket URL.
+    # Ingress mode tunnels the WS through HA Core's `/api/hassio_ingress`
+    # proxy (which supports WS upgrade) so it works on off-host installs.
+    # Direct-port mode connects straight to the add-on container.
+    headers: dict[str, str] = {}
     addon_ip = addon.get("ip_address", "")
+
     if port:
         if not addon_ip:
             raise_tool_error(
@@ -602,27 +641,23 @@ async def _call_addon_ws(
                     context={"slug": slug},
                 )
             )
-        target_port = port
+        ws_url = f"ws://{addon_ip}:{port}/{normalized}"
     else:
-        ingress_port = addon.get("ingress_port")
-        if not addon_ip or not ingress_port:
+        ingress_entry = addon.get("ingress_entry")
+        if not ingress_entry:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing network info",
+                    f"Add-on '{addon_name}' is missing ingress_entry",
                     context={"slug": slug},
                 )
             )
-        target_port = ingress_port
-
-    ws_url = f"ws://{addon_ip}:{target_port}/{normalized}"
-
-    # 6. Build connection headers
-    headers: dict[str, str] = {}
-    if not port:
-        ingress_entry = addon.get("ingress_entry", "")
-        headers["X-Ingress-Path"] = ingress_entry
-        headers["X-Hass-Source"] = "core.ingress"
+        session = await _create_ingress_session(client)
+        ws_scheme = "wss" if client.base_url.startswith("https") else "ws"
+        ws_host = client.base_url.split("://", 1)[1]
+        ws_url = f"{ws_scheme}://{ws_host}{ingress_entry}/{normalized}"
+        headers["Cookie"] = f"ingress_session={session}"
+        headers["Authorization"] = f"Bearer {client.token}"
 
     # 7. Connect and exchange messages
     collected: list[str] = []
@@ -736,11 +771,20 @@ async def _call_addon_ws(
             )
         )
     except OSError as e:
+        suggestions = ["Check that the add-on is running"]
+        if port:
+            suggestions.append(
+                "Direct-port access requires the MCP host to share Home "
+                "Assistant's container network. On PyPI/uvx installs, drop "
+                "the 'port' parameter to route through Ingress instead."
+            )
         raise_tool_error(
-            create_connection_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
-                details="Check that the add-on is running and the port is correct",
-                context={"slug": slug},
+                details=f"url={ws_url}",
+                context={"slug": slug, "direct_port": bool(port)},
+                suggestions=suggestions,
             )
         )
 
@@ -852,7 +896,18 @@ async def _call_addon_api(
     limit: int | None = None,
     python_transform: str | None = None,
 ) -> dict[str, Any]:
-    """Call an add-on's web API through Home Assistant's Ingress proxy.
+    """Call an add-on's web API.
+
+    Two routing modes:
+
+    - **Ingress (default)**: tunnels through HA Core's
+      `/api/hassio_ingress/<token>/...` proxy. Mints a fresh Supervisor
+      ingress session per call via the WS `supervisor/api` proxy. Works on
+      HAOS, Supervised, and off-host PyPI/uvx installs.
+    - **Direct port** (when `port` is set): connects to
+      `http://<addon_ip>:<port>/...` for add-ons that expose mapped ports
+      (e.g. Node-RED on 1880). Only works when the MCP host shares HA's
+      Docker network — i.e. running as the HAOS add-on.
 
     Args:
         client: Home Assistant REST client
@@ -868,9 +923,6 @@ async def _call_addon_api(
             parsed response body. The variable ``response`` is bound to
             ``dict | list | str`` depending on content-type. Transform runs
             after offset/limit slicing.
-
-    Returns:
-        Dictionary with response data, status code, and content type.
     """
     # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
     normalized = unquote(path).lstrip("/")
@@ -919,13 +971,16 @@ async def _call_addon_api(
             )
         )
 
-    # 5. Build URL to the add-on container
+    # 5. Build URL.
+    # Ingress mode (default) routes through HA Core's `/api/hassio_ingress`
+    # proxy so this works equally on HAOS addons and off-host PyPI/uvx
+    # installs. Direct-port mode connects straight to the add-on's container
+    # IP — this only works when the MCP host shares the hassio Docker
+    # bridge (i.e. the HAOS addon).
+    headers: dict[str, str] = {}
     addon_ip = addon.get("ip_address", "")
 
     if port:
-        # Direct port access: connect to the add-on's mapped network port
-        # (e.g., 1880 for Node-RED, 6052 for ESPHome) instead of the ingress port.
-        # Requires 'leave_front_door_open' or equivalent setting on the add-on.
         if not addon_ip:
             raise_tool_error(
                 create_error_response(
@@ -934,37 +989,23 @@ async def _call_addon_api(
                     context={"slug": slug, "ip_address": addon_ip},
                 )
             )
-        target_port = port
+        url = f"http://{addon_ip}:{port}/{normalized}"
     else:
-        # Default: use the ingress port for direct container communication
-        ingress_port = addon.get("ingress_port")
-        if not addon_ip or not ingress_port:
+        ingress_entry = addon.get("ingress_entry")
+        if not ingress_entry:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
-                    context={
-                        "slug": slug,
-                        "ip_address": addon_ip,
-                        "ingress_port": ingress_port,
-                    },
+                    f"Add-on '{addon_name}' is missing ingress_entry",
+                    context={"slug": slug},
                 )
             )
-        target_port = ingress_port
+        session = await _create_ingress_session(client)
+        url = f"{client.base_url}{ingress_entry}/{normalized}"
+        headers["Cookie"] = f"ingress_session={session}"
+        headers["Authorization"] = f"Bearer {client.token}"
 
-    url = f"http://{addon_ip}:{target_port}/{normalized}"
-
-    # 6. Make HTTP request directly to the add-on container
-    # Include Ingress headers so the add-on's web server (e.g., Nginx) recognizes
-    # this as an authenticated Ingress request and bypasses its own auth layer.
-    # When using a direct port, skip Ingress headers (not needed/recognized).
-    ingress_entry = addon.get("ingress_entry", "")
-    headers: dict[str, str] = {}
-    if not port:
-        headers["X-Ingress-Path"] = ingress_entry
-        headers["X-Hass-Source"] = "core.ingress"
-
-    # Set content type based on body type
+    # 6. Set content type based on body type
     if isinstance(body, dict):
         headers["Content-Type"] = "application/json"
         request_content = json.dumps(body).encode()
@@ -992,11 +1033,23 @@ async def _call_addon_api(
             )
         )
     except httpx.ConnectError as e:
+        # Direct-port mode is the only path that touches the addon's
+        # container IP directly; off-host installs (PyPI/uvx) have no route
+        # to that bridge, so surface the limitation in the suggestions.
+        suggestions = ["Check that the add-on is running"]
+        if port:
+            suggestions.append(
+                "Direct-port access requires the MCP host to share Home "
+                "Assistant's container network. On PyPI/uvx installs, drop "
+                "the 'port' parameter to route through Ingress instead."
+            )
         raise_tool_error(
-            create_connection_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}': {e!s}",
-                details="Check that the add-on is running and Home Assistant Ingress is working",
-                context={"slug": slug},
+                details=f"url={url}",
+                context={"slug": slug, "direct_port": bool(port)},
+                suggestions=suggestions,
             )
         )
 
@@ -1411,7 +1464,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         are fetched and merged automatically (including one level of nested dicts).
 
         **Proxy mode** (when path is provided):
-        Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
+        Routes HTTP or WebSocket requests through Home Assistant's Ingress
+        proxy by default (works on HAOS, Supervised, and off-host PyPI/uvx
+        installs). Pass `port=...` to bypass Ingress and connect directly to
+        an add-on's container port — that mode requires the MCP host to
+        share Home Assistant's container network (i.e. only the HAOS addon).
         Use ha_get_addon(slug="...") to discover available ports and endpoints.
 
         **Response shaping (proxy mode):**

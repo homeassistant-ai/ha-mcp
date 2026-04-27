@@ -34,6 +34,8 @@ _RUNNING_ADDON_INFO = {
     },
 }
 
+_INGRESS_SESSION_TOKEN = "test-ingress-session"
+
 
 def _make_mock_client() -> MagicMock:
     """Create a mock HomeAssistantClient."""
@@ -46,6 +48,17 @@ def _make_mock_client() -> MagicMock:
 def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
     """Parse the JSON payload from a ToolError."""
     return json.loads(str(exc_info.value))
+
+
+@pytest.fixture
+def mock_ingress_session():
+    """Patch _create_ingress_session to return a fixed token without WS calls."""
+    with patch(
+        "ha_mcp.tools.tools_addons._create_ingress_session",
+        new_callable=AsyncMock,
+        return_value=_INGRESS_SESSION_TOKEN,
+    ) as m:
+        yield m
 
 
 class TestCallAddonApiErrors:
@@ -215,8 +228,8 @@ class TestCallAddonApiErrors:
         )
 
     @pytest.mark.asyncio
-    async def test_addon_missing_network_info(self):
-        """Should raise ToolError when add-on is missing ip_address or ingress_port."""
+    async def test_direct_port_missing_ip_address(self):
+        """Direct-port mode requires the addon's container ip_address."""
         client = _make_mock_client()
 
         with (
@@ -228,26 +241,22 @@ class TestCallAddonApiErrors:
                     "addon": {
                         "name": "Test Addon",
                         "slug": "test_addon",
-                        "ingress": True,
+                        "ingress": False,
                         "state": "started",
                         "ip_address": "",
-                        "ingress_port": None,
                     },
                 },
             ),
             pytest.raises(ToolError) as exc_info,
         ):
-            await _call_addon_api(client, "test_addon", "/api/test")
+            await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert (
-            "network info" in result["error"]["message"].lower()
-            or "ip_address" in str(result).lower()
-        )
+        assert "ip_address" in str(result).lower()
 
     @pytest.mark.asyncio
-    async def test_http_timeout(self):
+    async def test_http_timeout(self, mock_ingress_session):
         """Should raise ToolError when add-on API doesn't respond."""
         client = _make_mock_client()
 
@@ -279,7 +288,7 @@ class TestCallAddonApiErrors:
         )
 
     @pytest.mark.asyncio
-    async def test_http_connection_error(self):
+    async def test_http_connection_error(self, mock_ingress_session):
         """Should raise ToolError when can't reach add-on."""
         client = _make_mock_client()
 
@@ -311,6 +320,136 @@ class TestCallAddonApiErrors:
             "connect" in result["error"]["message"].lower()
             or "connection" in str(result).lower()
         )
+
+    @pytest.mark.asyncio
+    async def test_http_ingress_routes_through_ha_core(self, mock_ingress_session):
+        """Ingress mode targets HA Core's /api/hassio_ingress proxy with a session cookie."""
+        client = _make_mock_client()
+
+        captured: dict[str, object] = {}
+
+        async def fake_request(*, method, url, headers, content):
+            captured["method"] = method
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 200
+            response.json.return_value = {"ok": True}
+            response.text = '{"ok": true}'
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["success"] is True
+        # URL is HA Core's ingress proxy, NOT the addon container IP
+        assert captured["url"] == (
+            "http://localhost:8123/api/hassio_ingress/abc123/api/test"
+        )
+        # Session cookie attached
+        headers = captured["headers"]
+        assert headers["Cookie"] == f"ingress_session={_INGRESS_SESSION_TOKEN}"
+        # Direct-container Ingress headers MUST NOT be set — HA Core adds them
+        # itself when it proxies upstream, and adding our own would conflict.
+        assert "X-Ingress-Path" not in headers
+        assert "X-Hass-Source" not in headers
+        # Ingress session was minted exactly once
+        mock_ingress_session.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_http_direct_port_skips_ingress_session(self, mock_ingress_session):
+        """Direct-port mode connects to container IP and does not mint an ingress session."""
+        client = _make_mock_client()
+
+        captured: dict[str, object] = {}
+
+        async def fake_request(*, method, url, headers, content):
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 200
+            response.json.return_value = {"ok": True}
+            response.text = '{"ok": true}'
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(
+                client, "test_addon", "/flows", port=1880
+            )
+
+        assert result["success"] is True
+        assert captured["url"] == "http://172.30.33.99:1880/flows"
+        assert "Cookie" not in captured["headers"]
+        mock_ingress_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_http_direct_port_offhost_error_hints_at_ingress(
+        self, mock_ingress_session
+    ):
+        """ConnectError in direct-port mode should suggest dropping `port` for off-host hosts."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = httpx.ConnectError(
+                "No route to host"
+            )
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(
+                    client, "test_addon", "/flows", port=1880
+                )
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        assert any("ingress" in s.lower() for s in suggestions), suggestions
 
 
 # Standard mock return for a running addon with Ingress support (for WS tests)
@@ -465,7 +604,7 @@ class TestCallAddonWsErrors:
         assert "not running" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_ws_handshake_failure(self):
+    async def test_ws_handshake_failure(self, mock_ingress_session):
         """Should raise ToolError when WebSocket handshake fails."""
         client = _make_mock_client()
 
@@ -492,7 +631,83 @@ class TestCallAddonWsErrors:
         assert "handshake" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_ws_connection_closed_during_send(self):
+    async def test_ws_ingress_routes_through_ha_core(self, mock_ingress_session):
+        """Ingress WS mode targets HA Core's /api/hassio_ingress proxy with a session cookie."""
+        client = _make_mock_client()
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert result["success"] is True
+        assert captured["url"] == (
+            "ws://localhost:8123/api/hassio_ingress/abc123/validate"
+        )
+        headers = captured["kwargs"]["additional_headers"]
+        assert headers["Cookie"] == f"ingress_session={_INGRESS_SESSION_TOKEN}"
+
+    @pytest.mark.asyncio
+    async def test_ws_direct_port_skips_ingress_session(self, mock_ingress_session):
+        """Direct-port WS mode hits the container IP and does not mint a session."""
+        client = _make_mock_client()
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            result = await _call_addon_ws(
+                client, "test_addon", "/validate", port=6052
+            )
+
+        assert result["success"] is True
+        assert captured["url"] == "ws://172.30.33.99:6052/validate"
+        mock_ingress_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ws_connection_closed_during_send(self, mock_ingress_session):
         """Should raise ToolError when connection closes during send."""
         client = _make_mock_client()
 
@@ -526,7 +741,7 @@ class TestCallAddonWsErrors:
         assert "closed unexpectedly" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_ws_connection_error(self):
+    async def test_ws_connection_error(self, mock_ingress_session):
         """Should raise ToolError when can't connect to add-on WebSocket."""
         client = _make_mock_client()
 
@@ -556,7 +771,7 @@ class TestCallAddonWsErrors:
         )
 
     @pytest.mark.asyncio
-    async def test_ws_collects_messages(self):
+    async def test_ws_collects_messages(self, mock_ingress_session):
         """Should collect text messages and parse JSON ones."""
         client = _make_mock_client()
 
@@ -591,7 +806,7 @@ class TestCallAddonWsErrors:
         assert result["messages"][2] == {"event": "exit", "code": 0}
 
     @pytest.mark.asyncio
-    async def test_ws_strips_ansi_codes(self):
+    async def test_ws_strips_ansi_codes(self, mock_ingress_session):
         """Should strip ANSI escape codes from messages."""
         client = _make_mock_client()
 
@@ -619,7 +834,7 @@ class TestCallAddonWsErrors:
         assert result["messages"][0] == "SUCCESS Build complete"
 
     @pytest.mark.asyncio
-    async def test_ws_skips_binary_frames(self):
+    async def test_ws_skips_binary_frames(self, mock_ingress_session):
         """Should skip binary WebSocket frames."""
         client = _make_mock_client()
 
@@ -649,7 +864,7 @@ class TestCallAddonWsErrors:
         assert result["messages"][0] == "text message"
 
     @pytest.mark.asyncio
-    async def test_ws_wait_for_close_false_returns_early(self):
+    async def test_ws_wait_for_close_false_returns_early(self, mock_ingress_session):
         """With wait_for_close=False, should return after silence timeout."""
         client = _make_mock_client()
 
@@ -685,8 +900,8 @@ class TestCallAddonWsErrors:
         assert result["closed_by"] == "silence"
 
     @pytest.mark.asyncio
-    async def test_ws_missing_network_info(self):
-        """Should raise ToolError when add-on is missing ip_address."""
+    async def test_ws_direct_port_missing_ip_address(self):
+        """Direct-port WS mode requires the addon's container ip_address."""
         client = _make_mock_client()
 
         with (
@@ -698,23 +913,19 @@ class TestCallAddonWsErrors:
                     "addon": {
                         "name": "Test Addon",
                         "slug": "test_addon",
-                        "ingress": True,
+                        "ingress": False,
                         "state": "started",
                         "ip_address": "",
-                        "ingress_port": None,
                     },
                 },
             ),
             pytest.raises(ToolError) as exc_info,
         ):
-            await _call_addon_ws(client, "test_addon", "/compile")
+            await _call_addon_ws(client, "test_addon", "/validate", port=6052)
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert (
-            "network info" in result["error"]["message"].lower()
-            or "ip_address" in str(result).lower()
-        )
+        assert "ip_address" in str(result).lower()
 
 
 class TestSliceWsMessages:
