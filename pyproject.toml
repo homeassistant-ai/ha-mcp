@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     "fastmcp==3.2.4",
     "httpx[socks]==0.28.1",
-    "pydantic==2.13.2",
+    "pydantic==2.13.3",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
