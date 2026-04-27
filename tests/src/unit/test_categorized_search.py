@@ -525,6 +525,78 @@ class TestDoubleUnwrap:
 
 
 # ---------------------------------------------------------------------------
+# JSON-string arguments fallback
+# ---------------------------------------------------------------------------
+
+
+class TestArgumentsAsString:
+    """Tolerate arguments passed as a JSON string instead of a dict.
+
+    Small models sometimes serialize the nested `arguments` param to a JSON
+    string before sending it, which FastMCP's schema validator rejects. The
+    proxy accepts a string fallback, parses it, and forwards the resulting
+    dict — same recovery spirit as the double-unwrap path.
+    """
+
+    @pytest.fixture
+    def transform(self):
+        t = CategorizedSearchTransform(max_results=5)
+        _prepopulate_cache(t, [
+            _make_tool("ha_get_state", read_only=True),
+        ])
+        return t
+
+    def _get_proxy_fn(self, transform, category):
+        annotations_map = {
+            "read": ToolAnnotations(readOnlyHint=True),
+            "write": ToolAnnotations(destructiveHint=True),
+            "delete": ToolAnnotations(destructiveHint=True),
+        }
+        proxy = transform._make_categorized_proxy(
+            proxy_name=f"ha_call_{category}_tool",
+            category=category,
+            annotations=annotations_map[category],
+            description=f"Test {category} proxy",
+        )
+        return proxy.fn
+
+    @pytest.mark.anyio
+    async def test_json_string_arguments_parsed_and_forwarded(self, transform):
+        """A JSON-object string is parsed to a dict and forwarded."""
+        ctx = _make_ctx(call_tool_return={"state": "on"})
+        fn = self._get_proxy_fn(transform, "read")
+        result = await fn(
+            "ha_get_state", '{"entity_id": "light.kitchen"}', ctx
+        )
+        assert result == {"state": "on"}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_get_state", {"entity_id": "light.kitchen"}
+        )
+
+    @pytest.mark.anyio
+    async def test_invalid_json_string_rejected(self, transform):
+        """Non-JSON string raises with INVALID_JSON and does not dispatch."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+        with pytest.raises(ToolError) as exc_info:
+            await fn("ha_get_state", "not valid json", ctx)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_json_string_not_object_rejected(self, transform):
+        """JSON that parses to a non-object (e.g. array) raises a clear error."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+        with pytest.raises(ToolError) as exc_info:
+            await fn("ha_get_state", "[1, 2, 3]", ctx)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        ctx.fastmcp.call_tool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _rebuild_category_cache
 # ---------------------------------------------------------------------------
 

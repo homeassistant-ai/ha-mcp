@@ -532,6 +532,13 @@ async def apply_entity_category(
         )
 
 
+def coerce_to_list(value: Any) -> list[Any]:
+    """Return value as a list: list → as-is, dict/other → [value], None/falsy → []."""
+    if isinstance(value, list):
+        return value
+    return [value] if value else []
+
+
 def merge_validation_meta(
     result: dict[str, Any], validation_meta: dict[str, Any]
 ) -> None:
