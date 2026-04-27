@@ -723,7 +723,7 @@ class IntegrationTools:
     # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
     async def _delete_flow_helper(
         self,
-        helper_type: str,
+        helper_type: HelperTypeLiteral,
         target: str,
         wait_bool: bool,
         warnings: list[str],
@@ -770,12 +770,31 @@ class IntegrationTools:
                             ],
                         )
                     )
-                # All other reasons (not_in_registry, lookup_failed,
-                # bare_id_not_supported, wrong_helper_type) → entity not
-                # found from the caller's perspective. wrong_helper_type
-                # cannot occur here because the dispatcher already checked
-                # SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; it remains in
-                # the reason enum so the helper is reusable.
+                if reason == "lookup_failed":
+                    # Registry WebSocket call failed transiently. Surface as
+                    # a connectivity error so the caller knows to retry,
+                    # rather than chasing a non-existent entity_id.
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.WEBSOCKET_DISCONNECTED,
+                            (
+                                f"Registry lookup for {entity_id} failed "
+                                "due to a WebSocket error."
+                            ),
+                            context={
+                                "target": target,
+                                "helper_type": helper_type,
+                                "entity_id": entity_id,
+                            },
+                        )
+                    )
+                # Remaining reasons (not_in_registry, bare_id_not_supported,
+                # wrong_helper_type) → entity not found from the caller's
+                # perspective. wrong_helper_type cannot occur here because
+                # the dispatcher already checked SIMPLE_HELPER_TYPES /
+                # FLOW_HELPER_TYPES; the assertion below enforces that
+                # contract at runtime.
+                assert reason != "wrong_helper_type"
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
@@ -888,7 +907,7 @@ class IntegrationTools:
     # === Path 1: SIMPLE helper delete via websocket ===
     async def _delete_simple_helper(
         self,
-        helper_type: str,
+        helper_type: HelperTypeLiteral,
         target: str,
         wait_bool: bool,
     ) -> dict[str, Any]:
@@ -965,7 +984,10 @@ class IntegrationTools:
                             f"waiting {wait_time}s before retry..."
                         )
                         await asyncio.sleep(wait_time)
-                except Exception as e:
+                except HomeAssistantAPIError as e:
+                    # APIError (e.g. 404) is informational and worth a retry.
+                    # Auth/connection errors must propagate so they're not
+                    # re-reported as ENTITY_NOT_FOUND in the fallback below.
                     logger.warning(
                         f"Registry lookup attempt {attempt + 1} failed: {e}"
                     )

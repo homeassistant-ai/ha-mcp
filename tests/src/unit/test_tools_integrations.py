@@ -1,9 +1,6 @@
 """
-Unit tests for src/ha_mcp/tools/tools_integrations.py module-level helpers.
-
-Phase 2 of #1007: Adds _get_entry_id_for_flow_helper, the lookup helper that
-resolves a flow-helper entity_id to its config_entry_id via the
-config/entity_registry/get WebSocket API.
+Unit tests for module-level helpers in tools_integrations and
+IntegrationTools.ha_delete_helpers_integrations dispatch.
 """
 
 import json
@@ -448,6 +445,33 @@ class TestDeleteHelpersIntegrations:
         assert err["error"]["code"] == "ENTITY_NOT_FOUND"
         assert "template.ghost" in err["error"]["message"]
 
+    async def test_flow_path_lookup_failed_maps_to_websocket_disconnected(
+        self, tools, mock_client
+    ):
+        """FLOW: registry lookup raises a WebSocket exception →
+        WEBSOCKET_DISCONNECTED, not ENTITY_NOT_FOUND (R8 in KP13 review #1056).
+
+        The lookup helper appends to warnings and returns reason='lookup_failed';
+        the caller must surface that as a transient connectivity error so the
+        user retries instead of chasing a non-existent entity_id.
+        """
+        # Initial lookup raises a non-typed WS exception (anything that
+        # isn't HomeAssistantConnectionError/HomeAssistantAuthError, since
+        # those propagate by design). The lookup helper catches it and
+        # returns (None, "lookup_failed").
+        mock_client.send_websocket_message.side_effect = ConnectionError(
+            "websocket dropped mid-call"
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_delete_helpers_integrations(
+                target="sensor.energy_meter",
+                helper_type="utility_meter",
+                confirm=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "WEBSOCKET_DISCONNECTED"
+        assert "sensor.energy_meter" in err["error"]["message"]
+
     async def test_flow_path_yaml_helper_no_config_entry(
         self, tools, mock_client
     ):
@@ -607,6 +631,34 @@ class TestDeleteHelpersIntegrations:
                     confirm=True,
                     wait=True,
                 )
+
+    async def test_simple_path_registry_lookup_connection_error_propagates(
+        self, tools, mock_client
+    ):
+        """SIMPLE: HomeAssistantConnectionError inside the 3-retry registry
+        lookup loop (line 968) must escape the bare-except (R8 fix) and reach
+        the outer exception_to_structured_error, surfacing as
+        CONNECTION_FAILED rather than being swallowed and re-reported as
+        ENTITY_NOT_FOUND (R8 in KP13 review #1056).
+
+        Pattern mirrors the :938 state-check fix from R1 — auth/connection
+        errors must escape the retry loop without conversion to NOT_FOUND.
+        """
+        # State check returns nothing (entity not in state) → falls through
+        # to registry lookup, which raises a connection error.
+        mock_client.get_entity_state.return_value = None
+        mock_client.send_websocket_message.side_effect = (
+            HomeAssistantConnectionError("websocket disconnected during lookup")
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_delete_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "CONNECTION_FAILED"
+        assert err["error"]["code"] != "ENTITY_NOT_FOUND"
 
     async def test_flow_path_wait_true_multi_subentity_partial_timeout(
         self, tools, mock_client
