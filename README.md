@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/homeassistant-ai-ha-mcp-badge.png)](https://mseep.ai/app/homeassistant-ai-ha-mcp)
+
 > **Breaking change (v7.3.0):** `ha_config_set_yaml` has been moved to [beta](docs/beta.md).
 
 <div align="center">
