@@ -451,6 +451,203 @@ class TestCallAddonApiErrors:
         suggestions = result["error"].get("suggestions", [])
         assert any("ingress" in s.lower() for s in suggestions), suggestions
 
+    @pytest.mark.asyncio
+    async def test_http_ingress_connection_error_hints_at_ha_core(
+        self, mock_ingress_session
+    ):
+        """ConnectError in ingress mode should point at HA Core, not the add-on.
+
+        The actual failure on off-host installs is HA Core unreachable from
+        the MCP host — the old generic "Check that the add-on is running"
+        hint sent users on a wild-goose chase.
+        """
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = httpx.ConnectError(
+                "Connection refused"
+            )
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/api/test")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        # Suggestion should reference the configured HA URL so the user
+        # knows where to verify reachability.
+        assert any(client.base_url in s for s in suggestions), suggestions
+        # Direct-port-only hint must not surface in ingress-mode failures.
+        assert not any("'port' parameter" in s for s in suggestions), suggestions
+
+    @pytest.mark.asyncio
+    async def test_http_base_url_with_trailing_slash(self, mock_ingress_session):
+        """Trailing slash on base_url must not produce a doubled slash in the request URL."""
+        client = _make_mock_client()
+        client.base_url = "http://localhost:8123/"
+
+        captured: dict[str, object] = {}
+
+        async def fake_request(*, method, url, headers, content):
+            captured["url"] = url
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 200
+            response.json.return_value = {"ok": True}
+            response.text = '{"ok": true}'
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert captured["url"] == (
+            "http://localhost:8123/api/hassio_ingress/abc123/api/test"
+        )
+
+
+class TestCreateIngressSession:
+    """Tests for _create_ingress_session error and success paths.
+
+    The fixture mocks this helper away in most other tests, so its own
+    error handling needs direct coverage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_session_token_on_success(self):
+        """Happy path: returns the session string from Supervisor's response."""
+        from ha_mcp.tools.tools_addons import _create_ingress_session
+
+        client = _make_mock_client()
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {"session": "abc-token-123"}},
+        ):
+            session = await _create_ingress_session(client)
+
+        assert session == "abc-token-123"
+
+    @pytest.mark.asyncio
+    async def test_supervisor_error_response_propagates(self):
+        """When _supervisor_api_call returns success=False, the error is raised."""
+        from ha_mcp.tools.tools_addons import _create_ingress_session
+
+        client = _make_mock_client()
+        error_response = {
+            "success": False,
+            "error": {
+                "code": "CONNECTION_FAILED",
+                "message": "WS connection failed",
+            },
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=error_response,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _create_ingress_session(client)
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert result["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_result_missing_session_field(self):
+        """Supervisor returns success but no `session` field — raise."""
+        from ha_mcp.tools.tools_addons import _create_ingress_session
+
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={"success": True, "result": {}},
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _create_ingress_session(client)
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "ingress session" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_empty_session_token_rejected(self):
+        """Empty session string is rejected (not silently treated as valid)."""
+        from ha_mcp.tools.tools_addons import _create_ingress_session
+
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={"success": True, "result": {"session": ""}},
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _create_ingress_session(client)
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "ingress session" in result["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_non_string_session_token_rejected(self):
+        """A non-string `session` value is rejected."""
+        from ha_mcp.tools.tools_addons import _create_ingress_session
+
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={"success": True, "result": {"session": 12345}},
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _create_ingress_session(client)
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "ingress session" in result["error"]["message"].lower()
+
 
 # Standard mock return for a running addon with Ingress support (for WS tests)
 _RUNNING_ADDON_INFO_WS = {
@@ -678,6 +875,7 @@ class TestCallAddonWsErrors:
 
         def capture_connect(url, **kwargs):
             captured["url"] = url
+            captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
@@ -704,7 +902,149 @@ class TestCallAddonWsErrors:
 
         assert result["success"] is True
         assert captured["url"] == "ws://172.30.33.99:6052/validate"
+        # Direct-port mode must NOT carry the ingress session cookie — that
+        # cookie only authenticates against HA Core's hassio_ingress proxy.
+        assert "Cookie" not in captured["headers"]
         mock_ingress_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ws_https_base_url_uses_wss_scheme(self, mock_ingress_session):
+        """When client.base_url is https, ingress WS targets wss://."""
+        client = _make_mock_client()
+        client.base_url = "https://homeassistant.example.com:8123"
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert result["success"] is True
+        assert captured["url"] == (
+            "wss://homeassistant.example.com:8123/api/hassio_ingress/abc123/validate"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ws_base_url_with_trailing_slash(self, mock_ingress_session):
+        """Trailing slash on base_url must not produce a doubled slash in the WS URL."""
+        client = _make_mock_client()
+        client.base_url = "http://localhost:8123/"
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert captured["url"] == (
+            "ws://localhost:8123/api/hassio_ingress/abc123/validate"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ws_direct_port_offhost_error_hints_at_ingress(
+        self, mock_ingress_session
+    ):
+        """OSError in direct-port WS mode should suggest dropping `port` for off-host hosts."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=OSError("No route to host"),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(
+                    client, "test_addon", "/validate", port=6052
+                )
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        assert any("ingress" in s.lower() for s in suggestions), suggestions
+
+    @pytest.mark.asyncio
+    async def test_ws_ingress_connection_error_hints_at_ha_core(
+        self, mock_ingress_session
+    ):
+        """OSError in ingress WS mode should point at HA Core, not the add-on.
+
+        The actual failure on off-host installs is HA Core unreachable from
+        the MCP host — the old generic "Check that the add-on is running"
+        hint sent users on a wild-goose chase.
+        """
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=OSError("Connection refused"),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/validate")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        assert any(client.base_url in s for s in suggestions), suggestions
+        assert not any("'port' parameter" in s for s in suggestions), suggestions
 
     @pytest.mark.asyncio
     async def test_ws_connection_closed_during_send(self, mock_ingress_session):
