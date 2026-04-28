@@ -25,7 +25,6 @@ from ..errors import (
     ErrorCode,
     create_connection_error,
     create_error_response,
-    create_timeout_error,
     create_validation_error,
 )
 from ..utils.python_sandbox import PythonSandboxError, safe_execute_expression
@@ -284,6 +283,28 @@ async def _supervisor_api_call(
                 await ws_client.disconnect()
             except Exception:
                 pass
+
+
+def _addon_connection_failure_suggestions(
+    client: HomeAssistantClient, port: int | None
+) -> list[str]:
+    """Suggestions for connect/timeout failures against an add-on.
+
+    Direct-port mode hits the addon's container IP, which off-host installs
+    can't route to — the actionable hint is to drop `port`. Ingress mode
+    hits HA Core, so failures usually mean HA Core is unreachable.
+    """
+    if port:
+        return [
+            "Check that the add-on is running",
+            "Direct-port access requires the MCP host to share Home "
+            "Assistant's container network. On PyPI/uvx installs, drop "
+            "the 'port' parameter to route through Ingress instead.",
+        ]
+    return [
+        f"Verify Home Assistant is reachable at {client.base_url}",
+        "Check network connectivity from the MCP host to HA Core",
+    ]
 
 
 async def _create_ingress_session(client: HomeAssistantClient) -> str:
@@ -762,29 +783,31 @@ async def _call_addon_ws(
             )
         )
     except TimeoutError:
+        # Off-host TCP timeouts to addon container IPs are common on PyPI
+        # installs; surface the same drop-`port` hint the OSError path uses.
         raise_tool_error(
-            create_timeout_error(
-                f"WebSocket connection to '{addon_name}'",
-                timeout,
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                f"Operation 'WebSocket connection to {addon_name!r}' timed out after {timeout}s",
                 details=f"path={path}",
-                context={"slug": slug, "path": path},
+                context={
+                    "slug": slug,
+                    "path": path,
+                    "operation": f"WebSocket connection to '{addon_name}'",
+                    "timeout_seconds": timeout,
+                    "direct_port": bool(port),
+                },
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
     except OSError as e:
-        suggestions = ["Check that the add-on is running"]
-        if port:
-            suggestions.append(
-                "Direct-port access requires the MCP host to share Home "
-                "Assistant's container network. On PyPI/uvx installs, drop "
-                "the 'port' parameter to route through Ingress instead."
-            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
                 details=f"url={ws_url}",
                 context={"slug": slug, "direct_port": bool(port)},
-                suggestions=suggestions,
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
 
@@ -1024,32 +1047,33 @@ async def _call_addon_api(
                 content=request_content,
             )
     except httpx.TimeoutException:
+        # Off-host installs hitting an addon's container IP often see a
+        # silent TCP drop (timeout) rather than ICMP unreachable
+        # (ConnectError) — depends on the upstream router. Either way,
+        # the actionable hint is the same.
         raise_tool_error(
-            create_timeout_error(
-                f"add-on API call to '{addon_name}'",
-                timeout,
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                f"Operation 'add-on API call to {addon_name!r}' timed out after {timeout}s",
                 details=f"path={path}, method={method}",
-                context={"slug": slug, "path": path},
+                context={
+                    "slug": slug,
+                    "path": path,
+                    "operation": f"add-on API call to '{addon_name}'",
+                    "timeout_seconds": timeout,
+                    "direct_port": bool(port),
+                },
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
     except httpx.ConnectError as e:
-        # Direct-port mode is the only path that touches the addon's
-        # container IP directly; off-host installs (PyPI/uvx) have no route
-        # to that bridge, so surface the limitation in the suggestions.
-        suggestions = ["Check that the add-on is running"]
-        if port:
-            suggestions.append(
-                "Direct-port access requires the MCP host to share Home "
-                "Assistant's container network. On PyPI/uvx installs, drop "
-                "the 'port' parameter to route through Ingress instead."
-            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}': {e!s}",
                 details=f"url={url}",
                 context={"slug": slug, "direct_port": bool(port)},
-                suggestions=suggestions,
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
 
