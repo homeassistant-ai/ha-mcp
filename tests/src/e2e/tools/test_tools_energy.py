@@ -11,6 +11,7 @@ renames (energy/get_prefs, energy/save_prefs) that mocks cannot.
 import logging
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import assert_mcp_success
 
@@ -170,34 +171,44 @@ async def test_energy_remove_device_not_found_returns_error(mcp_client):
     correctly — the unit tests cover the same logic against mocks; this
     catches any divergence in how raise_tool_error serialises through MCP.
     """
-    result = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "remove_device",
-            "stat_consumption": "sensor.does_not_exist_e2e",
-        },
-    )
-    # Tool errors surface as is_error=True in MCP, not as raised exceptions.
-    assert result.is_error, "remove_device on missing entry must return an error"
-    payload = str(result.content[0].text if result.content else "")
-    assert "RESOURCE_NOT_FOUND" in payload
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {
+                "mode": "remove_device",
+                "stat_consumption": "sensor.does_not_exist_e2e",
+            },
+        )
+    assert "RESOURCE_NOT_FOUND" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_energy_add_source_roundtrip(mcp_client):
     """mode='add_source' atomically appends to energy_sources.
 
-    Uses a grid source (no statistic-existence preconditions in the test
-    container) and cleans up via mode='set' to keep the test idempotent.
+    Uses a fully-shaped grid source — HA Core's voluptuous schema requires
+    all top-level grid fields (cost_adjustment_day, etc.) even when their
+    values are None. The local _shape_check is intentionally narrower than
+    the server schema; this test exercises the post-shape server validation
+    path.
     """
+    new_grid = {
+        "type": "grid",
+        "stat_energy_from": "sensor.test_e2e_grid_import",
+        "stat_energy_to": None,
+        "stat_cost": None,
+        "entity_energy_price": None,
+        "number_energy_price": None,
+        "cost_adjustment_day": 0,
+        "entity_energy_price_export": None,
+        "number_energy_price_export": None,
+        "stat_compensation": None,
+    }
     add_result = await mcp_client.call_tool(
         "ha_manage_energy_prefs",
         {
             "mode": "add_source",
-            "source": {
-                "type": "grid",
-                "stat_energy_from": "sensor.test_e2e_grid_import",
-            },
+            "source": new_grid,
         },
     )
     assert_mcp_success(add_result)

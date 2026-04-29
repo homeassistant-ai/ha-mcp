@@ -26,6 +26,7 @@ get uniform behavior on fresh and configured instances alike.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
@@ -914,7 +915,7 @@ class EnergyTools:
         *,
         mode: str,
         target_key: str,
-        mutator: Any,
+        mutator: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
         dry_run: bool,
         preview_payload: dict[str, Any],
     ) -> dict[str, Any]:
