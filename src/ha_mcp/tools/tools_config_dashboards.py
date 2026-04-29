@@ -7,7 +7,7 @@ This module provides tools for managing dashboard metadata and content.
 import json
 import logging
 import re
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, cast, overload
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -284,6 +284,66 @@ async def _resolve_dashboard(
     return None
 
 
+@overload
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: str,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[str, Any]: ...
+
+
+@overload
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: None,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[None, Any]: ...
+
+
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: str | None,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[str | None, Any]:
+    """Trigger-gated lazy resolve + single retry of a lovelace/config call.
+
+    If `response` indicates HA rejected the identifier with the
+    _LAZY_RESOLVE_TRIGGER substring, resolves `url_path` via
+    lovelace/dashboards/list and retries the WS call with the canonical
+    url_path. Returns the (possibly updated) url_path and the
+    (possibly retried) response so the caller can chain naturally:
+
+        url_path, response = await _lazy_resolve_and_retry(
+            client, url_path, ws_data, response
+        )
+
+    No-op when the response is not a failure, when url_path is empty,
+    or when the resolver finds no match — the original response is
+    returned unchanged in those cases.
+    """
+    if not (isinstance(response, dict) and not response.get("success", True)):
+        return url_path, response
+    if not url_path:
+        return url_path, response
+
+    err = response.get("error", {})
+    err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+    if not _should_lazy_resolve(err_msg):
+        return url_path, response
+
+    resolved = await _resolve_dashboard(client, url_path)
+    if resolved is None or not resolved["url_path"]:
+        return url_path, response
+
+    url_path = resolved["url_path"]
+    ws_data["url_path"] = url_path
+    response = await client.send_websocket_message(ws_data)
+    return url_path, response
+
+
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
@@ -494,19 +554,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             response = await client.send_websocket_message(data)
 
             # Lazy resolver fallback: if HA rejects the identifier as unknown,
-            # try resolving it via lovelace/dashboards/list and retry once.
-            # This pays the round-trip only when the caller passed an internal
-            # dashboard id (or another non-url_path form) that HA does not accept.
-            if isinstance(response, dict) and not response.get("success", True):
-                err = response.get("error", {})
-                err_msg = (
-                    err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                )
-                if url_path and _should_lazy_resolve(err_msg):
-                    resolved = await _resolve_dashboard(client, url_path)
-                    if resolved is not None and resolved["url_path"]:
-                        data["url_path"] = resolved["url_path"]
-                        response = await client.send_websocket_message(data)
+            # resolve it via lovelace/dashboards/list and retry once. The
+            # round-trip is only paid when the caller passed an internal
+            # dashboard id (or another non-url_path form) HA does not accept.
+            url_path, response = await _lazy_resolve_and_retry(
+                client, url_path, data, response
+            )
 
             # Check if request failed (after potential retry)
             if isinstance(response, dict) and not response.get("success", True):
@@ -851,19 +904,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # If the pre-resolver above didn't fire (e.g. caller passed an
                 # identifier that contains a hyphen but isn't a real url_path),
                 # HA may still reject it — resolve and retry once.
-                if isinstance(response, dict) and not response.get("success", True):
-                    err = response.get("error", {})
-                    err_msg = (
-                        err.get("message", str(err))
-                        if isinstance(err, dict)
-                        else str(err)
-                    )
-                    if url_path and _should_lazy_resolve(err_msg):
-                        resolved = await _resolve_dashboard(client, url_path)
-                        if resolved is not None and resolved["url_path"]:
-                            url_path = resolved["url_path"]
-                            get_data["url_path"] = url_path
-                            response = await client.send_websocket_message(get_data)
+                url_path, response = await _lazy_resolve_and_retry(
+                    client, url_path, get_data, response
+                )
 
                 if isinstance(response, dict) and not response.get("success", True):
                     error_msg = response.get("error", {})
