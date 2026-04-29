@@ -798,8 +798,6 @@ async def _call_addon_ws(
             )
         )
     except TimeoutError:
-        # Off-host TCP timeouts to addon container IPs are common on PyPI
-        # installs; surface the same drop-`port` hint the OSError path uses.
         raise_tool_error(
             create_error_response(
                 ErrorCode.TIMEOUT_OPERATION,
@@ -1063,10 +1061,6 @@ async def _call_addon_api(
                 content=request_content,
             )
     except httpx.TimeoutException:
-        # Off-host installs hitting an addon's container IP often see a
-        # silent TCP drop (timeout) rather than ICMP unreachable
-        # (ConnectError) — depends on the upstream router. Either way,
-        # the actionable hint is the same.
         raise_tool_error(
             create_error_response(
                 ErrorCode.TIMEOUT_OPERATION,
