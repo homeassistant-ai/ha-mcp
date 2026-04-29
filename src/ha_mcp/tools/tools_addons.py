@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from typing import Annotated, Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import httpx
 import websockets
@@ -674,11 +674,15 @@ async def _call_addon_ws(
                 )
             )
         session = await _create_ingress_session(client)
-        ws_scheme = "wss" if client.base_url.startswith("https") else "ws"
-        ws_host = client.base_url.split("://", 1)[1]
-        ws_url = f"{ws_scheme}://{ws_host}{ingress_entry}/{normalized}"
+        # urlsplit handles trailing slashes and reverse-proxied path
+        # prefixes that bare string slicing would mangle.
+        parsed = urlsplit(client.base_url)
+        ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+        ws_path_prefix = parsed.path.rstrip("/")
+        ws_url = f"{ws_scheme}://{parsed.netloc}{ws_path_prefix}{ingress_entry}/{normalized}"
+        # Cookie-only matches the HA frontend. A bearer here would be
+        # forwarded to the add-on upstream — needless LLAT leak.
         headers["Cookie"] = f"ingress_session={session}"
-        headers["Authorization"] = f"Bearer {client.token}"
 
     # 7. Connect and exchange messages
     collected: list[str] = []
@@ -759,14 +763,25 @@ async def _call_addon_ws(
                 total_size += len(clean)
 
     except websockets.exceptions.InvalidHandshake as e:
+        suggestions = [
+            "Check that the add-on supports WebSocket on this path",
+            f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+        ]
+        # 401/403 means auth was rejected, not a path-shape problem.
+        if isinstance(e, websockets.exceptions.InvalidStatus):
+            status = e.response.status_code
+            if status in (401, 403):
+                suggestions = [
+                    "The ingress session may have expired or your HA token "
+                    "may lack the required scope. Verify the token has admin "
+                    "rights and try again.",
+                    f"Status {status} from the WebSocket handshake.",
+                ]
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"WebSocket handshake failed with '{addon_name}': {e!s}",
-                suggestions=[
-                    "Check that the add-on supports WebSocket on this path",
-                    f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
-                ],
+                suggestions=suggestions,
                 context={"slug": slug, "path": path},
             )
         )
@@ -1024,9 +1039,10 @@ async def _call_addon_api(
                 )
             )
         session = await _create_ingress_session(client)
-        url = f"{client.base_url}{ingress_entry}/{normalized}"
+        url = f"{client.base_url.rstrip('/')}{ingress_entry}/{normalized}"
+        # Cookie-only matches the HA frontend. A bearer here would be
+        # forwarded to the add-on upstream — needless LLAT leak.
         headers["Cookie"] = f"ingress_session={session}"
-        headers["Authorization"] = f"Bearer {client.token}"
 
     # 6. Set content type based on body type
     if isinstance(body, dict):

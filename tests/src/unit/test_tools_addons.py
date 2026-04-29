@@ -370,6 +370,8 @@ class TestCallAddonApiErrors:
         # itself when it proxies upstream, and adding our own would conflict.
         assert "X-Ingress-Path" not in headers
         assert "X-Hass-Source" not in headers
+        # Bearer would be forwarded to the add-on upstream — leak vector.
+        assert "Authorization" not in headers
         # Ingress session was minted exactly once
         mock_ingress_session.assert_awaited_once()
 
@@ -872,6 +874,84 @@ class TestCallAddonWsErrors:
         assert "not running" in result["error"]["message"].lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status,must_mention",
+        [
+            (401, ("token", "scope", "session")),
+            (403, ("token", "scope", "session")),
+        ],
+    )
+    async def test_ws_handshake_4xx_auth_hints_at_token(
+        self, mock_ingress_session, status, must_mention
+    ):
+        """401/403 from the WS handshake should suggest token/scope, not path."""
+        from websockets.datastructures import Headers
+        from websockets.http11 import Response
+
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            response = Response(status, "Unauthorized", Headers())
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=websockets.exceptions.InvalidStatus(response),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        joined = " ".join(suggestions).lower()
+        assert any(k in joined for k in must_mention), suggestions
+        # Path-shape hint should NOT be the primary suggestion for an auth failure.
+        assert not any("supports WebSocket on this path" in s for s in suggestions), (
+            suggestions
+        )
+
+    @pytest.mark.asyncio
+    async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):
+        """404 from the WS handshake should still surface the path-shape hint."""
+        from websockets.datastructures import Headers
+        from websockets.http11 import Response
+
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            response = Response(404, "Not Found", Headers())
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=websockets.exceptions.InvalidStatus(response),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        assert any("path" in s.lower() or "endpoints" in s.lower() for s in suggestions), (
+            suggestions
+        )
+
+    @pytest.mark.asyncio
     async def test_ws_handshake_failure(self, mock_ingress_session):
         """Should raise ToolError when WebSocket handshake fails."""
         client = _make_mock_client()
@@ -936,6 +1016,7 @@ class TestCallAddonWsErrors:
         )
         headers = captured["kwargs"]["additional_headers"]
         assert headers["Cookie"] == f"ingress_session={_INGRESS_SESSION_TOKEN}"
+        assert "Authorization" not in headers
 
     @pytest.mark.asyncio
     async def test_ws_direct_port_skips_ingress_session(self, mock_ingress_session):
