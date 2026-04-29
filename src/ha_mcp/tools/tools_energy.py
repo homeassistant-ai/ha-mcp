@@ -25,6 +25,7 @@ structure (all three top-level keys present, empty lists) so agents
 get uniform behavior on fresh and configured instances alike.
 """
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
@@ -955,8 +956,17 @@ class EnergyTools:
             except ToolError as exc:
                 # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
                 # Retry once with a fresh read in case of a benign race.
-                err_str = str(exc)
-                if "RESOURCE_LOCKED" in err_str and attempt + 1 < max_attempts:
+                # raise_tool_error serialises the structured error as JSON in
+                # the exception message, so we parse rather than substring-match.
+                try:
+                    parsed = json.loads(str(exc))
+                    err_code = parsed.get("error", {}).get("code")
+                except (json.JSONDecodeError, TypeError):
+                    err_code = None
+                if (
+                    err_code == ErrorCode.RESOURCE_LOCKED.value
+                    and attempt + 1 < max_attempts
+                ):
                     last_error = exc
                     logger.info(
                         f"{mode}: hash conflict on attempt {attempt + 1}, retrying"
