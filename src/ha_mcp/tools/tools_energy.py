@@ -969,7 +969,8 @@ class EnergyTools:
                 ):
                     last_error = exc
                     logger.info(
-                        f"{mode}: hash conflict on attempt {attempt + 1}, retrying"
+                        f"{mode} on {target_key}: hash conflict on attempt "
+                        f"{attempt + 1}, retrying"
                     )
                     continue
                 raise
