@@ -385,6 +385,38 @@ HOMEASSISTANT_TOKEN = "your_long_lived_token"`,
     ]
   },
   {
+    id: 'opencode',
+    name: 'OpenCode',
+    company: 'Anomaly',
+    logo: '/ha-mcp/logos/opencode.svg',
+    accuracy: 5,
+    platforms: ['macOS', 'Windows', 'Linux'],
+    configFormat: 'json',
+    configLocation: '~/.config/opencode/opencode.json (global) or opencode.json (project)',
+    description: 'AI coding agent by Anomaly with native MCP support over stdio and streamable HTTP.',
+    config: `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "home-assistant": {
+      "type": "local",
+      "command": ["uvx", "ha-mcp@latest"],
+      "enabled": true,
+      "environment": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+      }
+    }
+  }
+}`,
+    notes: [
+      'Uses "mcp" key (not "mcpServers")',
+      'Local server: type:"local", single command array, "environment" not "env"',
+      'Remote server: type:"remote" with url — no mcp-proxy required',
+      'Manage with opencode mcp add / list / auth / logout / debug'
+    ],
+    docsUrl: 'https://opencode.ai/docs/mcp-servers/'
+  },
+  {
     id: 'jetbrains',
     name: 'JetBrains IDEs',
     company: 'JetBrains',
