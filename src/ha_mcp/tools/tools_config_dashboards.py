@@ -247,6 +247,43 @@ def _card_matches(
     return True
 
 
+# Substring in WS error message that signals the dashboard identifier was not
+# accepted by lovelace/config (e.g., caller passed an internal id where url_path
+# is expected). Used to gate the lazy resolver fallback in get/set tools.
+_LAZY_RESOLVE_TRIGGER = "Unknown config specified"
+
+
+def _should_lazy_resolve(error_msg: str) -> bool:
+    """Return True if a WS error message indicates the identifier needs resolving."""
+    return _LAZY_RESOLVE_TRIGGER in error_msg
+
+
+async def _resolve_dashboard(
+    client: Any, identifier: str
+) -> dict[str, str] | None:
+    """Resolve a dashboard identifier (url_path or internal id) to both forms.
+
+    Calls lovelace/dashboards/list once and returns {"url_path": ..., "id": ...}
+    if the identifier matches either field, otherwise None. Used as a lazy
+    fallback when a direct lovelace/config call has failed with the
+    _LAZY_RESOLVE_TRIGGER error — pays the round-trip only when needed.
+    """
+    result = await client.send_websocket_message(
+        {"type": "lovelace/dashboards/list"}
+    )
+    if isinstance(result, dict) and "result" in result:
+        dashboards = result["result"]
+    elif isinstance(result, list):
+        dashboards = result
+    else:
+        return None
+
+    for d in dashboards:
+        if d.get("id") == identifier or d.get("url_path") == identifier:
+            return {"url_path": d.get("url_path", ""), "id": d.get("id", "")}
+    return None
+
+
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
@@ -1157,10 +1194,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     )
     @log_tool_usage
     async def ha_config_delete_dashboard(
-        dashboard_id: Annotated[
+        url_path: Annotated[
             str,
             Field(
-                description="Dashboard ID or URL path to delete (e.g., 'my-dashboard' or 'my_dashboard')"
+                description="Dashboard URL path or internal ID to delete "
+                "(e.g., 'my-dashboard' or 'my_dashboard'). Both forms are accepted."
             ),
         ],
     ) -> dict[str, Any]:
@@ -1170,8 +1208,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         WARNING: This permanently deletes the dashboard and all its configuration.
         Cannot be undone. Does not work on YAML-mode dashboards.
 
-        Accepts either the internal dashboard ID or the URL path.
-        The tool resolves url_path to internal ID automatically.
+        Accepts either the URL path or the internal dashboard ID. HA internal IDs
+        may differ from url_path (e.g. hyphens → underscores); the tool resolves
+        either form to the actual registry ID before deletion.
 
         EXAMPLES:
         - Delete dashboard: ha_config_delete_dashboard("mobile-dashboard")
@@ -1179,37 +1218,18 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            # Fetch dashboard list to resolve the provided identifier.
-            # HA internal IDs may differ from url_path (e.g. hyphens → underscores),
-            # so we accept either and resolve to the actual registry ID.
-            list_result = await client.send_websocket_message(
-                {"type": "lovelace/dashboards/list"}
-            )
-            if isinstance(list_result, dict) and "result" in list_result:
-                dashboards = list_result["result"]
-            elif isinstance(list_result, list):
-                dashboards = list_result
-            else:
-                dashboards = []
-
-            resolved_id = None
-            for d in dashboards:
-                if d.get("id") == dashboard_id:
-                    resolved_id = d["id"]
-                    break
-                if d.get("url_path") == dashboard_id:
-                    resolved_id = d["id"]
-                    break
-
-            if resolved_id is None:
+            resolved = await _resolve_dashboard(client, url_path)
+            if resolved is None:
                 raise_tool_error(create_resource_not_found_error(
                     "Dashboard",
-                    dashboard_id,
+                    url_path,
                     details=(
-                        f"No dashboard found with ID or URL path '{dashboard_id}'. "
+                        f"No dashboard found with URL path or internal ID '{url_path}'. "
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
                     ),
                 ))
+            assert resolved is not None  # narrow type for mypy after raise_tool_error
+            resolved_id = resolved["id"]
 
             response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": resolved_id}
@@ -1233,7 +1253,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     return {
                         "success": True,
                         "action": "delete",
-                        "dashboard_id": dashboard_id,
+                        "url_path": url_path,
                         "message": "Dashboard already deleted or does not exist",
                     }
 
@@ -1248,7 +1268,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                             "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                             "Cannot delete YAML-mode or default dashboard",
                         ],
-                        context={"action": "delete", "dashboard_id": dashboard_id},
+                        context={"action": "delete", "url_path": url_path},
                     )
                 )
 
@@ -1256,10 +1276,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             result: dict[str, Any] = {
                 "success": True,
                 "action": "delete",
-                "dashboard_id": dashboard_id,
+                "url_path": url_path,
                 "message": "Dashboard deleted successfully",
             }
-            if resolved_id != dashboard_id:
+            if resolved_id != url_path:
                 result["resolved_id"] = resolved_id
             return result
         except ToolError:
@@ -1268,7 +1288,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             logger.error(f"Error deleting dashboard: {e}")
             exception_to_structured_error(
                 e,
-                context={"action": "delete", "dashboard_id": dashboard_id},
+                context={"action": "delete", "url_path": url_path},
                 suggestions=[
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
