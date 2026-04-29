@@ -212,9 +212,16 @@ class EnergyTools:
     async def ha_manage_energy_prefs(
         self,
         mode: Annotated[
-            Literal["get", "set"],
+            Literal["get", "set", "add_device", "remove_device", "add_source"],
             Field(
-                description="Operation mode: 'get' reads the current prefs; 'set' writes a new prefs payload."
+                description=(
+                    "Operation mode. Primitives: 'get' reads the current prefs; "
+                    "'set' writes a full prefs payload (per-top-level-key "
+                    "full-replace). Convenience modes: 'add_device' / "
+                    "'remove_device' / 'add_source' perform a single read-"
+                    "modify-write atomically — no config_hash from the caller, "
+                    "the tool fetches it fresh internally."
+                )
             ),
         ],
         config: Annotated[
@@ -227,7 +234,8 @@ class EnergyTools:
                     "top-level key present in this payload REPLACES the "
                     "existing list entirely; any omitted key is preserved. "
                     "Call with mode='get' first, mutate the returned config, "
-                    "then pass the whole object back."
+                    "then pass the whole object back. Ignored by convenience "
+                    "modes."
                 ),
                 default=None,
             ),
@@ -239,7 +247,8 @@ class EnergyTools:
                     "Hash returned by the previous mode='get' call. REQUIRED "
                     "for mode='set' unless dry_run=True. Rejected if the "
                     "server-side config has changed since that read — re-read "
-                    "and retry."
+                    "and retry. Ignored by convenience modes (they read fresh "
+                    "internally)."
                 ),
                 default=None,
             ),
@@ -248,16 +257,73 @@ class EnergyTools:
             bool,
             Field(
                 description=(
-                    "For mode='set' only. If True, runs a local shape check "
-                    "on the proposed config AND calls the server's "
-                    "energy/validate against the CURRENT persisted state "
-                    "(Home Assistant's validate endpoint cannot validate "
-                    "an unsubmitted payload). Returns both error lists "
-                    "without writing. Default False."
+                    "If True, no write is performed. For mode='set': runs a "
+                    "local shape check on the proposed config AND calls the "
+                    "server's energy/validate against the CURRENT persisted "
+                    "state (Home Assistant's validate endpoint cannot validate "
+                    "an unsubmitted payload). For convenience modes: simulates "
+                    "the mutation against a fresh read and reports what would "
+                    "change without writing. Default False."
                 ),
                 default=False,
             ),
         ] = False,
+        stat_consumption: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Statistic entity_id for mode='add_device' / "
+                    "'remove_device' (e.g. 'sensor.fridge_energy'). "
+                    "Required for those modes; ignored otherwise."
+                ),
+                default=None,
+            ),
+        ] = None,
+        name: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional display name for mode='add_device'. Only used "
+                    "when adding a new device entry; ignored otherwise."
+                ),
+                default=None,
+            ),
+        ] = None,
+        included_in_stat: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional 'parent' statistic for mode='add_device' — the "
+                    "statistic this device's consumption is already counted "
+                    "in (avoids double-counting in totals). Ignored otherwise."
+                ),
+                default=None,
+            ),
+        ] = None,
+        water: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If True, mode='add_device' / 'remove_device' targets "
+                    "'device_consumption_water' instead of 'device_consumption'. "
+                    "Default False."
+                ),
+                default=False,
+            ),
+        ] = False,
+        source: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Single energy_sources entry for mode='add_source'. Must "
+                    "contain 'type' (one of grid|solar|battery|gas) and the "
+                    "type-specific required fields (e.g. solar/battery/gas "
+                    "require 'stat_energy_from'). Required for that mode; "
+                    "ignored otherwise."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Manage the Home Assistant Energy Dashboard preferences.
@@ -269,7 +335,15 @@ class EnergyTools:
         modify it.
 
         WHEN TO USE:
-        - To inspect or modify the Energy Dashboard config programmatically.
+        - mode='get' / 'set': inspect or replace the full Energy Dashboard
+          config. Use 'set' for bulk edits or anything touching multiple
+          top-level keys at once.
+        - mode='add_device' / 'remove_device': add or remove a single
+          device-consumption entry. The tool performs a fresh read-modify-write
+          internally; the caller does NOT manage config_hash. Use ``water=True``
+          to target the water meter list instead of electricity.
+        - mode='add_source': append a single entry to ``energy_sources`` (grid,
+          solar, battery, or gas). Same atomic read-modify-write semantics.
 
         WHEN NOT TO USE:
         - To create the underlying statistics themselves — they must already
@@ -279,10 +353,9 @@ class EnergyTools:
         CAVEATS:
         - ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing
           ``{"device_consumption": [<one entry>]}`` deletes every other device
-          the user had configured — silently, with no error. Always call
-          mode='get' first, mutate the returned config, pass the whole object
-          back, and include the returned ``config_hash`` so the tool can
-          reject concurrent modifications.
+          the user had configured — silently, with no error. mode='set'
+          requires a fresh ``config_hash`` for optimistic locking; convenience
+          modes hide this entirely.
         - A local shape check runs before every write; malformed payloads
           are rejected with a ``shape_errors`` list.
         - After a successful write, the tool calls ``energy/validate`` and
@@ -292,9 +365,31 @@ class EnergyTools:
           regardless — correct the config and write again if needed.
         - The underlying save endpoint is admin-only. Non-admin tokens will
           receive an authorization error from Home Assistant.
+        - Convenience modes are NOT idempotent: 'add_device' on an existing
+          ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
+          on a missing entry returns RESOURCE_NOT_FOUND.
         """
         if mode == "get":
             return await self._get_prefs()
+
+        if mode == "add_device":
+            return await self._add_device(
+                stat_consumption=stat_consumption,
+                name=name,
+                included_in_stat=included_in_stat,
+                water=water,
+                dry_run=dry_run,
+            )
+
+        if mode == "remove_device":
+            return await self._remove_device(
+                stat_consumption=stat_consumption,
+                water=water,
+                dry_run=dry_run,
+            )
+
+        if mode == "add_source":
+            return await self._add_source(source=source, dry_run=dry_run)
 
         # mode == "set"
         if config is None:
@@ -619,6 +714,280 @@ class EnergyTools:
                     "Re-read prefs and retry with a fresh config_hash",
                 ],
             )
+
+    # ------------------------------------------------------------------
+    # Convenience modes — atomic read-modify-write (no caller hash)
+    # ------------------------------------------------------------------
+
+    async def _add_device(
+        self,
+        *,
+        stat_consumption: str | None,
+        name: str | None,
+        included_in_stat: str | None,
+        water: bool,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """Atomically add a device-consumption entry.
+
+        Reads current prefs, checks for duplicate ``stat_consumption`` in the
+        target list, appends the new entry, and writes back with the freshly
+        captured ``config_hash``. On hash conflict (concurrent modification),
+        retries once before failing.
+        """
+        if stat_consumption is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'stat_consumption' is required when mode='add_device'",
+                    context={"mode": "add_device"},
+                    suggestions=[
+                        "Pass stat_consumption='sensor.<your_device_energy>'",
+                    ],
+                )
+            )
+
+        target_key = "device_consumption_water" if water else "device_consumption"
+
+        new_entry: dict[str, Any] = {"stat_consumption": stat_consumption}
+        if name is not None:
+            new_entry["name"] = name
+        if included_in_stat is not None:
+            new_entry["included_in_stat"] = included_in_stat
+
+        return await self._mutate_atomic(
+            mode="add_device",
+            target_key=target_key,
+            mutator=lambda existing: self._append_unique_device(
+                existing, new_entry, target_key
+            ),
+            dry_run=dry_run,
+            preview_payload={"would_add": new_entry, "target_key": target_key},
+        )
+
+    async def _remove_device(
+        self,
+        *,
+        stat_consumption: str | None,
+        water: bool,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """Atomically remove a device-consumption entry by ``stat_consumption``."""
+        if stat_consumption is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'stat_consumption' is required when mode='remove_device'",
+                    context={"mode": "remove_device"},
+                    suggestions=[
+                        "Pass stat_consumption='sensor.<existing_device_energy>'",
+                    ],
+                )
+            )
+
+        target_key = "device_consumption_water" if water else "device_consumption"
+
+        return await self._mutate_atomic(
+            mode="remove_device",
+            target_key=target_key,
+            mutator=lambda existing: self._remove_device_by_stat(
+                existing, stat_consumption, target_key
+            ),
+            dry_run=dry_run,
+            preview_payload={
+                "would_remove": {"stat_consumption": stat_consumption},
+                "target_key": target_key,
+            },
+        )
+
+    async def _add_source(
+        self,
+        *,
+        source: dict[str, Any] | None,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """Atomically append an entry to ``energy_sources``.
+
+        The ``source`` dict is wrapped into a synthetic single-entry config
+        for ``_shape_check`` reuse, which validates the type-specific
+        required fields (e.g. ``stat_energy_from`` for solar/battery/gas).
+        """
+        if source is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "'source' is required when mode='add_source'",
+                    context={"mode": "add_source"},
+                    suggestions=[
+                        "Pass source={'type': 'grid'|'solar'|'battery'|'gas', ...}",
+                    ],
+                )
+            )
+
+        # Reuse _shape_check by wrapping the single entry in the expected
+        # top-level-list shape.
+        wrapped = {"energy_sources": [source]}
+        shape_errors = _shape_check(wrapped)
+        if shape_errors:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    f"Source shape invalid: {len(shape_errors)} error(s)",
+                    context={
+                        "mode": "add_source",
+                        "shape_errors": shape_errors,
+                    },
+                    suggestions=[
+                        "Fix the listed errors and retry",
+                        "Required fields per type: grid (no extra), "
+                        "solar/battery/gas need 'stat_energy_from'",
+                    ],
+                )
+            )
+
+        return await self._mutate_atomic(
+            mode="add_source",
+            target_key="energy_sources",
+            mutator=lambda existing: existing + [source],
+            dry_run=dry_run,
+            preview_payload={"would_add": source, "target_key": "energy_sources"},
+        )
+
+    @staticmethod
+    def _append_unique_device(
+        existing: list[dict[str, Any]],
+        new_entry: dict[str, Any],
+        target_key: str,
+    ) -> list[dict[str, Any]]:
+        """Append ``new_entry`` to ``existing`` if its ``stat_consumption`` is
+        not already present. Raises ToolError(RESOURCE_ALREADY_EXISTS) on
+        duplicate."""
+        stat = new_entry["stat_consumption"]
+        for entry in existing:
+            if entry.get("stat_consumption") == stat:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_ALREADY_EXISTS,
+                        f"Device with stat_consumption='{stat}' already in {target_key}",
+                        context={
+                            "mode": "add_device",
+                            "stat_consumption": stat,
+                            "target_key": target_key,
+                        },
+                        suggestions=[
+                            "Use mode='get' to inspect the current entries",
+                            "Use mode='remove_device' first if you want to replace it",
+                        ],
+                    )
+                )
+        return existing + [new_entry]
+
+    @staticmethod
+    def _remove_device_by_stat(
+        existing: list[dict[str, Any]],
+        stat_consumption: str,
+        target_key: str,
+    ) -> list[dict[str, Any]]:
+        """Return ``existing`` minus the entry whose ``stat_consumption``
+        matches. Raises ToolError(RESOURCE_NOT_FOUND) if no match."""
+        kept = [e for e in existing if e.get("stat_consumption") != stat_consumption]
+        if len(kept) == len(existing):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"No device with stat_consumption='{stat_consumption}' in {target_key}",
+                    context={
+                        "mode": "remove_device",
+                        "stat_consumption": stat_consumption,
+                        "target_key": target_key,
+                    },
+                    suggestions=[
+                        "Use mode='get' to inspect the current entries",
+                        "Check water=True/False targets the right list",
+                    ],
+                )
+            )
+        return kept
+
+    async def _mutate_atomic(
+        self,
+        *,
+        mode: str,
+        target_key: str,
+        mutator: Any,
+        dry_run: bool,
+        preview_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read-modify-write loop for convenience modes.
+
+        Performs at most two attempts: on RESOURCE_LOCKED from ``_set_prefs``
+        (concurrent modification between read and write), retries once with
+        a fresh read. Other errors propagate immediately.
+
+        For ``dry_run``: runs the mutator against a fresh read (so duplicate /
+        not-found errors surface), then returns ``preview_payload`` plus the
+        new shape — without writing.
+        """
+        max_attempts = 2
+        last_error: Exception | None = None
+        for attempt in range(max_attempts):
+            current = await self._get_prefs()
+            current_config: dict[str, Any] = current["config"]
+            current_hash: str = current["config_hash"]
+
+            existing_list = list(current_config.get(target_key, []))
+            new_list = mutator(existing_list)
+
+            if dry_run:
+                return {
+                    "success": True,
+                    "mode": mode,
+                    "dry_run": True,
+                    **preview_payload,
+                    "current_count": len(existing_list),
+                    "new_count": len(new_list),
+                }
+
+            partial_config = {target_key: new_list}
+            try:
+                set_result = await self._set_prefs(partial_config, current_hash)
+            except ToolError as exc:
+                # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
+                # Retry once with a fresh read in case of a benign race.
+                err_str = str(exc)
+                if "RESOURCE_LOCKED" in err_str and attempt + 1 < max_attempts:
+                    last_error = exc
+                    logger.info(
+                        f"{mode}: hash conflict on attempt {attempt + 1}, retrying"
+                    )
+                    continue
+                raise
+
+            return {
+                "success": True,
+                "mode": mode,
+                "config_hash": set_result["config_hash"],
+                "target_key": target_key,
+                "new_count": len(new_list),
+                "message": set_result.get("message", f"{mode} succeeded."),
+                **{
+                    k: set_result[k]
+                    for k in ("post_save_validation_errors", "warning", "partial")
+                    if k in set_result
+                },
+            }
+
+        # Exhausted retries — surface the last error for clarity.
+        if last_error is not None:
+            raise last_error
+        # Defensive: should be unreachable.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                f"{mode}: exhausted retries without a definitive result",
+                context={"mode": mode, "target_key": target_key},
+            )
+        )
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

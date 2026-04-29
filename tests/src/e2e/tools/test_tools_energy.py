@@ -120,3 +120,107 @@ async def test_energy_prefs_set_roundtrip(mcp_client):
         "Hash from mode='set' return should match hash from subsequent "
         "mode='get' — they compute over the same effective state."
     )
+
+
+@pytest.mark.asyncio
+async def test_energy_add_device_roundtrip(mcp_client):
+    """mode='add_device' atomically appends to device_consumption.
+
+    Verifies the convenience mode reads, mutates, and writes through the
+    real WebSocket plumbing without the caller having to manage
+    config_hash. A subsequent get must show the new entry.
+    """
+    add_result = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "add_device",
+            "stat_consumption": "sensor.test_e2e_add_device",
+            "name": "E2E Test Device",
+        },
+    )
+    assert_mcp_success(add_result)
+    assert add_result.data["target_key"] == "device_consumption"
+    assert add_result.data["new_count"] >= 1
+
+    # Verify via get that the entry persisted.
+    get_after = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    assert_mcp_success(get_after)
+    devices = get_after.data["config"]["device_consumption"]
+    stats = [d.get("stat_consumption") for d in devices]
+    assert "sensor.test_e2e_add_device" in stats, (
+        f"Added device should appear in subsequent get; got stats={stats}"
+    )
+
+    # Cleanup so the test is idempotent across runs.
+    remove_result = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "remove_device",
+            "stat_consumption": "sensor.test_e2e_add_device",
+        },
+    )
+    assert_mcp_success(remove_result)
+
+
+@pytest.mark.asyncio
+async def test_energy_remove_device_not_found_returns_error(mcp_client):
+    """mode='remove_device' on a missing entry surfaces RESOURCE_NOT_FOUND.
+
+    Confirms the convenience-mode error path traverses the real WS plumbing
+    correctly — the unit tests cover the same logic against mocks; this
+    catches any divergence in how raise_tool_error serialises through MCP.
+    """
+    result = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "remove_device",
+            "stat_consumption": "sensor.does_not_exist_e2e",
+        },
+    )
+    # Tool errors surface as is_error=True in MCP, not as raised exceptions.
+    assert result.is_error, "remove_device on missing entry must return an error"
+    payload = str(result.content[0].text if result.content else "")
+    assert "RESOURCE_NOT_FOUND" in payload
+
+
+@pytest.mark.asyncio
+async def test_energy_add_source_roundtrip(mcp_client):
+    """mode='add_source' atomically appends to energy_sources.
+
+    Uses a grid source (no statistic-existence preconditions in the test
+    container) and cleans up via mode='set' to keep the test idempotent.
+    """
+    add_result = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "add_source",
+            "source": {
+                "type": "grid",
+                "stat_energy_from": "sensor.test_e2e_grid_import",
+            },
+        },
+    )
+    assert_mcp_success(add_result)
+    assert add_result.data["target_key"] == "energy_sources"
+
+    # Verify and capture the fresh hash for cleanup.
+    get_after = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    assert_mcp_success(get_after)
+    sources = get_after.data["config"]["energy_sources"]
+    assert any(
+        s.get("stat_energy_from") == "sensor.test_e2e_grid_import" for s in sources
+    ), f"Added grid source should appear; got sources={sources}"
+
+    # Cleanup: rewrite energy_sources without the test entry.
+    cleaned = [
+        s for s in sources if s.get("stat_energy_from") != "sensor.test_e2e_grid_import"
+    ]
+    cleanup = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "set",
+            "config": {"energy_sources": cleaned},
+            "config_hash": get_after.data["config_hash"],
+        },
+    )
+    assert_mcp_success(cleanup)

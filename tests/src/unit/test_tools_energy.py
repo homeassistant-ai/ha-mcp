@@ -662,3 +662,289 @@ class TestRegistration:
         assert any(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
+
+
+# -----------------------------------------------------------------------------
+# ha_manage_energy_prefs — mode="add_device"
+# -----------------------------------------------------------------------------
+
+
+class TestAddDevice:
+    async def test_missing_stat_consumption_raises(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(mode="add_device")
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
+        assert "stat_consumption" in json.dumps(err).lower()
+
+    async def test_happy_path_appends_to_device_consumption(self, tools):
+        current_prefs = _sample_prefs()  # has fridge_energy
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},  # 1. initial _get_prefs
+            {"success": True, "result": current_prefs},  # 2. _set_prefs fresh re-read
+            {"success": True, "result": None},  # 3. save_prefs
+            {"success": True, "result": _empty_validate_result()},  # 4. post-save
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+            name="TV",
+        )
+
+        assert result["success"] is True
+        assert result["mode"] == "add_device"
+        assert result["target_key"] == "device_consumption"
+        assert result["new_count"] == 2  # fridge + tv
+
+        # The save payload must be a partial — only device_consumption.
+        save_call = tools._client.send_websocket_message.call_args_list[2]
+        save_payload = save_call.args[0]
+        assert save_payload["type"] == "energy/save_prefs"
+        assert "device_consumption" in save_payload
+        # Per-key full-replace semantics — other keys must NOT be in the save payload.
+        assert "energy_sources" not in save_payload
+        assert "device_consumption_water" not in save_payload
+        # New entry shape
+        new_devices = save_payload["device_consumption"]
+        assert len(new_devices) == 2
+        assert new_devices[1]["stat_consumption"] == "sensor.tv_energy"
+        assert new_devices[1]["name"] == "TV"
+
+    async def test_water_flag_targets_water_list(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.water_meter",
+            water=True,
+        )
+
+        assert result["target_key"] == "device_consumption_water"
+        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        assert "device_consumption_water" in save_payload
+        assert "device_consumption" not in save_payload
+
+    async def test_duplicate_raises_already_exists(self, tools):
+        current_prefs = _sample_prefs()  # has sensor.fridge_energy
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.fridge_energy",  # already there
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_ALREADY_EXISTS" in json.dumps(err)
+        assert "sensor.fridge_energy" in json.dumps(err)
+
+    async def test_dry_run_does_not_write(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},  # only one call expected
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+            dry_run=True,
+        )
+
+        assert result["success"] is True
+        assert result["dry_run"] is True
+        assert result["new_count"] == 2
+        assert result["current_count"] == 1
+        # Exactly one WS call (the read); no save_prefs.
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_fresh_install_no_prefs_starts_empty(self, tools):
+        # First call returns "No prefs"; tool maps to default empty.
+        tools._client.send_websocket_message.side_effect = [
+            {"success": False, "error": "Command failed: No prefs"},  # initial get
+            {"success": False, "error": "Command failed: No prefs"},  # set re-read
+            {"success": True, "result": None},  # save
+            {"success": True, "result": _empty_validate_result()},  # post-save
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.fridge_energy",
+        )
+
+        assert result["success"] is True
+        assert result["new_count"] == 1
+
+
+# -----------------------------------------------------------------------------
+# ha_manage_energy_prefs — mode="remove_device"
+# -----------------------------------------------------------------------------
+
+
+class TestRemoveDevice:
+    async def test_missing_stat_consumption_raises(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(mode="remove_device")
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
+
+    async def test_happy_path_removes_entry(self, tools):
+        current_prefs = _sample_prefs()  # has sensor.fridge_energy
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="remove_device",
+            stat_consumption="sensor.fridge_energy",
+        )
+
+        assert result["success"] is True
+        assert result["new_count"] == 0
+        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        assert save_payload["device_consumption"] == []
+
+    async def test_not_found_raises(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="remove_device",
+                stat_consumption="sensor.does_not_exist",
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_NOT_FOUND" in json.dumps(err)
+        assert "sensor.does_not_exist" in json.dumps(err)
+
+    async def test_dry_run_does_not_write(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+        result = await tools.ha_manage_energy_prefs(
+            mode="remove_device",
+            stat_consumption="sensor.fridge_energy",
+            dry_run=True,
+        )
+        assert result["dry_run"] is True
+        assert result["new_count"] == 0
+        assert tools._client.send_websocket_message.call_count == 1
+
+
+# -----------------------------------------------------------------------------
+# ha_manage_energy_prefs — mode="add_source"
+# -----------------------------------------------------------------------------
+
+
+class TestAddSource:
+    async def test_missing_source_raises(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(mode="add_source")
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
+        assert "source" in json.dumps(err).lower()
+
+    async def test_invalid_type_raises_validation_failed(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_source",
+                source={"type": "wind"},  # not in valid_types
+            )
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_FAILED" in json.dumps(err)
+
+    async def test_solar_missing_stat_energy_from_raises(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_source",
+                source={"type": "solar"},  # solar requires stat_energy_from
+            )
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_FAILED" in json.dumps(err)
+        assert "stat_energy_from" in json.dumps(err)
+
+    async def test_grid_happy_path(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        new_grid = {"type": "grid", "stat_energy_from": "sensor.grid_2"}
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source=new_grid,
+        )
+
+        assert result["success"] is True
+        assert result["target_key"] == "energy_sources"
+        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        assert "energy_sources" in save_payload
+        assert "device_consumption" not in save_payload
+        assert save_payload["energy_sources"][-1] == new_grid
+
+    async def test_dry_run_does_not_write(self, tools):
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source={"type": "solar", "stat_energy_from": "sensor.solar_2"},
+            dry_run=True,
+        )
+        assert result["dry_run"] is True
+        assert tools._client.send_websocket_message.call_count == 1
+
+
+# -----------------------------------------------------------------------------
+# ha_manage_energy_prefs — convenience-mode hash-conflict retry
+# -----------------------------------------------------------------------------
+
+
+class TestConvenienceRetryOnHashConflict:
+    async def test_add_device_retries_once_on_hash_conflict(self, tools):
+        """First write attempt sees a fresh-read mismatch (concurrent
+        modification), the retry loop reads fresh and succeeds."""
+        prefs_v1 = _sample_prefs()
+        prefs_v2 = {  # someone else added a device between our read and write
+            **prefs_v1,
+            "device_consumption": [
+                *prefs_v1["device_consumption"],
+                {"stat_consumption": "sensor.intruder"},
+            ],
+        }
+
+        tools._client.send_websocket_message.side_effect = [
+            # Attempt 1: initial get → set re-read (mismatch → RESOURCE_LOCKED)
+            {"success": True, "result": prefs_v1},  # initial get
+            {"success": True, "result": prefs_v2},  # set re-read sees v2 → hash diff
+            # Attempt 2: fresh get → set re-read (consistent) → save → validate
+            {"success": True, "result": prefs_v2},  # initial get (retry)
+            {"success": True, "result": prefs_v2},  # set re-read
+            {"success": True, "result": None},  # save_prefs
+            {"success": True, "result": _empty_validate_result()},  # post-save
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+        )
+        assert result["success"] is True
+        # Retry consumed all 6 mocked calls.
+        assert tools._client.send_websocket_message.call_count == 6
