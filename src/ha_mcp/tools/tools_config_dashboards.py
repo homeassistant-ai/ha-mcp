@@ -781,6 +781,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if url_path == "default":
                 url_path = "lovelace"
 
+            # Pre-resolve internal dashboard ID to url_path form before the
+            # hyphen check below, so callers may pass either form. Only fires
+            # when the identifier looks like an internal id (no hyphen, not
+            # the built-in "lovelace") and matches a known dashboard.
+            if "-" not in url_path and url_path != "lovelace":
+                resolved = await _resolve_dashboard(client, url_path)
+                if resolved is not None and resolved["url_path"]:
+                    url_path = resolved["url_path"]
+
             # Validate url_path contains hyphen for new dashboards
             # The built-in "lovelace" dashboard is exempt since it already exists
             if "-" not in url_path and url_path != "lovelace":
@@ -837,6 +846,24 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     get_data["url_path"] = url_path
 
                 response = await client.send_websocket_message(get_data)
+
+                # Lazy resolver fallback: same gate as ha_config_get_dashboard.
+                # If the pre-resolver above didn't fire (e.g. caller passed an
+                # identifier that contains a hyphen but isn't a real url_path),
+                # HA may still reject it — resolve and retry once.
+                if isinstance(response, dict) and not response.get("success", True):
+                    err = response.get("error", {})
+                    err_msg = (
+                        err.get("message", str(err))
+                        if isinstance(err, dict)
+                        else str(err)
+                    )
+                    if url_path and _should_lazy_resolve(err_msg):
+                        resolved = await _resolve_dashboard(client, url_path)
+                        if resolved is not None and resolved["url_path"]:
+                            url_path = resolved["url_path"]
+                            get_data["url_path"] = url_path
+                            response = await client.send_websocket_message(get_data)
 
                 if isinstance(response, dict) and not response.get("success", True):
                     error_msg = response.get("error", {})
