@@ -493,7 +493,22 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             response = await client.send_websocket_message(data)
 
-            # Check if request failed
+            # Lazy resolver fallback: if HA rejects the identifier as unknown,
+            # try resolving it via lovelace/dashboards/list and retry once.
+            # This pays the round-trip only when the caller passed an internal
+            # dashboard id (or another non-url_path form) that HA does not accept.
+            if isinstance(response, dict) and not response.get("success", True):
+                err = response.get("error", {})
+                err_msg = (
+                    err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                )
+                if url_path and _should_lazy_resolve(err_msg):
+                    resolved = await _resolve_dashboard(client, url_path)
+                    if resolved is not None and resolved["url_path"]:
+                        data["url_path"] = resolved["url_path"]
+                        response = await client.send_websocket_message(data)
+
+            # Check if request failed (after potential retry)
             if isinstance(response, dict) and not response.get("success", True):
                 error_msg = response.get("error", {})
                 if isinstance(error_msg, dict):
