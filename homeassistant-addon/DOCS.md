@@ -265,6 +265,7 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 - When empty, the add-on generates a secure 128-bit random path on first start
 - The path is persisted to `/data/secret_path.txt` and reused on restarts
 - Custom paths are useful for migration or specific security requirements
+- Ignored when OIDC authentication is enabled
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
 
@@ -309,6 +310,17 @@ Requires add-on restart to take effect.
 Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
 
 Requires add-on restart to take effect.
+
+### OIDC Authentication Options
+
+All four options must be set to enable OIDC mode. See the **Security > OIDC Authentication** section above for setup instructions.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `oidc_config_url` | URL | OIDC provider discovery URL (`.well-known/openid-configuration`) |
+| `oidc_client_id` | String | OAuth client ID from your OIDC provider |
+| `oidc_client_secret` | Password | OAuth client secret from your OIDC provider |
+| `oidc_base_url` | URL | Public HTTPS URL where the MCP server is accessible |
 
 ### enable_tool_security_policies
 
@@ -394,7 +406,90 @@ If you prefer not to use the web UI (or want to set these before first start), t
 
 ## Security
 
-### Auto-Generated Secret Paths
+### Option 1: OIDC Authentication (Recommended for Remote Access)
+
+For secure remote access, you can configure OIDC authentication with any OpenID Connect provider (Authentik, Keycloak, Auth0, Google, etc.). When enabled, users must authenticate through your OIDC provider before accessing the MCP server.
+
+#### Prerequisites
+
+- An OIDC provider (e.g., Authentik, Keycloak, Auth0)
+- A reverse proxy terminating HTTPS (e.g., Caddy, nginx, Cloudflare Tunnel)
+- A public HTTPS URL pointing to the add-on's port 9583
+
+#### OIDC Provider Setup
+
+1. **Create an OAuth/OIDC application** in your provider with these settings:
+   - **Redirect URI**: `https://your-public-url/auth/callback`
+   - **Grant type**: Authorization Code
+   - **Token endpoint auth method**: Client Secret Post (or as required by your provider)
+   - Note the **Client ID** and **Client Secret**
+
+2. **Find your OIDC Discovery URL**. It typically looks like:
+   - Authentik: `https://auth.example.com/application/o/<app-slug>/.well-known/openid-configuration`
+   - Keycloak: `https://keycloak.example.com/realms/<realm>/.well-known/openid-configuration`
+   - Auth0: `https://<tenant>.auth0.com/.well-known/openid-configuration`
+   - Google: `https://accounts.google.com/.well-known/openid-configuration`
+
+#### Add-on Configuration
+
+Fill in all four OIDC fields in the add-on options:
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `oidc_config_url` | OIDC Discovery URL | `https://auth.example.com/application/o/ha-mcp/.well-known/openid-configuration` |
+| `oidc_client_id` | OAuth Client ID | `ha-mcp-client` |
+| `oidc_client_secret` | OAuth Client Secret | `your-client-secret` |
+| `oidc_base_url` | Public HTTPS URL of this server | `https://mcp.example.com` |
+
+**All four fields must be set** to enable OIDC mode. If any are missing, the add-on will show an error. Leave all empty to use secret path mode instead.
+
+#### Reverse Proxy Setup
+
+The add-on runs HTTP internally on port 9583. Your reverse proxy must:
+
+1. Terminate TLS (HTTPS)
+2. Forward traffic to port 9583
+3. Pass through all paths (including `/auth/callback`, `/.well-known/oauth-authorization-server`, `/mcp`)
+
+**Example Caddy configuration:**
+```
+mcp.example.com {
+    reverse_proxy homeassistant.local:9583
+}
+```
+
+**Example nginx configuration:**
+```nginx
+server {
+    listen 443 ssl;
+    server_name mcp.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://homeassistant.local:9583;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+#### Connecting Claude.ai with OIDC
+
+Once OIDC is configured:
+
+1. In Claude.ai, go to **Settings > Integrations > Add MCP Connector**
+2. Enter the MCP endpoint URL: `https://mcp.example.com/mcp`
+3. Claude.ai will discover the OIDC endpoints automatically
+4. You'll be redirected to your OIDC provider to authenticate
+5. After authentication, Claude.ai can access your Home Assistant
+
+### Option 2: Secret Path (Default)
+
+#### Auto-Generated Secret Paths
 
 The add-on automatically generates a unique secret path on first startup using 128-bit cryptographic entropy. This ensures:
 
@@ -402,15 +497,15 @@ The add-on automatically generates a unique secret path on first startup using 1
 - The secret is persisted across restarts
 - No manual configuration needed
 
-### Authentication
+### Supervisor Authentication
 
 The add-on uses Home Assistant Supervisor's built-in authentication. No tokens or credentials are needed - the add-on automatically authenticates with your Home Assistant instance.
 
 ### Network Exposure
 
 - **Local network only by default** - The add-on listens on port 9583
-- **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
-- **Never expose** port 9583 directly to the internet without proper security measures
+- **Remote access** - Use OIDC authentication (recommended) or the Cloudflared add-on for secure HTTPS tunnels
+- **Never expose** port 9583 directly to the internet without OIDC authentication or proper security measures
 
 ### Supervisor Permissions
 

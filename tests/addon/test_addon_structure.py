@@ -104,6 +104,21 @@ class TestAddonStructure:
             "backup_hint schema must enumerate allowed values"
         )
 
+        # Verify OIDC configuration fields
+        oidc_fields = {
+            "oidc_config_url": "url?",
+            "oidc_client_id": "str?",
+            "oidc_client_secret": "password?",
+            "oidc_base_url": "url?",
+            "oidc_jwt_signing_key": "password?",
+        }
+        for field, expected_type in oidc_fields.items():
+            assert field in config["schema"], f"schema must include {field} field"
+            assert config["schema"][field] == expected_type, \
+                f"{field} schema should be {expected_type}"
+            assert field not in config.get("options", {}), \
+                f"{field} should be optional and omitted from options"
+
         # Verify architectures (only 64-bit platforms supported by uv image)
         expected_archs = ["amd64", "aarch64"]
         assert all(arch in config["arch"] for arch in expected_archs)
