@@ -6,9 +6,6 @@ logic without requiring a running Home Assistant Supervisor.
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 # Import start.py from the addon directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "homeassistant-addon"))

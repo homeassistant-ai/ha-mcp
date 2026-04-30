@@ -4,8 +4,8 @@ These tests verify environment variable validation, logging setup,
 and the OIDC server startup path without requiring a real OIDC provider.
 """
 
-import logging
 import os
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,7 +14,7 @@ import pytest
 class TestMainOidcValidation:
     """Tests for main_oidc() environment variable validation."""
 
-    _VALID_OIDC_ENV = {
+    _VALID_OIDC_ENV: ClassVar[dict[str, str]] = {
         "HOMEASSISTANT_URL": "http://test.local:8123",
         "HOMEASSISTANT_TOKEN": "test_token",
         "OIDC_CONFIG_URL": "https://auth.example.com/.well-known/openid-configuration",
@@ -32,12 +32,10 @@ class TestMainOidcValidation:
             "HOMEASSISTANT_URL": "http://test.local:8123",
             "HOMEASSISTANT_TOKEN": "test_token",
         }
-        # Remove any OIDC vars that might be set
-        clean_env = {k: v for k, v in env.items()}
+        clean_env = dict(env)
 
-        with patch.dict(os.environ, clean_env, clear=True):
-            with pytest.raises(SystemExit) as exc_info:
-                main_module.main_oidc()
+        with patch.dict(os.environ, clean_env, clear=True), pytest.raises(SystemExit) as exc_info:
+            main_module.main_oidc()
 
         assert exc_info.value.code == 1
 
@@ -81,9 +79,11 @@ class TestMainOidcValidation:
             # Close the coroutine to avoid warning
             coro.close()
 
-        with patch.dict(os.environ, self._VALID_OIDC_ENV, clear=True):
-            with patch.object(main_module, "_run_entrypoint", side_effect=mock_run_entrypoint):
-                main_module.main_oidc()
+        with (
+            patch.dict(os.environ, self._VALID_OIDC_ENV, clear=True),
+            patch.object(main_module, "_run_entrypoint", side_effect=mock_run_entrypoint),
+        ):
+            main_module.main_oidc()
 
         assert entrypoint_called, "_run_entrypoint was not called"
 
@@ -91,7 +91,7 @@ class TestMainOidcValidation:
 class TestMainOidcLogging:
     """Tests for OIDC mode logging configuration."""
 
-    _VALID_OIDC_ENV = {
+    _VALID_OIDC_ENV: ClassVar[dict[str, str]] = {
         "HOMEASSISTANT_URL": "http://test.local:8123",
         "HOMEASSISTANT_TOKEN": "test_token",
         "OIDC_CONFIG_URL": "https://auth.example.com/.well-known/openid-configuration",
@@ -106,18 +106,18 @@ class TestMainOidcLogging:
 
         setup_logging_calls = []
 
-        original_setup_logging = main_module._setup_logging
-
         def mock_setup_logging(level, force=False):
             setup_logging_calls.append({"level": level, "force": force})
 
         env = dict(self._VALID_OIDC_ENV)
         env["LOG_LEVEL"] = "DEBUG"
 
-        with patch.dict(os.environ, env, clear=True):
-            with patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging):
-                with patch.object(main_module, "_run_entrypoint", side_effect=lambda c, l: c.close()):
-                    main_module.main_oidc()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
+            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+        ):
+            main_module.main_oidc()
 
         assert len(setup_logging_calls) >= 1
         assert setup_logging_calls[0]["force"] is True
@@ -134,10 +134,12 @@ class TestMainOidcLogging:
         env = dict(self._VALID_OIDC_ENV)
         env["LOG_LEVEL"] = "WARNING"
 
-        with patch.dict(os.environ, env, clear=True):
-            with patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging):
-                with patch.object(main_module, "_run_entrypoint", side_effect=lambda c, l: c.close()):
-                    main_module.main_oidc()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
+            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+        ):
+            main_module.main_oidc()
 
         assert setup_logging_calls[0]["level"] == "WARNING"
 
@@ -153,10 +155,12 @@ class TestMainOidcLogging:
         env = dict(self._VALID_OIDC_ENV)
         # Don't set LOG_LEVEL
 
-        with patch.dict(os.environ, env, clear=True):
-            with patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging):
-                with patch.object(main_module, "_run_entrypoint", side_effect=lambda c, l: c.close()):
-                    main_module.main_oidc()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(main_module, "_setup_logging", side_effect=mock_setup_logging),
+            patch.object(main_module, "_run_entrypoint", side_effect=lambda c, _l: c.close()),
+        ):
+            main_module.main_oidc()
 
         assert setup_logging_calls[0]["level"] == "INFO"
 
@@ -188,17 +192,20 @@ class TestRunOidcServer:
         async def noop_shutdown(coro):
             coro.close()
 
-        with patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy):
-            with patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server):
-                with patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown):
-                    await main_module._run_oidc_server(
-                        config_url="https://auth.example.com/.well-known/openid-configuration",
-                        client_id="test-id",
-                        client_secret="test-secret",
-                        base_url="https://mcp.example.com",
-                        port=8086,
-                        path="/mcp",
-                    )
+        with (
+            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
 
         assert proxy_init_args["config_url"] == "https://auth.example.com/.well-known/openid-configuration"
         assert proxy_init_args["client_id"] == "test-id"
@@ -230,18 +237,21 @@ class TestRunOidcServer:
         async def noop_shutdown(coro):
             coro.close()
 
-        with patch.dict(os.environ, {"OIDC_JWT_SIGNING_KEY": "test-jwt-key"}, clear=False):
-            with patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy):
-                with patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server):
-                    with patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown):
-                        await main_module._run_oidc_server(
-                            config_url="https://auth.example.com/.well-known/openid-configuration",
-                            client_id="test-id",
-                            client_secret="test-secret",
-                            base_url="https://mcp.example.com",
-                            port=8086,
-                            path="/mcp",
-                        )
+        with (
+            patch.dict(os.environ, {"OIDC_JWT_SIGNING_KEY": "test-jwt-key"}, clear=False),
+            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
 
         assert proxy_init_args["jwt_signing_key"] == "test-jwt-key"
 
@@ -270,18 +280,21 @@ class TestRunOidcServer:
             coro.close()
 
         env_without_key = {k: v for k, v in os.environ.items() if k != "OIDC_JWT_SIGNING_KEY"}
-        with patch.dict(os.environ, env_without_key, clear=True):
-            with patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy):
-                with patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server):
-                    with patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown):
-                        await main_module._run_oidc_server(
-                            config_url="https://auth.example.com/.well-known/openid-configuration",
-                            client_id="test-id",
-                            client_secret="test-secret",
-                            base_url="https://mcp.example.com",
-                            port=8086,
-                            path="/mcp",
-                        )
+        with (
+            patch.dict(os.environ, env_without_key, clear=True),
+            patch("ha_mcp.__main__.OIDCProxy" if hasattr(main_module, "OIDCProxy") else "fastmcp.server.auth.oidc_proxy.OIDCProxy", MockOIDCProxy),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.object(main_module, "_run_with_shutdown", side_effect=noop_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
 
         assert proxy_init_args["jwt_signing_key"] is None
 
@@ -307,17 +320,20 @@ class TestRunOidcServer:
             # Close the coroutine to avoid warnings
             coro.close()
 
-        with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=mock_auth):
-            with patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server):
-                with patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown):
-                    await main_module._run_oidc_server(
-                        config_url="https://auth.example.com/.well-known/openid-configuration",
-                        client_id="test-id",
-                        client_secret="test-secret",
-                        base_url="https://mcp.example.com",
-                        port=8086,
-                        path="/mcp",
-                    )
+        with (
+            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=mock_auth),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=8086,
+                path="/mcp",
+            )
 
         assert mock_mcp.auth == mock_auth
 
@@ -345,17 +361,20 @@ class TestRunOidcServer:
         mock_mcp.run_async = capture_run_async
         mock_server.mcp = mock_mcp
 
-        with patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=MagicMock()):
-            with patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server):
-                with patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown):
-                    await main_module._run_oidc_server(
-                        config_url="https://auth.example.com/.well-known/openid-configuration",
-                        client_id="test-id",
-                        client_secret="test-secret",
-                        base_url="https://mcp.example.com",
-                        port=9000,
-                        path="/custom",
-                    )
+        with (
+            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=MagicMock()),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server),
+            patch.object(main_module, "_run_with_shutdown", side_effect=capture_run_with_shutdown),
+        ):
+            await main_module._run_oidc_server(
+                config_url="https://auth.example.com/.well-known/openid-configuration",
+                client_id="test-id",
+                client_secret="test-secret",
+                base_url="https://mcp.example.com",
+                host="0.0.0.0",
+                port=9000,
+                path="/custom",
+            )
 
         assert run_kwargs["transport"] == "streamable-http"
         assert run_kwargs["port"] == 9000

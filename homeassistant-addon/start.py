@@ -405,7 +405,7 @@ def _run_oidc_mode(oidc_config: dict[str, str], port: int) -> int:
     log_info(f"  Auth Callback: {base_url}/auth/callback")
     log_info("")
     log_info("  Users must authenticate via your OIDC provider before accessing MCP.")
-    log_info("  Ensure your reverse proxy forwards HTTPS traffic to port %d." % port)
+    log_info(f"  Ensure your reverse proxy forwards HTTPS traffic to port {port}.")
     log_info("=" * 80)
     log_info("")
 
