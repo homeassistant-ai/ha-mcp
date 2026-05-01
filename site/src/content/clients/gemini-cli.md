@@ -126,19 +126,19 @@ If you have the [Home Assistant MCP integration](https://www.home-assistant.io/i
 
 ### Self-hosted `ha-mcp` Docker container
 
-If `ha-mcp` runs in its own container alongside Home Assistant:
+If `ha-mcp` runs in its own container on the same host as Home Assistant (replace the IP with your own):
 
 ```json
 {
   "mcpServers": {
     "ha-mcp": {
-      "httpUrl": "http://192.168.1.20:8086/mcp"
+      "httpUrl": "http://192.168.1.10:8086/mcp"
     }
   }
 }
 ```
 
-### Sample `docker-compose.yml` for `ha-mcp`
+#### Sample `docker-compose.yml` for `ha-mcp`
 
 Minimal compose for a `ha-mcp-web` deployment paired with an `.env` file. The endpoint produced (`http://<host>:8086/mcp`) works with any HTTP-capable MCP client, not just Gemini CLI.
 
