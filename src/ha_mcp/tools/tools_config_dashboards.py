@@ -250,6 +250,14 @@ def _card_matches(
 # Substring in WS error message that signals the dashboard identifier was not
 # accepted by lovelace/config (e.g., caller passed an internal id where url_path
 # is expected). Used to gate the lazy resolver fallback in get/set tools.
+#
+# Source: homeassistant/components/lovelace/websocket.py, _handle_errors —
+# emits f"Unknown config specified: {url_path}" paired with structured
+# error.code "config_not_found". The websocket client currently surfaces only
+# the message string, so substring matching is the only signal available at
+# the tool layer. If HA reformats this string, the lazy fallback regresses
+# silently to never firing — re-verify with major HA upgrades.
+# Last verified: HA 2026.4.4.
 _LAZY_RESOLVE_TRIGGER = "Unknown config specified"
 
 
