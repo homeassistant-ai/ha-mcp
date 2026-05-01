@@ -310,7 +310,7 @@ class TestSystemTools:
             "allowlist_external_dirs should be a list"
         )
 
-        # Negative guard: field must not leak at lower detail levels
+        # Negative guard: full-only fields must not leak at lower detail levels
         minimal_result = await mcp_client.call_tool(
             "ha_get_overview", {"detail_level": "minimal"}
         )
@@ -318,8 +318,22 @@ class TestSystemTools:
         assert minimal_data.get("success") is True, (
             f"Minimal overview failed: {minimal_data.get('error')}"
         )
-        assert "allowlist_external_dirs" not in minimal_data.get("system_info", {}), (
-            "allowlist_external_dirs should only appear at detail_level='full'"
+        full_only_fields = {
+            "country",
+            "currency",
+            "unit_system",
+            "latitude",
+            "longitude",
+            "elevation",
+            "components_loaded",
+            "safe_mode",
+            "internal_url",
+            "external_url",
+            "allowlist_external_dirs",
+        }
+        leaked = full_only_fields & minimal_data.get("system_info", {}).keys()
+        assert not leaked, (
+            f"full-only fields leaked at detail_level='minimal': {leaked}"
         )
 
         # Log key information
