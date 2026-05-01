@@ -265,7 +265,10 @@ class EnergyTools:
                     "state (Home Assistant's validate endpoint cannot validate "
                     "an unsubmitted payload). For convenience modes: simulates "
                     "the mutation against a fresh read and reports what would "
-                    "change without writing. Default False."
+                    "change without writing — but still raises "
+                    "RESOURCE_ALREADY_EXISTS (duplicate add_device) or "
+                    "RESOURCE_NOT_FOUND (missing remove_device) when the "
+                    "proposed mutation is not applicable. Default False."
                 ),
                 default=False,
             ),
@@ -369,7 +372,9 @@ class EnergyTools:
           receive an authorization error from Home Assistant.
         - Convenience modes are NOT idempotent: 'add_device' on an existing
           ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
-          on a missing entry returns RESOURCE_NOT_FOUND.
+          on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' does NOT
+          check for duplicates — appending the same source twice silently
+          produces two entries; the caller is responsible for de-duplication.
         """
         if mode == "get":
             return await self._get_prefs()
@@ -813,6 +818,12 @@ class EnergyTools:
         The ``source`` dict is wrapped into a synthetic single-entry config
         for ``_shape_check`` reuse, which validates the type-specific
         required fields (e.g. ``stat_energy_from`` for solar/battery/gas).
+
+        Unlike ``_add_device``, this method does NOT detect duplicates —
+        appending the same source twice silently produces two entries.
+        Duplicate semantics for sources are looser than for devices (e.g.,
+        grid sources can have multiple legitimate variants), so de-
+        duplication is left to the caller.
         """
         if source is None:
             raise_tool_error(
@@ -921,6 +932,11 @@ class EnergyTools:
         preview_payload: dict[str, Any],
     ) -> dict[str, Any]:
         """Read-modify-write loop for convenience modes.
+
+        Atomicity is with respect to the *entire* prefs snapshot, not just
+        ``target_key``: ``_set_prefs`` validates the full ``config_hash``, so
+        this helper retries on any concurrent modification — even one that
+        touched an unrelated top-level key.
 
         Performs at most two attempts: on RESOURCE_LOCKED from ``_set_prefs``
         (concurrent modification between read and write), retries once with
