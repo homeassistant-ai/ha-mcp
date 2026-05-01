@@ -310,6 +310,18 @@ class TestSystemTools:
             "allowlist_external_dirs should be a list"
         )
 
+        # Negative guard: field must not leak at lower detail levels
+        minimal_result = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"}
+        )
+        minimal_data = parse_mcp_result(minimal_result)
+        assert minimal_data.get("success") is True, (
+            f"Minimal overview failed: {minimal_data.get('error')}"
+        )
+        assert "allowlist_external_dirs" not in minimal_data.get("system_info", {}), (
+            "allowlist_external_dirs should only appear at detail_level='full'"
+        )
+
         # Log key information
         logger.info(f"Home Assistant version: {system_info.get('version')}")
         logger.info(f"Location: {system_info.get('location_name')}")
