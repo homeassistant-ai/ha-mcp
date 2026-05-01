@@ -323,6 +323,10 @@ async def _lazy_resolve_and_retry(
     No-op when the response is not a failure, when url_path is empty,
     or when the resolver finds no match — the original response is
     returned unchanged in those cases.
+
+    The caller's `ws_data` dict is never mutated: when a retry is needed,
+    a shallow copy is made and the canonical `url_path` written into the
+    copy before the retry call.
     """
     if not (isinstance(response, dict) and not response.get("success", True)):
         return url_path, response
@@ -339,8 +343,9 @@ async def _lazy_resolve_and_retry(
         return url_path, response
 
     url_path = resolved["url_path"]
-    ws_data["url_path"] = url_path
-    response = await client.send_websocket_message(ws_data)
+    retry_data = dict(ws_data)
+    retry_data["url_path"] = url_path
+    response = await client.send_websocket_message(retry_data)
     return url_path, response
 
 
