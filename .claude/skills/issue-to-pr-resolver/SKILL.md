@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr-resolver
-description: Manage a GitHub issue end-to-end — create a worktree branch, implement the feature with tests, create a draft PR, then iteratively resolve all CI failures and review comments until the PR is clean. Use when you need to fully implement a GitHub issue from start to merge-ready. Triggers on "implement issue", "resolve issue", "/issue-to-pr-resolver <number>".
+description: Implement a GitHub issue end-to-end — create a worktree branch, implement the feature with tests, create a draft PR, then iteratively resolve all CI failures and review comments until the PR is clean. Use when you need to fully implement a GitHub issue from start to merge-ready. Triggers on "implement issue", "resolve issue", "/issue-to-pr-resolver <number>".
 argument-hint: "<issue-number>"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
@@ -13,7 +13,7 @@ Implement GitHub issue #$ARGUMENTS in `homeassistant-ai/ha-mcp` end-to-end.
 
 **Read the issue:**
 ```bash
-gh issue view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json title,body,labels,comments,author
+gh issue view "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --json title,body,labels,comments,author
 ```
 
 **Create a worktree from repo root:**
@@ -62,7 +62,7 @@ Repeat until all checks green and no unresolved threads:
 gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
 gh api repos/homeassistant-ai/ha-mcp/pulls/$PR_NUMBER/comments \
   --jq '.[] | {id, path, line, author: .user.login, body}'
-gh api graphql -f query='query { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:$PR_NUMBER) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }'
+gh api graphql -f query="query { repository(owner:\"homeassistant-ai\", name:\"ha-mcp\") { pullRequest(number:$PR_NUMBER) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }"
 ```
 
 **Resolve each comment (both steps required):**
