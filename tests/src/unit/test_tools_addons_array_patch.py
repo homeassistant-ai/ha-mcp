@@ -228,8 +228,9 @@ class TestApplyArrayOpsValidation:
 class TestHaManageAddonArrayPatchDispatch:
     """Exercise the dispatch in ha_manage_addon by mocking _call_addon_api.
 
-    We verify: GET happens with raw=True; ops are applied; POST sends the
-    mutated array; response shape is the compact summary (no full array).
+    We verify: GET happens with raw=True (full array needed for mutation);
+    POST happens without raw (response is small, default truncation guards
+    apply); mutated array is sent; response shape is the compact summary.
     """
 
     @pytest.fixture
@@ -262,7 +263,13 @@ class TestHaManageAddonArrayPatchDispatch:
 
         async def fake_call(**kwargs):
             method = kwargs.get("method", "GET")
-            assert kwargs.get("raw") is True
+            # GET must use raw=True so the full array isn't truncated.
+            # POST does not need raw — its response is small (deploy revision)
+            # and we want the size-based truncation guard in effect.
+            if method == "GET":
+                assert kwargs.get("raw") is True, "GET should use raw=True"
+            else:
+                assert not kwargs.get("raw"), "POST should not use raw"
             call_log.append((method, kwargs))
             if method == "GET":
                 return {
@@ -311,18 +318,20 @@ class TestHaManageAddonArrayPatchDispatch:
                 "status_code": 200,
             }
 
-        with patch(
-            "ha_mcp.tools.tools_addons._call_addon_api",
-            new=AsyncMock(side_effect=fake_call),
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._call_addon_api",
+                new=AsyncMock(side_effect=fake_call),
+            ),
+            pytest.raises(ToolError) as exc,
         ):
-            with pytest.raises(ToolError) as exc:
-                await _registered_tool(
-                    slug="a0d7b954_nodered",
-                    path="/flows",
-                    array_patch={
-                        "operations": [{"op": "delete", "id": "x"}],
-                    },
-                )
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/flows",
+                array_patch={
+                    "operations": [{"op": "delete", "id": "x"}],
+                },
+            )
         err = _parse_tool_error(exc)
         assert err["error"]["code"] == "VALIDATION_FAILED"
 
@@ -347,19 +356,21 @@ class TestHaManageAddonArrayPatchDispatch:
             post_called = True
             return {"success": True, "response": "ok", "status_code": 200}
 
-        with patch(
-            "ha_mcp.tools.tools_addons._call_addon_api",
-            new=AsyncMock(side_effect=fake_call),
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._call_addon_api",
+                new=AsyncMock(side_effect=fake_call),
+            ),
+            pytest.raises(ToolError),
         ):
-            with pytest.raises(ToolError):
-                await _registered_tool(
-                    slug="a0d7b954_nodered",
-                    path="/flows",
-                    array_patch={
-                        # 'ghost' isn't in the fetched array — _apply_array_ops raises
-                        "operations": [{"op": "delete", "id": "ghost"}],
-                    },
-                )
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/flows",
+                array_patch={
+                    # 'ghost' isn't in the fetched array — _apply_array_ops raises
+                    "operations": [{"op": "delete", "id": "ghost"}],
+                },
+            )
 
         assert get_called is True
         assert post_called is False
@@ -410,3 +421,181 @@ class TestHaManageAddonArrayPatchDispatch:
             )
         err = _parse_tool_error(exc)
         assert err["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestHaManageAddonRequestHeaders:
+    """Verify the new top-level request_headers parameter wires through to
+    _call_addon_api in proxy mode and array_patch mode (both GET and POST).
+    """
+
+    @pytest.fixture
+    def _registered_tool(self):
+        from ha_mcp.tools.tools_addons import register_addon_tools
+
+        captured: dict = {}
+
+        class _MockMCP:
+            def tool(self, *args, **kwargs):
+                def deco(fn):
+                    captured.setdefault(fn.__name__, fn)
+                    return fn
+
+                return deco
+
+        register_addon_tools(_MockMCP(), client=AsyncMock())
+        fn = captured["ha_manage_addon"]
+        while hasattr(fn, "__wrapped__"):
+            fn = fn.__wrapped__
+        return fn
+
+    @pytest.mark.asyncio
+    async def test_proxy_mode_forwards_request_headers(self, _registered_tool):
+        captured_headers: list[dict | None] = []
+
+        async def fake_call(**kwargs):
+            captured_headers.append(kwargs.get("headers"))
+            return {
+                "success": True,
+                "response": {"ok": True},
+                "addon_name": "X",
+                "slug": kwargs["slug"],
+                "status_code": 200,
+            }
+
+        with patch(
+            "ha_mcp.tools.tools_addons._call_addon_api",
+            new=AsyncMock(side_effect=fake_call),
+        ):
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/api/state",
+                request_headers={"Accept": "text/plain"},
+            )
+
+        assert captured_headers == [{"Accept": "text/plain"}]
+
+    @pytest.mark.asyncio
+    async def test_array_patch_forwards_request_headers_to_get_and_post(
+        self, _registered_tool
+    ):
+        captured_headers: list[dict | None] = []
+
+        async def fake_call(**kwargs):
+            captured_headers.append(kwargs.get("headers"))
+            if kwargs.get("method", "GET") == "GET":
+                return {
+                    "success": True,
+                    "response": [{"id": "n1", "name": "old"}],
+                    "addon_name": "Node-RED",
+                    "slug": kwargs["slug"],
+                    "status_code": 200,
+                }
+            return {"success": True, "response": "rev-1", "status_code": 200}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._call_addon_api",
+            new=AsyncMock(side_effect=fake_call),
+        ):
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/flows",
+                array_patch={
+                    "operations": [
+                        {"op": "patch", "id": "n1", "patches": {"name": "new"}},
+                    ],
+                },
+                request_headers={"Node-RED-Deployment-Type": "full"},
+            )
+
+        # Both GET and POST must receive the same caller-supplied headers
+        assert len(captured_headers) == 2
+        assert captured_headers[0] == {"Node-RED-Deployment-Type": "full"}
+        assert captured_headers[1] == {"Node-RED-Deployment-Type": "full"}
+
+    @pytest.mark.asyncio
+    async def test_request_headers_rejected_in_config_mode(self, _registered_tool):
+        with pytest.raises(ToolError) as exc:
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                options={"log_level": "debug"},
+                request_headers={"X-Custom": "value"},
+            )
+        err = _parse_tool_error(exc)
+        assert err["error"]["code"] == "VALIDATION_FAILED"
+        assert "request_headers" in err["error"]["message"]
+
+
+class TestCallAddonApiHeaderMerge:
+    """Direct test of _call_addon_api's header-merge contract: caller headers
+    go in first, internal framing layered on top so it always wins on collision.
+    """
+
+    @pytest.mark.asyncio
+    async def test_internal_framing_overrides_caller_headers(self):
+        """If a caller tries to override X-Ingress-Path / X-Hass-Source /
+        Content-Type, the proxy's internal values must still win."""
+        from unittest.mock import MagicMock
+
+        from ha_mcp.tools.tools_addons import _call_addon_api
+
+        addon_info = {
+            "success": True,
+            "addon": {
+                "name": "Test",
+                "slug": "test",
+                "ingress": True,
+                "ingress_entry": "/api/hassio_ingress/REAL",
+                "ingress_port": 5000,
+                "ip_address": "172.30.33.99",
+                "state": "started",
+            },
+        }
+
+        # Capture the headers passed to httpx.request — same mocking pattern
+        # the existing _call_addon_api tests use.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "ok"
+        mock_response.headers = {"content-type": "text/plain"}
+        mock_response.json.return_value = {}
+
+        mock_http_client = AsyncMock()
+        mock_http_client.request.return_value = mock_response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await _call_addon_api(
+                client=AsyncMock(),
+                slug="test",
+                path="/api/state",
+                method="POST",
+                body={"x": 1},
+                headers={
+                    "X-Ingress-Path": "/api/hassio_ingress/EVIL",
+                    "X-Hass-Source": "spoofed",
+                    "Content-Type": "application/x-attack",
+                    "X-Custom-Allowed": "kept",
+                },
+            )
+
+        # Headers actually sent to the addon container:
+        sent = mock_http_client.request.call_args.kwargs["headers"]
+        # Internal framing wins
+        assert sent["X-Ingress-Path"] == "/api/hassio_ingress/REAL"
+        assert sent["X-Hass-Source"] == "core.ingress"
+        assert sent["Content-Type"] == "application/json"
+        # Non-conflicting caller headers pass through
+        assert sent["X-Custom-Allowed"] == "kept"

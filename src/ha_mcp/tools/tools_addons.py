@@ -1253,6 +1253,7 @@ async def _call_addon_api(
     limit: int | None = None,
     python_transform: str | None = None,
     raw: bool = False,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Call an add-on's web API.
 
@@ -1289,6 +1290,11 @@ async def _call_addon_api(
             placeholder. Used by array_patch mode in ha_manage_addon, which
             needs the full parsed response in memory to apply operations
             even when the JSON is larger than _MAX_RESPONSE_SIZE.
+        extra_headers: Optional caller-supplied request headers. Layered
+            under the proxy's internal framing (`X-Ingress-Path`,
+            `X-Hass-Source`, `Cookie`, `Content-Type`) so the framing
+            always wins on collision. Use this to set addon-API
+            requirements like Node-RED's `Node-RED-Deployment-Type` header.
     """
     # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
     normalized = unquote(path).lstrip("/")
@@ -1340,7 +1346,15 @@ async def _call_addon_api(
     # 5. Resolve route (direct-port / addon-variant / off-host).
     url, headers = await _resolve_http_route(client, addon, normalized, port)
 
-    # 6. Set content type based on body type
+    # 6. Layer caller-supplied headers UNDER the proxy's framing so internal
+    # headers (X-Ingress-Path, X-Hass-Source, Cookie, Content-Type) always
+    # win on collision — a caller cannot forge ingress identity.
+    if extra_headers:
+        merged = dict(extra_headers)
+        merged.update(headers)
+        headers = merged
+
+    # 7. Set content type based on body type
     if isinstance(body, dict | list):
         headers["Content-Type"] = "application/json"
         request_content = json.dumps(body).encode()
@@ -1809,6 +1823,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        request_headers: Annotated[
+            dict[str, str] | None,
+            Field(
+                description=(
+                    "Proxy/array-patch mode: extra HTTP headers to send to the addon API. "
+                    "Useful for addon-specific requirements such as Node-RED's "
+                    "`Node-RED-Deployment-Type: full`. The proxy's internal framing "
+                    "(`X-Ingress-Path`, `X-Hass-Source`, `Content-Type`) is layered on "
+                    "top, so caller-supplied values for those keys are overridden. "
+                    "Not valid in config mode."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
@@ -1884,7 +1912,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     {"op": "add", "item": {"id": "n1", "type": "inject", "z": "tab-id", ...}},
                     {"op": "add", "item": {"id": "n2", "type": "function", "z": "tab-id", ...}},
                 ]},
+                request_headers={"Node-RED-Deployment-Type": "full"},
             )
+        - Custom request headers (proxy mode):
+            ha_manage_addon(slug="...", path="/api/state",
+                            request_headers={"Accept": "text/plain"})
         """
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
@@ -1958,6 +1990,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 proxy_overrides.append(("python_transform", "python_transform"))
             if array_patch is not None:
                 proxy_overrides.append(("array_patch", "array_patch"))
+            if request_headers is not None:
+                proxy_overrides.append(("request_headers", "request_headers"))
             if proxy_overrides:
                 raise_tool_error(
                     create_validation_error(
@@ -2122,6 +2156,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 debug=debug,
                 port=port,
                 raw=True,
+                extra_headers=request_headers,
             )
             if not fetch_result.get("success"):
                 raise_tool_error(fetch_result)
@@ -2142,6 +2177,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             assert isinstance(ops, list)
             new_array, summary = _apply_array_ops(fetched, ops, id_field)
 
+            # POST response is small (deploy revision string or status); skip
+            # raw mode here so the size-based truncation guard is in effect.
             post_result = await _call_addon_api(
                 client=client,
                 slug=slug,
@@ -2150,7 +2187,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 body=new_array,
                 debug=debug,
                 port=port,
-                raw=True,
+                extra_headers=request_headers,
             )
             if not post_result.get("success"):
                 raise_tool_error(post_result)
@@ -2224,6 +2261,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             offset=offset,
             limit=limit,
             python_transform=python_transform,
+            extra_headers=request_headers,
         )
         if not result.get("success"):
             raise_tool_error(result)
