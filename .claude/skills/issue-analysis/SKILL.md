@@ -47,42 +47,23 @@ Priority: `priority: high` / `priority: medium` / `priority: low` based on user 
 
 Always add `issue-analyzed`.
 
-## Step 5: Update Labels
+## Step 5: Draft Analysis for User
 
-Apply the labels determined in Step 4. Always include `issue-analyzed`; remove `triaged` if present.
+Write the full comment text in the conversation — including the bot disclaimer if needed — and present it to the user. Also show the labels you plan to apply.
+
+**Wait for user confirmation before proceeding.** The user may edit the draft or say "looks good" to approve.
+
+## Step 6: Apply Labels and Post Comment
+
+Once approved, apply labels and post the comment:
 
 ```bash
 gh issue edit $ARGUMENTS --repo homeassistant-ai/ha-mcp \
   --add-label "issue-analyzed,<classification>,<priority>" \
   --remove-label "triaged"
-```
 
-## Step 6: Post Analysis Comment
-
-```bash
 gh issue comment $ARGUMENTS --repo homeassistant-ai/ha-mcp --body "$(cat <<'EOF'
-[bot disclaimer if author ≠ julienld]
-
-## Issue Analysis
-
-### Summary
-[What's requested and the core problem/feature]
-
-### Codebase Analysis
-[Specific files, patterns, relevant implementations found]
-
-### Implementation Assessment
-[If needs-choice: options with pros/cons]
-[If ready-to-implement: recommended approach with specific files to modify]
-
-### Priority Assessment
-[Recommendation with justification relative to other open issues]
-
-### Labels Applied
-[Labels added and why]
-
----
-*Issue analysis by Claude Code*
+[approved comment text]
 EOF
 )"
 ```
