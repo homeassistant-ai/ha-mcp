@@ -2,7 +2,6 @@
 name: contrib-pr-review
 description: Review a contribution PR for safety, quality, and readiness. Checks for security concerns, test coverage, size appropriateness, and intent alignment. Use when reviewing external contributions.
 argument-hint: "<pr-number>"
-allowed-tools: Bash, Read, Grep, Glob, WebFetch
 ---
 
 # Contribution PR Review

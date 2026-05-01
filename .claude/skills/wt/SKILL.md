@@ -2,7 +2,6 @@
 name: wt
 description: Create a git worktree in worktree/ subdirectory with up-to-date master
 argument-hint: "<branch-name>"
-allowed-tools: Bash
 ---
 
 # Create Git Worktree
