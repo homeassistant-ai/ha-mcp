@@ -765,6 +765,27 @@ class TestAddDevice:
         # Exactly one WS call (the read); no save_prefs.
         assert tools._client.send_websocket_message.call_count == 1
 
+    async def test_dry_run_raises_on_duplicate(self, tools):
+        """dry_run does not bypass mutator validation: adding a duplicate
+        raises RESOURCE_ALREADY_EXISTS even with dry_run=True (the mutator
+        runs before the dry-run check)."""
+        current_prefs = _sample_prefs()  # has sensor.fridge_energy
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.fridge_energy",  # already present
+                dry_run=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_ALREADY_EXISTS" in json.dumps(err)
+        assert "sensor.fridge_energy" in json.dumps(err)
+        # Only the initial read; no save_prefs.
+        assert tools._client.send_websocket_message.call_count == 1
+
     async def test_fresh_install_no_prefs_starts_empty(self, tools):
         # First call returns "No prefs"; tool maps to default empty.
         tools._client.send_websocket_message.side_effect = [
@@ -841,6 +862,25 @@ class TestRemoveDevice:
         )
         assert result["dry_run"] is True
         assert result["new_count"] == 0
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_dry_run_raises_on_missing(self, tools):
+        """dry_run does not bypass mutator validation: removing a non-
+        existent device raises RESOURCE_NOT_FOUND even with dry_run=True."""
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="remove_device",
+                stat_consumption="sensor.does_not_exist",
+                dry_run=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_NOT_FOUND" in json.dumps(err)
+        assert "sensor.does_not_exist" in json.dumps(err)
         assert tools._client.send_websocket_message.call_count == 1
 
 
@@ -948,3 +988,42 @@ class TestConvenienceRetryOnHashConflict:
         assert result["success"] is True
         # Retry consumed all 6 mocked calls.
         assert tools._client.send_websocket_message.call_count == 6
+
+    async def test_retry_exhaustion_raises_resource_locked(self, tools):
+        """Two consecutive hash conflicts: the retry's set re-read also
+        sees a fresh external write. _mutate_atomic exits the loop via
+        `raise last_error`, surfacing the RESOURCE_LOCKED ToolError."""
+        prefs_v1 = _sample_prefs()
+        prefs_v2 = {  # external write before the first set
+            **prefs_v1,
+            "device_consumption": [
+                *prefs_v1["device_consumption"],
+                {"stat_consumption": "sensor.intruder_a"},
+            ],
+        }
+        prefs_v3 = {  # second external write before the retry's set
+            **prefs_v2,
+            "device_consumption": [
+                *prefs_v2["device_consumption"],
+                {"stat_consumption": "sensor.intruder_b"},
+            ],
+        }
+
+        tools._client.send_websocket_message.side_effect = [
+            # Attempt 1: get v1 → set re-read sees v2 → RESOURCE_LOCKED
+            {"success": True, "result": prefs_v1},
+            {"success": True, "result": prefs_v2},
+            # Attempt 2 (retry): get v2 → set re-read sees v3 → RESOURCE_LOCKED again
+            {"success": True, "result": prefs_v2},
+            {"success": True, "result": prefs_v3},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.tv_energy",
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_LOCKED" in json.dumps(err)
+        # 4 calls total (2 attempts × 2 calls each), no save_prefs ever.
+        assert tools._client.send_websocket_message.call_count == 4
