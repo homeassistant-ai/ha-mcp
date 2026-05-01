@@ -117,8 +117,7 @@ If you have the [Home Assistant MCP integration](https://www.home-assistant.io/i
     "home-assistant": {
       "httpUrl": "http://192.168.1.10:8123/api/mcp",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJIUzI1NiI...",
-        "Accept": "application/json"
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiI..."
       }
     }
   }
