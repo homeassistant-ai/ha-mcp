@@ -46,7 +46,7 @@ git worktree add worktree/feat-new-feature -b feat/new-feature
 
 # Wrong - don't create worktrees at repo root
 git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
-git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
+git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/skills/
 ```
 
 **Cleanup:** `git worktree remove worktree/<name>` or `git worktree prune` for stale references.
