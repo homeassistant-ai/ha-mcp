@@ -1313,7 +1313,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
                     ),
                 ))
-            assert resolved is not None  # narrow type for mypy after raise_tool_error
             resolved_id = resolved["id"]
 
             response = await client.send_websocket_message(
