@@ -2,6 +2,7 @@
 name: issue-analysis
 description: Deep analysis of a single GitHub issue with codebase exploration, implementation planning, and architectural assessment. Use when you need to analyze a GitHub issue, assess its complexity, plan implementation approaches, and post a structured analysis comment. Triggers on "analyze issue", "deep analysis", "/issue-analysis <number>".
 argument-hint: "<issue-number>"
+allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
 
 # Issue Analysis

@@ -2,6 +2,7 @@
 name: my-pr-checker
 description: Review and manage your own GitHub pull requests — check CI status, inline review comments, PR-level comments, resolve review threads, fix issues, and iterate until all checks pass and threads are resolved. Use for managing your own PRs (not external contributions). Triggers on "check my PR", "check PR", "/my-pr-checker <number>".
 argument-hint: "<pr-number>"
+allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
 
 # My PR Checker

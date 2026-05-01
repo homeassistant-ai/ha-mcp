@@ -2,6 +2,7 @@
 name: issue-to-pr-resolver
 description: Implement a GitHub issue end-to-end — create a worktree branch, implement the feature with tests, create a draft PR, then iteratively resolve all CI failures and review comments until the PR is clean. Use when you need to fully implement a GitHub issue from start to merge-ready. Triggers on "implement issue", "resolve issue", "/issue-to-pr-resolver <number>".
 argument-hint: "<issue-number>"
+allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
 
 # Issue-to-PR Resolver
