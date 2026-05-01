@@ -991,8 +991,10 @@ class TestConvenienceRetryOnHashConflict:
 
     async def test_retry_exhaustion_raises_resource_locked(self, tools):
         """Two consecutive hash conflicts: the retry's set re-read also
-        sees a fresh external write. _mutate_atomic exits the loop via
-        `raise last_error`, surfacing the RESOURCE_LOCKED ToolError."""
+        sees a fresh external write. On the final attempt, the inner
+        `except ToolError`'s gate (`attempt + 1 < max_attempts`) is False,
+        so the bare `raise` re-raises the RESOURCE_LOCKED ToolError to
+        the caller."""
         prefs_v1 = _sample_prefs()
         prefs_v2 = {  # external write before the first set
             **prefs_v1,

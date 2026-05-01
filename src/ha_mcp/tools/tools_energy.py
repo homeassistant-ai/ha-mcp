@@ -948,7 +948,6 @@ class EnergyTools:
         """
         try:
             max_attempts = 2
-            last_error: Exception | None = None
             for attempt in range(max_attempts):
                 current = await self._get_prefs()
                 current_config: dict[str, Any] = current["config"]
@@ -984,7 +983,6 @@ class EnergyTools:
                         err_code == ErrorCode.RESOURCE_LOCKED.value
                         and attempt + 1 < max_attempts
                     ):
-                        last_error = exc
                         logger.info(
                             f"{mode} on {target_key}: hash conflict on attempt "
                             f"{attempt + 1}, retrying"
@@ -1006,10 +1004,11 @@ class EnergyTools:
                     },
                 }
 
-            # Exhausted retries — surface the last error for clarity.
-            if last_error is not None:
-                raise last_error
-            # Defensive: should be unreachable.
+            # Unreachable: range(max_attempts) iterates max_attempts > 0 times,
+            # and every iteration either returns or raises. The only `continue`
+            # path is gated on `attempt + 1 < max_attempts`, which is False on
+            # the final iteration — so the bare `raise` above always fires
+            # there. Kept as a type-soundness sentinel for mypy.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_UNEXPECTED,
