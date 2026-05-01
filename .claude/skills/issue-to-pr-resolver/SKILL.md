@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr-resolver
-description: Implement a GitHub issue end-to-end — create a worktree branch, implement the feature with tests, create a draft PR, then iteratively resolve all CI failures and review comments until the PR is clean. Use when you need to fully implement a GitHub issue from start to merge-ready. Triggers on "implement issue", "resolve issue", "/issue-to-pr-resolver <number>".
+description: Manage a GitHub issue end-to-end — create a worktree branch, implement the feature with tests, create a draft PR, then iteratively resolve all CI failures and review comments until the PR is clean. Use when you need to fully implement a GitHub issue from start to merge-ready. Triggers on "implement issue", "resolve issue", "/issue-to-pr-resolver <number>".
 argument-hint: "<issue-number>"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
@@ -19,7 +19,7 @@ gh issue view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json title,body,labels
 **Create a worktree from repo root:**
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-git worktree add worktree/issue-$ARGUMENTS -b feature/issue-$ARGUMENTS
+git worktree add "worktree/issue-$ARGUMENTS" -b "feature/issue-$ARGUMENTS"
 cd worktree/issue-$ARGUMENTS
 ```
 
@@ -50,7 +50,7 @@ gh pr create --draft \
 
 Wait for CI (~3 min):
 ```bash
-sleep 180 && gh pr checks <PR_NUMBER> --repo homeassistant-ai/ha-mcp
+sleep 180 && gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
 ```
 
 ## Phase 4: Resolution Loop
@@ -59,16 +59,16 @@ Repeat until all checks green and no unresolved threads:
 
 **Check for issues:**
 ```bash
-gh pr checks <PR_NUMBER> --repo homeassistant-ai/ha-mcp
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR_NUMBER>/comments \
+gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
+gh api repos/homeassistant-ai/ha-mcp/pulls/$PR_NUMBER/comments \
   --jq '.[] | {id, path, line, author: .user.login, body}'
-gh api graphql -f query='query { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:<PR_NUMBER>) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }'
+gh api graphql -f query='query { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:$PR_NUMBER) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }'
 ```
 
 **Resolve each comment (both steps required):**
 ```bash
 # 1. Reply on the inline thread
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies \
+gh api repos/homeassistant-ai/ha-mcp/pulls/$PR_NUMBER/comments/<COMMENT_ID>/replies \
   -f body="✅ Fixed in [commit]. [explanation]"
 # or: -f body="📝 Not addressing because [reason]."
 
@@ -79,7 +79,7 @@ gh api graphql -f query='mutation($threadId: ID!) { resolveReviewThread(input: {
 
 **After pushing fixes**, wait and re-check:
 ```bash
-sleep 180 && gh pr checks <PR_NUMBER> --repo homeassistant-ai/ha-mcp
+sleep 180 && gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
 ```
 
 ## Phase 5: Final Report
@@ -87,7 +87,7 @@ sleep 180 && gh pr checks <PR_NUMBER> --repo homeassistant-ai/ha-mcp
 Once all checks pass and all threads resolved:
 
 ```bash
-gh pr comment <PR_NUMBER> --repo homeassistant-ai/ha-mcp --body "## Implementation Summary
+gh pr comment $PR_NUMBER --repo homeassistant-ai/ha-mcp --body "## Implementation Summary
 
 **Choices Made:**
 - [key technical decisions with rationale]

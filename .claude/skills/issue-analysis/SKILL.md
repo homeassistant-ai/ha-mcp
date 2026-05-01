@@ -1,6 +1,6 @@
 ---
 name: issue-analysis
-description: Deep analysis of a single GitHub issue with codebase exploration, implementation planning, and architectural assessment. Use when you need to analyze a GitHub issue, assess its complexity, plan implementation approaches, and post a structured analysis comment. Triggers on "analyze issue", "deep analysis", "/issue-analysis <number>".
+description: Manage deep analysis of a single GitHub issue with codebase exploration, implementation planning, and architectural assessment. Use when you need to analyze a GitHub issue, assess its complexity, plan implementation approaches, and post a structured analysis comment. Triggers on "analyze issue", "deep analysis", "/issue-analysis <number>".
 argument-hint: "<issue-number>"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch
 ---
@@ -14,7 +14,7 @@ Perform deep analysis of GitHub issue #$ARGUMENTS in the `homeassistant-ai/ha-mc
 ## Step 1: Fetch Issue Details
 
 ```bash
-gh issue view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json title,body,labels,comments,author,state
+gh issue view "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --json title,body,labels,comments,author,state
 ```
 
 Check `author.login`. If NOT `julienld`, prepend a bot disclaimer to the GitHub comment:
@@ -58,11 +58,11 @@ Write the full comment text in the conversation — including the bot disclaimer
 Once approved, apply labels and post the comment:
 
 ```bash
-gh issue edit $ARGUMENTS --repo homeassistant-ai/ha-mcp \
+gh issue edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp \
   --add-label "issue-analyzed,<classification>,<priority>" \
   --remove-label "triaged"
 
-gh issue comment $ARGUMENTS --repo homeassistant-ai/ha-mcp --body "$(cat <<'EOF'
+gh issue comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "$(cat <<'EOF'
 [approved comment text]
 EOF
 )"
