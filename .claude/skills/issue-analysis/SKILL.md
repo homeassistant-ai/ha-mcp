@@ -49,9 +49,11 @@ Always add `issue-analyzed`.
 
 ## Step 5: Update Labels
 
+Apply the labels determined in Step 4. Always include `issue-analyzed`; remove `triaged` if present.
+
 ```bash
 gh issue edit $ARGUMENTS --repo homeassistant-ai/ha-mcp \
-  --add-label "issue-analyzed,ready-to-implement,priority: medium" \
+  --add-label "issue-analyzed,<classification>,<priority>" \
   --remove-label "triaged"
 ```
 

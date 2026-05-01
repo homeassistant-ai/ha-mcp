@@ -108,6 +108,5 @@ Report to user: PR number, status, key choices, any improvement PRs created.
 
 - **Never commit to master** — always work in the worktree
 - **Always create PRs as draft** — never mark ready without user request
-- **Never push/create PRs without user permission**
 - Maximum 5 resolution iterations before reporting blockers
 - Improvement PRs (workflow, CI, docs): branch from master, separate PR
