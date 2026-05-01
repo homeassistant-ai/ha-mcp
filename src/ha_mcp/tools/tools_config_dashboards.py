@@ -913,14 +913,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 response = await client.send_websocket_message(get_data)
 
-                # Lazy resolver fallback: same gate as ha_config_get_dashboard.
-                # If the pre-resolver above didn't fire (e.g. caller passed an
-                # identifier that contains a hyphen but isn't a real url_path),
-                # HA may still reject it — resolve and retry once.
-                url_path, response = await _lazy_resolve_and_retry(
-                    client, url_path, get_data, response
-                )
-
                 if isinstance(response, dict) and not response.get("success", True):
                     error_msg = response.get("error", {})
                     if isinstance(error_msg, dict):

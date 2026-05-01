@@ -487,9 +487,11 @@ class TestDashboardIdentifierResolution:
             config_hash = get_data["config_hash"]
             assert config_hash
 
-            # Apply python_transform via the internal id — lazy fallback in
-            # the python_transform path resolves it. Hash from the url_path
-            # read must still validate because the underlying config is the same.
+            # Apply python_transform via the internal id — the set-tool's
+            # pre-resolver maps the internal id to the canonical url_path
+            # before the python_transform branch runs. The hash from the
+            # url_path read must still validate because the underlying
+            # config is the same.
             transform_data = await mcp.call_tool_success(
                 "ha_config_set_dashboard",
                 {
