@@ -930,76 +930,90 @@ class EnergyTools:
         not-found errors surface), then returns ``preview_payload`` plus the
         new shape — without writing.
         """
-        max_attempts = 2
-        last_error: Exception | None = None
-        for attempt in range(max_attempts):
-            current = await self._get_prefs()
-            current_config: dict[str, Any] = current["config"]
-            current_hash: str = current["config_hash"]
+        try:
+            max_attempts = 2
+            last_error: Exception | None = None
+            for attempt in range(max_attempts):
+                current = await self._get_prefs()
+                current_config: dict[str, Any] = current["config"]
+                current_hash: str = current["config_hash"]
 
-            existing_list = list(current_config.get(target_key, []))
-            new_list = mutator(existing_list)
+                existing_list = list(current_config.get(target_key, []))
+                new_list = mutator(existing_list)
 
-            if dry_run:
+                if dry_run:
+                    return {
+                        "success": True,
+                        "mode": mode,
+                        "dry_run": True,
+                        **preview_payload,
+                        "current_count": len(existing_list),
+                        "new_count": len(new_list),
+                    }
+
+                partial_config = {target_key: new_list}
+                try:
+                    set_result = await self._set_prefs(partial_config, current_hash)
+                except ToolError as exc:
+                    # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
+                    # Retry once with a fresh read in case of a benign race.
+                    # raise_tool_error serialises the structured error as JSON in
+                    # the exception message, so we parse rather than substring-match.
+                    try:
+                        parsed = json.loads(str(exc))
+                        err_code = parsed.get("error", {}).get("code")
+                    except (json.JSONDecodeError, TypeError):
+                        err_code = None
+                    if (
+                        err_code == ErrorCode.RESOURCE_LOCKED.value
+                        and attempt + 1 < max_attempts
+                    ):
+                        last_error = exc
+                        logger.info(
+                            f"{mode} on {target_key}: hash conflict on attempt "
+                            f"{attempt + 1}, retrying"
+                        )
+                        continue
+                    raise
+
                 return {
                     "success": True,
                     "mode": mode,
-                    "dry_run": True,
-                    **preview_payload,
-                    "current_count": len(existing_list),
+                    "config_hash": set_result["config_hash"],
+                    "target_key": target_key,
                     "new_count": len(new_list),
+                    "message": set_result.get("message", f"{mode} succeeded."),
+                    **{
+                        k: set_result[k]
+                        for k in ("post_save_validation_errors", "warning", "partial")
+                        if k in set_result
+                    },
                 }
 
-            partial_config = {target_key: new_list}
-            try:
-                set_result = await self._set_prefs(partial_config, current_hash)
-            except ToolError as exc:
-                # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
-                # Retry once with a fresh read in case of a benign race.
-                # raise_tool_error serialises the structured error as JSON in
-                # the exception message, so we parse rather than substring-match.
-                try:
-                    parsed = json.loads(str(exc))
-                    err_code = parsed.get("error", {}).get("code")
-                except (json.JSONDecodeError, TypeError):
-                    err_code = None
-                if (
-                    err_code == ErrorCode.RESOURCE_LOCKED.value
-                    and attempt + 1 < max_attempts
-                ):
-                    last_error = exc
-                    logger.info(
-                        f"{mode} on {target_key}: hash conflict on attempt "
-                        f"{attempt + 1}, retrying"
-                    )
-                    continue
-                raise
-
-            return {
-                "success": True,
-                "mode": mode,
-                "config_hash": set_result["config_hash"],
-                "target_key": target_key,
-                "new_count": len(new_list),
-                "message": set_result.get("message", f"{mode} succeeded."),
-                **{
-                    k: set_result[k]
-                    for k in ("post_save_validation_errors", "warning", "partial")
-                    if k in set_result
-                },
-            }
-
-        # Exhausted retries — surface the last error for clarity.
-        if last_error is not None:
-            raise last_error
-        # Defensive: should be unreachable.
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.INTERNAL_UNEXPECTED,
-                f"{mode}: exhausted retries without a definitive result",
-                context={"mode": mode, "target_key": target_key},
+            # Exhausted retries — surface the last error for clarity.
+            if last_error is not None:
+                raise last_error
+            # Defensive: should be unreachable.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_UNEXPECTED,
+                    f"{mode}: exhausted retries without a definitive result",
+                    context={"mode": mode, "target_key": target_key},
+                )
             )
-        )
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in {mode} on {target_key}: {e}")
+            exception_to_structured_error(
+                e,
+                context={"mode": mode, "target_key": target_key},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
