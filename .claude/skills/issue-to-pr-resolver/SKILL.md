@@ -95,8 +95,7 @@ gh pr comment $PR_NUMBER --repo homeassistant-ai/ha-mcp --body "## Implementatio
 **Problems Encountered:**
 - [issues faced and how resolved]
 - [unrelated test failures fixed, if any]
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+"
 ```
 
 Report to user: PR number, status, key choices.
