@@ -1306,18 +1306,32 @@ class TestExtractAddonLogLevel:
         """An empty string in options falls through to the schema default marker."""
         addon = {
             "options": {"log_level": ""},
-            "schema": {"log_level": "list(info|debug|...)"},
+            "schema": [{"name": "log_level", "type": "list(info|debug|...)"}],
         }
         assert _extract_addon_log_level(addon) == "default"
 
     def test_schema_only_returns_default_marker(self):
         """Add-on with log_level in schema but no option set reports 'default'."""
-        addon = {"options": {}, "schema": {"log_level": "list(info|debug|...)"}}
+        addon = {
+            "options": {},
+            "schema": [{"name": "log_level", "type": "list(info|debug|...)"}],
+        }
         assert _extract_addon_log_level(addon) == "default"
 
     def test_no_log_level_returns_none(self):
         """Add-on with no log_level anywhere returns None (field omitted in response)."""
-        assert _extract_addon_log_level({"options": {"port": 8080}, "schema": {}}) is None
+        assert (
+            _extract_addon_log_level({"options": {"port": 8080}, "schema": []})
+            is None
+        )
+
+    def test_schema_without_log_level_returns_none(self):
+        """Schema list that doesn't include log_level returns None."""
+        addon = {
+            "options": {},
+            "schema": [{"name": "port", "type": "int"}],
+        }
+        assert _extract_addon_log_level(addon) is None
 
     def test_malformed_options_ignored(self):
         """Non-dict options don't crash the extractor."""
@@ -1325,9 +1339,20 @@ class TestExtractAddonLogLevel:
 
     def test_non_string_log_level_ignored(self):
         """A non-string log_level is not surfaced (avoids leaking junk to users)."""
-        addon = {"options": {"log_level": 42}, "schema": {"log_level": "..."}}
+        addon = {
+            "options": {"log_level": 42},
+            "schema": [{"name": "log_level", "type": "..."}],
+        }
         # Falls through past options (non-string) and then uses schema → "default"
         assert _extract_addon_log_level(addon) == "default"
+
+    def test_schema_dict_legacy_shape_returns_none(self):
+        """Legacy dict-shaped schema is no longer recognized (Supervisor returns a list)."""
+        addon = {
+            "options": {},
+            "schema": {"log_level": "list(info|debug|...)"},
+        }
+        assert _extract_addon_log_level(addon) is None
 
 
 class TestGetAddonInfoLogLevel:

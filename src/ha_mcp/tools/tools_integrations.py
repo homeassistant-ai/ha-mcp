@@ -234,6 +234,13 @@ class IntegrationTools:
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
+
+        Each entry carries a ``log_level`` field — the canonical Python logger
+        level name (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when
+        the integration has a ``logger.set_level`` override, or ``"DEFAULT"``
+        (uppercase sentinel) when no override is set. This is distinct from the
+        add-on side, where ``ha_get_addon`` returns Supervisor's lowercase
+        ``"default"`` literal — do not cross-compare the two.
         """
         try:
             include_opts = coerce_bool_param(
@@ -290,9 +297,9 @@ class IntegrationTools:
 
             # Surface the effective Python logger level for this integration
             # so users can confirm logger.set_level changes took effect.
-            if isinstance(entry_domain, str) and entry_domain:
-                logger_levels = await get_logger_levels(self._client)
-                resp["log_level"] = logger_levels.get(entry_domain, "DEFAULT")
+            # Emit unconditionally for symmetry with the list path (_format_entry).
+            logger_levels = await get_logger_levels(self._client)
+            resp["log_level"] = logger_levels.get(entry_domain or "", "DEFAULT")
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):

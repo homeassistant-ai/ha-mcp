@@ -170,9 +170,14 @@ def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
     """Return the add-on's configured log level, if any.
 
     Checks the add-on's current options first (``options.log_level`` — what the
-    user set), then falls back to the schema defaults (``schema.log_level``)
-    so add-ons that ship a default-but-unset value still surface something
-    meaningful. Returns ``None`` when the add-on exposes no log-level option.
+    user set), then falls back to the schema (Supervisor serializes ``schema``
+    as a list of ``{name, type, ...}`` field descriptors) so add-ons that ship a
+    log_level option without a value still surface ``"default"``. Returns
+    ``None`` when the add-on exposes no log_level option at all.
+
+    The lower-case ``"default"`` is the literal Supervisor sentinel; the
+    integration path uses ``"DEFAULT"`` (uppercase) — these are distinct values
+    by design and should not be cross-compared.
     """
     options = addon.get("options")
     if isinstance(options, dict):
@@ -181,7 +186,10 @@ def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
             return level
 
     schema = addon.get("schema")
-    if isinstance(schema, dict) and "log_level" in schema:
+    if isinstance(schema, list) and any(
+        isinstance(item, dict) and item.get("name") == "log_level"
+        for item in schema
+    ):
         return "default"
 
     return None
