@@ -241,7 +241,7 @@ cd worktree/<branch-name>
    gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
    ```
 7. **Address review comments** if any (prioritize human comments)
-8. **Update PR description** to reflect all changes made so far (only when PR is already marked as ready)
+8. **Update PR description** if the scope changed (only when PR is already marked as ready)
 9. **Repeat steps 2-8 until:**
    - ✅ All CI checks green
    - ✅ All comments addressed

@@ -51,7 +51,7 @@ git push
 
 Fix unrelated test failures encountered (document in final summary).
 
-After each push, update the PR description to reflect all changes made so far — the PR is already ready so reviewers see it immediately.
+After each push, if the scope changed, update the PR description — the PR is already ready so reviewers see it immediately.
 
 After each push, update the PR description if the changes affect what the PR does.
 
