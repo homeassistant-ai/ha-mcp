@@ -49,7 +49,7 @@ Gemini CLI uses `url` key for SSE transport:
 }
 ```
 
-> **Note:** Use `url` only when the server actually serves SSE. If your client logs show `405 Method Not Allowed` on `GET /mcp`, the server is running in Streamable HTTP mode (POST-only, the default for `ha-mcp-web`) — switch to `httpUrl` (next section).
+> **Note:** Use `url` only when the server actually serves SSE. If your client logs show `405 Method Not Allowed` on `GET /mcp`, the server is running in Streamable HTTP mode (the default for `ha-mcp-web`; for SSE use the separate `ha-mcp-sse` entry point on port 8087) — switch to `httpUrl` (next section).
 
 ### Streamable HTTP Configuration (Network/Remote)
 
@@ -105,7 +105,7 @@ gemini mcp add --transport sse home-assistant {{MCP_SERVER_URL}}
 
 ## Setup Examples
 
-Concrete `~/.gemini/settings.json` snippets for the two most common deployments. Replace IPs and tokens with your own.
+Concrete `~/.gemini/settings.json` snippets for the two most common deployments. Replace IPs and tokens with your own. These JSON snippets are equivalent to using `gemini mcp add` (shown above) — pick whichever flow you prefer.
 
 ### Home Assistant built-in MCP integration (no `ha-mcp` container)
 
@@ -115,9 +115,9 @@ If you have the [Home Assistant MCP integration](https://www.home-assistant.io/i
 {
   "mcpServers": {
     "home-assistant": {
-      "httpUrl": "http://192.168.1.10:8123/api/mcp",
+      "httpUrl": "http://homeassistant.local:8123/api/mcp",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJIUzI1NiI..."
+        "Authorization": "Bearer <your-long-lived-access-token>"
       }
     }
   }
@@ -132,7 +132,7 @@ If `ha-mcp` runs in its own container on the same host as Home Assistant (replac
 {
   "mcpServers": {
     "ha-mcp": {
-      "httpUrl": "http://192.168.1.10:8086/mcp"
+      "httpUrl": "http://homeassistant.local:8086/mcp"
     }
   }
 }
@@ -159,11 +159,11 @@ services:
 Companion `.env`:
 
 ```bash
-HOMEASSISTANT_URL=http://192.168.1.10:8123
-HOMEASSISTANT_TOKEN=eyJhbGciOiJIUzI1NiI...
+HOMEASSISTANT_URL=http://homeassistant.local:8123
+HOMEASSISTANT_TOKEN=<your-long-lived-access-token>
 ```
 
-For production hardening (read-only filesystem, dropped privileges, resource limits), see Docker Compose's [security reference](https://docs.docker.com/compose/compose-file/05-services/#security_opt).
+For production hardening (read-only filesystem via `read_only`, dropped privileges via `cap_drop`, resource limits via `deploy.resources.limits`), see Docker Compose's [services reference](https://docs.docker.com/reference/compose-file/services/).
 
 ## Management Commands
 
