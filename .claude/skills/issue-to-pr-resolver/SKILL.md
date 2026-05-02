@@ -53,6 +53,8 @@ Wait for CI (~3 min):
 sleep 180 && gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
 ```
 
+Before marking ready (`gh pr ready`), update the PR description to reflect all changes made.
+
 ## Phase 4: Resolution Loop
 
 Repeat until all checks green and no unresolved threads:

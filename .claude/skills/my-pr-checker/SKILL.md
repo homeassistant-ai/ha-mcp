@@ -51,6 +51,8 @@ git push
 
 Fix unrelated test failures encountered (document in final summary).
 
+After each push, update the PR description if the changes affect what the PR does.
+
 ## Step 4: Resolve Each Thread (both steps required)
 
 ```bash

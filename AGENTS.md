@@ -215,7 +215,7 @@ cd worktree/<branch-name>
 
 **Never push or create PRs without user permission.**
 
-**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user.
+**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
 
 ### PR Workflow
 
@@ -241,7 +241,8 @@ cd worktree/<branch-name>
    gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
    ```
 7. **Address review comments** if any (prioritize human comments)
-8. **Repeat steps 2-7 until:**
+8. **Update PR description** if the push changed what the PR does
+9. **Repeat steps 2-8 until:**
    - ✅ All CI checks green
    - ✅ All comments addressed
    - ✅ PR ready for merge
