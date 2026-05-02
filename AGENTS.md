@@ -286,14 +286,7 @@ Once the PR is ready (all checks green, comments addressed), provide:
 
 ### Implementing Improvements in Separate PRs
 
-**Fix small things inline — don't defer unnecessarily.** If you spot a simple fix (a few lines, clearly within scope), fix it in the current PR. Deferring small fixes to follow-up PRs creates noise and rarely gets done.
-
-Open a **separate PR** only when the improvement is genuinely large or unrelated:
-- Touches many files or requires design decisions
-- Would significantly expand PR scope or risk
-- Is a workflow/CI/docs change unrelated to the feature (e.g. `.claude/skills/` changes always go to master)
-
-Branch from master when possible; only branch from the PR branch if the improvement depends on those changes. Mention any separate improvement PRs in the main PR's final comment.
+Implement long-term improvements (workflow, code quality, docs, tests, CI) in **separate PRs** — never mix with the main feature PR. Branch from master when possible; only branch from the PR branch if the improvement depends on those changes. For `.claude/skills/` changes, always branch from and PR to master. Mention improvement PRs in the main PR's final comment.
 
 ### Hotfix Process (Critical Bugs Only)
 

@@ -15,5 +15,10 @@
 - [ ] All automated tests pass (`uv run pytest`)
 - [ ] Code follows style guidelines (`uv run ruff check`)
 
+## Future improvements
+
+<!-- Optional: things noticed during this PR that are out of scope but worth doing later.
+     Small things fixable in a few lines should be fixed inline rather than listed here. -->
+
 ## Checklist
 - [ ] I have updated documentation if needed
