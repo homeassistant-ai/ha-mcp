@@ -664,27 +664,42 @@ class TestFetchAddonLogs:
 
     @pytest.mark.asyncio
     async def test_jwt_split_at_truncation_boundary_is_redacted(self, monkeypatch):
-        # G1 regression: a JWT positioned so the truncation cut would slice
-        # into it must still be fully redacted because sanitization runs
-        # before truncation.
+        # G1 regression: position the JWT so the truncation cut slices THROUGH
+        # it — the eyJ prefix falls in the dropped region, the signature falls
+        # in the kept region. Under the old truncate-then-sanitize order, the
+        # surviving JWT tail (no eyJ prefix) would not match the JWT regex and
+        # the signature characters would leak. Under the fixed sanitize-then-
+        # truncate order, the entire JWT is replaced with [REDACTED_JWT]
+        # before the cut, so nothing from the JWT survives.
+        from ha_mcp.tools.tools_bug_report import _ADDON_LOG_MAX_CHARS
+
         jwt = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
             "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
             "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
         )
-        # Pad with sanitizer-clean filler so the JWT sits well before the cut,
-        # but the total length still exceeds _ADDON_LOG_MAX_CHARS (3000).
-        padding = "x" * 5000
-        fake_response = httpx.Response(200, text=f"{jwt}\n{padding}")
+        # Place the JWT so cut_point lands 50 chars inside it (well past `eyJ`,
+        # well before `SflKx`).
+        prefix_len = 100
+        jwt_chars_to_drop = 50
+        total_len = prefix_len + jwt_chars_to_drop + _ADDON_LOG_MAX_CHARS
+        suffix_len = total_len - prefix_len - len(jwt)
+        assert suffix_len > 0, "suffix_len math is off"
+        # Sanity-check the placement: the buggy order really would leak SflKx.
+        assert "SflKx" in jwt[jwt_chars_to_drop:]
+        text = "x" * prefix_len + jwt + "x" * suffix_len
+        fake_response = httpx.Response(200, text=text)
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
         with patch("httpx.AsyncClient.get", return_value=fake_response):
             result = await _fetch_addon_logs()
 
-        # Even though truncation kept only the tail, the JWT was redacted
-        # in the pre-truncation pass, so no fragment of it leaks through.
-        assert "eyJhbG" not in result
+        # Pre-fix code (truncate-then-sanitize) would leave SflKx in the tail.
         assert "SflKx" not in result
+        # Confirm the marker survived the cut (positive proof sanitization
+        # actually ran before truncation, not just that SflKx happened to be
+        # truncated away).
+        assert "[REDACTED_JWT]" in result
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_http_error_with_log(self, monkeypatch, caplog):
