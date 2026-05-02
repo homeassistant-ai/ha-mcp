@@ -373,8 +373,11 @@ def main() -> int:
     register_browser_landing(mcp, secret_path)
     # Mount settings UI routes both at root (for HA ingress proxy) and
     # under the secret path (for direct port access). See
-    # register_settings_routes docstring for the auth model.
-    register_settings_routes(mcp, _get_server(), secret_path=secret_path)
+    # register_settings_routes docstring for the auth model. Use the
+    # server's actual FastMCP instance (not the _DeferredMCP wrapper)
+    # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
+    server_instance = _get_server()
+    register_settings_routes(server_instance.mcp, server_instance, secret_path=secret_path)
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
