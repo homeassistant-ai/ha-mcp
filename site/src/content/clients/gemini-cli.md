@@ -105,7 +105,7 @@ gemini mcp add --transport sse home-assistant {{MCP_SERVER_URL}}
 
 ## Setup Examples
 
-Concrete `~/.gemini/settings.json` snippets for the two most common deployments. Replace IPs and tokens with your own. These JSON snippets are equivalent to using `gemini mcp add` (shown above) — pick whichever flow you prefer.
+Concrete `~/.gemini/settings.json` snippets for the two most common deployments. Replace hosts and tokens with your own. These JSON snippets are equivalent to using `gemini mcp add` (shown above) — pick whichever flow you prefer.
 
 ### Home Assistant built-in MCP integration (no `ha-mcp` container)
 
@@ -126,7 +126,7 @@ If you have the [Home Assistant MCP integration](https://www.home-assistant.io/i
 
 ### Self-hosted `ha-mcp` Docker container
 
-If `ha-mcp` runs in its own container on the same host as Home Assistant (replace the IP with your own):
+If `ha-mcp` runs in its own container on the same host as Home Assistant (replace the host with your own):
 
 ```json
 {
