@@ -98,8 +98,8 @@ gh pr comment $ARGUMENTS --repo homeassistant-ai/ha-mcp --body "## PR Assessment
 - [issues faced and how resolved]
 - [unrelated test failures fixed, if any]
 
-**Suggested Improvements Not Implemented:**
-- [optional follow-up]
+**Future improvements:**
+- [large/out-of-scope improvements noted — document here rather than opening separate PRs]
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```

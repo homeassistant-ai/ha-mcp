@@ -274,9 +274,6 @@ Once the PR is ready (all checks green, comments addressed), provide:
    **Problems Encountered:**
    - [Issues faced and how they were resolved]
    - [Unrelated test failures fixed (if any)]
-
-   **Suggested Improvements:**
-   - [Optional follow-up work or technical debt noted]
    ```
 
 2. **Short summary for user** when returning control:
@@ -284,9 +281,17 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-### Implementing Improvements in Separate PRs
+### Handling Discovered Improvements
 
-Implement long-term improvements (workflow, code quality, docs, tests, CI) in **separate PRs** — never mix with the main feature PR. Branch from master when possible; only branch from the PR branch if the improvement depends on those changes. For `.claude/skills/` changes, always branch from and PR to master. Mention improvement PRs in the main PR's final comment.
+When you notice something that could be improved while working on a PR, use this scale:
+
+| Size | Action |
+|------|--------|
+| **Small** — a few lines, clearly in scope | Fix it inline, no mention needed |
+| **Mid-sized** — meaningful effort, worth doing but out of scope | Pause **before pushing** and ask the user whether to include it |
+| **Large / unrelated** — many files, design decisions, or different domain | Document in the PR description's **Future improvements** section; open a separate PR only if the user asks |
+
+**Never open a separate improvement PR without explicit user approval.** Document it in the PR description first — it may already be covered by an open issue or the user may not want it at all.
 
 ### Hotfix Process (Critical Bugs Only)
 

@@ -96,17 +96,14 @@ gh pr comment $PR_NUMBER --repo homeassistant-ai/ha-mcp --body "## Implementatio
 - [issues faced and how resolved]
 - [unrelated test failures fixed, if any]
 
-**Suggested Improvements:**
-- [optional follow-up work]
-
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
-Report to user: PR number, status, key choices, any improvement PRs created.
+Report to user: PR number, status, key choices.
 
 ## Rules
 
 - **Never commit to master** — always work in the worktree
 - **Always create PRs as draft** — never mark ready without user request
 - Maximum 5 resolution iterations before reporting blockers
-- Improvement PRs (workflow, CI, docs): branch from master, separate PR
+- **Discovered improvements**: fix small things inline; surface mid-sized ones to user before pushing; document large/unrelated ones in the PR description's **Future improvements** section — never open a separate improvement PR without explicit user approval
