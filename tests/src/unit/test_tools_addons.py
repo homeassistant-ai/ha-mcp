@@ -963,6 +963,45 @@ class TestCallAddonWsNewParams:
         assert result["pagination"]["limit"] == 5
 
     @pytest.mark.asyncio
+    async def test_safety_ceiling_distinct_from_message_limit(self):
+        """Hitting the global ceiling without a caller-set message_limit
+        reports closed_by="safety_ceiling", not "message_limit"."""
+        client = _make_mock_client()
+
+        messages_to_send = [f"msg {i}" for i in range(10)]
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._MAX_WS_MESSAGES",
+                5,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = messages_to_send + [
+                websockets.exceptions.ConnectionClosed(None, None)
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/compile",
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "safety_ceiling"
+        assert result["message_count"] == 5
+
+    @pytest.mark.asyncio
     async def test_message_offset_skips_head(self):
         """message_offset drops the first N messages from the returned list."""
         client = _make_mock_client()

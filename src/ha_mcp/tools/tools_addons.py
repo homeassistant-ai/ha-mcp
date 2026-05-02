@@ -628,7 +628,14 @@ async def _call_addon_ws(
                     break
 
                 if len(collected) >= collection_cap:
-                    close_reason = "message_limit"
+                    # Distinguish caller-set cap from the global safety ceiling
+                    # so an agent reading the response can tell "I capped this"
+                    # from "ha-mcp's hard ceiling kicked in".
+                    close_reason = (
+                        "message_limit"
+                        if message_limit is not None
+                        else "safety_ceiling"
+                    )
                     break
 
                 if total_size >= _MAX_RESPONSE_SIZE:
