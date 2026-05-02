@@ -35,6 +35,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
 )
+from .util_helpers import ANSI_ESCAPE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,6 @@ _MAX_RESPONSE_SIZE = 50 * 1024
 # Hard safety cap on WebSocket messages collected per call. `message_limit`
 # can lower this but never raise it.
 _MAX_WS_MESSAGES = 1000
-
-# ANSI escape code pattern for stripping terminal colors from addon output
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # Substrings that flag a WebSocket message as "signal" for the summarize pass.
 # Keep conservative: false negatives get elided, false positives just mean
@@ -661,7 +659,7 @@ async def _call_addon_ws(
                     continue
 
                 # Strip ANSI escape codes
-                clean = _ANSI_ESCAPE_RE.sub("", message)
+                clean = ANSI_ESCAPE_RE.sub("", message)
                 collected.append(clean)
                 total_size += len(clean)
 

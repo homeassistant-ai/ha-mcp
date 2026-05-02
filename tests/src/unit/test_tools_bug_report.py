@@ -518,15 +518,75 @@ class TestSanitizeLogText:
         assert "Bearer [REDACTED]" in result
 
     def test_redacts_long_hex_strings(self):
-        text = f"token: {'a1b2c3d4' * 5}"  # 40-char hex string
+        # Bare hex (no leading "token:" — that path is exercised by the
+        # key=value rule below) gets the dedicated hex marker.
+        text = f"raw: {'a1b2c3d4' * 5}"  # 40-char hex string
         result = _sanitize_log_text(text)
         assert "a1b2c3d4" not in result
         assert "[REDACTED_HEX]" in result
 
-    def test_redacts_ipv4_addresses(self):
+    def test_redacts_ipv4_with_port(self):
         text = "Connected to 192.168.1.100:8123"
         result = _sanitize_log_text(text)
         assert "192.168.1.100" not in result
+        assert "[IP]" in result
+
+    def test_redacts_ipv4_in_url(self):
+        text = "fetched https://192.168.1.1/api/states"
+        result = _sanitize_log_text(text)
+        assert "192.168.1.1" not in result
+        assert "[IP]" in result
+
+    def test_redacts_ipv4_after_keyword(self):
+        text = "host=10.0.0.5 connecting"
+        result = _sanitize_log_text(text)
+        assert "10.0.0.5" not in result
+        assert "[IP]" in result
+
+    def test_preserves_four_segment_version_strings(self):
+        # Regression: bare four-segment values without network context (e.g.
+        # version banners) were being mangled by the IPv4 rule.
+        text = "ha-mcp version 1.2.3.4 starting"
+        result = _sanitize_log_text(text)
+        assert result == text
+
+    def test_redacts_key_value_credentials(self):
+        cases = [
+            ("OPENAI_API_KEY=sk-proj-AbCdEf1234567890qwerty", "sk-proj-AbCdEf"),
+            ("token=ghp_AbCdEf1234567890qwerty1234567890qwer", "ghp_AbCdEf"),
+            ("password=hunter2-S3cret!", "hunter2"),
+            ("api_key: somekey1234", "somekey1234"),
+        ]
+        for text, secret in cases:
+            result = _sanitize_log_text(text)
+            assert secret not in result, f"{secret!r} leaked in {result!r}"
+            assert "[REDACTED]" in result
+
+    def test_redacts_url_userinfo(self):
+        cases = [
+            ("https://admin:supersecret@homeassistant.local/api", "supersecret"),
+            ("mqtt://user:pass@broker.local:1883", "user:pass"),
+        ]
+        for text, secret in cases:
+            result = _sanitize_log_text(text)
+            assert secret not in result, f"{secret!r} leaked in {result!r}"
+            assert "[REDACTED]" in result
+
+    def test_bearer_preserves_casing(self):
+        # Capital and lowercase variants both get redacted; original casing kept.
+        upper = _sanitize_log_text("Authorization: Bearer abc123token")
+        lower = _sanitize_log_text("auth: bearer abc123token")
+        assert "abc123" not in upper and "abc123" not in lower
+        assert "Bearer [REDACTED]" in upper
+        assert "bearer [REDACTED]" in lower
+
+    def test_handles_multiple_secrets_in_one_line(self):
+        text = "token=abc123 connected to 192.168.1.5 with bearer xyz789"
+        result = _sanitize_log_text(text)
+        assert "abc123" not in result
+        assert "xyz789" not in result
+        assert "192.168.1.5" not in result
+        assert "[REDACTED]" in result
         assert "[IP]" in result
 
     def test_preserves_normal_text(self):
@@ -538,23 +598,32 @@ class TestSanitizeLogText:
 class TestFetchAddonLogs:
     """Tests for _fetch_addon_logs."""
 
+    @pytest.fixture
+    def _no_supervisor_token(self, monkeypatch):
+        """Remove SUPERVISOR_TOKEN without clobbering the rest of os.environ."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
     @pytest.mark.asyncio
-    async def test_returns_empty_without_supervisor_token(self):
-        with patch.dict("os.environ", {}, clear=True):
-            result = await _fetch_addon_logs()
+    async def test_returns_empty_without_supervisor_token(self, _no_supervisor_token):
+        result = await _fetch_addon_logs()
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_fetches_and_sanitizes_logs(self):
+    async def test_returns_empty_when_supervisor_token_is_empty(self, monkeypatch):
+        # Empty-string token is treated the same as missing.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "")
+        result = await _fetch_addon_logs()
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_fetches_and_sanitizes_logs(self, monkeypatch):
         fake_response = httpx.Response(
             200,
             text="INFO ha_mcp: connected to 192.168.1.50\n\x1b[31mERROR\x1b[0m: fail",
         )
 
-        with (
-            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "test-token"}),
-            patch("httpx.AsyncClient.get", return_value=fake_response),
-        ):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
             result = await _fetch_addon_logs()
 
         # ANSI codes stripped
@@ -566,38 +635,79 @@ class TestFetchAddonLogs:
         assert "ha_mcp" in result
 
     @pytest.mark.asyncio
-    async def test_truncates_long_logs(self):
+    async def test_truncates_long_logs_with_marker(self, monkeypatch):
+        # Use a long, sanitizer-clean payload so character math is exact.
         long_log = "x" * 5000
         fake_response = httpx.Response(200, text=long_log)
 
-        with (
-            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "test-token"}),
-            patch("httpx.AsyncClient.get", return_value=fake_response),
-        ):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
             result = await _fetch_addon_logs()
 
-        assert len(result) <= 3000
+        # Marker prepended, then last 3000 chars of the sanitized payload.
+        assert result.startswith("[...truncated, showing last 3000 of 5000 chars...]\n")
+        assert result.endswith("x" * 3000)
+        assert "x" * 3001 not in result  # exactly 3000 chars after marker
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_http_error(self):
+    async def test_short_logs_not_marked_or_truncated(self, monkeypatch):
+        # Logs shorter than the cap should be returned verbatim, no marker.
+        short_log = "INFO ha_mcp: started cleanly\n"
+        fake_response = httpx.Response(200, text=short_log)
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        assert result == short_log
+        assert "truncated" not in result
+
+    @pytest.mark.asyncio
+    async def test_jwt_split_at_truncation_boundary_is_redacted(self, monkeypatch):
+        # G1 regression: a JWT positioned so the truncation cut would slice
+        # into it must still be fully redacted because sanitization runs
+        # before truncation.
+        jwt = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        )
+        # Pad with sanitizer-clean filler so the JWT sits well before the cut,
+        # but the total length still exceeds _ADDON_LOG_MAX_CHARS (3000).
+        padding = "x" * 5000
+        fake_response = httpx.Response(200, text=f"{jwt}\n{padding}")
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        # Even though truncation kept only the tail, the JWT was redacted
+        # in the pre-truncation pass, so no fragment of it leaks through.
+        assert "eyJhbG" not in result
+        assert "SflKx" not in result
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error_with_log(self, monkeypatch, caplog):
         fake_response = httpx.Response(403, text="Forbidden")
 
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
         with (
-            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "test-token"}),
             patch("httpx.AsyncClient.get", return_value=fake_response),
+            caplog.at_level("INFO", logger="ha_mcp.tools.tools_bug_report"),
         ):
             result = await _fetch_addon_logs()
 
         assert result == ""
+        # G6: status code is logged so users can distinguish 4xx/5xx from
+        # "Supervisor unreachable" / "not running as add-on".
+        assert any("403" in rec.getMessage() for rec in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_network_error(self):
-        with (
-            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "test-token"}),
-            patch(
-                "httpx.AsyncClient.get",
-                side_effect=httpx.ConnectError("Connection refused"),
-            ),
+    async def test_returns_empty_on_network_error(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch(
+            "httpx.AsyncClient.get",
+            side_effect=httpx.ConnectError("Connection refused"),
         ):
             result = await _fetch_addon_logs()
 

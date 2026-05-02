@@ -25,6 +25,7 @@ from ..utils.usage_logger import (
     get_startup_logs,
 )
 from .helpers import log_tool_usage
+from .util_helpers import ANSI_ESCAPE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,24 @@ logger = logging.getLogger(__name__)
 RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
 AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
 
-# ANSI escape code pattern (terminal colors in container logs)
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
-
-# Max characters to include from addon container logs
+# Max characters to include from addon container logs.
+# 3000 chars ≈ 750 LLM tokens — keeps the tool response well below context budgets
+# while still capturing enough recent output to diagnose most issues.
 _ADDON_LOG_MAX_CHARS = 3000
+
+# IPv4 sanitization: only redact addresses with strong network context so that
+# four-segment version strings (e.g. "ha-mcp version 1.2.3.4") are preserved.
+_IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_IPV4 = rf"(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}"
+# IP followed by :port or /CIDR — always a network address, never a version.
+_IPV4_WITH_PORT_OR_CIDR_RE = re.compile(rf"\b{_IPV4}(?::\d+|/\d{{1,2}})\b(?!\.\d)")
+# IP preceded by a network keyword (from, to, host=, addr=, etc.).
+_IPV4_AFTER_KEYWORD_RE = re.compile(
+    rf"\b((?:from|to|host|hostname|addr|address|ip|src|dst|server|client|peer|via)\b\s*[=:]?\s*){_IPV4}\b(?!\.\d)",
+    re.IGNORECASE,
+)
+# IP appearing inside a URL (`scheme://1.2.3.4...`).
+_IPV4_IN_URL_RE = re.compile(rf"(://){_IPV4}\b(?!\.\d)")
 
 
 def _detect_installation_method() -> str:
@@ -90,23 +104,54 @@ def _detect_platform() -> dict[str, str]:
 
 
 def _sanitize_log_text(text: str) -> str:
-    """Strip common secrets from log text before including in reports."""
+    """Best-effort secret scrubber for log text.
+
+    Defense-in-depth, not exhaustive — bug reports still pass through human
+    review (see ``_generate_anonymization_guide``). Rules cover the most common
+    leak shapes seen in HA add-on logs:
+    JWTs, bearer tokens, long hex tokens, ``key=value`` style credentials,
+    URL userinfo, and IPv4 addresses with network context.
+    """
     # JWT tokens (header.payload.signature)
     text = re.sub(
         r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
         "[REDACTED_JWT]",
         text,
     )
-    # Bearer tokens
-    text = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+    # Bearer tokens — preserve original casing of "Bearer"/"bearer"
+    text = re.sub(
+        r"\b([Bb]earer)\s+\S+",
+        lambda m: f"{m.group(1)} [REDACTED]",
+        text,
+    )
+    # Generic key=value credentials (api_key, token, secret, password, etc.).
+    # Negative lookbehind for a letter so OPENAI_API_KEY=... still matches
+    # (underscore is a word-char, so \b doesn't fire there).
+    # "authorization" is intentionally omitted — the Bearer rule above already
+    # handles "Authorization: Bearer ..." and overlapping rules double-tap.
+    text = re.sub(
+        r"(?<![A-Za-z])(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd)\b(\s*[:=]\s*)\S+",
+        r"\1\2[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # URL userinfo: scheme://user:password@host -> scheme://user:[REDACTED]@host
+    text = re.sub(
+        r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^:/?#\s@]+):([^@/\s]+)@",
+        r"\1\2:[REDACTED]@",
+        text,
+    )
     # Long hex strings (API keys, tokens) - 32+ contiguous hex chars
     text = re.sub(
         r"(?<![a-fA-F0-9])[a-fA-F0-9]{32,}(?![a-fA-F0-9])",
         "[REDACTED_HEX]",
         text,
     )
-    # IPv4 addresses
-    text = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "[IP]", text)
+    # IPv4 addresses — only when there's strong network context, so that
+    # four-segment version strings (e.g. "version 1.2.3.4") survive intact.
+    text = _IPV4_WITH_PORT_OR_CIDR_RE.sub("[IP]", text)
+    text = _IPV4_IN_URL_RE.sub(r"\1[IP]", text)
+    text = _IPV4_AFTER_KEYWORD_RE.sub(r"\1[IP]", text)
     return text
 
 
@@ -114,11 +159,20 @@ async def _fetch_addon_logs() -> str:
     """Fetch ha-mcp addon container logs via the Supervisor REST API.
 
     Only works when running as a Home Assistant add-on (SUPERVISOR_TOKEN set).
-    Uses /addons/self/logs which resolves to the calling addon's own logs.
+    Uses /addons/self/logs which resolves to the calling addon's own logs via
+    the Supervisor's per-addon token binding — no slug interpolation needed.
 
-    Returns sanitized log text (last _ADDON_LOG_MAX_CHARS chars), or empty
-    string on failure.
+    Direct httpx against ``http://supervisor`` is the documented add-on access
+    pattern: it uses the Supervisor token directly (no extra HA hop) and
+    preserves the ``self`` shortcut, which the WebSocket ``supervisor/api``
+    proxy used by other tools may not.
+
+    Returns sanitized log text (last _ADDON_LOG_MAX_CHARS chars, with a
+    truncation marker prepended when truncation occurs), or empty string on
+    failure.
     """
+    # Redundant with the caller's `install_method == "addon"` gate, but kept
+    # as a defensive guard for any direct callers added later.
     token = os.environ.get("SUPERVISOR_TOKEN", "")
     if not token:
         return ""
@@ -129,14 +183,24 @@ async def _fetch_addon_logs() -> str:
                 "http://supervisor/addons/self/logs",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            if resp.status_code == 200:
-                raw = resp.text
-                # Strip ANSI escape codes (terminal colors)
-                raw = _ANSI_ESCAPE_RE.sub("", raw)
-                # Take the tail (most recent logs)
-                if len(raw) > _ADDON_LOG_MAX_CHARS:
-                    raw = raw[-_ADDON_LOG_MAX_CHARS:]
-                return _sanitize_log_text(raw)
+            if resp.status_code != 200:
+                logger.info(
+                    "Addon log fetch returned HTTP %s", resp.status_code
+                )
+                return ""
+
+            # Strip ANSI escape codes first, then sanitize, then truncate.
+            # Sanitizing before truncating prevents secrets that straddle the
+            # truncation boundary from leaking through.
+            cleaned = ANSI_ESCAPE_RE.sub("", resp.text)
+            sanitized = _sanitize_log_text(cleaned)
+            if len(sanitized) > _ADDON_LOG_MAX_CHARS:
+                marker = (
+                    f"[...truncated, showing last {_ADDON_LOG_MAX_CHARS} of "
+                    f"{len(sanitized)} chars...]\n"
+                )
+                return marker + sanitized[-_ADDON_LOG_MAX_CHARS:]
+            return sanitized
     except httpx.RequestError as e:
         logger.warning(f"Failed to fetch addon logs: {e}")
 
@@ -202,7 +266,12 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "That was inefficient"
 
         **OUTPUT:**
-        Returns both templates. Choose the appropriate one based on context.
+        Returns both templates plus diagnostic data. Key fields:
+        - `runtime_bug_template`, `agent_behavior_template` — pick based on context
+        - `recent_logs`, `startup_logs` — captured ha-mcp tool/server log entries
+        - `addon_logs` — addon container stdout/stderr (HA add-on installs only;
+          empty string otherwise)
+        - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
         """
         # Detect installation method and platform
         install_method = _detect_installation_method()
@@ -367,7 +436,8 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"      - Runtime bugs: {RUNTIME_BUG_URL}\n"
                 f"      - Agent behavior: {AGENT_BEHAVIOR_URL}\n"
                 "   d. Ask them to fill in the description sections\n"
-                "   e. Remind them to review for any remaining personal information before submitting\n\n"
+                "   e. For HA add-on installs, the runtime bug template includes a collapsible '📦 Add-on Container Logs' section auto-filled from addon_logs — keep it as-is\n"
+                "   f. Remind them to review for any remaining personal information before submitting\n\n"
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
@@ -388,8 +458,8 @@ def _format_logs_for_report(logs: list[dict[str, Any]]) -> str:
 
         line = f"  {timestamp} | {tool_name} | {success} | {exec_time:.0f}ms"
         if error:
-            # Truncate error to avoid leaking sensitive info
-            error_short = str(error)[:100]
+            # Sanitize before truncating so secrets straddling the cut survive redaction.
+            error_short = _sanitize_log_text(str(error))[:100]
             line += f" | Error: {error_short}"
         lines.append(line)
 
@@ -408,7 +478,8 @@ def _format_startup_logs(logs: list[dict[str, Any]]) -> str:
         logger_name = log.get("logger", "")
         message = log.get("message", "")
 
-        # Truncate long messages
+        # Sanitize before truncating so secrets straddling the cut survive redaction.
+        message = _sanitize_log_text(message)
         if len(message) > 200:
             message = message[:200] + "..."
 
