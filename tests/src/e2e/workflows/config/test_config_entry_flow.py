@@ -165,7 +165,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "min_max", config, "min_max helper")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_group_helper_light(self, mcp_client):
@@ -179,7 +179,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "group", config, "light group helper")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_template_sensor(self, mcp_client):
@@ -192,7 +192,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "template", config, "template sensor")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_template_binary_sensor(self, mcp_client):
@@ -207,7 +207,7 @@ class TestConfigEntryFlow:
         )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_update_min_max_helper(self, mcp_client):
@@ -241,8 +241,8 @@ class TestConfigEntryFlow:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_config_entry",
-            {"entry_id": entry_id, "confirm": True},
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_get_integration_include_schema(self, mcp_client):

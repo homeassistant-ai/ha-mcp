@@ -202,17 +202,38 @@ class TestLabelCRUD:
         )
 
     async def test_get_nonexistent_label(self, mcp_client):
-        """Test getting a non-existent label."""
+        """
+        Test: ha_config_get_label with a nonexistent label_id returns a
+        structured error with code ENTITY_NOT_FOUND, not success=True.
+
+        Source path: tools_labels.py — after listing labels via WebSocket,
+        the requested label_id is looked up in the result. When absent,
+        raise_tool_error is invoked with ErrorCode.ENTITY_NOT_FOUND and the
+        message "Label not found: ...".
+
+        Hardened from success-only check to explicit error-code and
+        message-substring assertions.
+        """
         logger.info("Testing get non-existent label")
 
         data = await safe_call_tool(
             mcp_client,
             "ha_config_get_label",
-            {"label_id": "nonexistent_label_xyz_12345"},
+            {"label_id": "nonexistent_label_a2_e2e_xyz_404"},
         )
 
         assert data.get("success") is False, (
             f"Should fail for non-existent label: {data}"
+        )
+        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
+            f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+        )
+        assert "suggestion" in data["error"], (
+            "Error response should include a suggestion"
+        )
+        error_msg = data["error"]["message"].lower()
+        assert "not found" in error_msg, (
+            f"Expected 'not found' in error message, got: {data['error']}"
         )
         logger.info("Non-existent label properly returned error")
 

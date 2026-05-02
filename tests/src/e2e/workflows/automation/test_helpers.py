@@ -184,10 +184,11 @@ class TestHelperIntegration:
         # 4. DELETE: Clean up helper
         logger.info("🗑️ Deleting helper...")
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": helper_name
+                "target": helper_name,
+                "confirm": True,
             },
         )
 
@@ -359,10 +360,11 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_number",
-                "helper_id": helper_name
+                "target": helper_name,
+                "confirm": True,
             },
         )
         delete_data = parse_mcp_result(delete_result)
@@ -474,10 +476,11 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_select",
-                "helper_id": helper_name
+                "target": helper_name,
+                "confirm": True,
             },
         )
         delete_data = parse_mcp_result(delete_result)
@@ -594,10 +597,11 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_text",
-                "helper_id": helper_name
+                "target": helper_name,
+                "confirm": True,
             },
         )
         delete_data = parse_mcp_result(delete_result)
@@ -716,10 +720,11 @@ class TestHelperIntegration:
 
             # 4. CLEANUP: Delete this datetime helper
             delete_result = await mcp_client.call_tool(
-                "ha_config_remove_helper",
+                "ha_delete_helpers_integrations",
                 {
                     "helper_type": "input_datetime",
-                    "helper_id": helper_name
+                    "target": helper_name,
+                    "confirm": True,
                 },
             )
             delete_data = parse_mcp_result(delete_result)
@@ -824,10 +829,11 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_button",
-                "helper_id": helper_name
+                "target": helper_name,
+                "confirm": True,
             },
         )
         delete_data = parse_mcp_result(delete_result)
@@ -940,10 +946,11 @@ class TestHelperIntegration:
         logger.info(f"🗑️ Bulk deleting {len(created_helpers)} helpers...")
         for helper_type, helper_id, helper_entity in created_helpers:
             delete_result = await mcp_client.call_tool(
-                "ha_config_remove_helper",
+                "ha_delete_helpers_integrations",
                 {
                     "helper_type": helper_type,
-                    "helper_id": helper_id
+                    "target": helper_id,
+                    "confirm": True,
                 },
             )
 
@@ -1164,10 +1171,11 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
     logger.info("🗑️ Cleaning up test helpers...")
     for helper_type, helper_name in test_helpers_created:
         delete_result = await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": helper_type,
-                "helper_id": helper_name,
+                "target": helper_name,
+                "confirm": True,
             },
         )
         delete_data = parse_mcp_result(delete_result)

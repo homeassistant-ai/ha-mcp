@@ -2,21 +2,19 @@
 Configuration management for Home Assistant MCP Server.
 """
 
-import importlib.metadata
 import os
 
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
 
-try:
-    _PACKAGE_VERSION = importlib.metadata.version("ha-mcp")
-except importlib.metadata.PackageNotFoundError:
-    _PACKAGE_VERSION = "unknown"
-
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ha_mcp._version import get_version
+
+_PACKAGE_VERSION = get_version()
 
 project_root = Path(__file__).parent.parent.parent
 

@@ -131,11 +131,11 @@ class TestEntityCleaner:
             helper_id = entity_id.replace(f"{helper_type}.", "")
 
             delete_result = await self.client.call_tool(
-                "ha_config_remove_helper",
+                "ha_delete_helpers_integrations",
                 {
                     "helper_type": helper_type,
-                    "helper_id": helper_id,
-                    "name": "",  # Required but not used for delete
+                    "target": helper_id,
+                    "confirm": True,
                 },
             )
 

@@ -42,6 +42,11 @@ jobs:
     - uses: actions/checkout@v6
       with:
         submodules: true
+        # Check out the release tag so uv sync installs the bumped pyproject.toml.
+        # Without this, GITHUB_SHA points to the pre-semantic-release merge commit
+        # and the installed package metadata would reflect the previous version.
+        # Falls back to GITHUB_SHA for manual dispatch without a version input.
+        ref: ${{ inputs.version && format('v{0}', inputs.version) || github.sha }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4

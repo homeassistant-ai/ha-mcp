@@ -25,20 +25,20 @@ const withBase = (path: string) => {
 
 // Create serializable data for client-side JS
 const clientsData = sortedClients.map(c => ({
-  id: c.slug,
+  id: c.id,
   ...c.data,
   logo: withBase(c.data.logo),
 }));
 const platformsData = sortedPlatforms.map(p => ({
-  id: p.slug,
+  id: p.id,
   ...p.data,
 }));
 const connectionsData = sortedConnections.map(c => ({
-  id: c.slug,
+  id: c.id,
   ...c.data,
 }));
 const deploymentData = sortedDeployment.map(d => ({
-  id: d.slug,
+  id: d.id,
   ...d.data,
 }));
 
@@ -104,7 +104,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="client-grid">
           {sortedClients.map((client) => (
             <button
-              data-client={client.slug}
+              data-client={client.id}
               data-transports={JSON.stringify(client.data.transports)}
               class="option-card group"
             >
@@ -141,16 +141,16 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         <div class="grid md:grid-cols-3 gap-4" id="connection-grid">
           {sortedConnections.map((conn) => (
             <button
-              data-connection={conn.slug}
+              data-connection={conn.id}
               data-transport={conn.data.transport}
               class="option-card-large connection-option"
             >
               <div class="flex items-center gap-2 mb-2">
                 <PlatformIcon icon={conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
-                <span class="complexity-badge" data-complexity={conn.slug === 'local' ? 'quick' : conn.slug === 'network' ? 'complex' : 'advanced'}>
-                  {conn.slug === 'local' && 'Quick'}
-                  {conn.slug === 'network' && 'Complex'}
-                  {conn.slug === 'remote' && 'Advanced'}
+                <span class="complexity-badge" data-complexity={conn.id === 'local' ? 'quick' : conn.id === 'network' ? 'complex' : 'advanced'}>
+                  {conn.id === 'local' && 'Quick'}
+                  {conn.id === 'network' && 'Complex'}
+                  {conn.id === 'remote' && 'Advanced'}
                 </span>
               </div>
               <h3 class="font-semibold text-white mb-1">{conn.data.name}</h3>
@@ -297,7 +297,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="platform-grid">
           {sortedPlatforms.map((platform) => (
             <button
-              data-platform={platform.slug}
+              data-platform={platform.id}
               class="option-card-large"
             >
               <div class="mb-2 text-[var(--text-secondary)]">
