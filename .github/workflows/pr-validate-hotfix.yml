@@ -21,6 +21,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # Check out the PR head, not the synthetic merge ref. The default
+          # checkout merges the PR into master, which makes `merge-base
+          # origin/master HEAD` resolve to master HEAD — defeating the
+          # ancestor checks below whenever master is ahead of stable.
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Validate hotfix is based on stable tag
         run: |
