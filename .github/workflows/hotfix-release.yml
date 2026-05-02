@@ -28,13 +28,21 @@ jobs:
       issues: write
 
     steps:
-    - name: Checkout hotfix branch commit
+    - name: Checkout merged hotfix on master
       uses: actions/checkout@v6
       with:
-        # Checkout the original hotfix commit, not the merge commit
-        ref: ${{ github.event.pull_request.head.sha }}
+        # Check out the merge commit so the workspace matches master's history;
+        # then attach to a local master branch below. python-semantic-release
+        # matches the active branch against [tool.semantic_release].branch
+        # in pyproject.toml — a detached HEAD checkout (e.g., of head.sha)
+        # fails silently with "Detached HEAD state cannot match any release
+        # groups; no release will be made", which is what broke PR #1090.
+        ref: ${{ github.event.pull_request.merge_commit_sha }}
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Attach to master branch locally
+      run: git checkout -B master HEAD
 
     - name: Validate hotfix is based on stable
       run: |
