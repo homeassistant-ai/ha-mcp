@@ -70,7 +70,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
         self._skill_tool_names: list[str] = []
-        # Populated by _apply_settings_ui from tool_config.json on startup
+        # Populated by _apply_settings_visibility from tool_config.json on startup
         self._user_pinned_tools: list[str] = []
 
         # Get server name/version from settings if no client provided
@@ -145,9 +145,17 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register bundled skills as MCP resources
         self._register_skills()
 
-        # Apply user-configured tool visibility (after all tools registered,
-        # before tool search transform wraps them)
-        self._apply_settings_ui()
+        # Apply user-configured tool visibility (must come before keyword
+        # enrichment / tool search so disabled tools are excluded from
+        # search indexing too).
+        self._apply_settings_visibility()
+
+        # Enrich tool descriptions with BM25 keyword boosts. Runs
+        # unconditionally so Claude's native deferred-tool search
+        # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
+        # Must come before _apply_tool_search so CategorizedSearchTransform
+        # indexes the enriched descriptions.
+        self._apply_search_keyword_enrichment()
 
         # Apply tool search transform (must come after all tools and
         # ResourcesAsTools are registered so it can wrap everything)
@@ -312,15 +320,17 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
 
-    def _apply_settings_ui(self) -> None:
-        """Register settings web UI and apply persisted tool visibility."""
-        from .settings_ui import (
-            apply_tool_visibility,
-            load_tool_config,
-            register_settings_routes,
-        )
+    def _apply_settings_visibility(self) -> None:
+        """Apply persisted tool visibility from ``tool_config.json``.
 
-        register_settings_routes(self.mcp, self)
+        Reads the saved enable/disable/pin state and applies it to the
+        FastMCP instance via ``apply_tool_visibility``. HTTP routes for
+        the settings UI are registered separately by entry-point callers
+        (start.py / main_web) so they can be mounted under the secret
+        path; that keeps the routes inert in stdio mode and behind the
+        same auth posture as the MCP endpoint in HTTP mode.
+        """
+        from .settings_ui import apply_tool_visibility, load_tool_config
 
         config = load_tool_config(self.settings)
         if config:
@@ -359,8 +369,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     )
 
     # Extra keywords appended to tool descriptions for BM25 ranking.
-    # Only active behind enable_tool_search — the original docstrings
-    # are unchanged; these keywords are appended by SearchKeywordsTransform.
+    # Applied unconditionally via SearchKeywordsTransform so they also
+    # improve retrieval for Claude's native deferred-tool search on
+    # claude.ai, which indexes tool names and descriptions with BM25
+    # (no semantic matching). Original tool docstrings stay unchanged;
+    # these keywords are appended by the transform at list-tools time.
     _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
         # s02: "find entities" → ha_search_entities should outrank ha_deep_search
         "ha_search_entities": (
@@ -374,10 +387,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "conditions actions get show detail"
         ),
         # s09: "create helper" → ha_config_set_helper should outrank remove_helper
+        # Covers all 27 helper types (12 simple + 15 flow-based, unified in #967).
         "ha_config_set_helper": (
-            "create new add helper input_boolean input_number input_text "
-            "counter timer input_datetime input_select input_button "
-            "schedule zone group min_max"
+            "create update new add helper "
+            "input_boolean input_button input_number input_text input_datetime "
+            "input_select counter timer schedule zone person tag "
+            "template group utility_meter derivative min_max threshold "
+            "integration statistics trend random filter tod "
+            "generic_thermostat switch_as_x generic_hygrostat"
         ),
         # Boost tools that compete with ha_deep_search for common queries
         "ha_config_get_script": (
@@ -409,8 +426,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     }
 
     # Description overrides that REPLACE the original description for BM25.
-    # Used to narrow overly broad tools so they stop matching generic queries.
-    # Only active behind enable_tool_search via SearchKeywordsTransform.
+    # Used to narrow overly broad tools so they stop matching generic queries
+    # against ha-mcp's internal BM25 search tool. Only applied when
+    # enable_tool_search=True, because they are tuned specifically for the
+    # categorized search transform and replacing the base description would
+    # unnecessarily trim context for other clients.
     _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {
         "ha_deep_search": (
             "Search INSIDE automation, script, and helper YAML configurations. "
@@ -421,6 +441,53 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ),
     }
 
+    def _apply_search_keyword_enrichment(self) -> None:
+        """Append BM25 keyword boosts to tool descriptions.
+
+        Applied unconditionally so Claude's native deferred-tool search
+        (claude.ai uses BM25 over tool names and descriptions) can find
+        ha-mcp tools for common natural-language queries like "create
+        automation" — the scenario in #940. The original tool docstrings
+        in ``src/ha_mcp/tools/`` are unchanged; keywords are appended at
+        list-tools time via ``SearchKeywordsTransform``.
+
+        Description overrides (``_SEARCH_DESCRIPTION_OVERRIDES``) are only
+        applied when ``enable_tool_search`` is also set, because they
+        REPLACE the original description and are tuned specifically for
+        ha-mcp's internal BM25 search tool.
+
+        Runs before ``_apply_tool_search`` so downstream transforms
+        index the enriched descriptions.
+        """
+        try:
+            from .transforms import SearchKeywordsTransform
+        except ImportError:
+            logger.warning(
+                "SearchKeywordsTransform not available; skipping description "
+                "enrichment (tool discoverability on claude.ai may be degraded)."
+            )
+            return
+
+        overrides = (
+            self._SEARCH_DESCRIPTION_OVERRIDES
+            if self.settings.enable_tool_search
+            else None
+        )
+        try:
+            self.mcp.add_transform(
+                SearchKeywordsTransform(
+                    keywords=self._SEARCH_KEYWORDS,
+                    overrides=overrides,
+                )
+            )
+            logger.info(
+                "Search keyword enrichment applied (%d boosts%s)",
+                len(self._SEARCH_KEYWORDS),
+                f", {len(overrides)} overrides" if overrides else "",
+            )
+        except Exception:
+            logger.exception("Failed to apply SearchKeywordsTransform")
+
     def _apply_tool_search(self) -> None:
         """Apply the CategorizedSearchTransform if enabled.
 
@@ -429,6 +496,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         remain directly visible in list_tools() for individual permission
         gating. ResourcesAsTools (list_resources/read_resource) are also
         pinned when enabled.
+
+        Note: ``_apply_search_keyword_enrichment`` already ran before this
+        method and installed ``SearchKeywordsTransform`` — the enriched
+        catalog is what the categorized transform indexes.
         """
         if not self.settings.enable_tool_search:
             return
@@ -467,26 +538,18 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
 
         try:
-            # Enrich tool descriptions for BM25 ranking (innermost transform).
-            # Added first so the search transform indexes enriched descriptions.
-            # Original tool docstrings are unchanged.
-            from .transforms import SearchKeywordsTransform
-
-            self.mcp.add_transform(
-                SearchKeywordsTransform(
-                    keywords=self._SEARCH_KEYWORDS,
-                    overrides=self._SEARCH_DESCRIPTION_OVERRIDES,
-                )
-            )
-
             self.mcp.add_transform(
                 CategorizedSearchTransform(
-                    max_results=5,
+                    max_results=self.settings.tool_search_max_results,
                     always_visible=pinned,
                     search_tool_description=description,
                 )
             )
-            logger.info("Tool search transform applied (%d pinned tools)", len(pinned))
+            logger.info(
+                "Tool search transform applied (%d pinned tools, max_results=%d)",
+                len(pinned),
+                self.settings.tool_search_max_results,
+            )
         except Exception:
             logger.exception("Failed to apply tool search transform")
 
@@ -643,7 +706,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 if not f.resolve().is_relative_to(resolved_root):
                     continue
                 rel = f.relative_to(skill_dir)
-                ref_files.append({"name": str(rel), "uri": f"skill://{skill_name}/{rel}"})
+                ref_files.append(
+                    {"name": str(rel), "uri": f"skill://{skill_name}/{rel}"}
+                )
         except OSError:
             logger.warning("Error reading skill files in %s", skill_dir)
         return ref_files

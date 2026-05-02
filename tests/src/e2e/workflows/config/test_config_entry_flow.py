@@ -22,10 +22,15 @@ logger = logging.getLogger(__name__)
 async def _create_config_entry_helper(
     mcp_client, helper_type: str, config: dict, description: str
 ) -> str:
-    """Create a config entry helper, poll until registered, and return entry_id."""
+    """Create a config entry helper via unified ha_config_set_helper.
+
+    The unified tool expects either a top-level `name` param or a `name` key
+    in the `config` dict. The test fixtures place `name` inside `config`, so
+    we forward it as-is. Polls until the new entry is registered, returns entry_id.
+    """
     result = await mcp_client.call_tool(
-        "ha_set_config_entry_helper",
-        {"helper_type": helper_type, "config": config},
+        "ha_config_set_helper",
+        {"helper_type": helper_type, "name": config.get("name", ""), "config": config},
     )
     data = assert_mcp_success(result, f"Create {description}")
     assert data.get("success") is True
@@ -160,7 +165,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "min_max", config, "min_max helper")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_group_helper_light(self, mcp_client):
@@ -174,7 +179,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "group", config, "light group helper")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_template_sensor(self, mcp_client):
@@ -187,7 +192,7 @@ class TestConfigEntryFlow:
         entry_id = await _create_config_entry_helper(mcp_client, "template", config, "template sensor")
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_create_template_binary_sensor(self, mcp_client):
@@ -202,7 +207,7 @@ class TestConfigEntryFlow:
         )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_config_entry", {"entry_id": entry_id, "confirm": True}
+            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
         )
 
     async def test_update_min_max_helper(self, mcp_client):
@@ -222,8 +227,13 @@ class TestConfigEntryFlow:
             "type": "max",
         }
         update_result = await mcp_client.call_tool(
-            "ha_set_config_entry_helper",
-            {"helper_type": "min_max", "config": updated_config, "entry_id": entry_id},
+            "ha_config_set_helper",
+            {
+                "helper_type": "min_max",
+                "name": "test_min_max_update_e2e",
+                "config": updated_config,
+                "helper_id": entry_id,  # unified tool normalizes entry_id -> helper_id for flow helpers
+            },
         )
         update_data = assert_mcp_success(update_result, "Update min_max helper")
         assert update_data.get("updated") is True
@@ -231,8 +241,8 @@ class TestConfigEntryFlow:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_config_entry",
-            {"entry_id": entry_id, "confirm": True},
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_get_integration_include_schema(self, mcp_client):
@@ -263,8 +273,8 @@ class TestConfigEntryFlow:
 
         data = await safe_call_tool(
             mcp_client,
-            "ha_set_config_entry_helper",
-            {"helper_type": "group", "config": config},
+            "ha_config_set_helper",
+            {"helper_type": "group", "name": "my_group", "config": config},
         )
         assert data.get("success") is not True, "Should fail without group_type"
         # The error should mention available options or the missing key

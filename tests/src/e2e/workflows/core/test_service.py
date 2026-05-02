@@ -284,7 +284,7 @@ class TestCallService:
         # Search for a scene
         search_result = await mcp_client.call_tool(
             "ha_search_entities",
-            {"query": "", "domain_filter": "scene", "limit": 5},
+            {"domain_filter": "scene", "limit": 5},
         )
         search_data = parse_mcp_result(search_result)
 
@@ -413,6 +413,6 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
 
     # Cleanup
     await mcp_client.call_tool(
-        "ha_config_remove_helper",
-        {"helper_type": "input_boolean", "helper_id": entity_id},
+        "ha_delete_helpers_integrations",
+        {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
     )

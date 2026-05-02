@@ -6,12 +6,14 @@ Verifies that ha_get_automation_traces returns non-empty traces after automation
 """
 
 import logging
+from typing import Any
 
 import pytest
 
 from ...utilities.assertions import (
     assert_mcp_success,
     parse_mcp_result,
+    safe_call_tool,
 )
 from ...utilities.wait_helpers import wait_for_condition
 
@@ -337,3 +339,17 @@ class TestAutomationTraces:
         assert trace_count > 0, (
             f"Expected at least 1 trace after running script, got {trace_count}"
         )
+
+@pytest.mark.automation
+class TestGetAutomationTracesNegativeInputs:
+    """Negative-input tests for ha_get_automation_traces."""
+
+    async def test_wrong_domain_prefix_rejected(self, mcp_client: Any) -> None:
+        """Rejects an entity ID that does not belong to a supported domain."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_automation_traces",
+            {"automation_id": "sensor.some_entity"},
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

@@ -10,23 +10,30 @@ Full results are written to a temp file. Stdout gets a concise summary with
 the file path — the calling agent only reads the full file when needed.
 
 Usage:
-    echo '{"test_prompt":"Search for light entities."}' | python tests/uat/run_uat.py --agents gemini
-    python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
-    python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+    echo '{"test_prompt":"Search for light entities."}' | uv run python tests/uat/run_uat.py --agents gemini
+    uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
+    uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import json
+import logging
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
+import requests
 from testcontainers.core.container import DockerContainer
 
 # Resolve paths relative to repo root
@@ -36,6 +43,7 @@ REPO_ROOT = TESTS_DIR.parent
 
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
@@ -44,11 +52,20 @@ DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
 
 
-# ---------------------------------------------------------------------------
-# Logging (stderr only - stdout is reserved for JSON output)
-# ---------------------------------------------------------------------------
-def log(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+logger = logging.getLogger("uat.run_uat")
+
+
+class SuggestingArgumentParser(argparse.ArgumentParser):
+    """argparse parser that suggests close matches for unknown flags."""
+
+    def error(self, message: str) -> NoReturn:
+        match = re.search(r"unrecognized arguments?: (--\S+)", message)
+        if match:
+            known = [opt for opt in self._option_string_actions if opt.startswith("--")]
+            suggestions = difflib.get_close_matches(match.group(1), known, n=1, cutoff=0.6)
+            if suggestions:
+                message = f"{message} (did you mean {suggestions[0]}?)"
+        super().error(message)
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +117,8 @@ class HAContainer:
         try:
             port = self.container.get_exposed_port(8123)
             self.url = f"http://localhost:{port}"
-            log(f"HA container started on {self.url}")
-            wait_for_ha_ready(self.url, self.token, log=log)
+            logger.info(f"HA container started on {self.url}")
+            wait_for_ha_ready(self.url, self.token)
         except Exception:
             self.__exit__(None, None, None)
             raise
@@ -109,7 +126,7 @@ class HAContainer:
 
     def __exit__(self, *exc: object) -> None:
         if self.container:
-            log("Stopping HA container...")
+            logger.info("Stopping HA container...")
             self.container.stop()
         if self.config_dir and self.config_dir.exists():
             shutil.rmtree(self.config_dir, ignore_errors=True)
@@ -130,25 +147,101 @@ def mcp_server_command(branch: str | None) -> list[str]:
     return ["uv", "run", "--project", str(REPO_ROOT), "ha-mcp"]
 
 
+def preflight_check_docker(timeout: float = 5.0) -> str | None:
+    """Return an error string if the Docker daemon is unreachable, else None."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return "'docker' CLI not found on PATH (install Docker or pass --ha-url)"
+    except subprocess.TimeoutExpired:
+        return f"Docker daemon did not respond within {timeout:.0f}s"
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip().splitlines()
+        hint = stderr[-1] if stderr else f"exit {result.returncode}"
+        return f"Docker daemon is not reachable: {hint}"
+    return None
+
+
+def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
+    """Return an error string if the OpenAI endpoint is unreachable or broken, else None.
+
+    Catches both connection-level failures (ConnectionError, Timeout) and
+    HTTP error responses (4xx/5xx from ``raise_for_status``) — the latter
+    covers "up but wrong" cases like hitting the wrong port, a bad
+    auth token, or an upstream error, which would otherwise only surface
+    as an opaque warmup stall.
+    """
+    url = f"{base_url.rstrip('/')}/models"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return f"OpenAI endpoint {base_url} is not reachable ({type(e).__name__}): {e}"
+    return None
+
+
 def _build_mcp_env(
     ha_url: str, ha_token: str, extra_env: dict[str, str] | None
 ) -> dict[str, str]:
-    env = {"HOMEASSISTANT_URL": ha_url, "HOMEASSISTANT_TOKEN": ha_token}
+    # Override with --mcp-env LOG_LEVEL=INFO when debugging the server.
+    env = {
+        "HOMEASSISTANT_URL": ha_url,
+        "HOMEASSISTANT_TOKEN": ha_token,
+        "LOG_LEVEL": "WARNING",
+    }
     if extra_env:
         env.update(extra_env)
     return env
 
 
-def write_stdio_mcp_config(
+def parse_mcp_env(
+    raw_mcp_env: list[str] | None,
+    base_url: str | None = None,
+    on_default_applied: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    """Parse ``KEY=VALUE`` pairs into a dict, with the local-model default.
+
+    A bare ``KEY`` (no ``=``) maps to an empty string — useful for
+    boolean-presence flags. When ``base_url`` is set (targeting a local
+    OpenAI-compatible endpoint), ``ENABLE_TOOL_SEARCH=true`` is injected
+    unless the caller already set it. Local models typically can't prefill
+    the full tool catalog, so tool search is the default for that path.
+    Override with an explicit ``ENABLE_TOOL_SEARCH=...`` pair.
+
+    If ``on_default_applied`` is provided, it is called with a human-readable
+    message each time a default is injected.
+    """
+    pairs = raw_mcp_env or []
+    env = {k: v for pair in pairs for k, _, v in [pair.partition("=")]}
+    if base_url and "ENABLE_TOOL_SEARCH" not in env:
+        env["ENABLE_TOOL_SEARCH"] = "true"
+        if on_default_applied:
+            on_default_applied(
+                "Defaulting ENABLE_TOOL_SEARCH=true for local model (--base-url set)"
+            )
+    return env
+
+
+def build_stdio_mcp_config(
     ha_url: str,
     ha_token: str,
     branch: str | None,
     extra_env: dict[str, str] | None = None,
-) -> Path:
-    """Write a temporary Claude MCP config JSON file."""
+) -> dict:
+    """Build the stdio MCP config dict (format shared with Claude's --mcp-config).
+
+    The dict can be passed directly to ``fastmcp.Client(config)`` for in-process
+    use, or serialized to a file via ``write_stdio_mcp_config`` for CLI agents
+    that expect a file path.
+    """
     cmd = mcp_server_command(branch)
     env = _build_mcp_env(ha_url, ha_token, extra_env)
-    config = {
+    return {
         "mcpServers": {
             "home-assistant": {
                 "command": cmd[0],
@@ -157,6 +250,16 @@ def write_stdio_mcp_config(
             }
         }
     }
+
+
+def write_stdio_mcp_config(
+    ha_url: str,
+    ha_token: str,
+    branch: str | None,
+    extra_env: dict[str, str] | None = None,
+) -> Path:
+    """Write the stdio MCP config to a temporary JSON file, return its path."""
+    config = build_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="claude_mcp_", delete=False
     ) as f:
@@ -398,7 +501,7 @@ async def run_agent_scenario(
                 continue
 
             phase_key = phase.replace("_prompt", "")
-            log(f"  [{agent_name}] Running {phase_key}...")
+            logger.info(f"  [{agent_name}] Running {phase_key}...")
 
             if agent_name == "claude":
                 assert stdio_config_path is not None
@@ -433,7 +536,7 @@ async def run_agent_scenario(
                 }
 
             results[phase_key] = result
-            log(
+            logger.info(
                 f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)"
             )
             # Forward agent stderr on failure so the error is visible to the user
@@ -441,9 +544,9 @@ async def run_agent_scenario(
                 _BOX_CHARS = frozenset("│╭╰╮─▄█▀ \t")
                 for line in result["stderr"].splitlines():
                     if "error" in line.lower():
-                        log(f"  [{agent_name}] !! {line.strip()}")
+                        logger.info(f"  [{agent_name}] !! {line.strip()}")
                     elif not all(c in _BOX_CHARS for c in line):
-                        log(f"  [{agent_name}] stderr: {line}")
+                        logger.info(f"  [{agent_name}] stderr: {line}")
     finally:
         # Cleanup temp files
         if stdio_config_path and stdio_config_path.exists():
@@ -577,6 +680,13 @@ async def run(args: argparse.Namespace) -> dict:
     if args.scenario_file:
         scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
     else:
+        if sys.stdin.isatty():
+            raise ValueError(
+                "No scenario provided. Pipe scenario JSON via stdin, or pass --scenario-file.\n"
+                "  echo '{\"test_prompt\":\"...\"}' | uv run python tests/uat/run_uat.py --agents gemini\n"
+                "  uv run python tests/uat/run_uat.py --scenario-file scenario.json --agents gemini\n"
+                "For the pre-built story catalog, use tests/uat/stories/run_story.py --all."
+            )
         scenario = json.loads(sys.stdin.read())
 
     if "test_prompt" not in scenario:
@@ -589,7 +699,7 @@ async def run(args: argparse.Namespace) -> dict:
         available = check_agent_available(name)
         agents[name] = available
         if not available:
-            log(f"WARNING: {name} CLI not found, skipping")
+            logger.warning(f"{name} CLI not found, skipping")
 
     active_agents = [name for name, avail in agents.items() if avail]
     if not active_agents:
@@ -600,6 +710,17 @@ async def run(args: argparse.Namespace) -> dict:
             "--base-url is required when using the openai agent. "
             "Example: --base-url http://localhost:1234/v1"
         )
+
+    # Preflight: fail fast if Docker or the OpenAI endpoint is unreachable,
+    # rather than stalling inside container startup / model warmup.
+    if not args.ha_url:
+        err = preflight_check_docker()
+        if err:
+            raise RuntimeError(err)
+    if "openai" in active_agents and getattr(args, "base_url", None):
+        err = preflight_check_base_url(args.base_url)
+        if err:
+            raise RuntimeError(err)
 
     # Start HA (container or external)
     ha_url = args.ha_url
@@ -614,17 +735,14 @@ async def run(args: argparse.Namespace) -> dict:
         ha_token = container.token
 
     try:
-        log(f"HA: {ha_url}")
-        log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
-        log(f"Agents: {', '.join(active_agents)}")
+        logger.info(f"HA: {ha_url}")
+        logger.info(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
+        logger.info(f"Agents: {', '.join(active_agents)}")
 
-        # Parse --mcp-env pairs into a dict.  The format is KEY=VALUE, but bare
-        # KEY (no =) is also valid and intentionally sets the variable to an empty
-        # string — useful for boolean-presence flags like ENABLE_TOOL_SEARCH=.
-        raw_mcp_env = getattr(args, "mcp_env", None) or []
-        extra_env: dict[str, str] | None = (
-            {k: v for pair in raw_mcp_env for k, _, v in [pair.partition("=")]}
-            if raw_mcp_env else None
+        extra_env = parse_mcp_env(
+            getattr(args, "mcp_env", None),
+            base_url=getattr(args, "base_url", None),
+            on_default_applied=logger.info,
         )
 
         # Run agents sequentially to avoid resource contention
@@ -664,15 +782,17 @@ async def run(args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    configure_cli_logging()
+
+    parser = SuggestingArgumentParser(
         description="BAT Runner - Execute MCP test scenarios on AI agent CLIs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  echo '{"test_prompt":"Search for light entities."}' | python tests/uat/run_uat.py --agents gemini
-  python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
-  python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
-  python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+  echo '{"test_prompt":"Search for light entities."}' | uv run python tests/uat/run_uat.py --agents gemini
+  uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
+  uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+  uv run python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
         """,
     )
     parser.add_argument(
@@ -743,7 +863,7 @@ Examples:
     try:
         full_results = asyncio.run(run(args))
     except ValueError as e:
-        log(f"ERROR: {e}")
+        logger.error(str(e))
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(130)

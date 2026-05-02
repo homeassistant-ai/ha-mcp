@@ -186,11 +186,18 @@ def generate_docs_section(tools: list[dict]) -> str:
         f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
         "",
     ]
+    if any("beta" in t["tags"] for t in tools):
+        lines.extend([
+            "> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.",
+            "",
+        ])
     for cat in sorted(categories):
         lines.append(f"### {cat}")
         for tool in sorted(categories[cat], key=lambda t: t["name"]):
             desc = tool["description"].split("\n")[0].strip() if tool["description"] else ""
             entry = f"- `{tool['name']}`"
+            if "beta" in tool["tags"]:
+                entry += " **(beta — dev channel only)**"
             if desc:
                 entry += f" — {desc}"
             lines.append(entry)
@@ -236,7 +243,10 @@ def generate_readme_table(tools: list[dict]) -> str:
     categories: dict[str, list[str]] = {}
     for tool in tools:
         cat = tool["tags"][0] if tool["tags"] else "Other"
-        categories.setdefault(cat, []).append(f"`{tool['name']}`")
+        name = f"`{tool['name']}`"
+        if "beta" in tool["tags"]:
+            name += " *(beta)*"
+        categories.setdefault(cat, []).append(name)
 
     lines = [
         README_START_MARKER,

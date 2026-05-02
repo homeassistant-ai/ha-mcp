@@ -124,10 +124,11 @@ class TestEntityRename:
         # 6. CLEANUP: Delete renamed entity
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": new_name,
+                "target": new_name,
+                "confirm": True,
             },
         )
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
@@ -198,10 +199,11 @@ class TestEntityRename:
         # 4. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_boolean",
-                "helper_id": new_name,
+                "target": new_name,
+                "confirm": True,
             },
         )
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
@@ -226,12 +228,16 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Domain change should be rejected"
-        # Error might be in error.message or just error string
-        error_msg = rename_data.get("error", "")
-        if isinstance(error_msg, dict):
-            error_msg = error_msg.get("message", "")
-        assert "domain" in str(error_msg).lower(), (
-            f"Error should mention domain: {rename_data}"
+        # Contract: error must be a dict with code and message keys
+        error = rename_data.get("error")
+        assert isinstance(error, dict), (
+            f"error should be dict, got {type(error).__name__}: {error!r}"
+        )
+        assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+            f"Expected VALIDATION_INVALID_PARAMETER, got: {error}"
+        )
+        assert "domain" in error.get("message", "").lower(), (
+            f"Error message should indicate domain mismatch, got: {error}"
         )
         logger.info("Domain mismatch correctly rejected")
 
@@ -262,6 +268,18 @@ class TestEntityRename:
             assert not rename_data.get("success"), (
                 f"Invalid format should be rejected: {invalid_id}"
             )
+            # Contract: error must be a dict with code and message keys
+            error = rename_data.get("error")
+            assert isinstance(error, dict), (
+                f"error should be dict, got {type(error).__name__}: {error!r}"
+            )
+            assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+                f"Expected VALIDATION_INVALID_PARAMETER for {invalid_id}, got: {error}"
+            )
+            error_msg = error.get("message", "")
+            assert invalid_id in error_msg, (
+                f"Error message should identify rejected input '{invalid_id}', got: {error_msg}"
+            )
             logger.info(f"Invalid format correctly rejected: {invalid_id}")
 
     async def test_rename_nonexistent_entity(self, mcp_client):
@@ -280,6 +298,7 @@ class TestEntityRename:
         )
 
         assert not rename_data.get("success"), "Non-existent entity rename should fail"
+        assert rename_data["error"]["code"] == "SERVICE_CALL_FAILED"
         logger.info(
             f"Non-existent entity correctly rejected: {rename_data.get('error')}"
         )
@@ -330,10 +349,11 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
-        "ha_config_remove_helper",
+        "ha_delete_helpers_integrations",
         {
             "helper_type": "input_button",
-            "helper_id": "test_quick_renamed",
+            "target": "test_quick_renamed",
+            "confirm": True,
         },
     )
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
@@ -419,8 +439,8 @@ class TestEntityRenameVoiceExposure:
         # 5. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -493,8 +513,8 @@ class TestRenameEntityWithDevice:
         # 4. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
         logger.info("Cleanup completed")
@@ -544,8 +564,8 @@ class TestRenameEntityWithDevice:
         # 3. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -595,8 +615,8 @@ class TestRenameEntityWithDevice:
         # 3. CLEANUP
         delete_data = await safe_call_tool(
             mcp_client,
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": new_name},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
         assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"
 
@@ -643,10 +663,11 @@ async def test_rename_entity_with_device_basic(mcp_client, cleanup_tracker):
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
-        "ha_config_remove_helper",
+        "ha_delete_helpers_integrations",
         {
             "helper_type": "input_button",
-            "helper_id": "test_combo_quick_new",
+            "target": "test_combo_quick_new",
+            "confirm": True,
         },
     )
     assert delete_data.get("success"), f"Failed to cleanup: {delete_data}"

@@ -4,7 +4,6 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -14,6 +13,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
+from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
     get_security_documentation,
@@ -24,13 +24,6 @@ from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
 
-
-
-def _compute_config_hash(config: dict[str, Any]) -> str:
-    """Compute a stable hash of dashboard config for optimistic locking."""
-    # Use sorted keys for deterministic serialization
-    config_str = json.dumps(config, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
 
 async def _verify_config_unchanged(
@@ -59,7 +52,7 @@ async def _verify_config_unchanged(
     if not isinstance(current_config, dict):
         return {"success": True}  # Can't verify, proceed anyway
 
-    current_hash = _compute_config_hash(current_config)
+    current_hash = compute_config_hash(current_config)
 
     if current_hash != original_hash:
         raise_tool_error(
@@ -433,7 +426,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     for match in matches:
                         del match["card_config"]
 
-                config_hash: str | None = _compute_config_hash(config)
+                config_hash: str | None = compute_config_hash(config)
 
                 return {
                     "success": True,
@@ -486,7 +479,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             # Compute hash for optimistic locking in subsequent operations
             config_hash = (
-                _compute_config_hash(config) if isinstance(config, dict) else None
+                compute_config_hash(config) if isinstance(config, dict) else None
             )
 
             # Calculate config size for progressive disclosure hint
@@ -832,7 +825,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     )
 
                 # Validate config_hash for optimistic locking
-                current_hash = _compute_config_hash(current_config)
+                current_hash = compute_config_hash(current_config)
                 if current_hash != config_hash:
                     raise_tool_error(
                         create_error_response(
@@ -902,7 +895,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     )
 
                 # Compute new hash for potential chaining
-                new_config_hash = _compute_config_hash(transformed_config)
+                new_config_hash = compute_config_hash(transformed_config)
 
                 return {
                     "success": True,
@@ -1072,7 +1065,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                         # Optional config_hash validation for full replacement
                         if config_hash is not None:
-                            current_hash = _compute_config_hash(current_config)
+                            current_hash = compute_config_hash(current_config)
                             if current_hash != config_hash:
                                 raise_tool_error(
                                     create_error_response(

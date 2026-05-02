@@ -2,21 +2,19 @@
 Configuration management for Home Assistant MCP Server.
 """
 
-import importlib.metadata
 import os
 
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
 
-try:
-    _PACKAGE_VERSION = importlib.metadata.version("ha-mcp")
-except importlib.metadata.PackageNotFoundError:
-    _PACKAGE_VERSION = "unknown"
-
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ha_mcp._version import get_version
+
+_PACKAGE_VERSION = get_version()
 
 project_root = Path(__file__).parent.parent.parent
 
@@ -118,8 +116,10 @@ class Settings(BaseSettings):
     disabled_tools: str = Field("", alias="DISABLED_TOOLS")
     pinned_tools: str = Field("", alias="PINNED_TOOLS")
 
-    # Max results returned by ha_search_tools (2-10).
-    tool_search_max_results: int = Field(5, alias="TOOL_SEARCH_MAX_RESULTS")
+    # Max results returned by ha_search_tools. Pydantic enforces the
+    # 2-10 range; the addon-dev schema also uses ``int(2,10)?`` so the
+    # supervisor UI rejects out-of-range values before they reach env vars.
+    tool_search_max_results: int = Field(5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS")
 
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":

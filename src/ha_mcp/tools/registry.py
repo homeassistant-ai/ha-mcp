@@ -132,6 +132,42 @@ class ToolsRegistry:
 
         return discovered
 
+    def _import_and_register_module(
+        self, module_name: str, kwargs: dict[str, Any], func_name: str | None = None
+    ) -> bool:
+        """Import a tools submodule and call its register function.
+
+        When ``func_name`` is given, uses it directly (explicit mode); otherwise scans
+        the module for an attribute matching the ``register_*_tools`` convention.
+        Returns True if registered, False if no register function was found.
+        Re-raises on import or registration failure (fail-fast).
+        """
+        import importlib
+
+        try:
+            module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
+
+            if func_name is not None:
+                register_func = getattr(module, func_name)
+            else:
+                register_func = None
+                for attr_name in dir(module):
+                    if attr_name.startswith("register_") and attr_name.endswith("_tools"):
+                        register_func = getattr(module, attr_name)
+                        break
+
+            if register_func:
+                register_func(self.mcp, self.client, **kwargs)
+                logger.debug(f"Registered tools from {module_name}")
+                return True
+            else:
+                logger.warning(f"Module {module_name} has no register_*_tools function")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to register tools from {module_name}: {e}")
+            raise
+
     def register_all_tools(self) -> None:
         """Register all tools with the MCP server using lazy auto-discovery.
 
@@ -141,8 +177,6 @@ class ToolsRegistry:
         if self._modules_registered:
             logger.debug("Tools already registered, skipping")
             return
-
-        import importlib
 
         # Build kwargs with all available dependencies (lazy access)
         kwargs = {
@@ -157,44 +191,16 @@ class ToolsRegistry:
             # Skip explicit modules - handled separately
             if module_name in EXPLICIT_MODULES:
                 continue
-
-            try:
-                module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
-
-                # Find the register function (convention: register_*_tools)
-                register_func = None
-                for attr_name in dir(module):
-                    if attr_name.startswith("register_") and attr_name.endswith("_tools"):
-                        register_func = getattr(module, attr_name)
-                        break
-
-                if register_func:
-                    register_func(self.mcp, self.client, **kwargs)
-                    registered_count += 1
-                    logger.debug(f"Registered tools from {module_name}")
-                else:
-                    logger.warning(
-                        f"Module {module_name} has no register_*_tools function"
-                    )
-
-            except Exception as e:
-                logger.error(f"Failed to register tools from {module_name}: {e}")
-                raise
+            if self._import_and_register_module(module_name, kwargs):
+                registered_count += 1
 
         # Register explicit modules (those not following tools_*.py convention)
         # Only register if they were included in discovered modules (respects filtering)
         for module_name, func_name in EXPLICIT_MODULES.items():
             if module_name not in self._discovered_modules:
                 continue
-            try:
-                module = importlib.import_module(f".{module_name}", "ha_mcp.tools")
-                register_func = getattr(module, func_name)
-                register_func(self.mcp, self.client, **kwargs)
+            if self._import_and_register_module(module_name, kwargs, func_name):
                 registered_count += 1
-                logger.debug(f"Registered tools from {module_name}")
-            except Exception as e:
-                logger.error(f"Failed to register tools from {module_name}: {e}")
-                raise
 
         self._modules_registered = True
         logger.info(f"Auto-discovery registered tools from {registered_count} modules")

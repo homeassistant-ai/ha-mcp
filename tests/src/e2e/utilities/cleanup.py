@@ -131,11 +131,11 @@ class TestEntityCleaner:
             helper_id = entity_id.replace(f"{helper_type}.", "")
 
             delete_result = await self.client.call_tool(
-                "ha_config_remove_helper",
+                "ha_delete_helpers_integrations",
                 {
                     "helper_type": helper_type,
-                    "helper_id": helper_id,
-                    "name": "",  # Required but not used for delete
+                    "target": helper_id,
+                    "confirm": True,
                 },
             )
 
@@ -227,7 +227,7 @@ async def cleanup_test_entities_by_name(
             # Search for entities in this domain
             search_result = await mcp_client.call_tool(
                 "ha_search_entities",
-                {"query": "", "domain_filter": domain, "limit": 50},
+                {"domain_filter": domain, "limit": 50},
             )
 
             search_data = parse_mcp_result(search_result)

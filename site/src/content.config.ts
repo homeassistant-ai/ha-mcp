@@ -1,7 +1,8 @@
 import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
 
 const clients = defineCollection({
-  type: 'content',
+  loader: glob({ pattern: '**/*.md', base: './src/content/clients' }),
   schema: z.object({
     name: z.string(),
     company: z.string(),
@@ -11,40 +12,40 @@ const clients = defineCollection({
     configLocation: z.string().optional(),
     accuracy: z.number().min(1).max(5),
     order: z.number().default(99),
-    httpNote: z.string().optional(), // e.g., "requires mcp-proxy"
-    beta: z.boolean().optional(), // mark as BETA if uncertain
-  })
+    httpNote: z.string().optional(),
+    beta: z.boolean().optional(),
+  }),
 });
 
 const platforms = defineCollection({
-  type: 'content',
+  loader: glob({ pattern: '**/*.md', base: './src/content/platforms' }),
   schema: z.object({
     name: z.string(),
     icon: z.string(),
     order: z.number(),
-  })
+  }),
 });
 
 const connections = defineCollection({
-  type: 'content',
+  loader: glob({ pattern: '**/*.md', base: './src/content/connections' }),
   schema: z.object({
     name: z.string(),
     transport: z.enum(['stdio', 'http', 'https']),
     description: z.string(),
     icon: z.string(),
     order: z.number(),
-  })
+  }),
 });
 
 const deployment = defineCollection({
-  type: 'content',
+  loader: glob({ pattern: '**/*.md', base: './src/content/deployment' }),
   schema: z.object({
     name: z.string(),
     description: z.string(),
     icon: z.string(),
     forConnections: z.array(z.enum(['local', 'network', 'remote'])),
     order: z.number(),
-  })
+  }),
 });
 
 export const collections = {

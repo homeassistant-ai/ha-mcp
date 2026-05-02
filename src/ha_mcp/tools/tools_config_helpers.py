@@ -15,15 +15,334 @@ from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .tools_config_entry_flow import (
+    FLOW_HELPER_TYPES,
+    create_flow_helper,
+    update_flow_helper,
+)
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
+    parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
-    wait_for_entity_removed,
 )
 
+# Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
+# (not Config Entry Flow). Kept in parallel with FLOW_HELPER_TYPES for routing.
+SIMPLE_HELPER_TYPES: frozenset[str] = frozenset({
+    "input_button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "input_text",
+    "input_datetime",
+    "counter",
+    "timer",
+    "schedule",
+    "zone",
+    "person",
+    "tag",
+})
+
 logger = logging.getLogger(__name__)
+
+
+async def _get_entities_for_config_entry(
+    client: Any, entry_id: str, warnings: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Return all entity_registry entries linked to the given config_entry_id.
+
+    Uses the config/entity_registry/list WebSocket API and filters client-side
+    by config_entry_id. Multi-entity helpers (e.g. utility_meter with tariffs)
+    are handled naturally — all entities for the same entry are returned.
+
+    On WebSocket failure (e.g. HA mid-restart, auth lost, connection drop) the
+    caller would otherwise see `entity_ids: []` and be told that registry-update
+    targets like `area_id` / `labels` were silently dropped. If `warnings` is
+    provided, append a concrete message so the caller surfaces the partial
+    failure instead.
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+    except Exception as e:
+        if warnings is not None:
+            warnings.append(
+                f"entity_registry/list failed for config_entry_id={entry_id}: {e}"
+            )
+        return []
+
+    # Success path: message can come back as a bare list or wrapped in
+    # {"success": True, "result": [...]}. Treat a false success flag as an
+    # error that should surface in warnings rather than silently returning [].
+    if isinstance(result, dict) and result.get("success") is False:
+        if warnings is not None:
+            error_detail = result.get("error", "Unknown error")
+            error_msg = (
+                error_detail.get("message", str(error_detail))
+                if isinstance(error_detail, dict)
+                else str(error_detail)
+            )
+            warnings.append(
+                f"entity_registry/list failed for config_entry_id={entry_id}: "
+                f"{error_msg}"
+            )
+        return []
+
+    entries = result if isinstance(result, list) else result.get("result", [])
+    if not isinstance(entries, list):
+        if warnings is not None:
+            warnings.append(
+                f"entity_registry/list returned unexpected shape for "
+                f"config_entry_id={entry_id}"
+            )
+        return []
+    return [e for e in entries if e.get("config_entry_id") == entry_id]
+
+
+async def _apply_registry_updates_to_entity(
+    client: Any,
+    entity_id: str,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Apply area_id/labels (single WS call) and category (shared helper) to one entity.
+
+    Appends human-readable warning strings to `warnings` on any failure.
+    Returns a small dict summarizing what was applied (for result building).
+    """
+    applied: dict[str, Any] = {"entity_id": entity_id}
+
+    # area_id + labels in one entity_registry/update.
+    # Use `is not None` to distinguish "not provided" (no change) from
+    # "explicit clear" (empty string / empty list). Mirrors ha_set_entity.
+    if area_id is not None or labels is not None:
+        update_message: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": entity_id,
+        }
+        if area_id is not None:
+            update_message["area_id"] = area_id if area_id else None
+        if labels is not None:
+            update_message["labels"] = labels
+        try:
+            ws_result = await client.send_websocket_message(update_message)
+        except Exception as e:
+            # Transient raise (timeout, connection drop) mid-loop must not
+            # abort the remaining entities for a multi-entity flow helper
+            # (e.g. utility_meter with tariffs #3..#5 of 5). Record and
+            # continue; soft-failure via ws_result["success"]=False is
+            # already handled below.
+            warnings.append(
+                f"{entity_id}: entity registry update raised: {e}"
+            )
+            return applied
+        if ws_result.get("success"):
+            if area_id is not None:
+                applied["area_id"] = area_id if area_id else None
+            if labels is not None:
+                applied["labels"] = labels
+        else:
+            error_detail = ws_result.get("error", {})
+            error_msg = (
+                error_detail.get("message", "Unknown error")
+                if isinstance(error_detail, dict)
+                else str(error_detail)
+            )
+            warnings.append(
+                f"{entity_id}: entity registry update failed: {error_msg}"
+            )
+
+    # category via shared helper (consistent with simple helpers / automations / scripts)
+    if category:
+        cat_ack: dict[str, Any] = {}
+        await apply_entity_category(
+            client,
+            entity_id,
+            category,
+            "helpers",
+            cat_ack,
+            "helper",
+        )
+        if "category" in cat_ack:
+            applied["category"] = cat_ack["category"]
+        elif "category_warning" in cat_ack:
+            warnings.append(f"{entity_id}: {cat_ack['category_warning']}")
+
+    return applied
+
+
+async def _handle_flow_helper(
+    client: Any,
+    helper_type: str,
+    name: str | None,
+    helper_id: str | None,
+    config: str | dict | None,
+    area_id: str | None,
+    labels: str | list[str] | None,
+    category: str | None,
+    wait: bool | str,
+) -> dict[str, Any]:
+    """Create or update a flow-based helper and apply registry updates to all entities.
+
+    Routes between create_flow_helper and update_flow_helper based on helper_id,
+    then resolves the resulting config_entry_id to its entity(ies) and applies
+    area_id / labels / category across the full set.
+
+    For utility_meter with tariffs, this means the same label/area is applied
+    to every tariff sensor (and the select entity) uniformly.
+    """
+    action = "update" if helper_id else "create"
+
+    # Normalize empty string to None, matching ha_config_set_helper's treatment
+    # of config in (None, {}, "") as "nothing passed" (L785 simple-type branch).
+    # Without this, parse_json_param("") raises a confusing 'Invalid JSON' error.
+    if config == "":
+        config = None
+
+    # Normalize config into a dict (accepts JSON string or dict).
+    if isinstance(config, str):
+        parsed = parse_json_param(config)
+        if not isinstance(parsed, dict):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config must be a JSON object (dict) for flow-based helpers",
+                suggestions=['Example: {"name": "my_helper", "source": "sensor.x"}'],
+                context={"helper_type": helper_type},
+            ))
+        config_dict: dict[str, Any] = parsed
+    elif isinstance(config, dict):
+        config_dict = dict(config)  # shallow copy — we may mutate
+    elif config is None:
+        config_dict = {}
+    else:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"config must be a dict or JSON string, got {type(config).__name__}",
+            context={"helper_type": helper_type},
+        ))
+
+    # Fold the top-level `name` parameter into config_dict only for create:
+    # options (update) flows are strict about extra keys and will reject `name`
+    # with 400 "extra keys not allowed @ data['name']" — names on existing flow
+    # helpers are not renamed through the options flow.
+    if action == "create" and name and "name" not in config_dict:
+        config_dict["name"] = name
+
+    # Normalize labels to a list for registry updates below.
+    try:
+        labels_list = parse_string_list_param(labels, "labels")
+    except ValueError as e:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Invalid labels parameter: {e}",
+            context={"helper_type": helper_type},
+        ))
+
+    # Dispatch to the shared flow machinery.
+    if action == "create":
+        if not config_dict.get("name"):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "name is required for create action",
+                suggestions=[
+                    "Pass the name argument directly or include 'name' in config",
+                ],
+                context={"helper_type": helper_type},
+            ))
+        flow_result = await create_flow_helper(client, helper_type, config_dict)
+    else:
+        # For updates, helper_id is the config entry_id (flow-based helpers)
+        flow_result = await update_flow_helper(
+            client, helper_type, config_dict, helper_id  # type: ignore[arg-type]
+        )
+
+    entry_id = flow_result.get("entry_id")
+    result: dict[str, Any] = {
+        "success": True,
+        "action": action,
+        "helper_type": helper_type,
+        "method": "config_flow",
+        "entry_id": entry_id,
+        "title": flow_result.get("title"),
+        "message": flow_result.get("message"),
+    }
+    if action == "update":
+        result["updated"] = True
+
+    # Resolve all entities for this config entry (multi-entity helpers handled naturally).
+    # For create with wait=True, poll briefly for at least one entity to appear —
+    # otherwise a single fetch is enough (update keeps entities; create without wait
+    # is caller-opted into not waiting).
+    #
+    # Graduated polling: short intervals for the first retries catch local/small
+    # instances quickly; steady 500ms matches typical entity_registry/list latency
+    # on larger remote setups without missing entities near the deadline.
+    warnings: list[str] = []
+    wait_bool = coerce_bool_param(wait, "wait", default=True)
+    entities: list[dict[str, Any]] = []
+    if entry_id:
+        if action == "create" and wait_bool:
+            deadline = 5.0
+            intervals = [0.2, 0.3]  # first two retries faster
+            steady_interval = 0.5
+            elapsed = 0.0
+            attempt = 0
+            # Silent retries — a transient WS failure on attempt #1 often
+            # recovers by the deadline, and 14 identical warnings would
+            # just flood the response. Collect warnings only on the final
+            # attempt, when we know the poll has truly given up.
+            while elapsed < deadline:
+                poll_warnings: list[str] = []
+                entities = await _get_entities_for_config_entry(
+                    client, entry_id, poll_warnings
+                )
+                if entities:
+                    break
+                step = intervals[attempt] if attempt < len(intervals) else steady_interval
+                await asyncio.sleep(step)
+                elapsed += step
+                attempt += 1
+            # Polled out without finding entities — surface the last
+            # attempt's warning so the caller sees why.
+            if not entities and poll_warnings:
+                warnings.extend(poll_warnings)
+        else:
+            entities = await _get_entities_for_config_entry(
+                client, entry_id, warnings
+            )
+    entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
+    result["entity_ids"] = entity_ids
+
+    # Apply registry updates (area_id / labels / category) to every entity.
+    # Use `is not None` so an explicit empty value (area_id="" or labels=[])
+    # reaches _apply_registry_updates_to_entity, which forwards the clear
+    # semantics (area_id: None / labels: []) to Home Assistant.
+    if entity_ids and (
+        area_id is not None or labels_list is not None or category is not None
+    ):
+        applied_per_entity: list[dict[str, Any]] = []
+        for eid in entity_ids:
+            applied = await _apply_registry_updates_to_entity(
+                client, eid, area_id, labels_list, category, warnings
+            )
+            applied_per_entity.append(applied)
+        if area_id is not None:
+            result["area_id"] = area_id if area_id else None
+        if labels_list is not None:
+            result["labels"] = labels_list
+        if category:
+            result["category"] = category
+        result["applied"] = applied_per_entity
+
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
 
 
 def _format_schedule_days(
@@ -180,22 +499,49 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_config_set_helper(
         helper_type: Annotated[
             Literal[
-                "input_button",
-                "input_boolean",
-                "input_select",
-                "input_number",
-                "input_text",
-                "input_datetime",
                 "counter",
-                "timer",
-                "schedule",
-                "zone",
+                "derivative",
+                "filter",
+                "generic_hygrostat",
+                "generic_thermostat",
+                "group",
+                "input_boolean",
+                "input_button",
+                "input_datetime",
+                "input_number",
+                "input_select",
+                "input_text",
+                "integration",
+                "min_max",
                 "person",
+                "random",
+                "schedule",
+                "statistics",
+                "switch_as_x",
                 "tag",
+                "template",
+                "threshold",
+                "timer",
+                "tod",
+                "trend",
+                "utility_meter",
+                "zone",
             ],
             Field(description="Type of helper entity to create or update"),
         ],
-        name: Annotated[str, Field(description="Display name for the helper")],
+        name: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Display name for the helper. Required on create; optional on "
+                    "update (pass helper_id to skip). For flow-based helper types on "
+                    "update (template, group, utility_meter, ...), this is typically "
+                    "ignored — options flows don't expose renaming. Rename a flow "
+                    "helper by deleting and recreating instead."
+                ),
+                default=None,
+            ),
+        ] = None,
         helper_id: Annotated[
             str | None,
             Field(
@@ -412,6 +758,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        config: Annotated[
+            str | dict | None,
+            Field(
+                description=(
+                    "Config dict for flow-based helper types "
+                    "(template, group, utility_meter, derivative, min_max, threshold, "
+                    "integration, statistics, trend, random, filter, tod, "
+                    "generic_thermostat, switch_as_x, generic_hygrostat). "
+                    "Accepts JSON string or dict. Ignored for simple helper types. "
+                    "Use ha_get_helper_schema(helper_type) to discover required fields."
+                ),
+                default=None,
+            ),
+        ] = None,
         wait: Annotated[
             bool | str,
             Field(
@@ -421,40 +781,77 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update Home Assistant helper entities.
+        Create or update Home Assistant helper entities (27 types, unified interface).
 
         Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
-        Parameters are validated by Home Assistant - errors return clear messages.
 
-        QUICK EXAMPLES:
-        - ha_config_set_helper("input_boolean", "My Switch", icon="mdi:toggle-switch")
-        - ha_config_set_helper("counter", "My Counter", initial=0, step=1)
-        - ha_config_set_helper("timer", "Laundry", duration="0:45:00")
-        - ha_config_set_helper("zone", "Office", latitude=37.77, longitude=-122.41, radius=100)
-        - ha_config_set_helper("schedule", "Work", monday=[{"from": "09:00", "to": "17:00"}])
-        - ha_config_set_helper("schedule", "Light", monday=[{"from": "07:00", "to": "22:00", "data": {"brightness": "100", "mode": "comfort"}}])
+        SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
+        input_select, input_number, input_text, input_datetime, counter, timer, schedule,
+        zone, person, tag.
 
-        TEMPLATE SENSORS AND BINARY SENSORS:
-        Use ha_set_config_entry_helper(helper_type="template", ...) — not this tool.
-        Template helpers are managed via the Config Entry Flow API.
-        Before reaching for a template, check if a simpler built-in exists:
-        - min_max instead of template for combining sensors
-        - group instead of template binary sensor for any/all logic
-        - counter instead of template with math for counting
-        - input_number instead of template for storing values
-        - schedule instead of template with weekday checks
-        Workflow:
-          1. ha_get_helper_schema("template") → see available sub-types
-          2. ha_get_helper_schema("template", menu_option="sensor") → see form fields
-          3. ha_set_config_entry_helper("template", {
-               "next_step_id": "sensor",
-               "name": "My Sensor",
-               "state": "{{ states('sensor.foo') }}",
-             })
+        FLOW types (pass `config` dict, Config Entry Flow API): template, group,
+        utility_meter, derivative, min_max, threshold, integration, statistics, trend,
+        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.
+        Note: `tod` is the purpose-built "is-current-time-in-range" indicator
+        (supports cross-midnight ranges, unlike `schedule`).
 
-        For detailed parameter info, use ha_get_skill_home_assistant_best_practices.
+        For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
+        reject the `name` key on update — to rename a flow helper, delete and recreate.
+
+        EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
+        - template sensor:
+            ha_config_set_helper(helper_type="template", name="Room Temp",
+                config={"next_step_id": "sensor",
+                        "state": "{{ states('sensor.x')|float }}",
+                        "unit_of_measurement": "°C"})
+        - group (light):
+            ha_config_set_helper(helper_type="group", name="Kitchen Lights",
+                config={"group_type": "light",
+                        "entities": ["light.a", "light.b"]})
+        - tod (time-of-day indicator, cross-midnight OK):
+            ha_config_set_helper(helper_type="tod", name="Quiet Hours",
+                config={"after_time": "22:00:00", "before_time": "07:00:00"})
+
+        For complex schemas and per-type parameter details, use ha_get_helper_schema.
         """
         try:
+            # Determine if this is a create or update — set early so the
+            # outer exception handler's context dict can reference it even
+            # if an exception bubbles out of the flow-helper branch below.
+            action = "update" if helper_id else "create"
+
+            # Route flow-based helpers to Config Entry Flow API.
+            # Simple helpers continue through the WebSocket {type}/create+update path below.
+            if helper_type in FLOW_HELPER_TYPES:
+                return await _handle_flow_helper(
+                    client=client,
+                    helper_type=helper_type,
+                    name=name,
+                    helper_id=helper_id,
+                    config=config,
+                    area_id=area_id,
+                    labels=labels,
+                    category=category,
+                    wait=wait,
+                )
+
+            # Simple helper types use explicit parameters (name, options, min_value, ...).
+            # The `config` parameter only applies to flow-based types; silently ignoring
+            # it here would let the caller believe the payload took effect.
+            if config not in (None, {}, ""):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"The 'config' parameter is only valid for flow-based helper types. "
+                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
+                        context={"helper_type": helper_type},
+                        suggestions=[
+                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
+                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
+                        ],
+                    )
+                )
+
             # Parse JSON list parameters if provided as strings
             try:
                 labels = parse_string_list_param(labels, "labels")
@@ -466,9 +863,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         f"Invalid list parameter: {e}",
                     )
                 )
-
-            # Determine if this is a create or update based on helper_id
-            action = "update" if helper_id else "create"
 
             if action == "create":
                 if not name:
@@ -682,22 +1076,24 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
 
                     # Update entity registry if area_id or labels specified
-                    if (area_id or labels) and entity_id:
+                    if (area_id is not None or labels is not None) and entity_id:
                         update_message: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
                         }
-                        if area_id:
-                            update_message["area_id"] = area_id
-                        if labels:
+                        if area_id is not None:
+                            update_message["area_id"] = area_id if area_id else None
+                        if labels is not None:
                             update_message["labels"] = labels
 
                         update_result = await client.send_websocket_message(
                             update_message
                         )
                         if update_result.get("success"):
-                            helper_data["area_id"] = area_id
-                            helper_data["labels"] = labels
+                            if area_id is not None:
+                                helper_data["area_id"] = area_id if area_id else None
+                            if labels is not None:
+                                helper_data["labels"] = labels
                         else:
                             error_detail = update_result.get("error", {})
                             error_msg = (
@@ -1146,16 +1542,16 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         updated_data = result.get("result", {})
 
                     # Also update entity registry for icon, area, and labels
-                    if icon or area_id or labels:
+                    if icon is not None or area_id is not None or labels is not None:
                         registry_update: dict[str, Any] = {
                             "type": "config/entity_registry/update",
                             "entity_id": entity_id,
                         }
-                        if icon:
-                            registry_update["icon"] = icon
-                        if area_id:
-                            registry_update["area_id"] = area_id
-                        if labels:
+                        if icon is not None:
+                            registry_update["icon"] = icon if icon else None
+                        if area_id is not None:
+                            registry_update["area_id"] = area_id if area_id else None
+                        if labels is not None:
                             registry_update["labels"] = labels
                         reg_result = await client.send_websocket_message(
                             registry_update
@@ -1193,12 +1589,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
 
                     if name is not None:
-                        update_msg["name"] = name
-                    if icon:
-                        update_msg["icon"] = icon
-                    if area_id:
-                        update_msg["area_id"] = area_id
-                    if labels:
+                        update_msg["name"] = name if name else None
+                    if icon is not None:
+                        update_msg["icon"] = icon if icon else None
+                    if area_id is not None:
+                        update_msg["area_id"] = area_id if area_id else None
+                    if labels is not None:
                         update_msg["labels"] = labels
 
                     result = await client.send_websocket_message(update_msg)
@@ -1269,267 +1665,5 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check Home Assistant connection",
                     "Verify helper_id exists for update operations",
                     "Ensure required parameters are provided for the helper type",
-                ],
-            )
-
-    @mcp.tool(
-        tags={"Helper Entities"},
-        annotations={
-            "destructiveHint": True,
-            "idempotentHint": True,
-            "title": "Remove Helper",
-        },
-    )
-    @log_tool_usage
-    async def ha_config_remove_helper(
-        helper_type: Annotated[
-            Literal[
-                "input_button",
-                "input_boolean",
-                "input_select",
-                "input_number",
-                "input_text",
-                "input_datetime",
-                "counter",
-                "timer",
-                "schedule",
-                "zone",
-                "person",
-                "tag",
-            ],
-            Field(description="Type of helper entity to delete"),
-        ],
-        helper_id: Annotated[
-            str,
-            Field(
-                description="Helper ID to delete (e.g., 'my_button' or 'input_button.my_button')"
-            ),
-        ],
-        wait: Annotated[
-            bool | str,
-            Field(
-                description="Wait for helper entity to be fully removed before returning. Default: True.",
-                default=True,
-            ),
-        ] = True,
-    ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant helper entity.
-
-        SUPPORTED HELPER TYPES:
-        - input_button, input_boolean, input_select, input_number, input_text, input_datetime
-        - counter, timer, schedule, zone, person, tag
-
-        EXAMPLES:
-        - Delete button: ha_config_remove_helper("input_button", "my_button")
-        - Delete counter: ha_config_remove_helper("counter", "my_counter")
-        - Delete timer: ha_config_remove_helper("timer", "my_timer")
-        - Delete schedule: ha_config_remove_helper("schedule", "work_hours")
-
-        **WARNING:** Deleting a helper that is used by automations or scripts may cause those automations/scripts to fail.
-        Use ha_search_entities() to verify the helper exists before attempting to delete it.
-        """
-        try:
-            # Convert helper_id to full entity_id if needed
-            entity_id = (
-                helper_id
-                if helper_id.startswith(helper_type)
-                else f"{helper_type}.{helper_id}"
-            )
-
-            # Try to get unique_id with retry logic to handle race conditions
-            unique_id = None
-            registry_result = None
-            max_retries = 3
-
-            for attempt in range(max_retries):
-                logger.info(
-                    f"Getting entity registry for: {entity_id} (attempt {attempt + 1}/{max_retries})"
-                )
-
-                # Check if entity exists via state API first (faster check)
-                try:
-                    state_check = await client.get_entity_state(entity_id)
-                    if not state_check:
-                        # Entity doesn't exist in state, wait a bit for registration
-                        if attempt < max_retries - 1:
-                            wait_time = 0.5 * (
-                                2**attempt
-                            )  # Exponential backoff: 0.5s, 1s, 2s
-                            logger.debug(
-                                f"Entity {entity_id} not found in state, waiting {wait_time}s before retry..."
-                            )
-                            await asyncio.sleep(wait_time)
-                            continue
-                except Exception as e:
-                    logger.debug(f"State check failed for {entity_id}: {e}")
-
-                # Try registry lookup
-                registry_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                }
-
-                try:
-                    registry_result = await client.send_websocket_message(registry_msg)
-
-                    if registry_result.get("success"):
-                        entity_entry = registry_result.get("result", {})
-                        unique_id = entity_entry.get("unique_id")
-                        if unique_id:
-                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
-                            break
-
-                    # If registry lookup failed but we haven't exhausted retries, wait and try again
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)  # Exponential backoff
-                        logger.debug(
-                            f"Registry lookup failed for {entity_id}, waiting {wait_time}s before retry..."
-                        )
-                        await asyncio.sleep(wait_time)
-
-                except Exception as e:
-                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
-                    if attempt < max_retries - 1:
-                        wait_time = 0.5 * (2**attempt)
-                        await asyncio.sleep(wait_time)
-
-            # Fallback strategy 1: Try deletion with helper_id directly if unique_id not found
-            if not unique_id:
-                logger.info(
-                    f"Could not find unique_id for {entity_id}, trying direct deletion with helper_id"
-                )
-
-                # Try deleting using helper_id directly (fallback approach)
-                delete_msg: dict[str, Any] = {
-                    "type": f"{helper_type}/delete",
-                    f"{helper_type}_id": helper_id,
-                }
-
-                logger.info(f"Sending fallback WebSocket delete message: {delete_msg}")
-                result = await client.send_websocket_message(delete_msg)
-
-                if result.get("success"):
-                    # Wait for entity to be removed
-                    wait_bool = coerce_bool_param(wait, "wait", default=True)
-                    response: dict[str, Any] = {
-                        "success": True,
-                        "action": "delete",
-                        "helper_type": helper_type,
-                        "helper_id": helper_id,
-                        "entity_id": entity_id,
-                        "method": "fallback_direct_id",
-                        "message": f"Successfully deleted {helper_type}: {helper_id} using direct ID (entity: {entity_id})",
-                    }
-                    if wait_bool:
-                        try:
-                            removed = await wait_for_entity_removed(client, entity_id)
-                            if not removed:
-                                response["warning"] = (
-                                    f"Deletion confirmed but {entity_id} may still appear briefly."
-                                )
-                        except Exception as e:
-                            response["warning"] = (
-                                f"Deletion confirmed but removal verification failed: {e}"
-                            )
-                    return response
-
-                # Fallback strategy 2: Check if entity was already deleted
-                try:
-                    final_state_check = await client.get_entity_state(entity_id)
-                    if not final_state_check:
-                        logger.info(
-                            f"Entity {entity_id} no longer exists, considering deletion successful"
-                        )
-                        return {
-                            "success": True,
-                            "action": "delete",
-                            "helper_type": helper_type,
-                            "helper_id": helper_id,
-                            "entity_id": entity_id,
-                            "method": "already_deleted",
-                            "message": f"Helper {helper_id} was already deleted or never properly registered",
-                        }
-                except Exception:
-                    pass
-
-                # Final fallback failed
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Helper not found in entity registry after {max_retries} attempts: {registry_result.get('error', 'Unknown error') if registry_result else 'No registry response'}",
-                        suggestions=[
-                            "Helper may not be properly registered or was already deleted. Use ha_search_entities() to verify.",
-                        ],
-                        context={"helper_id": helper_id, "entity_id": entity_id},
-                    )
-                )
-
-            # Delete helper using unique_id (correct API from docs)
-            delete_message: dict[str, Any] = {
-                "type": f"{helper_type}/delete",
-                f"{helper_type}_id": unique_id,
-            }
-
-            logger.info(f"Sending WebSocket delete message: {delete_message}")
-            result = await client.send_websocket_message(delete_message)
-            logger.info(f"WebSocket delete response: {result}")
-
-            if result.get("success"):
-                # Wait for entity to be removed
-                wait_bool = coerce_bool_param(wait, "wait", default=True)
-                response = {
-                    "success": True,
-                    "action": "delete",
-                    "helper_type": helper_type,
-                    "helper_id": helper_id,
-                    "entity_id": entity_id,
-                    "unique_id": unique_id,
-                    "method": "standard",
-                    "message": f"Successfully deleted {helper_type}: {helper_id} (entity: {entity_id})",
-                }
-                if wait_bool:
-                    try:
-                        removed = await wait_for_entity_removed(client, entity_id)
-                        if not removed:
-                            response["warning"] = (
-                                f"Deletion confirmed but {entity_id} may still appear briefly."
-                            )
-                    except Exception as e:
-                        response["warning"] = (
-                            f"Deletion confirmed but removal verification failed: {e}"
-                        )
-                return response
-            else:
-                error_msg = result.get("error", "Unknown error")
-                # Handle specific HA error messages
-                if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
-
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to delete helper: {error_msg}",
-                        suggestions=[
-                            "Make sure the helper exists and is not being used by automations or scripts",
-                        ],
-                        context={
-                            "helper_id": helper_id,
-                            "entity_id": entity_id,
-                            "unique_id": unique_id,
-                        },
-                    )
-                )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={"helper_type": helper_type, "helper_id": helper_id},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify helper_id exists using ha_search_entities()",
-                    "Ensure helper is not being used by automations or scripts",
                 ],
             )

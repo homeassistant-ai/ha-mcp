@@ -4,6 +4,8 @@ These tests verify that the WebSocket client correctly constructs WebSocket URLs
 for both standard Home Assistant installations and Supervisor proxy environments.
 """
 
+import pytest
+
 
 class TestWebSocketURLConstruction:
     """Tests for WebSocket URL construction logic."""
@@ -115,3 +117,118 @@ class TestWebSocketURLConstruction:
             token="my-secret-token",
         )
         assert client.token == "my-secret-token"
+
+
+class TestSendCommandErrorContract:
+    """Tests that pin the HomeAssistantCommandError raise contract.
+
+    ``WebSocketClient.send_command`` and ``send_command_with_event`` raise
+    ``HomeAssistantCommandError(f"Command failed: {msg}")`` when Home
+    Assistant replies with ``{type: "result", success: False}``. The
+    message is derived from the response's ``error`` field — dict
+    payloads use ``error["message"]``, string/other payloads use
+    ``str(error)``. These tests cover the raise sites at
+    ``websocket_client.py`` L443 (send_command) and L524
+    (send_command_with_event), which are not exercised by the
+    classifier tests (those mock HomeAssistantCommandError directly).
+
+    Mock strategy: stub ``send_json_message`` so that it resolves the
+    pending-response future with a pre-built failure payload using the
+    message ID carried in the outgoing message. This avoids depending
+    on the private message-ID counter and keeps the tests robust to
+    internal state changes.
+    """
+
+    @staticmethod
+    def _prepare_client():
+        """Build a client whose state passes is_ready and skips real I/O."""
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_send_command_raises_on_dict_error(self):
+        """send_command raises HomeAssistantCommandError with dict error payload."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve_with_failure(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_error", "message": "entity not available"},
+                }
+            )
+
+        client.send_json_message = _resolve_with_failure  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.send_command("test/ping")
+        assert "Command failed:" in str(exc_info.value)
+        assert "entity not available" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_send_command_raises_on_string_error(self):
+        """send_command raises HomeAssistantCommandError when error is a string."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve_with_failure(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": False,
+                    "error": "bare string error",
+                }
+            )
+
+        client.send_json_message = _resolve_with_failure  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.send_command("test/ping")
+        assert "Command failed:" in str(exc_info.value)
+        assert "bare string error" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_send_command_with_event_raises_on_dict_error(self):
+        """send_command_with_event raises HomeAssistantCommandError on failure result."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve_with_failure(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_error", "message": "system_health failure"},
+                }
+            )
+
+        client.send_json_message = _resolve_with_failure  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.send_command_with_event("system_health/info")
+        assert "Command failed:" in str(exc_info.value)
+        assert "system_health failure" in str(exc_info.value)

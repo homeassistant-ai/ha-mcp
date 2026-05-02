@@ -111,19 +111,22 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
         "read": (
             f"Execute a read-only tool discovered via {search_tool_name}. "
             f"Safe — does not modify any data or state.\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_read_tool(name="ha_get_history", arguments={{"entity_ids": "light.x", "start_time": "24h"}})'
         ),
         "write": (
             f"Execute a write tool discovered via {search_tool_name}. "
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_write_tool(name="ha_config_set_area", arguments={{"name": "Kitchen"}})'
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
             f"Permanently removes data. Use for tools that delete or "
             f"remove resources (areas, automations, devices, etc.).\n"
-            f"{_PROXY_PARAMS_SUFFIX}"
+            f"{_PROXY_PARAMS_SUFFIX}\n"
+            f'EXAMPLE: ha_call_delete_tool(name="ha_config_remove_area", arguments={{"area_id": "old_area"}})'
         ),
     }
 
@@ -254,12 +257,46 @@ class CategorizedSearchTransform(BM25SearchTransform):
         async def categorized_call(
             name: Annotated[str, "The name of the tool to call"],
             arguments: Annotated[
-                dict[str, Any] | None, "Arguments to pass to the tool"
+                dict[str, Any] | str | None, "Arguments to pass to the tool"
             ] = None,
             ctx: Context = None,  # type: ignore[assignment]
         ) -> Any:
             # Rebuild category cache if catalog has changed
             await transform._rebuild_category_cache(ctx)
+
+            # Tolerate `arguments` passed as a JSON string — small models
+            # sometimes serialize it before sending. Parse once up front so
+            # downstream logic can assume a dict (or None).
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                except json.JSONDecodeError as e:
+                    raise ToolError(json.dumps(create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_JSON,
+                        message=f"'arguments' is a string but not valid JSON: {e}",
+                        suggestions=[
+                            "Pass 'arguments' as an object, not a JSON string.",
+                        ],
+                        context={"proxy_used": proxy_name, "tool_name": name},
+                    ))) from e
+                if not isinstance(parsed, dict):
+                    raise ToolError(json.dumps(create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message=(
+                            "'arguments' must be a JSON object "
+                            f"(got {type(parsed).__name__})."
+                        ),
+                        suggestions=[
+                            "Pass 'arguments' as an object (dict), not a list or scalar.",
+                        ],
+                        context={"proxy_used": proxy_name, "tool_name": name},
+                    )))
+                logger.warning(
+                    "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
+                    proxy_name,
+                    name,
+                )
+                arguments = parsed
 
             # Determine which category set to check
             if category == "read":

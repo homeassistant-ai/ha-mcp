@@ -1,10 +1,12 @@
 """Unit tests for bulk_device_control validation in device_control module."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.device_control import DeviceControlTools
 
 
@@ -141,3 +143,63 @@ class TestBulkDeviceControlValidation:
 
         assert result["skipped_operations"] == 1
         assert result["execution_mode"] == "sequential"
+
+
+class TestBulkExecutionErrorHandling:
+    """Test error handling semantics in parallel and sequential bulk execution."""
+
+    @pytest.fixture
+    def tools_with_mock_control(self):
+        """Create DeviceControlTools with mocked control_device_smart."""
+        tools = DeviceControlTools(client=MagicMock())
+        tools._ensure_websocket_listener = AsyncMock()  # type: ignore[method-assign]
+        return tools
+
+    @pytest.mark.asyncio
+    async def test_sequential_continues_after_tool_error(self, tools_with_mock_control):
+        """Sequential execution no longer aborts on a single ToolError (fail-soft)."""
+        tools_with_mock_control.control_device_smart = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                {"entity_id": "light.ok", "command_sent": True, "operation_id": "op1"},
+                ToolError(json.dumps(create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND, "Entity not found: light.missing",
+                ))),
+                {"entity_id": "light.also_ok", "command_sent": True, "operation_id": "op3"},
+            ]
+        )
+
+        operations = [
+            {"entity_id": "light.ok", "action": "on"},
+            {"entity_id": "light.missing", "action": "on"},
+            {"entity_id": "light.also_ok", "action": "on"},
+        ]
+        result = await tools_with_mock_control.bulk_device_control(operations, parallel=False)
+
+        assert result["total_operations"] == 3
+        assert result["successful_commands"] == 2
+        assert len(result["results"]) == 3
+        # Middle op's structured code survived, not flattened into a string
+        assert result["results"][1]["error"]["code"] == ErrorCode.ENTITY_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_parallel_preserves_tool_error_code(self, tools_with_mock_control):
+        """Parallel execution preserves the structured ErrorCode from a ToolError."""
+        tools_with_mock_control.control_device_smart = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                {"entity_id": "light.ok", "command_sent": True, "operation_id": "op1"},
+                ToolError(json.dumps(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON, "Invalid JSON in parameters",
+                ))),
+            ]
+        )
+
+        operations = [
+            {"entity_id": "light.ok", "action": "on"},
+            {"entity_id": "light.bad", "action": "on", "parameters": "{not-json"},
+        ]
+        result = await tools_with_mock_control.bulk_device_control(operations, parallel=True)
+
+        assert result["total_operations"] == 2
+        assert result["successful_commands"] == 1
+        # Structured code preserved, not flattened to SERVICE_CALL_FAILED
+        assert result["results"][1]["error"]["code"] == ErrorCode.VALIDATION_INVALID_JSON

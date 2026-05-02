@@ -13,9 +13,17 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import (
+    ErrorCode,
     create_config_error,
+    create_error_response,
     create_resource_not_found_error,
     create_validation_error,
+)
+from ..utils.config_hash import compute_config_hash
+from ..utils.python_sandbox import (
+    PythonSandboxError,
+    get_security_documentation,
+    safe_execute,
 )
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
@@ -29,10 +37,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
+    coerce_to_list,
     fetch_entity_category,
+    merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -244,11 +255,10 @@ class AutomationConfigTools:
         For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
         """
         try:
-            config_result = await self._client.get_automation_config(identifier)
-            # Normalize config for round-trip compatibility (GET -> SET)
-            normalized_config = _normalize_config_for_roundtrip(config_result)
+            normalized_config, config_hash = await self._get_automation_config_internal(identifier)
 
             # Resolve entity_id and fetch category from entity registry
+            # (injected after hash so transient registry failures don't affect the hash)
             entity_id = await self._resolve_automation_entity_id(identifier)
             if entity_id:
                 cat_id = await fetch_entity_category(self._client, entity_id, "automation")
@@ -260,6 +270,7 @@ class AutomationConfigTools:
                 "action": "get",
                 "identifier": identifier,
                 "config": normalized_config,
+                "config_hash": config_hash,
             }
         except Exception as e:
             # Handle 404 errors gracefully (often used to verify deletion)
@@ -304,16 +315,42 @@ class AutomationConfigTools:
     async def ha_config_set_automation(
         self,
         config: Annotated[
-            str | dict[str, Any],
+            str | dict[str, Any] | None,
             Field(
-                description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'"
+                description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. "
+                "Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. "
+                "Mutually exclusive with python_transform.",
+                default=None,
             ),
-        ],
+        ] = None,
         identifier: Annotated[
             str | None,
             Field(
-                description="Automation entity_id or unique_id for updates. Omit to create new automation with generated unique_id.",
+                description="Automation entity_id or unique_id for updates. "
+                "Required for python_transform. Omit to create new automation with generated unique_id.",
                 default=None,
+            ),
+        ] = None,
+        python_transform: Annotated[
+            str | None,
+            Field(
+                description="Python expression to transform existing automation config. "
+                "Mutually exclusive with config. "
+                "Requires identifier and config_hash for validation. "
+                "WARNING: Expressions with infinite loops will hang the server. "
+                "Examples: "
+                "Simple: python_transform=\"config['action'][0]['data']['brightness'] = 255\" "
+                "Pattern: python_transform=\"for a in config['action']: "
+                "if a.get('alias') == 'My Step': a['data']['value'] = 100\" "
+                "\n\n" + get_security_documentation(),
+            ),
+        ] = None,
+        config_hash: Annotated[
+            str | None,
+            Field(
+                description="Config hash from ha_config_get_automation for optimistic locking. "
+                "REQUIRED for python_transform (validates automation unchanged). "
+                "Optional for config updates (validates before full replacement if provided).",
             ),
         ] = None,
         category: Annotated[
@@ -333,6 +370,19 @@ class AutomationConfigTools:
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.
+
+        Supports two modes: full config replacement OR Python transformation.
+
+        WHEN TO USE WHICH MODE:
+        - python_transform: RECOMMENDED for edits to existing automations. Surgical updates.
+        - config: Use for creating new automations or full restructures.
+
+        IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
+
+        PYTHON TRANSFORM EXAMPLES:
+        - Update action: python_transform="config['action'][0]['data']['brightness'] = 255"
+        - Add trigger: python_transform="config['trigger'].append({'platform': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
+        - Remove last action: python_transform="config['action'].pop()"
 
         Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
 
@@ -364,7 +414,7 @@ class AutomationConfigTools:
         BASIC EXAMPLES:
 
         Simple time-based automation:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Morning Lights",
             "description": "Turn on bedroom lights at 7 AM to help wake up",
             "trigger": [{"platform": "time", "at": "07:00:00"}],
@@ -372,7 +422,7 @@ class AutomationConfigTools:
         })
 
         Motion-activated lighting with condition:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light",
             "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
             "condition": [{"condition": "sun", "after": "sunset"}],
@@ -400,7 +450,7 @@ class AutomationConfigTools:
         BLUEPRINT AUTOMATION EXAMPLES:
 
         Create automation from blueprint:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light Kitchen",
             "use_blueprint": {
                 "path": "homeassistant/motion_light.yaml",
@@ -452,6 +502,126 @@ class AutomationConfigTools:
         """
         bp_warnings: list[str] = []
         try:
+            # Validate mutual exclusivity of config and python_transform
+            if config is not None and python_transform is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Cannot use both config and python_transform simultaneously",
+                        suggestions=[
+                            "Use only ONE of: config or python_transform",
+                            "config: Full replacement",
+                            "python_transform: Python-based edits (recommended for existing automations)",
+                        ],
+                        context={"action": "set", "identifier": identifier},
+                    )
+                )
+
+            # Handle python_transform mode
+            if python_transform is not None:
+                if not identifier:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "identifier is required for python_transform",
+                            suggestions=[
+                                "Provide the automation entity_id or unique_id",
+                                "Use ha_search_entities(domain_filter='automation') to find automations",
+                            ],
+                            context={"action": "python_transform", "identifier": identifier},
+                        )
+                    )
+                if config_hash is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "config_hash is required for python_transform",
+                            suggestions=[
+                                "Call ha_config_get_automation() first",
+                                "Use the config_hash from that response",
+                            ],
+                            context={"action": "python_transform", "identifier": identifier},
+                        )
+                    )
+
+                # Fetch current config and verify hash
+                current_config = await self._fetch_and_verify_hash(
+                    identifier, config_hash, "python_transform"
+                )
+
+                # Apply Python transformation
+                try:
+                    transformed_config = safe_execute(python_transform, current_config)
+                except PythonSandboxError as e:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            str(e),
+                            suggestions=[
+                                "Check expression syntax",
+                                "Ensure only allowed operations are used",
+                                "See tool description for allowed operations",
+                                f"Expression: {python_transform[:100]}{'...' if len(python_transform) > 100 else ''}",
+                            ],
+                            context={"action": "python_transform", "identifier": identifier},
+                        )
+                    )
+
+                # Pop category before sending to HA REST API (rejects unknown keys)
+                transform_category = transformed_config.pop("category", None)
+
+                # Normalize and validate the transformed config
+                transformed_config = _normalize_automation_config(transformed_config)
+                self._validate_required_fields(transformed_config, identifier)
+                bp_warnings = _check_best_practices(
+                    transformed_config, skill_prefix=_get_skill_prefix()
+                )
+
+                # Save transformed config
+                result = await self._client.upsert_automation_config(
+                    transformed_config, identifier
+                )
+
+                # Re-fetch to get authoritative hash (HA may normalize after save)
+                refetched = await self._get_automation_config_internal(identifier)
+                new_config_hash = refetched[1]  # (config, hash) tuple
+
+                # Re-apply category if present
+                entity_id = result.get("entity_id")
+                if not entity_id and identifier and identifier.startswith("automation."):
+                    entity_id = identifier
+                if transform_category and entity_id:
+                    await apply_entity_category(
+                        self._client, entity_id, transform_category, "automation", result, "automation"
+                    )
+
+                response: dict[str, Any] = {
+                    "success": True,
+                    "action": "python_transform",
+                    "identifier": identifier,
+                    "config_hash": new_config_hash,
+                    "python_expression": python_transform,
+                    "message": f"Automation {identifier} updated via Python transform",
+                    # Merge upsert result, excluding "success" (we set it ourselves)
+                    **{k: v for k, v in result.items() if k != "success"},
+                }
+                if bp_warnings:
+                    response["best_practice_warnings"] = bp_warnings
+                return response
+
+            if config is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Either config or python_transform must be provided",
+                        suggestions=[
+                            "config: Full automation configuration for create/replace",
+                            "python_transform: Python expression for surgical edits",
+                        ],
+                        context={"action": "set", "identifier": identifier},
+                    )
+                )
+
             config_dict = self._parse_and_validate_config(config)
 
             # Extract category before sending to HA REST API (which rejects unknown keys).
@@ -462,12 +632,23 @@ class AutomationConfigTools:
             # Normalize field names (triggers -> trigger, actions -> action, etc.)
             config_dict = _normalize_automation_config(config_dict)
 
+            # Optional hash check for full config updates
+            if identifier and config_hash:
+                await self._fetch_and_verify_hash(identifier, config_hash, "set")
+
             # Validate required fields based on automation type
             self._validate_required_fields(config_dict, identifier)
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(
                 config_dict, skill_prefix=_get_skill_prefix()
+            )
+
+            # Cross-check literal service and entity references against
+            # the live registries. Soft warnings only — the write still
+            # happens, even when references don't resolve (#940).
+            validation_meta = await validate_config_references(
+                self._client, config_dict
             )
 
             result = await self._client.upsert_automation_config(config_dict, identifier)
@@ -506,6 +687,8 @@ class AutomationConfigTools:
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
 
+            merge_validation_meta(result, validation_meta)
+
             return {
                 "success": True,
                 **result,
@@ -533,16 +716,56 @@ class AutomationConfigTools:
                 suggestions=suggestions,
             )
 
+    async def _get_automation_config_internal(
+        self, identifier: str
+    ) -> tuple[dict[str, Any], str]:
+        """Fetch and normalize automation config without logging or category injection.
+
+        Returns (normalized_config, config_hash) tuple.
+        Used internally by _fetch_and_verify_hash and ha_config_get_automation.
+        """
+        config_result = await self._client.get_automation_config(identifier)
+        normalized_config = _normalize_config_for_roundtrip(config_result)
+        config_hash_value = compute_config_hash(normalized_config)
+        return normalized_config, config_hash_value
+
+    async def _fetch_and_verify_hash(
+        self, identifier: str, config_hash: str, action: str
+    ) -> dict[str, Any]:
+        """Fetch current automation config and verify config_hash for optimistic locking.
+
+        Returns the current normalized config dict.
+        Raises ToolError if the hash does not match (conflict).
+        """
+        current_config, current_hash = await self._get_automation_config_internal(identifier)
+        if current_hash != config_hash:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Automation modified since last read (conflict)",
+                    suggestions=[
+                        "Call ha_config_get_automation() again",
+                        "Use the fresh config_hash from that response",
+                    ],
+                    context={"action": action, "identifier": identifier},
+                )
+            )
+        return current_config
+
     @staticmethod
     def _parse_and_validate_config(config: str | dict[str, Any]) -> dict[str, Any]:
         """Parse JSON config and validate it is a dict."""
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_validation_error(
-                f"Invalid config parameter: {e}",
-                parameter="config",
-                invalid_json=True,
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_JSON,
+                message=f"Invalid config parameter: {e}",
+                suggestions=[
+                    "Pass 'config' as a dict, not a JSON string, to avoid escaping issues.",
+                    "Check for JSON syntax errors: unquoted keys, trailing commas, or invalid escape sequences.",
+                ],
+                context={"parameter": "config"},
             ))
 
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -570,11 +793,53 @@ class AutomationConfigTools:
 
         missing_fields = [f for f in required_fields if f not in config_dict]
         if missing_fields:
+            # If the caller supplied a 'sequence' key, the config looks like a
+            # script — point them at ha_config_set_script instead of the generic
+            # missing-fields error.
+            if "sequence" in config_dict and (
+                "trigger" in missing_fields or "action" in missing_fields
+            ):
+                context: dict[str, Any] = {"missing_fields": missing_fields}
+                if identifier:
+                    context["identifier"] = identifier
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    message=f"Missing required fields: {', '.join(missing_fields)}",
+                    details=(
+                        "Config contains 'sequence', which belongs to scripts. "
+                        "Automations use 'trigger' and 'action'; scripts use 'sequence'."
+                    ),
+                    suggestions=[
+                        "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
+                        "For an automation, replace 'sequence' with 'action' and add a 'trigger'.",
+                    ],
+                    context=context,
+                ))
             raise_tool_error(create_config_error(
                 f"Missing required fields: {', '.join(missing_fields)}",
                 identifier=identifier,
                 missing_fields=missing_fields,
             ))
+
+        # HA accepts conditions with 'platform' (trigger syntax) but then crashes
+        # with an unhelpful 500 rather than a 400 validation error.
+        for idx, cond in enumerate(coerce_to_list(config_dict.get("condition"))):
+            if not isinstance(cond, dict):
+                continue
+            if "platform" in cond and "condition" not in cond:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        f"Condition at index {idx} uses 'platform' (trigger syntax). "
+                        "Conditions use 'condition', not 'platform'."
+                    ),
+                    suggestions=[
+                        f"Replace 'platform' with 'condition': "
+                        f"{{'condition': '{cond['platform']}', ...}}",
+                        "Triggers use 'platform'; conditions use 'condition'.",
+                    ],
+                    context={"condition_index": idx, "found_key": "platform"},
+                ))
 
         # Prevent duplicate creation when config contains an existing automation id
         if identifier is None and "id" in config_dict:

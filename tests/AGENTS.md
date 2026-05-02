@@ -6,7 +6,7 @@
 - HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}` — tools unwrap this with `result.get("service_response", result)` before returning
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
-- Feature flags (`ENABLE_YAML_CONFIG_EDITING`, `HAMCP_ENABLE_FILESYSTEM_TOOLS`) are set in `ha_container_with_fresh_config` fixture
+- Feature flags (`ENABLE_YAML_CONFIG_EDITING`, `HAMCP_ENABLE_FILESYSTEM_TOOLS`, `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION`) are set in `ha_container_with_fresh_config` fixture
 
 ## Test Patterns
 

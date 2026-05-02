@@ -331,9 +331,11 @@ If the add-on is slow or unresponsive:
 
 The add-on provides 86+ MCP tools for controlling Home Assistant:
 
+> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
+
 ### Add-ons
-- `ha_call_addon_api` — Call an add-on's HTTP or WebSocket API.
 - `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
+- `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
 
 ### Areas & Floors
 - `ha_config_list_areas` — List all Home Assistant areas (rooms).
@@ -342,6 +344,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_remove_floor` — Delete a Home Assistant floor.
 - `ha_config_set_area` — Create or update a Home Assistant area (room).
 - `ha_config_set_floor` — Create or update a Home Assistant floor.
+- `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
 ### Automations
 - `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
@@ -373,6 +376,9 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
 - `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
 
+### Energy
+- `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences.
+
 ### Entity Registry
 - `ha_get_entity` — Get entity registry information for one or more entities.
 - `ha_get_entity_exposure` — Get entity exposure settings - list all or get settings for a specific entity.
@@ -380,15 +386,15 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_set_entity` — Update entity properties in the entity registry.
 
 ### Files
-- `ha_delete_file` — Delete a file from allowed directories in the Home Assistant config.
-- `ha_list_files` — List files in a directory within the Home Assistant config directory.
-- `ha_read_file` — Read a file from the Home Assistant config directory.
-- `ha_write_file` — Write a file to allowed directories in the Home Assistant config.
+- `ha_delete_file` **(beta — dev channel only)** — Delete a file from allowed directories in the Home Assistant config.
+- `ha_list_files` **(beta — dev channel only)** — List files in a directory within the Home Assistant config directory.
+- `ha_read_file` **(beta — dev channel only)** — Read a file from the Home Assistant config directory.
+- `ha_write_file` **(beta — dev channel only)** — Write a file to allowed directories in the Home Assistant config.
 
 ### Groups
 - `ha_config_list_groups` — List all Home Assistant entity groups with their member entities.
-- `ha_config_remove_group` — Remove a Home Assistant entity group.
-- `ha_config_set_group` — Create or update a Home Assistant entity group.
+- `ha_config_remove_group` — Remove a service-based Home Assistant entity group via the group.remove service.
+- `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
 - `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
@@ -398,10 +404,9 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
-- `ha_config_remove_helper` — Delete a Home Assistant helper entity.
-- `ha_config_set_helper` — Create or update Home Assistant helper entities.
+- `ha_config_set_helper` — Create or update Home Assistant helper entities (27 types, unified interface).
+- `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
 - `ha_get_helper_schema` — Get configuration schema for a helper type.
-- `ha_set_config_entry_helper` — Create or update a Config Entry Flow helper (template, group, utility_meter, etc.).
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
@@ -409,7 +414,6 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_get_logs` — Get Home Assistant logs from various sources.
 
 ### Integrations
-- `ha_delete_config_entry` — Delete config entry permanently. Requires confirm=True.
 - `ha_get_integration` — Get integration (config entry) information with pagination.
 - `ha_set_integration_enabled` — Enable/disable integration (config entry).
 
@@ -430,7 +434,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
 - `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_search_entities` — PRIMARY tool for finding entities (lights, sensors, switches, etc.) by name, area, or domain. Use this first when looking up any entity ID.
+- `ha_search_entities` — Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
 
 ### Service & Device Control
 - `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
@@ -442,7 +446,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_backup_create` — Create a fast Home Assistant backup (local only).
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
-- `ha_config_set_yaml` — Add, replace, or remove a top-level key in configuration.yaml or package files.
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
@@ -455,7 +459,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Utilities
 - `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
-- `ha_install_mcp_tools` — Install the ha_mcp_tools custom component via HACS.
+- `ha_install_mcp_tools` **(beta — dev channel only)** — Install the ha_mcp_tools custom component via HACS.
 - `ha_report_issue` — Collect diagnostic information for filing issue reports or feedback.
 
 ### Zones

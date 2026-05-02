@@ -43,6 +43,17 @@ class HomeAssistantAPIError(HomeAssistantError):
         self.response_data = response_data
 
 
+class HomeAssistantCommandError(HomeAssistantError):
+    """WebSocket command returned success=False.
+
+    Raised by ``WebSocketClient.send_command`` when Home Assistant responds
+    with ``{type: "result", success: False}``. Used as a type marker in
+    ``_classify_exception``'s match dispatch; classification then falls
+    through to ``_classify_by_message`` for pattern matching on the
+    error message.
+    """
+
+
 class HomeAssistantClient:
     """Authenticated HTTP client for Home Assistant API."""
 
@@ -97,9 +108,57 @@ class HomeAssistantClient:
         await self.httpx_client.aclose()
         logger.debug("Closed Home Assistant client")
 
+    async def _raw_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Authenticated request that returns the raw httpx.Response.
+
+        Handles auth, HTTP 4xx/5xx, and transport errors in one place.
+        Callers parse the body themselves (JSON via `_request`, text via
+        `get_addon_logs`, etc.).
+
+        Raises:
+            HomeAssistantAuthError: 401 response.
+            HomeAssistantAPIError: Non-2xx response (with status_code and
+                response_data set from JSON body when possible).
+            HomeAssistantConnectionError: Network, timeout, or transport error.
+        """
+        try:
+            response = await self.httpx_client.request(method, endpoint, **kwargs)
+
+            if response.status_code == 401:
+                raise HomeAssistantAuthError("Invalid authentication token")
+
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                except Exception:
+                    error_data = {"message": response.text}
+
+                message = error_data.get("message")
+                if not message or not message.strip():
+                    message = response.reason_phrase or "<empty body>"
+
+                raise HomeAssistantAPIError(
+                    f"API error: {response.status_code} - {message}",
+                    status_code=response.status_code,
+                    response_data=error_data,
+                )
+
+            return response
+
+        except httpx.ConnectError as e:
+            raise HomeAssistantConnectionError(
+                f"Failed to connect to Home Assistant: {e}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
+        except httpx.HTTPError as e:
+            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+
     async def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
         """
-        Make authenticated request to Home Assistant API.
+        Make authenticated request to Home Assistant API and parse JSON body.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -114,42 +173,13 @@ class HomeAssistantClient:
             HomeAssistantAuthError: Authentication failed
             HomeAssistantAPIError: API error
         """
+        response = await self._raw_request(method, endpoint, **kwargs)
         try:
-            response = await self.httpx_client.request(method, endpoint, **kwargs)
-
-            # Handle authentication errors
-            if response.status_code == 401:
-                raise HomeAssistantAuthError("Invalid authentication token")
-
-            # Handle other HTTP errors
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                except Exception:
-                    error_data = {"message": response.text}
-
-                raise HomeAssistantAPIError(
-                    f"API error: {response.status_code} - {error_data.get('message', 'Unknown error')}",
-                    status_code=response.status_code,
-                    response_data=error_data,
-                )
-
-            # Parse JSON response
-            try:
-                result: dict[str, Any] = response.json()
-                return result
-            except json.JSONDecodeError:
-                # Some endpoints return empty responses
-                return {}
-
-        except httpx.ConnectError as e:
-            raise HomeAssistantConnectionError(
-                f"Failed to connect to Home Assistant: {e}"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
-        except httpx.HTTPError as e:
-            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+            result: dict[str, Any] = response.json()
+            return result
+        except json.JSONDecodeError:
+            # Some endpoints return empty responses
+            return {}
 
     async def get_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
@@ -366,6 +396,29 @@ class HomeAssistantClient:
         logger.debug("Fetching error log")
         response = await self._request("GET", "/error_log")
         return response if isinstance(response, str) else str(response)
+
+    async def get_addon_logs(self, slug: str) -> str:
+        """Fetch an add-on's container logs via HA Core's Supervisor REST proxy.
+
+        Uses `/api/hassio/addons/{slug}/logs`, which HA Core proxies to
+        Supervisor and returns as `text/plain`. This avoids the
+        `supervisor/api` websocket path that tries to JSON-decode the text
+        body and always fails (see #950).
+
+        Raises:
+            HomeAssistantAuthError: 401 from HA Core.
+            HomeAssistantAPIError: Non-2xx response (e.g. 404 unknown slug,
+                400 addon not installed). `status_code` is set so callers
+                can map to specific suggestions.
+            HomeAssistantConnectionError: Network, timeout, or transport error.
+        """
+        logger.debug(f"Fetching addon logs for slug={slug}")
+        response = await self._raw_request(
+            "GET",
+            f"/hassio/addons/{slug}/logs",
+            headers={"Accept": "text/plain"},
+        )
+        return response.text
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """

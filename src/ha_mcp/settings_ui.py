@@ -32,6 +32,13 @@ _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
 logger = logging.getLogger(__name__)
 
+# Tools that are always enabled regardless of saved config — the server
+# strips them out of any disable list before applying. Three of these
+# overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
+# (ha_search_entities, ha_get_overview, ha_report_issue); ha_get_state
+# is mandatory but not pinned-by-default because it is reachable via the
+# ha_call_read_tool proxy when tool search is on. Keep these lists in
+# sync where it matters and divergent where it matters — don't merge them.
 MANDATORY_TOOLS: set[str] = {
     "ha_search_entities",
     "ha_get_overview",
@@ -42,7 +49,10 @@ MANDATORY_TOOLS: set[str] = {
 # Tools that exist in the codebase but are only registered when a
 # corresponding feature flag/env var is set. When the flag is off, these
 # won't appear in local_provider._list_tools(), so we inject stub entries
-# into the settings UI with a read-only "disabled by" note.
+# into the settings UI so users discover the tool exists and how to enable
+# it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
+# source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py)
+# — a future rename or removal needs to land in both places.
 FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
@@ -55,38 +65,56 @@ FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
         "title": "List Files",
         "primary_tag": "Files",
         "description": "List files in a directory within the Home Assistant config.",
-        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "disabled_by": "enable_filesystem_tools",
         "readOnlyHint": "true",
     },
     "ha_read_file": {
         "title": "Read File",
         "primary_tag": "Files",
         "description": "Read a file from the Home Assistant config directory.",
-        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "disabled_by": "enable_filesystem_tools",
         "readOnlyHint": "true",
     },
     "ha_write_file": {
         "title": "Write File",
         "primary_tag": "Files",
         "description": "Write a file to allowed directories in the Home Assistant config.",
-        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "disabled_by": "enable_filesystem_tools",
         "destructiveHint": "true",
     },
     "ha_delete_file": {
         "title": "Delete File",
         "primary_tag": "Files",
         "description": "Delete a file from allowed directories.",
-        "disabled_by": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+        "disabled_by": "enable_filesystem_tools",
+        "destructiveHint": "true",
+    },
+    "ha_install_mcp_tools": {
+        "title": "Install MCP Tools Component",
+        "primary_tag": "Utilities",
+        "description": "Install the ha_mcp_tools custom component via HACS.",
+        "disabled_by": "enable_custom_component_integration",
         "destructiveHint": "true",
     },
 }
 
 
+def _is_addon() -> bool:
+    """Return True when running inside the Home Assistant add-on container.
+
+    Mirrors the existing convention in this module (and ``__main__.py``)
+    of treating ``SUPERVISOR_TOKEN`` as the add-on detector. Using the env
+    var is more reliable than checking for ``/data`` because some Docker
+    setups (and macOS dev environments) have a ``/data`` directory that
+    isn't the add-on data dir.
+    """
+    return bool(os.environ.get("SUPERVISOR_TOKEN"))
+
+
 def _get_config_path() -> Path:
     """Return the path to the tool config JSON file."""
-    data_dir = Path("/data")
-    if data_dir.exists():
-        return data_dir / "tool_config.json"
+    if _is_addon():
+        return Path("/data") / "tool_config.json"
     home_dir = Path.home() / ".ha-mcp"
     home_dir.mkdir(parents=True, exist_ok=True)
     return home_dir / "tool_config.json"
@@ -223,10 +251,14 @@ def apply_tool_visibility(
         elif state == "pinned":
             pinned_names.add(name)
 
+    # AND semantics for the YAML safety toggle: the tool is disabled if
+    # *either* the safety toggle is off *or* the user disabled it in the UI.
+    # Kept as defense-in-depth even though tools_yaml_config.py already
+    # early-returns when the toggle is off (the tool isn't registered, so
+    # mcp.disable() is a no-op in that case) — if the registration site
+    # ever moves, this still keeps the tool out of the visible catalog.
     if not settings.enable_yaml_config_editing:
         disabled_names.add("ha_config_set_yaml")
-    else:
-        disabled_names.discard("ha_config_set_yaml")
 
     disabled_names -= MANDATORY_TOOLS
 
@@ -410,6 +442,21 @@ function getState(name) {
   return DEFAULT_PINNED.includes(name) ? 'pinned' : 'enabled';
 }
 
+// Escape HTML special characters before interpolating into innerHTML.
+// All interpolated values come from the server (tool docstrings, names,
+// FEATURE_GATED_TOOLS metadata) so this is defense-in-depth — but a
+// docstring containing literal '<' or '&' would otherwise break the
+// page silently.
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function render() {
   const groups = {};
   toolData.forEach(t => {
@@ -440,7 +487,7 @@ function render() {
     header.className = 'group-header';
     header.innerHTML = `<div class="group-header-left">` +
       `<span class="group-chevron">&#9654;</span>` +
-      `<span class="group-name">${tag}</span>` +
+      `<span class="group-name">${escapeHtml(tag)}</span>` +
       `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
       `</div>` +
       `<label class="switch group-master" title="Enable/disable all tools in this group">` +
@@ -517,23 +564,25 @@ function render() {
 
       const title = t.title || t.name;
       const desc = (t.description || '').split('\\n')[0].slice(0, 120);
-      const gatedNote = disabledBy ? `<div class="disabled-by-note">Requires ${disabledBy} in add-on config</div>` : '';
+      const gatedNote = disabledBy
+        ? `<div class="disabled-by-note">Beta — set <code>${escapeHtml(disabledBy)}</code> in the dev add-on config or the matching env var (see docs/beta.md).</div>`
+        : '';
 
       div.innerHTML = `<div class="tool-info">` +
-        `<div class="tool-name">${title}${badges}</div>` +
-        `<div class="tool-meta">${t.name}</div>` +
-        (desc ? `<div class="tool-desc">${desc}</div>` : '') +
+        `<div class="tool-name">${escapeHtml(title)}${badges}</div>` +
+        `<div class="tool-meta">${escapeHtml(t.name)}</div>` +
+        (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
         `</div>` +
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +
-            `<label class="switch"><input type="checkbox" data-tool="${t.name}" data-field="enabled" ` +
+            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="enabled" ` +
               `${isEnabled ? 'checked' : ''} ${lockEnabled ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
             `<span>enabled</span>` +
           `</div>` +
           `<div class="toggle-group ${!isEnabled ? 'disabled-toggle' : ''}">` +
-            `<label class="switch"><input type="checkbox" data-tool="${t.name}" data-field="pinned" ` +
+            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="pinned" ` +
               `${isPinned ? 'checked' : ''} ${lockPinned ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
             `<span>pinned</span>` +
@@ -628,18 +677,35 @@ loadTools();
 def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
+    secret_path: str = "",
 ) -> None:
-    """Register the /settings web UI and /api/settings/* endpoints."""
+    """Register the settings UI HTTP routes.
 
-    @mcp.custom_route("/", methods=["GET"])
+    The routes are mounted under ``secret_path`` so HTTP clients (Docker
+    / standalone) need the same secret to reach the UI as they do to
+    reach the MCP endpoint itself — there's no native auth on FastMCP
+    custom routes (they bypass ``RequireAuthMiddleware``), so this
+    matches the auth-by-obscurity model the rest of the server uses for
+    those modes. In add-on mode (``SUPERVISOR_TOKEN`` set) the routes
+    are *also* mounted at root so HA ingress can proxy to ``localhost:9583/``
+    and serve the "Open Web UI" button. Stdio transports never call this
+    function.
+
+    Args:
+        mcp: The FastMCP instance to register routes on.
+        server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
+        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
+            ``/mcp``). Required for non-add-on HTTP modes; if empty in
+            non-add-on mode, the function logs a warning and registers
+            nothing rather than expose the routes publicly.
+    """
+
     async def _root_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_SETTINGS_HTML)
 
-    @mcp.custom_route("/settings", methods=["GET"])
     async def _settings_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_SETTINGS_HTML)
 
-    @mcp.custom_route("/api/settings/tools", methods=["GET"])
     async def _get_tools(_: Request) -> JSONResponse:
         tools = await _get_tool_metadata(server)
         config = load_tool_config()
@@ -649,7 +715,6 @@ def register_settings_routes(
                 states[name] = "pinned"
         return JSONResponse({"tools": tools, "states": states})
 
-    @mcp.custom_route("/api/settings/tools", methods=["POST"])
     async def _save_tools(request: Request) -> JSONResponse:
         try:
             body = await request.json()
@@ -659,6 +724,18 @@ def register_settings_routes(
                     ErrorCode.VALIDATION_INVALID_JSON,
                     "Invalid JSON body",
                     suggestions=["Ensure the request body is valid JSON"],
+                ),
+                status_code=400,
+            )
+
+        # A valid-JSON-but-non-object payload (`null`, `[]`, `42`, `"x"`)
+        # would otherwise blow up on body.get below as a 500 Internal
+        # Server Error — convert to a structured 400 instead.
+        if not isinstance(body, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Request body must be a JSON object",
                 ),
                 status_code=400,
             )
@@ -699,7 +776,6 @@ def register_settings_routes(
             "restart_required": True,
         })
 
-    @mcp.custom_route("/api/settings/restart", methods=["POST"])
     async def _restart_addon(_: Request) -> JSONResponse:
         token = os.environ.get("SUPERVISOR_TOKEN")
         if not token:
@@ -745,8 +821,42 @@ def register_settings_routes(
             )
         return JSONResponse({"success": True, "message": "Restart initiated"})
 
-    @mcp.custom_route("/api/settings/info", methods=["GET"])
     async def _settings_info(_: Request) -> JSONResponse:
         return JSONResponse({
-            "is_addon": bool(os.environ.get("SUPERVISOR_TOKEN")),
+            "is_addon": _is_addon(),
         })
+
+    secret_prefix = secret_path.rstrip("/") if secret_path else ""
+    is_addon = _is_addon()
+
+    if not is_addon and not secret_prefix:
+        logger.warning(
+            "register_settings_routes: not in add-on mode and no secret_path "
+            "provided — settings UI HTTP routes not registered (would otherwise "
+            "be publicly reachable). Pass MCP_SECRET_PATH or run as add-on."
+        )
+        return
+
+    if is_addon:
+        # Root mount lets HA ingress proxy localhost:9583/ → settings UI.
+        # Direct port 9583 LAN access also reaches these routes; in this
+        # respect they share the existing add-on networking model where
+        # port 9583 is exposed via host_network and the secret path is
+        # the auth for direct access. Document this in DOCS.md.
+        mcp.custom_route("/", methods=["GET"])(_root_page)
+        mcp.custom_route("/settings", methods=["GET"])(_settings_page)
+        mcp.custom_route("/api/settings/tools", methods=["GET"])(_get_tools)
+        mcp.custom_route("/api/settings/tools", methods=["POST"])(_save_tools)
+        mcp.custom_route("/api/settings/restart", methods=["POST"])(_restart_addon)
+        mcp.custom_route("/api/settings/info", methods=["GET"])(_settings_info)
+
+    if secret_prefix:
+        # Mount under the MCP secret path so Docker / standalone clients
+        # need the same secret to reach the UI as they do for the MCP
+        # endpoint. The frontend uses relative fetches (./api/settings/...)
+        # so the JS works at either prefix unchanged.
+        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(_settings_page)
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(_get_tools)
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(_save_tools)
+        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(_restart_addon)
+        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(_settings_info)

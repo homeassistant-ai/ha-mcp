@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import websockets
 
 from ..config import get_global_settings
+from .rest_client import HomeAssistantCommandError, HomeAssistantConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ class HomeAssistantWebSocketClient:
                 message_type="auth_required", timeout=5
             )
             if not auth_msg:
-                raise Exception("Did not receive auth_required message")
+                raise HomeAssistantConnectionError("Did not receive auth_required message")
 
             # Send authentication
             await self._send_auth()
@@ -411,7 +412,7 @@ class HomeAssistantWebSocketClient:
             Response from Home Assistant
         """
         if not self._state.is_ready:
-            raise Exception("WebSocket not authenticated")
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
@@ -439,7 +440,7 @@ class HomeAssistantWebSocketClient:
                         if isinstance(error, dict)
                         else str(error)
                     )
-                    raise Exception(f"Command failed: {error_msg}")
+                    raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
                 # Return success response according to HA WebSocket format
                 return {
@@ -484,7 +485,7 @@ class HomeAssistantWebSocketClient:
             A (result_response, event_response) tuple.
         """
         if not self._state.is_ready:
-            raise Exception("WebSocket not authenticated")
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
@@ -516,7 +517,7 @@ class HomeAssistantWebSocketClient:
                 if isinstance(error, dict)
                 else str(error)
             )
-            raise Exception(f"Command failed: {error_msg}")
+            raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
         try:
             event_response = await asyncio.wait_for(
