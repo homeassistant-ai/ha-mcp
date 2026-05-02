@@ -6,7 +6,7 @@ transports: ['stdio', 'sse', 'streamable-http']
 configFormat: json
 configLocation: Manage MCP Servers → Show Config File in Finder
 accuracy: 4
-order: 12
+order: 15
 httpNote: HTTP transport is experimental (requires v1.100.0+)
 ---
 

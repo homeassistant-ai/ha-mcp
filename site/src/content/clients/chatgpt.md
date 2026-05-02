@@ -5,7 +5,7 @@ logo: /logos/openai.svg
 transports: ['sse', 'streamable-http']
 configFormat: ui
 accuracy: 4
-order: 7
+order: 9
 beta: true
 ---
 

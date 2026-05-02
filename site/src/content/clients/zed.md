@@ -6,7 +6,7 @@ transports: ['stdio']
 configFormat: json
 configLocation: ~/.config/zed/settings.json
 accuracy: 4
-order: 10
+order: 13
 httpNote: stdio only - limited HTTP support
 ---
 

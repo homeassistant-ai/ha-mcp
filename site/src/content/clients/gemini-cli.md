@@ -6,7 +6,7 @@ transports: ['stdio', 'sse', 'streamable-http']
 configFormat: cli
 configLocation: ~/.gemini/settings.json
 accuracy: 4
-order: 8
+order: 11
 ---
 
 ## Configuration

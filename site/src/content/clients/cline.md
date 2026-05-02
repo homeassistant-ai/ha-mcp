@@ -6,7 +6,7 @@ transports: ['stdio', 'streamable-http']
 configFormat: json
 configLocation: VS Code Settings → Cline → MCP Servers
 accuracy: 4
-order: 6
+order: 7
 ---
 
 ## Configuration

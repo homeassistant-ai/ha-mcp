@@ -6,7 +6,7 @@ transports: ['stdio', 'sse', 'streamable-http']
 configFormat: yaml
 configLocation: .continue/mcpServers/
 accuracy: 4
-order: 11
+order: 14
 ---
 
 ## Configuration

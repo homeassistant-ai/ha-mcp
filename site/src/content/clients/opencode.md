@@ -6,7 +6,7 @@ transports: ['stdio', 'streamable-http']
 configFormat: json
 configLocation: ~/.config/opencode/opencode.json (global) or opencode.json (project)
 accuracy: 5
-order: 14
+order: 18
 ---
 
 ## Configuration
@@ -22,6 +22,11 @@ OpenCode supports MCP servers through the `mcp` key in its JSON (or JSONC) confi
 OpenCode merges configs from all locations (project overrides global). See [config precedence](https://opencode.ai/docs/config/#precedence-order).
 
 ### stdio Configuration (Local)
+
+<!-- The uvx-stdio shape below (type, command, enabled, environment) is mirrored in: -->
+<!--   - site/src/pages/setup.astro (wizard `isOpenCode` branch) -->
+<!--   - site/src/data/clients.ts (legacy mirror entry) -->
+<!-- Keep all three aligned when editing. -->
 
 ```json
 {
