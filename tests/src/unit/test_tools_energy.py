@@ -6,6 +6,7 @@ hermetic while still exercising every branch of the state machine.
 """
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -767,6 +768,41 @@ class TestSetPrefsPerKeyHash:
         # No save WS call.
         assert tools._client.send_websocket_message.call_count == 1
 
+    async def test_per_key_mismatch_lists_all_offending_keys_sorted(self, tools):
+        """Two stale keys must both appear in mismatched_keys, sorted —
+        regression guard against `next(...)` / single-element shortcuts
+        on the comprehension at the dict-branch's mismatch loop.
+        """
+        current_prefs = _sample_prefs()
+        per_key = _compute_per_key_hashes(current_prefs)
+        # Both device_consumption and energy_sources are stale; only
+        # device_consumption_water hash is fresh (and not submitted).
+        config = {
+            "device_consumption": [{"stat_consumption": "sensor.fridge_energy"}],
+            "energy_sources": current_prefs["energy_sources"],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="set",
+                config=config,
+                config_hash={
+                    "device_consumption": "stale1deadbeefcafe",
+                    "energy_sources": "stale2deadbeefcafe",
+                },
+            )
+        err = json.loads(str(exc_info.value))
+        assert "RESOURCE_LOCKED" in json.dumps(err)
+        # Both stale keys surface, in lexicographic sorted order.
+        assert err["mismatched_keys"] == [
+            "device_consumption",
+            "energy_sources",
+        ]
+        assert tools._client.send_websocket_message.call_count == 1
+
     async def test_missing_hash_for_submitted_key_raises_validation(self, tools):
         current_prefs = _sample_prefs()
         per_key = _compute_per_key_hashes(current_prefs)
@@ -818,10 +854,11 @@ class TestSetPrefsPerKeyHash:
         assert err["missing_in_hash"] == []
         assert tools._client.send_websocket_message.call_count == 1
 
-    async def test_unknown_top_level_keys_silently_dropped(self, tools):
+    async def test_unknown_top_level_keys_rejected(self, tools):
         """Unknown top-level keys (outside the canonical set) on either
-        side are silently dropped before set-equality, matching the
-        permissive-drop semantics of _shape_check and the save loop.
+        side are rejected with VALIDATION_FAILED. Closes the silent-no-op
+        trap where typo'd keys on both sides would coincide as ∅ == ∅
+        and slip through as a save with an empty payload.
         """
         current_prefs = _sample_prefs()
         per_key = _compute_per_key_hashes(current_prefs)
@@ -831,25 +868,69 @@ class TestSetPrefsPerKeyHash:
         }
         tools._client.send_websocket_message.side_effect = [
             {"success": True, "result": current_prefs},
-            {"success": True, "result": None},
-            {"success": True, "result": _empty_validate_result()},
         ]
 
-        result = await tools.ha_manage_energy_prefs(
-            mode="set",
-            config=config,
-            config_hash={
-                "device_consumption": per_key["device_consumption"],
-                "another_garbage_key": "also_ignored",
-            },
-        )
-        assert result["success"] is True
-        save_payload = tools._client.send_websocket_message.call_args_list[
-            1
-        ].args[0]
-        # Garbage keys never reach the save payload either.
-        assert "garbage_key" not in save_payload
-        assert "another_garbage_key" not in save_payload
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="set",
+                config=config,
+                config_hash={
+                    "device_consumption": per_key["device_consumption"],
+                    "another_garbage_key": "also_ignored",
+                },
+            )
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_FAILED" in json.dumps(err)
+        assert err["invalid_config_keys"] == ["garbage_key"]
+        assert err["invalid_hash_keys"] == ["another_garbage_key"]
+        # Hash mismatch is the gate — no save WS call.
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_all_typoed_keys_does_not_silently_succeed(self, tools):
+        """Belt-and-braces: even if EVERY submitted key is a typo (so the
+        old silent-drop logic would have left submitted_keys=∅ and
+        coincided with hashed_keys=∅), the unknown-key guard rejects
+        before set-equality runs. No no-op save reaches HA.
+        """
+        current_prefs = _sample_prefs()
+        config_only_typos = {"devic_consumption": [{"stat_consumption": "x"}]}
+        hash_only_typos = {"devic_consumption": "deadbeefcafefade"}
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="set",
+                config=config_only_typos,
+                config_hash=hash_only_typos,
+            )
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_FAILED" in json.dumps(err)
+        assert err["invalid_config_keys"] == ["devic_consumption"]
+        assert err["invalid_hash_keys"] == ["devic_consumption"]
+        # No save attempted.
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_empty_config_with_dict_hash_rejected(self, tools):
+        """Empty 'config' under dict-form hash is rejected — even with
+        valid (empty) hashed_keys the agent's intent is unclear, and the
+        save endpoint would no-op silently.
+        """
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="set",
+                config={},
+                config_hash={},
+            )
+        err = json.loads(str(exc_info.value))
+        assert "VALIDATION_FAILED" in json.dumps(err)
+        assert "at least one top-level key" in json.dumps(err)
+        assert tools._client.send_websocket_message.call_count == 1
 
     async def test_response_includes_fresh_per_key_hashes_after_write(
         self, tools
@@ -910,6 +991,121 @@ class TestSetPrefsPerKeyHash:
         )
         assert result["success"] is True
         assert result["mode"] == "set"
+
+    async def test_dry_run_with_dict_form_skips_hash_check(self, tools):
+        """``dry_run=True`` short-circuits before the hash branch entirely,
+        so a dict-form ``config_hash`` (even one with stale or invalid
+        entries) is silently accepted on dry runs. Documented in the
+        tool docstring; pinned here so a future refactor cannot quietly
+        start enforcing the dict shape under dry_run.
+        """
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": _empty_validate_result(),
+        }
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config=_sample_prefs(),
+            # All three fields stale — would be RESOURCE_LOCKED under
+            # a real-run, but dry_run skips the check.
+            config_hash={
+                "energy_sources": "deadbeefcafefade",
+                "device_consumption": "deadbeefcafefade",
+                "device_consumption_water": "deadbeefcafefade",
+            },
+            dry_run=True,
+        )
+        assert result["success"] is True
+        assert result["dry_run"] is True
+
+
+# -----------------------------------------------------------------------------
+# Convenience-mode contract — never reaches dict-form hash branch (issue #1049)
+# -----------------------------------------------------------------------------
+
+
+class TestConvenienceModesPassStrHash:
+    """``_mutate_atomic`` reads ``current["config_hash"]`` (always a ``str``
+    from ``_get_prefs``) and forwards it to ``_set_prefs``. The dict-form
+    code path is therefore unreachable from convenience modes. Pinning
+    that contract guards against a future refactor that forwards
+    ``config_hash_per_key`` instead — which would expose dict-branch
+    semantics to a code path that pre-validates differently.
+    """
+
+    async def test_add_device_forwards_str_hash_to_set_prefs(self, tools, monkeypatch):
+        from ha_mcp.tools.tools_energy import EnergyTools
+
+        original_set_prefs = EnergyTools._set_prefs
+        captured: dict[str, Any] = {}
+
+        async def spy_set_prefs(self, config, config_hash, **kwargs):
+            captured["config_hash_type"] = type(config_hash).__name__
+            return await original_set_prefs(self, config, config_hash, **kwargs)
+
+        monkeypatch.setattr(EnergyTools, "_set_prefs", spy_set_prefs)
+
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": _sample_prefs()},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+        await tools.ha_manage_energy_prefs(
+            mode="add_device", stat_consumption="sensor.tv_energy"
+        )
+        assert captured["config_hash_type"] == "str"
+
+    async def test_remove_device_forwards_str_hash_to_set_prefs(
+        self, tools, monkeypatch
+    ):
+        from ha_mcp.tools.tools_energy import EnergyTools
+
+        original_set_prefs = EnergyTools._set_prefs
+        captured: dict[str, Any] = {}
+
+        async def spy_set_prefs(self, config, config_hash, **kwargs):
+            captured["config_hash_type"] = type(config_hash).__name__
+            return await original_set_prefs(self, config, config_hash, **kwargs)
+
+        monkeypatch.setattr(EnergyTools, "_set_prefs", spy_set_prefs)
+
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": _sample_prefs()},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+        await tools.ha_manage_energy_prefs(
+            mode="remove_device", stat_consumption="sensor.fridge_energy"
+        )
+        assert captured["config_hash_type"] == "str"
+
+    async def test_add_source_forwards_str_hash_to_set_prefs(
+        self, tools, monkeypatch
+    ):
+        from ha_mcp.tools.tools_energy import EnergyTools
+
+        original_set_prefs = EnergyTools._set_prefs
+        captured: dict[str, Any] = {}
+
+        async def spy_set_prefs(self, config, config_hash, **kwargs):
+            captured["config_hash_type"] = type(config_hash).__name__
+            return await original_set_prefs(self, config, config_hash, **kwargs)
+
+        monkeypatch.setattr(EnergyTools, "_set_prefs", spy_set_prefs)
+
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": _sample_prefs()},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+        await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source={
+                "type": "solar",
+                "stat_energy_from": "sensor.solar_in",
+            },
+        )
+        assert captured["config_hash_type"] == "str"
 
 
 # -----------------------------------------------------------------------------
