@@ -51,10 +51,11 @@ READABLE_PATTERNS = [
     "www/**",
     "themes/**",
     "custom_templates/**",
+    "dashboards/**",
     "custom_components/**/*.py",
 ]
 
-WRITABLE_DIRS = ["www", "themes", "custom_templates"]
+WRITABLE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 
 
 def is_filesystem_tools_enabled() -> bool:
@@ -115,7 +116,7 @@ class FilesystemTools:
             Field(
                 description=(
                     "Relative directory path from config directory. "
-                    "Allowed paths: www/, themes/, custom_templates/. "
+                    "Allowed paths: www/, themes/, custom_templates/, dashboards/. "
                     "Example: 'www/' or 'themes/my_theme'"
                 ),
             ),
@@ -133,13 +134,14 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """List files in a directory within the Home Assistant config directory.
 
-        Lists files in allowed directories (www/, themes/, custom_templates/) with
+        Lists files in allowed directories (www/, themes/, custom_templates/, dashboards/) with
         optional glob pattern filtering. Returns file names, sizes, and modification times.
 
         **Allowed Directories:**
         - `www/` - Web assets (CSS, JS, images for dashboards)
         - `themes/` - Theme files
         - `custom_templates/` - Jinja2 template files
+        - `dashboards/` - YAML-mode dashboard files
 
         **Security:** Only directories in the allowed list can be accessed.
         Path traversal attempts (../) are blocked.
@@ -237,7 +239,7 @@ class FilesystemTools:
         - `secrets.yaml` (values masked)
         - `packages/*.yaml`
         - `home-assistant.log` (tail only)
-        - `www/**`, `themes/**`, `custom_templates/**`
+        - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`
         - `custom_components/**/*.py` (read-only)
 
         **Security:**
@@ -322,7 +324,7 @@ class FilesystemTools:
             Field(
                 description=(
                     "Relative path from config directory. "
-                    "Must be in www/, themes/, or custom_templates/. "
+                    "Must be in www/, themes/, custom_templates/, or dashboards/. "
                     "Example: 'www/custom.css', 'themes/my_theme.yaml'"
                 ),
             ),
@@ -365,6 +367,7 @@ class FilesystemTools:
         - `www/` - Web assets for dashboards
         - `themes/` - Theme YAML files
         - `custom_templates/` - Jinja2 template files
+        - `dashboards/` - YAML-mode dashboard files
 
         **Security:**
         - Only the directories above allow writes
@@ -453,7 +456,7 @@ class FilesystemTools:
             Field(
                 description=(
                     "Relative path from config directory. "
-                    "Must be in www/, themes/, or custom_templates/. "
+                    "Must be in www/, themes/, custom_templates/, or dashboards/. "
                     "Example: 'www/old-file.css'"
                 ),
             ),
@@ -478,6 +481,7 @@ class FilesystemTools:
         - `www/` - Web assets
         - `themes/` - Theme files
         - `custom_templates/` - Template files
+        - `dashboards/` - YAML-mode dashboard files
 
         **Security:**
         - Only the directories above allow deletions
