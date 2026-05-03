@@ -46,7 +46,7 @@ async def _check_storage_mode_dashboard_collision(
         result = await client.send_websocket_message(
             {"type": "lovelace/dashboards/list"}
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "lovelace/dashboards/list WS query failed (%s); skipping collision check",
             exc,
@@ -112,8 +112,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
                     "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify'). Not for template sensors "
-                    "(use ha_config_set_helper), automations, scripts, "
+                    "'rest', 'shell_command', 'notify'). For YAML-mode dashboards, "
+                    "use the dotted form 'lovelace.dashboards.<url_path>' where "
+                    "<url_path> is lowercase, hyphenated, and not a reserved HA "
+                    "route. No other dotted paths are supported. Not for template "
+                    "sensors (use ha_config_set_helper), automations, scripts, "
                     "scenes, or input_* helpers — those have dedicated tools."
                 ),
             ),
@@ -174,7 +177,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
 
         Intended for YAML-only integrations with no config-flow or API
-        equivalent (command_line, rest, shell_command, notify platforms).
+        equivalent (command_line, rest, shell_command, notify platforms),
+        and for registering YAML-mode dashboards via
+        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
         Check ``post_action`` in the response: most keys need a full HA
         restart; template, mqtt, and group support reload. Preserves YAML
         comments and HA tags (``!include``, ``!secret``) on round-trip;
