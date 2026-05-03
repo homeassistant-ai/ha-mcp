@@ -1,6 +1,5 @@
 """Unit tests for ha_config_set_yaml MCP tool wrapper."""
 
-import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
