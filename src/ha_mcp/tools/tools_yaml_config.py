@@ -227,8 +227,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)
 
-            # Storage-mode dashboard collision check (only for lovelace.dashboards.*)
-            await _check_storage_mode_dashboard_collision(client, yaml_path)
+            # Storage-mode dashboard collision check (only for lovelace.dashboards.*).
+            # Skip on `remove` so users can clean up YAML entries that conflict
+            # with a storage-mode dashboard (e.g., during a migration).
+            if action in ("add", "replace"):
+                await _check_storage_mode_dashboard_collision(client, yaml_path)
 
             # Check if custom component is available
             await _assert_mcp_tools_available(client)

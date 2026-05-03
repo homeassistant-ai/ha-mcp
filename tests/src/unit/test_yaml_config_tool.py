@@ -162,3 +162,24 @@ async def test_ws_returns_unexpected_shape_warns_and_dispatches(monkeypatch):
         content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
     )
     client.call_service.assert_called_once()
+
+
+async def test_remove_action_skips_collision_check(monkeypatch):
+    """`remove` must NOT pay the WS round-trip — users need to be able to
+    clean up YAML entries even when a storage-mode dashboard owns the same
+    url_path (migration scenario)."""
+    fn, client = await _make_tool()
+    # Set up the collision return so we'd notice if the check ran.
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "result": [
+                {"url_path": "energy-dash", "mode": "storage", "id": "abc"}
+            ]
+        }
+    )
+    await fn(
+        yaml_path="lovelace.dashboards.energy-dash",
+        action="remove",
+    )
+    client.send_websocket_message.assert_not_called()
+    client.call_service.assert_called_once()
