@@ -1,7 +1,10 @@
 """Unit tests for YAML-mode dashboard validators in ha_mcp_tools."""
 
+import asyncio
 import sys
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock as MM
 
 import pytest
 
@@ -177,11 +180,6 @@ class TestParseYamlPath:
     def test_rejects_other_dotted_path(self, parse):
         _, _, err = parse("homeassistant.customize")
         assert err is not None
-
-
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock as MM
 
 
 class TestHandleEditYamlConfigDashboards:
