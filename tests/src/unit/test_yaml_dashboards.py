@@ -80,3 +80,43 @@ class TestReservedDashboardUrlPaths:
 
     def test_is_frozenset(self):
         assert isinstance(RESERVED_DASHBOARD_URL_PATHS, frozenset)
+
+
+class TestValidateDashboardFilename:
+    """`filename:` value in a YAML-mode dashboard entry must stay under dashboards/."""
+
+    @pytest.fixture(scope="class")
+    def validate(self):
+        from custom_components.ha_mcp_tools import _validate_dashboard_filename
+        return _validate_dashboard_filename
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "dashboards/main.yaml",
+            "dashboards/sub/nested.yaml",
+            "dashboards/energy-2026.yaml",
+        ],
+    )
+    def test_accepts_valid_filenames(self, validate, filename):
+        err = validate(filename)
+        assert err is None, f"{filename} should be valid, got: {err}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "../secrets.yaml",
+            "/etc/passwd",
+            "dashboards/../secrets.yaml",
+            "dashboards/main.yml",       # wrong extension
+            "main.yaml",                 # not under dashboards/
+            "www/dashboard.yaml",        # other allowlist dir, not dashboards
+            "",
+            "dashboards/",
+            "dashboards/main",           # no extension
+        ],
+    )
+    def test_rejects_invalid_filenames(self, validate, filename):
+        err = validate(filename)
+        assert err is not None, f"{filename} should be rejected"
+        assert isinstance(err, str)

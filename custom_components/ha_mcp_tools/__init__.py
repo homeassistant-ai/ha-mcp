@@ -198,6 +198,37 @@ def _mask_secrets_content(content: str) -> str:
     return "\n".join(masked_lines)
 
 
+def _validate_dashboard_filename(filename: str) -> str | None:
+    """Validate a YAML-mode dashboard `filename:` value.
+
+    Returns None if valid, otherwise a human-readable error string.
+
+    Rules:
+    - Must be a non-empty string.
+    - Must end in '.yaml'.
+    - Must resolve to a path under 'dashboards/' (no traversal escape).
+    - No absolute paths, no '..' segments.
+    """
+    if not filename or not isinstance(filename, str):
+        return "filename must be a non-empty string"
+    if filename.startswith("/"):
+        return "filename must not be an absolute path"
+    if not filename.endswith(".yaml"):
+        return "filename must end with .yaml"
+
+    normalized = os.path.normpath(filename)
+    if normalized.startswith("..") or normalized.startswith("/"):
+        return "filename must not escape the config directory"
+
+    parts = normalized.split(os.sep)
+    if not parts or parts[0] != "dashboards":
+        return "filename must be under dashboards/"
+    # Reject any '..' segment (defence-in-depth after normpath collapse)
+    if ".." in parts:
+        return "filename must not contain path traversal segments"
+    return None
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA MCP Tools from a config entry."""
     config_dir = Path(hass.config.config_dir)
