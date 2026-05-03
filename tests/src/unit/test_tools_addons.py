@@ -50,6 +50,19 @@ def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
     return json.loads(str(exc_info.value))
 
 
+@pytest.fixture(autouse=True)
+def _default_offhost_env(monkeypatch):
+    """Pin tests to the off-host install variant by default.
+
+    `is_running_in_addon()` reads `SUPERVISOR_TOKEN` from the environment.
+    Without explicit pinning, a test inheriting that env var from the host
+    shell would silently flip into the HA-add-on branch and assert the wrong
+    route. Tests exercising the addon variant must `monkeypatch.setenv`
+    inside their body to override this default.
+    """
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+
 @pytest.fixture
 def mock_ingress_session():
     """Patch _create_ingress_session to return a fixed token without WS calls."""
@@ -605,6 +618,139 @@ class TestCallAddonApiErrors:
         assert captured["url"] == (
             "http://localhost:8123/api/hassio_ingress/abc123/api/test"
         )
+
+    @pytest.mark.asyncio
+    async def test_http_addon_variant_uses_direct_ingress_port(
+        self, monkeypatch, mock_ingress_session
+    ):
+        """When running as the HA add-on, ingress mode hits the addon's container
+        directly with `core.ingress` source headers — no HA Core proxy hop, no
+        session cookie. This is the path that worked on master pre-PR."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        # Inside the addon variant, base_url points at Supervisor's proxy mount.
+        client.base_url = "http://supervisor/core"
+
+        captured: dict[str, object] = {}
+
+        async def fake_request(*, method, url, headers, content):
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 200
+            response.json.return_value = {"ok": True}
+            response.text = '{"ok": true}'
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["success"] is True
+        # URL is the addon container's ingress port — NOT the HA Core proxy.
+        assert captured["url"] == "http://172.30.33.99:5000/api/test"
+        headers = captured["headers"]
+        # Source-trust headers, the way master routed pre-PR.
+        assert headers["X-Ingress-Path"] == "/api/hassio_ingress/abc123"
+        assert headers["X-Hass-Source"] == "core.ingress"
+        # No HA-Core-side auth — not going through Core.
+        assert "Cookie" not in headers
+        assert "Authorization" not in headers
+        # No ingress session minted on the addon variant.
+        mock_ingress_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_http_addon_variant_missing_ingress_port_errors(
+        self, monkeypatch
+    ):
+        """Addon variant requires both ip_address and ingress_port."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "http://supervisor/core"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "addon": {
+                        "name": "Test Addon",
+                        "slug": "test_addon",
+                        "ingress": True,
+                        "state": "started",
+                        "ingress_entry": "/api/hassio_ingress/abc123",
+                        "ip_address": "172.30.33.99",
+                        "ingress_port": None,
+                    },
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _call_addon_api(client, "test_addon", "/api/test")
+
+        result = _parse_tool_error(exc_info)
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+        assert "ingress_port" in str(result).lower()
+
+    @pytest.mark.asyncio
+    async def test_http_addon_variant_connect_error_hints_at_addon_network(
+        self, monkeypatch, mock_ingress_session
+    ):
+        """ConnectError on addon variant should suggest restarting the target
+        add-on, not 'verify HA reachable' (HA is fine — sibling network is the
+        problem)."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "http://supervisor/core"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = httpx.ConnectError(
+                "No route to host"
+            )
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/api/test")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        # Addon-variant suggestion should be about the target add-on / addon
+        # network — not about HA Core reachability.
+        assert any(
+            "restart" in s.lower() or "addon network" in s.lower() for s in suggestions
+        ), suggestions
+        # The off-host hint about HA Core reachability must NOT appear here.
+        assert not any(client.base_url in s for s in suggestions), suggestions
 
 
 class TestCreateIngressSession:
@@ -1475,6 +1621,160 @@ class TestCallAddonWsErrors:
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "ip_address" in str(result).lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_variant_uses_direct_ingress_port(
+        self, monkeypatch, mock_ingress_session
+    ):
+        """When running as the HA add-on, ingress WS hits the addon container's
+        ingress port directly with `core.ingress` source headers — no HA Core
+        proxy hop, no session cookie."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "http://supervisor/core"
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = dict(kwargs.get("additional_headers", {}))
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            result = await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert result["success"] is True
+        # WS to the addon container's ingress port — never to HA Core.
+        assert captured["url"] == "ws://172.30.33.99:5000/validate"
+        headers = captured["headers"]
+        assert headers["X-Ingress-Path"] == "/api/hassio_ingress/abc123"
+        assert headers["X-Hass-Source"] == "core.ingress"
+        assert "Cookie" not in headers
+        assert "Authorization" not in headers
+        mock_ingress_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_variant_wss_not_used_for_https_base_url(
+        self, monkeypatch, mock_ingress_session
+    ):
+        """Even when client.base_url is HTTPS, the addon-variant route hits the
+        container's bridge IP — always plain `ws://`. The base_url scheme is
+        irrelevant here because we never go through HA Core."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "https://homeassistant.example.com:8123"
+
+        captured: dict[str, object] = {}
+
+        def capture_connect(url, **kwargs):
+            captured["url"] = url
+            cm = MagicMock()
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
+                None, None
+            )
+            cm.__aenter__ = AsyncMock(return_value=mock_ws)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+                side_effect=capture_connect,
+            ),
+        ):
+            await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert captured["url"].startswith("ws://"), captured["url"]
+        assert not captured["url"].startswith("wss://"), captured["url"]
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_variant_missing_ingress_port_errors(
+        self, monkeypatch
+    ):
+        """Addon variant requires both ip_address and ingress_port for WS."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "http://supervisor/core"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "addon": {
+                        "name": "Test Addon",
+                        "slug": "test_addon",
+                        "ingress": True,
+                        "state": "started",
+                        "ingress_entry": "/api/hassio_ingress/abc123",
+                        "ip_address": "172.30.33.99",
+                        "ingress_port": None,
+                    },
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _call_addon_ws(client, "test_addon", "/validate")
+
+        result = _parse_tool_error(exc_info)
+        assert result["error"]["code"] == "INTERNAL_ERROR"
+        assert "ingress_port" in str(result).lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_addon_variant_connect_error_hints_at_addon_network(
+        self, monkeypatch, mock_ingress_session
+    ):
+        """OSError on addon-variant WS should suggest restarting the target
+        add-on, not 'verify HA reachable'."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
+        client = _make_mock_client()
+        client.base_url = "http://supervisor/core"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws_connect.side_effect = OSError("No route to host")
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/validate")
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        assert any(
+            "restart" in s.lower() or "addon network" in s.lower() for s in suggestions
+        ), suggestions
+        assert not any(client.base_url in s for s in suggestions), suggestions
 
 
 class TestSliceWsMessages:
