@@ -5,12 +5,16 @@ Unit tests mock Supervisor API calls to test discovery logic in start.py.
 """
 
 import importlib
+import importlib.util
 import json
 import os
+import sys
 import tempfile
+import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import yaml
 
 PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
@@ -24,6 +28,71 @@ def _import_start():
     """Import the webhook proxy start.py as a module."""
     start_path = os.path.join(PROXY_ADDON_DIR, "start.py")
     spec = importlib.util.spec_from_file_location("webhook_proxy_start", start_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ---------------------------------------------------------------------------
+# Helper: import mcp_proxy/__init__.py with homeassistant imports stubbed
+# ---------------------------------------------------------------------------
+
+class _FakeConfigEntryError(Exception):
+    pass
+
+
+def _install_runtime_stubs():
+    """Inject homeassistant.* and aiohttp stubs into sys.modules.
+
+    The custom integration imports from these packages at module load.
+    Neither is in our dev dependencies (homeassistant only exists inside
+    HA Core at runtime; aiohttp ships with HA's own deps), so tests stub
+    just enough surface area to satisfy the imports.
+    """
+    ha = types.ModuleType("homeassistant")
+    ha_components = types.ModuleType("homeassistant.components")
+    ha_webhook = types.ModuleType("homeassistant.components.webhook")
+    ha_webhook.async_register = MagicMock(name="async_register")
+    ha_webhook.async_unregister = MagicMock(name="async_unregister")
+    ha_config_entries = types.ModuleType("homeassistant.config_entries")
+    ha_config_entries.ConfigEntry = MagicMock
+    ha_core = types.ModuleType("homeassistant.core")
+    ha_core.HomeAssistant = MagicMock
+    ha_helpers = types.ModuleType("homeassistant.helpers")
+    ha_helpers_typing = types.ModuleType("homeassistant.helpers.typing")
+    ha_helpers_typing.ConfigType = dict
+    ha_exceptions = types.ModuleType("homeassistant.exceptions")
+    ha_exceptions.ConfigEntryError = _FakeConfigEntryError
+
+    aiohttp_mod = types.ModuleType("aiohttp")
+    aiohttp_mod.ClientSession = MagicMock(name="ClientSession")
+    aiohttp_mod.ClientTimeout = MagicMock(name="ClientTimeout")
+    aiohttp_mod.ClientError = type("ClientError", (Exception,), {})
+    aiohttp_web = types.ModuleType("aiohttp.web")
+    aiohttp_web.Request = MagicMock
+    aiohttp_web.Response = MagicMock
+    aiohttp_web.StreamResponse = MagicMock
+    aiohttp_mod.web = aiohttp_web
+
+    sys.modules.update({
+        "homeassistant": ha,
+        "homeassistant.components": ha_components,
+        "homeassistant.components.webhook": ha_webhook,
+        "homeassistant.config_entries": ha_config_entries,
+        "homeassistant.core": ha_core,
+        "homeassistant.helpers": ha_helpers,
+        "homeassistant.helpers.typing": ha_helpers_typing,
+        "homeassistant.exceptions": ha_exceptions,
+        "aiohttp": aiohttp_mod,
+        "aiohttp.web": aiohttp_web,
+    })
+
+
+def _import_mcp_proxy():
+    _install_runtime_stubs()
+    init_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "__init__.py")
+    sys.modules.pop("mcp_proxy_init", None)
+    spec = importlib.util.spec_from_file_location("mcp_proxy_init", init_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -572,3 +641,288 @@ class TestTargetUrlConstruction:
                 start._discover_addon()  # This would fail
 
             assert target_url == "http://192.168.1.100:9583/private_custom"
+
+
+# ---------------------------------------------------------------------------
+# mcp_proxy/__init__.py — surfacing webhook setup failures
+# ---------------------------------------------------------------------------
+
+
+class TestTargetUrlValidation:
+    @pytest.fixture
+    def validate(self):
+        return _import_mcp_proxy()._validate_target_url
+
+    def test_accepts_real_22char_token(self, validate):
+        ok, reason = validate("http://172.30.33.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw")
+        assert ok, reason
+        assert reason == ""
+
+    def test_accepts_https_scheme(self, validate):
+        ok, reason = validate("https://example.com:443/private_aaaaaaaaaaaaaaaa")
+        assert ok, reason
+
+    def test_accepts_minimum_16char_token(self, validate):
+        ok, reason = validate("http://h:9583/private_aaaaaaaaaaaaaaaa")
+        assert ok, reason
+
+    def test_accepts_non_private_path(self, validate):
+        """Custom MCP servers may sit at any path; only /private_* triggers length check."""
+        ok, reason = validate("http://localhost:8123/api/")
+        assert ok, reason
+
+    def test_accepts_arbitrary_other_path(self, validate):
+        ok, reason = validate("http://example.com/some/other/mcp")
+        assert ok, reason
+
+    def test_rejects_truncated_secret_path(self, validate):
+        ok, reason = validate("http://127.0.0.1:9583/private_ZZZZZZZ")
+        assert not ok
+        assert "secret path" in reason
+
+    def test_rejects_15char_token_at_boundary(self, validate):
+        ok, reason = validate("http://h/private_aaaaaaaaaaaaaaa")  # 15 chars
+        assert not ok
+        assert "secret path" in reason
+
+    def test_rejects_non_http_scheme(self, validate):
+        ok, reason = validate("ftp://h/private_aaaaaaaaaaaaaaaa")
+        assert not ok
+        assert "scheme" in reason
+
+    def test_rejects_missing_host(self, validate):
+        ok, reason = validate("http:///private_aaaaaaaaaaaaaaaa")
+        assert not ok
+        assert "host" in reason
+
+    def test_rejects_empty_string(self, validate):
+        ok, reason = validate("")
+        assert not ok
+
+    def test_rejects_query_string(self, validate):
+        ok, reason = validate("http://h/private_aaaaaaaaaaaaaaaa?foo=bar")
+        assert not ok
+        assert "query" in reason
+
+    def test_rejects_fragment(self, validate):
+        ok, reason = validate("http://h/private_aaaaaaaaaaaaaaaa#frag")
+        assert not ok
+        assert "fragment" in reason
+
+    def test_rejects_path_params(self, validate):
+        ok, reason = validate("http://h/private_aaaaaaaaaaaaaaaa;param")
+        assert not ok
+        assert "path parameters" in reason
+
+    def test_rejects_invalid_chars_in_private_token(self, validate):
+        ok, reason = validate("http://h/private_has%20space_aaaaaaa")
+        # urlparse keeps the percent-encoding in path; regex rejects '%' chars.
+        assert not ok
+        assert "secret path" in reason
+
+
+class TestSetupEntrySurfaceFailures:
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def run_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=run_executor)
+        return h
+
+    async def test_truncated_target_url_raises_config_entry_error(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_ZZZZZZZ",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register") as mock_register,
+            patch.object(mod.aiohttp, "ClientSession") as mock_session,
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Invalid target_url" in str(exc_info.value)
+        mock_register.assert_not_called()
+        mock_session.assert_not_called()
+        assert mod.DOMAIN not in hass.data
+
+    async def test_truncated_url_does_not_log_full_token(self, mod, hass, caplog):
+        """A leaked secret in logs would be a silent regression of the masking."""
+        secret_tail = "ZZZZZZZ_real_secret_value"
+        proxy_config = {
+            "target_url": f"http://h:9583/private_{secret_tail}_but_with_bad_chars!",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        with (
+            caplog.at_level("ERROR"),
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            pytest.raises(_FakeConfigEntryError),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "validation failed" in caplog.text
+        assert secret_tail not in caplog.text
+        assert "/private_********" in caplog.text
+
+    async def test_missing_target_url_raises_config_entry_error(self, mod, hass):
+        proxy_config = {"target_url": "", "webhook_id": "mcp_x"}
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register") as mock_register,
+            patch.object(mod.aiohttp, "ClientSession") as mock_session,
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Missing target_url" in str(exc_info.value)
+        mock_register.assert_not_called()
+        mock_session.assert_not_called()
+
+    async def test_missing_webhook_id_raises_config_entry_error(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://h:9583/private_aaaaaaaaaaaaaaaa",
+            "webhook_id": "",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register") as mock_register,
+            patch.object(mod.aiohttp, "ClientSession") as mock_session,
+            pytest.raises(_FakeConfigEntryError),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        mock_register.assert_not_called()
+        mock_session.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "register_error",
+        [RuntimeError("boom"), ValueError("duplicate webhook"), KeyError("not loaded")],
+    )
+    async def test_register_failure_closes_session_and_raises(
+        self, mod, hass, register_error
+    ):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        captured_session = {}
+
+        def make_session(*args, **kwargs):
+            session = MagicMock()
+            session.close = AsyncMock()
+            captured_session["s"] = session
+            return session
+
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register", side_effect=register_error),
+            patch.object(mod.aiohttp, "ClientSession", side_effect=make_session),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to register webhook endpoint" in str(exc_info.value)
+        assert exc_info.value.__cause__ is register_error
+        captured_session["s"].close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+
+    async def test_corrupted_json_raises_config_entry_error(self, mod, hass):
+        async def fake_executor(func, *args):
+            raise json.JSONDecodeError("trailing garbage", "{ ", 2)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        with (
+            patch.object(mod, "async_register") as mock_register,
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to read" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+        mock_register.assert_not_called()
+
+    async def test_unreadable_config_raises_config_entry_error(self, mod, hass):
+        async def fake_executor(func, *args):
+            raise OSError("permission denied")
+
+        hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        with (
+            patch.object(mod, "async_register") as mock_register,
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to read" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, OSError)
+        mock_register.assert_not_called()
+
+    async def test_happy_path_registers_and_stores_data(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register") as mock_register,
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True
+        mock_register.assert_called_once()
+        assert hass.data[mod.DOMAIN]["target_url"] == proxy_config["target_url"]
+        assert hass.data[mod.DOMAIN]["webhook_id"] == proxy_config["webhook_id"]
+
+    async def test_no_config_file_returns_true(self, mod, hass):
+        """Fresh install: file-not-found is the one valid 'no config' state."""
+        with patch.object(mod, "_read_config", return_value=None):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True
+        assert mod.DOMAIN not in hass.data
+
+
+class TestUnloadEntry:
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+        return h
+
+    async def test_unload_after_failed_setup_is_noop(self, mod, hass):
+        with patch.object(mod, "async_unregister") as mock_unreg:
+            result = await mod.async_unload_entry(hass, MagicMock())
+
+        assert result is True
+        mock_unreg.assert_not_called()
+
+    async def test_unload_unregisters_and_closes_session(self, mod, hass):
+        session = MagicMock()
+        session.close = AsyncMock()
+        hass.data[mod.DOMAIN] = {
+            "webhook_id": "mcp_test_id",
+            "session": session,
+            "target_url": "http://h/private_aaaaaaaaaaaaaaaa",
+        }
+        with patch.object(mod, "async_unregister") as mock_unreg:
+            result = await mod.async_unload_entry(hass, MagicMock())
+
+        assert result is True
+        mock_unreg.assert_called_once_with(hass, "mcp_test_id")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
