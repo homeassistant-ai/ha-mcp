@@ -77,6 +77,13 @@ class TestIsPathAllowedForDir:
         """Should block custom_components directory for writes."""
         assert _is_path_allowed_for_dir(tmp_path, "custom_components/", ALLOWED_WRITE_DIRS) is False
 
+    def test_allows_dashboards_directory(self, tmp_path):
+        """Should allow paths in dashboards/ directory (YAML-mode dashboards)."""
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_READ_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_READ_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_WRITE_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_WRITE_DIRS) is True
+
 
 class TestIsPathAllowedForRead:
     """Test _is_path_allowed_for_read function."""
@@ -143,6 +150,11 @@ class TestIsPathAllowedForRead:
         """Should block arbitrary files not in allowed list."""
         assert _is_path_allowed_for_read(tmp_path, "random_file.txt") is False
         assert _is_path_allowed_for_read(tmp_path, "deps/some_file") is False
+
+    def test_allows_dashboards_yaml_files(self, tmp_path):
+        """Should allow reading files under dashboards/ directory."""
+        assert _is_path_allowed_for_read(tmp_path, "dashboards/main.yaml") is True
+        assert _is_path_allowed_for_read(tmp_path, "dashboards/sub/nested.yaml") is True
 
 
 class TestMaskSecretsContent:
