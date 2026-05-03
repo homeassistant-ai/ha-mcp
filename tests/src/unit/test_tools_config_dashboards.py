@@ -12,7 +12,6 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from ha_mcp.tools.tools_config_dashboards import (
     _LAZY_RESOLVE_TRIGGER,
     _lazy_resolve_and_retry,

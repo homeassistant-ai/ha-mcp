@@ -675,7 +675,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Calculate config size for progressive disclosure hint
             config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
-            result: dict[str, Any] = {
+            get_result: dict[str, Any] = {
                 "success": True,
                 "action": "get",
                 "url_path": url_path,
@@ -688,18 +688,18 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # resolved_id field). Caller can use this to detect that their
             # input was an internal id rather than a url_path.
             if original_url_path is not None and original_url_path != url_path:
-                result["resolved_from"] = original_url_path
+                get_result["resolved_from"] = original_url_path
 
             # Add hint for large configs (progressive disclosure) - 10KB ≈ 2-3k tokens
             if config_size >= 10000:
-                result["hint"] = (
+                get_result["hint"] = (
                     f"Large config ({config_size:,} bytes). For edits, use "
                     "ha_config_get_dashboard(entity_id=...) to find card positions, "
                     "then ha_config_set_dashboard(python_transform=...) "
                     "instead of full config replacement."
                 )
 
-            return result
+            return get_result
         except ToolError:
             raise
         except Exception as e:
