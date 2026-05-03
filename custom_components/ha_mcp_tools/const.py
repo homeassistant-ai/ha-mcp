@@ -1,5 +1,7 @@
 """Constants for HA MCP Tools integration."""
 
+import re
+
 DOMAIN = "ha_mcp_tools"
 
 # Allowed directories for file operations (relative to config dir)
@@ -54,3 +56,27 @@ YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
 }
 # Default for keys not in YAML_KEY_POST_ACTIONS:
 YAML_KEY_DEFAULT_POST_ACTION = {"post_action": "restart_required"}
+
+# YAML-mode dashboard url_path validation (issue #1034).
+# Pattern: lowercase letters/digits, hyphen-separated, must contain at least
+# one hyphen (HA's lovelace dashboard rule). No leading/trailing/double hyphens.
+DASHBOARD_URL_PATH_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)+")
+
+# url_paths reserved by HA core dashboards/routes — must not be registered as
+# YAML-mode dashboards or they will shadow / collide with built-ins.
+RESERVED_DASHBOARD_URL_PATHS = frozenset(
+    {
+        "lovelace",
+        "overview",
+        "map",
+        "logbook",
+        "history",
+        "energy",
+        "developer-tools",
+        "config",
+        "profile",
+        "media-browser",
+        "todo",
+        "calendar",
+    }
+)
