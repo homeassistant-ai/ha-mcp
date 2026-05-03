@@ -58,6 +58,11 @@ async def _check_storage_mode_dashboard_collision(
     elif isinstance(result, list):
         dashboards = result
     else:
+        logger.warning(
+            "lovelace/dashboards/list returned unexpected shape (%s); "
+            "skipping collision check",
+            type(result).__name__,
+        )
         return None
 
     for entry in dashboards or []:

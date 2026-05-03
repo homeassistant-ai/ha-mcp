@@ -89,3 +89,64 @@ async def test_non_dashboard_path_skips_ws_check(monkeypatch):
     )
     client.send_websocket_message.assert_not_called()
     client.call_service.assert_called_once()
+
+
+async def test_ws_failure_skips_check_and_dispatches(monkeypatch):
+    """WS query failure must warn-and-skip, not block dispatch."""
+    fn, client = await _make_tool()
+    client.send_websocket_message = AsyncMock(side_effect=ConnectionError("boom"))
+    await fn(
+        yaml_path="lovelace.dashboards.energy-dash",
+        action="add",
+        content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+    )
+    client.call_service.assert_called_once()
+
+
+async def test_ws_returns_bare_list_blocks_collision(monkeypatch):
+    """WS may return a bare list (no 'result' wrapper); collision still detected."""
+    fn, client = await _make_tool()
+    client.send_websocket_message = AsyncMock(
+        return_value=[{"url_path": "energy-dash", "mode": "storage", "id": "abc"}]
+    )
+
+    from fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        await fn(
+            yaml_path="lovelace.dashboards.energy-dash",
+            action="add",
+            content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+        )
+    client.call_service.assert_not_called()
+
+
+async def test_yaml_mode_existing_does_not_block(monkeypatch):
+    """Existing yaml-mode entry with same url_path is NOT a collision; dispatch proceeds.
+    (HA itself surfaces dup errors at config_check time.)"""
+    fn, client = await _make_tool()
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "result": [
+                {"url_path": "energy-dash", "mode": "yaml", "id": "abc"}
+            ]
+        }
+    )
+    await fn(
+        yaml_path="lovelace.dashboards.energy-dash",
+        action="add",
+        content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+    )
+    client.call_service.assert_called_once()
+
+
+async def test_ws_returns_unexpected_shape_warns_and_dispatches(monkeypatch):
+    """Unexpected WS response shape (non-dict, non-list) skips collision check."""
+    fn, client = await _make_tool()
+    client.send_websocket_message = AsyncMock(return_value="weird")
+    await fn(
+        yaml_path="lovelace.dashboards.energy-dash",
+        action="add",
+        content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+    )
+    client.call_service.assert_called_once()
