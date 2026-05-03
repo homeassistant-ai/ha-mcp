@@ -1269,6 +1269,7 @@ cloudflared tunnel run ha-mcp</code></pre>
       // VS Code uses different structure: mcp.servers instead of mcpServers
       const isVSCode = state.client.id === 'vscode';
       const isZed = state.client.id === 'zed';
+      const isOpenCode = state.client.id === 'opencode';
 
       if (isStdio) {
         if (isVSCode) {
@@ -1284,6 +1285,34 @@ cloudflared tunnel run ha-mcp</code></pre>
           config = JSON.stringify({
             context_servers: {
               "home-assistant": stdioConfig
+            }
+          }, null, 2);
+        } else if (isOpenCode) {
+          // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env"
+          const opencodeStdio = isDocker
+            ? {
+                type: "local",
+                command: [
+                  "docker", "run", "--rm", "-i",
+                  "-e", "HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}",
+                  "-e", "HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}",
+                  "ghcr.io/homeassistant-ai/ha-mcp:latest"
+                ],
+                enabled: true
+              }
+            : {
+                type: "local",
+                command: ["uvx", "ha-mcp@latest"],
+                enabled: true,
+                environment: {
+                  HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
+                  HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
+                }
+              };
+          config = JSON.stringify({
+            "$schema": "https://opencode.ai/config.json",
+            mcp: {
+              "home-assistant": opencodeStdio
             }
           }, null, 2);
         } else {
@@ -1358,6 +1387,18 @@ cloudflared tunnel run ha-mcp</code></pre>
             context_servers: {
               "home-assistant": {
                 url: mcpUrl
+              }
+            }
+          }, null, 2);
+        } else if (isOpenCode) {
+          // OpenCode: type:"remote" under mcp key
+          config = JSON.stringify({
+            "$schema": "https://opencode.ai/config.json",
+            mcp: {
+              "home-assistant": {
+                type: "remote",
+                url: mcpUrl,
+                enabled: true
               }
             }
           }, null, 2);

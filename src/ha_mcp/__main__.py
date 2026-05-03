@@ -733,8 +733,11 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         transport: Transport type (http or sse).
         default_port: Default port to use if MCP_PORT env var is not set.
     """
+    from ha_mcp.settings_ui import register_settings_routes
+
     port, path = _get_http_runtime(default_port)
     register_browser_landing(_get_mcp(), path)
+    register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, port, path),
@@ -870,6 +873,9 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
 
     logger.info("Server created with OAuthProxyClient")
     register_browser_landing(mcp, path)
+
+    from ha_mcp.settings_ui import register_settings_routes
+    register_settings_routes(mcp, _server, secret_path=path)
 
     tools = await mcp.list_tools()
     logger.info(
