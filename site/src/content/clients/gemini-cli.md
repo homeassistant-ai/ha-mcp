@@ -49,7 +49,7 @@ Gemini CLI uses `url` key for SSE transport:
 }
 ```
 
-> **Note:** Use `url` only when the server actually serves SSE. If your client logs show `405 Method Not Allowed` on `GET /mcp`, the server is running in Streamable HTTP mode (the default for `ha-mcp-web`; for SSE use the separate `ha-mcp-sse` entry point on port 8087) — switch to `httpUrl` (next section).
+> **Note:** Use `url` only when the server actually serves SSE. If your client logs show `405 Method Not Allowed` on `GET /mcp`, the server is running in Streamable HTTP mode — switch to `httpUrl` (next section). For Home Assistant: `ha-mcp-web` defaults to Streamable HTTP; for SSE use the separate `ha-mcp-sse` entry point (default port 8087).
 
 ### Streamable HTTP Configuration (Network/Remote)
 
@@ -163,7 +163,7 @@ HOMEASSISTANT_URL=http://homeassistant.local:8123
 HOMEASSISTANT_TOKEN=<your-long-lived-access-token>
 ```
 
-For production hardening (read-only filesystem via `read_only`, dropped privileges via `cap_drop`, resource limits via `deploy.resources.limits`), see Docker Compose's [services reference](https://docs.docker.com/reference/compose-file/services/).
+For production hardening (read-only filesystem via `read_only`, dropped Linux capabilities via `cap_drop`, resource limits via `deploy.resources.limits`), see Docker Compose's [services reference](https://docs.docker.com/reference/compose-file/services/).
 
 ## Management Commands
 
