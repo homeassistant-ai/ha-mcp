@@ -136,7 +136,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"Parameters {', '.join(ignored)} only apply to source='logbook'; "
                 f"ignored for source='{source}'"
             )
-        if source in ("logbook", "logger") and level is not None:
+        if source in ("logbook", "logger", "supervisor") and level is not None:
             warnings.append(
                 "Parameter 'level' only applies to source='system' or 'error_log'; "
                 f"ignored for source='{source}'"
