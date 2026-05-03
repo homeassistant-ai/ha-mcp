@@ -1987,7 +1987,7 @@ class TestCallAddonWsNewParams:
     """Integration tests for message_limit/offset/summarize/python_transform in _call_addon_ws."""
 
     @pytest.mark.asyncio
-    async def test_message_limit_caps_collection(self):
+    async def test_message_limit_caps_collection(self, mock_ingress_session):
         """message_limit lowers the collection cap so we stop early."""
         client = _make_mock_client()
 
@@ -2025,7 +2025,9 @@ class TestCallAddonWsNewParams:
         assert result["pagination"]["limit"] == 5
 
     @pytest.mark.asyncio
-    async def test_safety_ceiling_distinct_from_message_limit(self):
+    async def test_safety_ceiling_distinct_from_message_limit(
+        self, mock_ingress_session
+    ):
         """Hitting the global ceiling without a caller-set message_limit
         reports closed_by="safety_ceiling", not "message_limit"."""
         client = _make_mock_client()
@@ -2064,7 +2066,7 @@ class TestCallAddonWsNewParams:
         assert result["message_count"] == 5
 
     @pytest.mark.asyncio
-    async def test_message_offset_skips_head(self):
+    async def test_message_offset_skips_head(self, mock_ingress_session):
         """message_offset drops the first N messages from the returned list."""
         client = _make_mock_client()
 
@@ -2103,7 +2105,7 @@ class TestCallAddonWsNewParams:
         assert result["pagination"]["total_collected"] == 4
 
     @pytest.mark.asyncio
-    async def test_summarize_elides_yaml_dump(self):
+    async def test_summarize_elides_yaml_dump(self, mock_ingress_session):
         """The summarize pass collapses a long non-signal run from the WS stream."""
         client = _make_mock_client()
 
@@ -2144,7 +2146,7 @@ class TestCallAddonWsNewParams:
         )
 
     @pytest.mark.asyncio
-    async def test_summarize_false_returns_raw_stream(self):
+    async def test_summarize_false_returns_raw_stream(self, mock_ingress_session):
         """With summarize=False, no elision happens."""
         client = _make_mock_client()
 
@@ -2175,7 +2177,7 @@ class TestCallAddonWsNewParams:
         assert "summary" not in result
 
     @pytest.mark.asyncio
-    async def test_python_transform_filters_messages(self):
+    async def test_python_transform_filters_messages(self, mock_ingress_session):
         """python_transform post-processes the message list after summarize."""
         client = _make_mock_client()
 
@@ -2216,7 +2218,7 @@ class TestCallAddonWsNewParams:
         assert result["messages"][0]["level"] == "ERROR"
 
     @pytest.mark.asyncio
-    async def test_python_transform_invalid_raises(self):
+    async def test_python_transform_invalid_raises(self, mock_ingress_session):
         """Invalid python_transform surfaces VALIDATION_FAILED as ToolError."""
         client = _make_mock_client()
 
@@ -2255,7 +2257,7 @@ class TestCallAddonApiPythonTransform:
     """Tests for python_transform in HTTP mode (_call_addon_api)."""
 
     @pytest.mark.asyncio
-    async def test_transform_applies_to_json_array(self):
+    async def test_transform_applies_to_json_array(self, mock_ingress_session):
         """Transform reshapes a JSON array response before return."""
         client = _make_mock_client()
         with (
@@ -2290,7 +2292,7 @@ class TestCallAddonApiPythonTransform:
         assert result["response"] == [1, 2]
 
     @pytest.mark.asyncio
-    async def test_transform_applies_to_dict_body(self):
+    async def test_transform_applies_to_dict_body(self, mock_ingress_session):
         """Transform on dict content-type."""
         client = _make_mock_client()
         with (
@@ -2322,7 +2324,7 @@ class TestCallAddonApiPythonTransform:
         assert result["response"] == {"status": "ok"}
 
     @pytest.mark.asyncio
-    async def test_transform_invalid_raises(self):
+    async def test_transform_invalid_raises(self, mock_ingress_session):
         """HTTP mode: invalid transform raises ToolError."""
         client = _make_mock_client()
         with (
