@@ -12,13 +12,13 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from ha_mcp.tools.tools_config_dashboards import (
     _LAZY_RESOLVE_TRIGGER,
     _lazy_resolve_and_retry,
     _resolve_dashboard,
     _should_lazy_resolve,
 )
-
 
 # -----------------------------------------------------------------------------
 # Fixtures / helpers
@@ -133,9 +133,9 @@ class TestResolveDashboard:
         ):
             result = await _resolve_dashboard(fake_client, "anything")
         assert result is None
-        assert any(
-            "unexpected shape" in rec.message for rec in caplog.records
-        ), f"expected an 'unexpected shape' warning; got {caplog.records}"
+        assert any("unexpected shape" in rec.message for rec in caplog.records), (
+            f"expected an 'unexpected shape' warning; got {caplog.records}"
+        )
 
     async def test_missing_url_path_in_match_returns_none(self, fake_client):
         # Malformed registry entry where the matching dashboard is
@@ -246,9 +246,9 @@ class TestLazyResolveAndRetry:
         # Caller's ws_data dict must NOT be mutated — the retry uses a
         # shallow copy. Verify both the contract and that the retry call
         # carried the canonical url_path.
-        assert (
-            ws_data["url_path"] == "my_dash"
-        ), "_lazy_resolve_and_retry mutated the caller's ws_data dict"
+        assert ws_data["url_path"] == "my_dash", (
+            "_lazy_resolve_and_retry mutated the caller's ws_data dict"
+        )
         retry_call = fake_client.send_websocket_message.call_args_list[1]
         assert retry_call.args[0]["url_path"] == "my-dash"
         assert retry_call.args[0]["type"] == "lovelace/config"

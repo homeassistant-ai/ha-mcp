@@ -25,7 +25,6 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
-
 async def _verify_config_unchanged(
     client: Any,
     url_path: str,
@@ -265,9 +264,7 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
-async def _resolve_dashboard(
-    client: Any, identifier: str
-) -> dict[str, str] | None:
+async def _resolve_dashboard(client: Any, identifier: str) -> dict[str, str] | None:
     """Resolve a dashboard identifier (url_path or internal id) to both forms.
 
     Calls ``lovelace/dashboards/list`` and returns
@@ -284,9 +281,7 @@ async def _resolve_dashboard(
       cheap heuristic ("no hyphen, not 'lovelace'") rather than an error
       from HA.
     """
-    result = await client.send_websocket_message(
-        {"type": "lovelace/dashboards/list"}
-    )
+    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
     if isinstance(result, dict) and "result" in result:
         dashboards = result["result"]
     elif isinstance(result, list):
@@ -413,8 +408,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Dashboard"
-        }
+            "title": "Get Dashboard",
+        },
     )
     @log_tool_usage
     async def ha_config_get_dashboard(
@@ -434,7 +429,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = False,
         force_reload: Annotated[
-            bool, Field(description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results).")
+            bool,
+            Field(
+                description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results)."
+            ),
         ] = False,
         entity_id: Annotated[
             str | None,
@@ -505,7 +503,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
-        search_mode = entity_id is not None or card_type is not None or heading is not None
+        search_mode = (
+            entity_id is not None or card_type is not None or heading is not None
+        )
         try:
             # List mode
             if list_only:
@@ -740,10 +740,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(
         tags={"Dashboards"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Create or Update Dashboard"
-        }
+        annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
     )
     @log_tool_usage
     async def ha_config_set_dashboard(
@@ -1383,10 +1380,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(
         tags={"Dashboards"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Delete Dashboard"
-        }
+        annotations={"destructiveHint": True, "title": "Delete Dashboard"},
     )
     @log_tool_usage
     async def ha_config_delete_dashboard(
@@ -1416,14 +1410,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         try:
             resolved = await _resolve_dashboard(client, url_path)
             if resolved is None:
-                raise_tool_error(create_resource_not_found_error(
-                    "Dashboard",
-                    url_path,
-                    details=(
-                        f"No dashboard found with URL path or internal ID '{url_path}'. "
-                        "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
-                    ),
-                ))
+                raise_tool_error(
+                    create_resource_not_found_error(
+                        "Dashboard",
+                        url_path,
+                        details=(
+                            f"No dashboard found with URL path or internal ID '{url_path}'. "
+                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
+                        ),
+                    )
+                )
             resolved_id = resolved["id"]
 
             response = await client.send_websocket_message(
@@ -1501,4 +1497,3 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # - ha_config_set_dashboard_resource: Create/update resources (inline code or URL)
     # - ha_config_delete_dashboard_resource: Delete resources
     # =========================================================================
-
