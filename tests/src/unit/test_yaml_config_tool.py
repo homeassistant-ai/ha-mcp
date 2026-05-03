@@ -7,8 +7,20 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def enable_flag(monkeypatch):
+    """Enable the yaml-config tool flag and bust the cached global settings.
+
+    `get_global_settings()` memoizes a `Settings` object the first time it's called.
+    If anything in the test process imported the module before this fixture ran,
+    the cached settings have ENABLE_YAML_CONFIG_EDITING=False and our env var is
+    ignored. Reset the cache before AND after to keep tests hermetic.
+    """
+    from ha_mcp import config as ha_mcp_config
+
     monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "true")
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
     yield
+    # Reset the cache so other tests don't see our enabled flag.
+    ha_mcp_config._settings = None
 
 
 async def _make_tool():

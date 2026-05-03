@@ -33,14 +33,16 @@ _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 
 async def _check_storage_mode_dashboard_collision(
     client: Any, yaml_path: str
-) -> dict[str, Any] | None:
-    """Return a structured-error dict if a storage-mode dashboard owns the
-    requested url_path; otherwise None.
+) -> None:
+    """Raise a ToolError if a storage-mode dashboard already owns the requested
+    url_path; otherwise return without doing anything.
 
     Only runs for yaml_path values starting with 'lovelace.dashboards.'.
+    A WebSocket failure or unexpected response shape warns and skips the check
+    (fail-open) so that a transient HA outage doesn't block dashboard creation.
     """
     if not yaml_path.startswith(_LOVELACE_DASHBOARD_PREFIX):
-        return None
+        return
     url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
     try:
         result = await client.send_websocket_message(
@@ -51,7 +53,7 @@ async def _check_storage_mode_dashboard_collision(
             "lovelace/dashboards/list WS query failed (%s); skipping collision check",
             exc,
         )
-        return None
+        return
 
     if isinstance(result, dict) and "result" in result:
         dashboards = result["result"]
@@ -63,7 +65,7 @@ async def _check_storage_mode_dashboard_collision(
             "skipping collision check",
             type(result).__name__,
         )
-        return None
+        return
 
     for entry in dashboards or []:
         if (
@@ -71,20 +73,22 @@ async def _check_storage_mode_dashboard_collision(
             and entry.get("url_path") == url_path
             and entry.get("mode") == "storage"
         ):
-            return create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                (
-                    f"A storage-mode dashboard already owns url_path '{url_path}'. "
-                    "Delete it via ha_config_delete_dashboard or pick a different "
-                    "url_path before registering a YAML-mode dashboard."
-                ),
-                context={"url_path": url_path, "existing_id": entry.get("id")},
-                suggestions=[
-                    f"ha_config_delete_dashboard(url_path='{url_path}')",
-                    "Pick a different url_path for your YAML-mode dashboard.",
-                ],
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        f"A storage-mode dashboard already owns url_path "
+                        f"'{url_path}'. Delete it via ha_config_delete_dashboard "
+                        "or pick a different url_path before registering a "
+                        "YAML-mode dashboard."
+                    ),
+                    context={"url_path": url_path, "existing_id": entry.get("id")},
+                    suggestions=[
+                        f"ha_config_delete_dashboard(url_path='{url_path}')",
+                        "Pick a different url_path for your YAML-mode dashboard.",
+                    ],
+                )
             )
-    return None
 
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -224,9 +228,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             backup_bool = coerce_bool_param(backup, "backup", default=True)
 
             # Storage-mode dashboard collision check (only for lovelace.dashboards.*)
-            collision = await _check_storage_mode_dashboard_collision(client, yaml_path)
-            if collision is not None:
-                raise_tool_error(collision)
+            await _check_storage_mode_dashboard_collision(client, yaml_path)
 
             # Check if custom component is available
             await _assert_mcp_tools_available(client)
