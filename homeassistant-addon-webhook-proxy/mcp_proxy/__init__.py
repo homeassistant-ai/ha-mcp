@@ -12,7 +12,9 @@ addon creates the config entry automatically via the HA API.
 
 import json
 import logging
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
@@ -22,12 +24,42 @@ from homeassistant.components.webhook import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
+
+# Real ha-mcp generates a 22-char base64url token after `/private_`. A shorter
+# token indicates a truncated/corrupted config (issue #1020 defect 1).
+_SECRET_PATH_RE = re.compile(r"^/private_[A-Za-z0-9_-]{16,}$")
+
+
+def _validate_target_url(target_url: str) -> tuple[bool, str]:
+    """Check that target_url has the shape we expect.
+
+    Returns (is_valid, reason). The URL must be http(s)://host with a path
+    matching `/private_<token>` where the token is at least 16 characters.
+    Catches the issue #1020 truncation, where the parsed secret_path was
+    ~7 characters instead of the expected 22.
+    """
+    try:
+        parsed = urlparse(target_url)
+    except ValueError as err:
+        return False, f"unparseable URL ({err})"
+
+    if parsed.scheme not in ("http", "https"):
+        return False, f"scheme must be http or https, got {parsed.scheme!r}"
+    if not parsed.netloc:
+        return False, "URL is missing host"
+    if not _SECRET_PATH_RE.match(parsed.path):
+        return False, (
+            f"path {parsed.path!r} does not look like a valid secret path "
+            "(expected /private_<token> with token of at least 16 characters)"
+        )
+    return True, ""
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -65,7 +97,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not target_url or not webhook_id:
         _LOGGER.error("MCP Proxy: Invalid config - missing target_url or webhook_id")
-        return False
+        raise ConfigEntryError(
+            "Missing target_url or webhook_id in /config/.mcp_proxy_config.json. "
+            "Restart the Webhook Proxy addon to regenerate it."
+        )
 
     # Mask sensitive values in logs to avoid leaking secrets
     if "/private_" in target_url:
@@ -73,26 +108,54 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         masked_target = target_url
     masked_wh = webhook_id[:6] + "..." if len(webhook_id) > 6 else "***"
+
+    # Validate target_url shape before registering — without this a corrupted
+    # URL (e.g. issue #1020 secret-path truncation) would propagate silently and
+    # the config entry would deceptively report `loaded` while every webhook
+    # request returns 404.
+    is_valid, reason = _validate_target_url(target_url)
+    if not is_valid:
+        _LOGGER.error(
+            "MCP Proxy: target_url validation failed for %s: %s",
+            masked_target,
+            reason,
+        )
+        raise ConfigEntryError(
+            f"Invalid target_url ({reason}). Restart the Webhook Proxy addon "
+            "to regenerate /config/.mcp_proxy_config.json."
+        )
+
     _LOGGER.info("MCP Proxy: target = %s", masked_target)
     _LOGGER.info("MCP Proxy: webhook endpoint = /api/webhook/%s", masked_wh)
 
     session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300),
     )
+
+    try:
+        async_register(
+            hass,
+            DOMAIN,
+            "MCP Proxy",
+            webhook_id,
+            _handle_webhook,
+            allowed_methods=["POST", "GET"],
+        )
+    except Exception as err:
+        _LOGGER.exception(
+            "MCP Proxy: failed to register webhook endpoint /api/webhook/%s",
+            masked_wh,
+        )
+        await session.close()
+        raise ConfigEntryError(
+            f"Failed to register webhook endpoint: {err}"
+        ) from err
+
     hass.data[DOMAIN] = {
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
     }
-
-    async_register(
-        hass,
-        DOMAIN,
-        "MCP Proxy",
-        webhook_id,
-        _handle_webhook,
-        allowed_methods=["POST", "GET"],
-    )
 
     return True
 
