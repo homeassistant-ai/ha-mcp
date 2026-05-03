@@ -49,8 +49,6 @@ Gemini CLI uses `url` key for SSE transport:
 }
 ```
 
-> **Note:** Use `url` only when the server actually serves SSE. If your client logs show `405 Method Not Allowed` on `GET /mcp`, the server is running in Streamable HTTP mode — switch to `httpUrl` (see the Streamable HTTP Configuration section below). For Home Assistant: `ha-mcp-web` defaults to Streamable HTTP; for SSE use the separate `ha-mcp-sse` entry point (default port 8087).
-
 ### Streamable HTTP Configuration (Network/Remote)
 
 Gemini CLI uses `httpUrl` key for HTTP streaming transport:
@@ -102,88 +100,6 @@ gemini mcp add --transport http home-assistant {{MCP_SERVER_URL}}
 ```bash
 gemini mcp add --transport sse home-assistant {{MCP_SERVER_URL}}
 ```
-
-## Setup Examples
-
-Concrete `~/.gemini/settings.json` snippets for the two most common deployments. Replace hosts and tokens with your own. These JSON snippets are equivalent to using `gemini mcp add` (shown above) — pick whichever flow you prefer.
-
-### Home Assistant built-in MCP integration (no `ha-mcp` container)
-
-If you have the [Home Assistant MCP integration](https://www.home-assistant.io/integrations/mcp_server/) enabled, point Gemini CLI directly at Home Assistant's `/api/mcp` endpoint with a long-lived access token:
-
-```json
-{
-  "mcpServers": {
-    "home-assistant": {
-      "httpUrl": "http://homeassistant.local:8123/api/mcp",
-      "headers": {
-        "Authorization": "Bearer <your-long-lived-access-token>"
-      }
-    }
-  }
-}
-```
-
-HA core also serves the legacy SSE endpoint at `/mcp_server/sse` on the same host and port. Use that path with the `url` key (not `httpUrl`) if you prefer SSE over Streamable HTTP.
-
-### Self-hosted `ha-mcp` Docker container
-
-If `ha-mcp` runs in its own container on the same host as Home Assistant (replace the host with your own):
-
-```json
-{
-  "mcpServers": {
-    "ha-mcp": {
-      "httpUrl": "http://homeassistant.local:8086/mcp"
-    }
-  }
-}
-```
-
-A `GET` against `http://<host>:8086/mcp` returns `405 Method Not Allowed` by design — that is the `register_browser_landing` handler in `__main__.py` confirming the server is running, not a fault. MCP clients use `POST`, so this only shows up if a curl probe or a browser hits the URL directly.
-
-#### Sample `docker-compose.yml` for `ha-mcp`
-
-Minimum-viable compose for a `ha-mcp-web` deployment paired with an `.env` file. The endpoint produced (`http://<host>:8086/mcp`) works with any HTTP-capable MCP client, not just Gemini CLI. Layer in the production hardening below before exposing this on a real network.
-
-```yaml
-services:
-  ha-mcp:
-    container_name: ha-mcp
-    image: ghcr.io/homeassistant-ai/ha-mcp:latest
-    command: ha-mcp-web
-    ports:
-      - "8086:8086"
-    environment:
-      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
-      - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
-    restart: unless-stopped
-```
-
-Companion `.env`:
-
-```bash
-HOMEASSISTANT_URL=http://homeassistant.local:8123
-HOMEASSISTANT_TOKEN=<your-long-lived-access-token>
-```
-
-For a production-grade deployment, layer the following onto the `ha-mcp` service block above:
-
-```yaml
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-```
-
-`read_only: true` pairs with `tmpfs: /tmp` because the Python runtime writes temporary files there; `cap_drop: [ALL]` drops every Linux kernel capability the container would otherwise inherit; `security_opt: no-new-privileges:true` blocks privilege escalation via setuid binaries. See Docker Compose's [services reference](https://docs.docker.com/reference/compose-file/services/) for the full schema.
 
 ## Management Commands
 

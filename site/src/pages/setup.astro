@@ -1109,10 +1109,41 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         const secretPathEnv = useSecretPath ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
+        const composeSecretPathLine = useSecretPath
+          ? `\n      - MCP_SECRET_PATH=/private_{{RANDOM_STRING}}`
+          : '';
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Start Docker Container</h4>
           <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv.trim() : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
+          <details class="mt-3">
+            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Production hardening (docker compose)</summary>
+            <p class="text-slate-300 text-sm mt-3 mb-2">A minimum-viable compose paired with an <code>.env</code> file:</p>
+            <pre class="code-block"><code>services:
+  ha-mcp:
+    container_name: ha-mcp
+    image: ghcr.io/homeassistant-ai/ha-mcp:latest
+    command: ha-mcp-web
+    ports:
+      - "8086:8086"
+    environment:
+      - HOMEASSISTANT_URL=\${HOMEASSISTANT_URL}
+      - HOMEASSISTANT_TOKEN=\${HOMEASSISTANT_TOKEN}${composeSecretPathLine}
+    restart: unless-stopped</code></pre>
+            <p class="text-slate-300 text-sm mt-3 mb-2">Layer these hardening directives onto the service block before exposing on a real network:</p>
+            <pre class="code-block"><code>    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M</code></pre>
+            <p class="text-slate-400 text-xs mt-2"><code>read_only: true</code> pairs with <code>tmpfs: /tmp</code> because the Python runtime writes temporary files there; <code>cap_drop: [ALL]</code> drops every Linux kernel capability the container would otherwise inherit; <code>no-new-privileges:true</code> blocks privilege escalation via setuid binaries. See Docker Compose's <a href="https://docs.docker.com/reference/compose-file/services/" target="_blank" class="text-blue-400 hover:underline">services reference</a> for the full schema.</p>
+          </details>
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
@@ -1235,6 +1266,20 @@ cloudflared tunnel run ha-mcp</code></pre>
         <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
       </div>`;
       instructions.push(mcpProxyInstr);
+    }
+
+    // Client-specific notes for HTTP-based connections.
+    // Gemini CLI: 405-on-GET caveat (a recurring confusion source — see #1027)
+    // and the Home Assistant built-in MCP integration as an alternative to
+    // running a separate ha-mcp container.
+    if (state.client?.id === 'gemini-cli' && !isLocal) {
+      instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
+        <h4 class="instruction-title text-blue-300">Gemini CLI Notes</h4>
+        <p class="text-slate-300 text-sm mb-2"><strong>If client logs show <code>405 Method Not Allowed</code> on <code>GET /mcp</code>:</strong> the server is running in Streamable HTTP mode — switch from <code>url</code> to <code>httpUrl</code> in <code>~/.gemini/settings.json</code>. The config below already uses <code>httpUrl</code>.</p>
+        <p class="text-slate-300 text-sm mb-2 mt-3">Entry points: <code>ha-mcp-web</code> (default) serves Streamable HTTP at <code>/mcp</code> on port 8086. The separate <code>ha-mcp-sse</code> entry point serves legacy SSE on port 8087 — pair that with the <code>url</code> key (not <code>httpUrl</code>) if you need SSE specifically.</p>
+        <p class="text-slate-300 text-sm mb-2 mt-3"><strong>A direct browser/curl probe of <code>http://&lt;host&gt;:8086/mcp</code> also returns 405 by design</strong> — that is the <code>register_browser_landing</code> handler in <code>src/ha_mcp/__main__.py</code> confirming the server is up, not a fault. MCP clients use <code>POST</code>; this only shows up if a curl probe or browser hits the URL directly.</p>
+        <p class="text-slate-300 text-sm mt-3"><strong>Alternative: HA built-in MCP integration.</strong> If you have the <a href="https://www.home-assistant.io/integrations/mcp_server/" target="_blank" class="text-blue-400 hover:underline">Home Assistant MCP integration</a> enabled, you can skip <code>ha-mcp</code> entirely and point Gemini CLI at HA's <code>/api/mcp</code> endpoint with a long-lived access token in a <code>Bearer</code> header. HA core also serves the legacy SSE endpoint at <code>/mcp_server/sse</code> on the same host/port — same 405-on-GET caveat applies there.</p>
+      </div>`);
     }
 
     // Generate client config
