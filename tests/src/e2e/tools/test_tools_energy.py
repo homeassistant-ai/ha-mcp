@@ -130,37 +130,47 @@ async def test_energy_add_device_roundtrip(mcp_client):
     Verifies the convenience mode reads, mutates, and writes through the
     real WebSocket plumbing without the caller having to manage
     config_hash. A subsequent get must show the new entry.
+
+    Cleanup is in a finally so an assertion failure between add and
+    cleanup does not leave the artifact in the test container — the next
+    run would otherwise hit RESOURCE_ALREADY_EXISTS.
     """
-    add_result = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "add_device",
-            "stat_consumption": "sensor.test_e2e_add_device",
-            "name": "E2E Test Device",
-        },
-    )
-    assert_mcp_success(add_result)
-    assert add_result.data["target_key"] == "device_consumption"
-    assert add_result.data["new_count"] >= 1
+    stat = "sensor.test_e2e_add_device"
+    try:
+        add_result = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {
+                "mode": "add_device",
+                "stat_consumption": stat,
+                "name": "E2E Test Device",
+            },
+        )
+        assert_mcp_success(add_result)
+        assert add_result.data["target_key"] == "device_consumption"
+        assert add_result.data["new_count"] >= 1
 
-    # Verify via get that the entry persisted.
-    get_after = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
-    assert_mcp_success(get_after)
-    devices = get_after.data["config"]["device_consumption"]
-    stats = [d.get("stat_consumption") for d in devices]
-    assert "sensor.test_e2e_add_device" in stats, (
-        f"Added device should appear in subsequent get; got stats={stats}"
-    )
-
-    # Cleanup so the test is idempotent across runs.
-    remove_result = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "remove_device",
-            "stat_consumption": "sensor.test_e2e_add_device",
-        },
-    )
-    assert_mcp_success(remove_result)
+        # Verify via get that the entry persisted.
+        get_after = await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get"}
+        )
+        assert_mcp_success(get_after)
+        devices = get_after.data["config"]["device_consumption"]
+        stats = [d.get("stat_consumption") for d in devices]
+        assert stat in stats, (
+            f"Added device should appear in subsequent get; got stats={stats}"
+        )
+    finally:
+        # Best-effort cleanup. remove_device on a missing entry raises
+        # RESOURCE_NOT_FOUND — swallow it so the original assertion error
+        # (if any) is what surfaces.
+        try:
+            await mcp_client.call_tool(
+                "ha_manage_energy_prefs",
+                {"mode": "remove_device", "stat_consumption": stat},
+            )
+        except ToolError as cleanup_err:
+            if "RESOURCE_NOT_FOUND" not in str(cleanup_err):
+                raise
 
 
 @pytest.mark.asyncio
@@ -182,19 +192,46 @@ async def test_energy_remove_device_not_found_returns_error(mcp_client):
     assert "RESOURCE_NOT_FOUND" in str(exc_info.value)
 
 
+async def _cleanup_test_source(mcp_client, stat_energy_from: str) -> None:
+    """Remove any energy_sources entry matching ``stat_energy_from`` via a
+    fresh read + mode='set' rewrite. Idempotent; safe to call when the
+    source is already absent."""
+    get_result = await mcp_client.call_tool(
+        "ha_manage_energy_prefs", {"mode": "get"}
+    )
+    assert_mcp_success(get_result)
+    sources = get_result.data["config"]["energy_sources"]
+    if not any(s.get("stat_energy_from") == stat_energy_from for s in sources):
+        return
+    cleaned = [s for s in sources if s.get("stat_energy_from") != stat_energy_from]
+    cleanup = await mcp_client.call_tool(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "set",
+            "config": {"energy_sources": cleaned},
+            "config_hash": get_result.data["config_hash"],
+        },
+    )
+    assert_mcp_success(cleanup)
+
+
 @pytest.mark.asyncio
 async def test_energy_add_source_roundtrip(mcp_client):
-    """mode='add_source' atomically appends to energy_sources.
+    """mode='add_source' atomically appends a grid entry to energy_sources.
 
     Uses a fully-shaped grid source — HA Core's voluptuous schema requires
     all top-level grid fields (cost_adjustment_day, etc.) even when their
     values are None. The local _shape_check is intentionally narrower than
     the server schema; this test exercises the post-shape server validation
     path.
+
+    Cleanup is in a finally so an assertion failure does not persist the
+    test artifact (subsequent runs would otherwise leave it accumulating).
     """
+    stat = "sensor.test_e2e_grid_import"
     new_grid = {
         "type": "grid",
-        "stat_energy_from": "sensor.test_e2e_grid_import",
+        "stat_energy_from": stat,
         "stat_energy_to": None,
         "stat_cost": None,
         "entity_energy_price": None,
@@ -204,34 +241,55 @@ async def test_energy_add_source_roundtrip(mcp_client):
         "number_energy_price_export": None,
         "stat_compensation": None,
     }
-    add_result = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "add_source",
-            "source": new_grid,
-        },
-    )
-    assert_mcp_success(add_result)
-    assert add_result.data["target_key"] == "energy_sources"
+    try:
+        add_result = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {"mode": "add_source", "source": new_grid},
+        )
+        assert_mcp_success(add_result)
+        assert add_result.data["target_key"] == "energy_sources"
 
-    # Verify and capture the fresh hash for cleanup.
-    get_after = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
-    assert_mcp_success(get_after)
-    sources = get_after.data["config"]["energy_sources"]
-    assert any(
-        s.get("stat_energy_from") == "sensor.test_e2e_grid_import" for s in sources
-    ), f"Added grid source should appear; got sources={sources}"
+        get_after = await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get"}
+        )
+        assert_mcp_success(get_after)
+        sources = get_after.data["config"]["energy_sources"]
+        assert any(s.get("stat_energy_from") == stat for s in sources), (
+            f"Added grid source should appear; got sources={sources}"
+        )
+    finally:
+        await _cleanup_test_source(mcp_client, stat)
 
-    # Cleanup: rewrite energy_sources without the test entry.
-    cleaned = [
-        s for s in sources if s.get("stat_energy_from") != "sensor.test_e2e_grid_import"
-    ]
-    cleanup = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "set",
-            "config": {"energy_sources": cleaned},
-            "config_hash": get_after.data["config_hash"],
-        },
-    )
-    assert_mcp_success(cleanup)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
+    """mode='add_source' atomically appends solar/battery/gas entries.
+
+    Each non-grid type only requires ``stat_energy_from`` for the local
+    shape check; the post-save validate may surface ``stat not found``
+    because the test stat does not exist in the container, but that is
+    a non-fatal warning (the save itself succeeds and returns a
+    config_hash).
+    """
+    stat = f"sensor.test_e2e_{source_type}_in"
+    new_source = {"type": source_type, "stat_energy_from": stat}
+    try:
+        add_result = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {"mode": "add_source", "source": new_source},
+        )
+        assert_mcp_success(add_result)
+        assert add_result.data["target_key"] == "energy_sources"
+
+        get_after = await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get"}
+        )
+        assert_mcp_success(get_after)
+        sources = get_after.data["config"]["energy_sources"]
+        assert any(
+            s.get("type") == source_type and s.get("stat_energy_from") == stat
+            for s in sources
+        ), f"Added {source_type} source should appear; got sources={sources}"
+    finally:
+        await _cleanup_test_source(mcp_client, stat)

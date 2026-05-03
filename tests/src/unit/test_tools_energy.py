@@ -674,22 +674,22 @@ class TestAddDevice:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(mode="add_device")
         err = json.loads(str(exc_info.value))
-        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
-        assert "stat_consumption" in json.dumps(err).lower()
+        assert err["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert "stat_consumption" in err["error"]["message"].lower()
 
     async def test_happy_path_appends_to_device_consumption(self, tools):
         current_prefs = _sample_prefs()  # has fridge_energy
         tools._client.send_websocket_message.side_effect = [
             {"success": True, "result": current_prefs},  # 1. initial _get_prefs
-            {"success": True, "result": current_prefs},  # 2. _set_prefs fresh re-read
-            {"success": True, "result": None},  # 3. save_prefs
-            {"success": True, "result": _empty_validate_result()},  # 4. post-save
+            {"success": True, "result": None},  # 2. save_prefs
+            {"success": True, "result": _empty_validate_result()},  # 3. post-save
         ]
 
         result = await tools.ha_manage_energy_prefs(
             mode="add_device",
             stat_consumption="sensor.tv_energy",
             name="TV",
+            included_in_stat="sensor.whole_home_energy",
         )
 
         assert result["success"] is True
@@ -697,24 +697,30 @@ class TestAddDevice:
         assert result["target_key"] == "device_consumption"
         assert result["new_count"] == 2  # fridge + tv
 
+        # Convenience path skips _set_prefs's internal re-read — exactly
+        # 3 WS calls per write attempt (initial get + save + validate).
+        assert tools._client.send_websocket_message.call_count == 3
+
         # The save payload must be a partial — only device_consumption.
-        save_call = tools._client.send_websocket_message.call_args_list[2]
+        save_call = tools._client.send_websocket_message.call_args_list[1]
         save_payload = save_call.args[0]
         assert save_payload["type"] == "energy/save_prefs"
         assert "device_consumption" in save_payload
         # Per-key full-replace semantics — other keys must NOT be in the save payload.
         assert "energy_sources" not in save_payload
         assert "device_consumption_water" not in save_payload
-        # New entry shape
+        # New entry shape — name and included_in_stat both land in the payload.
         new_devices = save_payload["device_consumption"]
         assert len(new_devices) == 2
-        assert new_devices[1]["stat_consumption"] == "sensor.tv_energy"
-        assert new_devices[1]["name"] == "TV"
+        assert new_devices[1] == {
+            "stat_consumption": "sensor.tv_energy",
+            "name": "TV",
+            "included_in_stat": "sensor.whole_home_energy",
+        }
 
     async def test_water_flag_targets_water_list(self, tools):
         current_prefs = _sample_prefs()
         tools._client.send_websocket_message.side_effect = [
-            {"success": True, "result": current_prefs},
             {"success": True, "result": current_prefs},
             {"success": True, "result": None},
             {"success": True, "result": _empty_validate_result()},
@@ -727,7 +733,7 @@ class TestAddDevice:
         )
 
         assert result["target_key"] == "device_consumption_water"
-        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert "device_consumption_water" in save_payload
         assert "device_consumption" not in save_payload
 
@@ -743,8 +749,8 @@ class TestAddDevice:
                 stat_consumption="sensor.fridge_energy",  # already there
             )
         err = json.loads(str(exc_info.value))
-        assert "RESOURCE_ALREADY_EXISTS" in json.dumps(err)
-        assert "sensor.fridge_energy" in json.dumps(err)
+        assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
+        assert "sensor.fridge_energy" in err["error"]["message"]
 
     async def test_dry_run_does_not_write(self, tools):
         current_prefs = _sample_prefs()
@@ -768,7 +774,7 @@ class TestAddDevice:
     async def test_dry_run_raises_on_duplicate(self, tools):
         """dry_run does not bypass mutator validation: adding a duplicate
         raises RESOURCE_ALREADY_EXISTS even with dry_run=True (the mutator
-        runs before the dry-run check)."""
+        runs before the dry-run short-circuit)."""
         current_prefs = _sample_prefs()  # has sensor.fridge_energy
         tools._client.send_websocket_message.side_effect = [
             {"success": True, "result": current_prefs},
@@ -781,16 +787,33 @@ class TestAddDevice:
                 dry_run=True,
             )
         err = json.loads(str(exc_info.value))
-        assert "RESOURCE_ALREADY_EXISTS" in json.dumps(err)
-        assert "sensor.fridge_energy" in json.dumps(err)
+        assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
+        assert "sensor.fridge_energy" in err["error"]["message"]
         # Only the initial read; no save_prefs.
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_dry_run_does_not_enter_retry_loop(self, tools):
+        """dry_run short-circuits before the retry loop — exactly one WS
+        call (the initial read) regardless of max_attempts."""
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+            dry_run=True,
+        )
+        assert result["dry_run"] is True
+        # If dry_run had entered the retry loop and re-read, this would be 2.
         assert tools._client.send_websocket_message.call_count == 1
 
     async def test_fresh_install_no_prefs_starts_empty(self, tools):
         # First call returns "No prefs"; tool maps to default empty.
+        # _set_prefs no longer re-reads on the convenience path, so only
+        # 3 WS calls total (initial get + save + validate).
         tools._client.send_websocket_message.side_effect = [
             {"success": False, "error": "Command failed: No prefs"},  # initial get
-            {"success": False, "error": "Command failed: No prefs"},  # set re-read
             {"success": True, "result": None},  # save
             {"success": True, "result": _empty_validate_result()},  # post-save
         ]
@@ -802,6 +825,7 @@ class TestAddDevice:
 
         assert result["success"] is True
         assert result["new_count"] == 1
+        assert tools._client.send_websocket_message.call_count == 3
 
 
 # -----------------------------------------------------------------------------
@@ -814,12 +838,11 @@ class TestRemoveDevice:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(mode="remove_device")
         err = json.loads(str(exc_info.value))
-        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
+        assert err["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
 
     async def test_happy_path_removes_entry(self, tools):
         current_prefs = _sample_prefs()  # has sensor.fridge_energy
         tools._client.send_websocket_message.side_effect = [
-            {"success": True, "result": current_prefs},
             {"success": True, "result": current_prefs},
             {"success": True, "result": None},
             {"success": True, "result": _empty_validate_result()},
@@ -832,8 +855,39 @@ class TestRemoveDevice:
 
         assert result["success"] is True
         assert result["new_count"] == 0
-        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["device_consumption"] == []
+        assert tools._client.send_websocket_message.call_count == 3
+
+    async def test_water_flag_targets_water_list_for_remove(self, tools):
+        """remove_device with water=True targets device_consumption_water,
+        mirroring the add_device water-flag semantics."""
+        current_prefs = {
+            **_sample_prefs(),
+            "device_consumption_water": [
+                {"stat_consumption": "sensor.water_meter"},
+            ],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="remove_device",
+            stat_consumption="sensor.water_meter",
+            water=True,
+        )
+
+        assert result["target_key"] == "device_consumption_water"
+        assert result["new_count"] == 0
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
+        # Only the water list is touched; the electricity list is preserved
+        # by virtue of being absent from the partial save payload.
+        assert "device_consumption_water" in save_payload
+        assert save_payload["device_consumption_water"] == []
+        assert "device_consumption" not in save_payload
 
     async def test_not_found_raises(self, tools):
         current_prefs = _sample_prefs()
@@ -847,8 +901,8 @@ class TestRemoveDevice:
                 stat_consumption="sensor.does_not_exist",
             )
         err = json.loads(str(exc_info.value))
-        assert "RESOURCE_NOT_FOUND" in json.dumps(err)
-        assert "sensor.does_not_exist" in json.dumps(err)
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "sensor.does_not_exist" in err["error"]["message"]
 
     async def test_dry_run_does_not_write(self, tools):
         current_prefs = _sample_prefs()
@@ -879,8 +933,8 @@ class TestRemoveDevice:
                 dry_run=True,
             )
         err = json.loads(str(exc_info.value))
-        assert "RESOURCE_NOT_FOUND" in json.dumps(err)
-        assert "sensor.does_not_exist" in json.dumps(err)
+        assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "sensor.does_not_exist" in err["error"]["message"]
         assert tools._client.send_websocket_message.call_count == 1
 
 
@@ -894,8 +948,8 @@ class TestAddSource:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(mode="add_source")
         err = json.loads(str(exc_info.value))
-        assert "VALIDATION_MISSING_PARAMETER" in json.dumps(err)
-        assert "source" in json.dumps(err).lower()
+        assert err["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert "source" in err["error"]["message"].lower()
 
     async def test_invalid_type_raises_validation_failed(self, tools):
         with pytest.raises(ToolError) as exc_info:
@@ -904,22 +958,23 @@ class TestAddSource:
                 source={"type": "wind"},  # not in valid_types
             )
         err = json.loads(str(exc_info.value))
-        assert "VALIDATION_FAILED" in json.dumps(err)
+        assert err["error"]["code"] == "VALIDATION_FAILED"
 
-    async def test_solar_missing_stat_energy_from_raises(self, tools):
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    async def test_non_grid_missing_stat_energy_from_raises(self, tools, source_type):
+        """solar/battery/gas all require stat_energy_from; grid does not."""
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
                 mode="add_source",
-                source={"type": "solar"},  # solar requires stat_energy_from
+                source={"type": source_type},
             )
         err = json.loads(str(exc_info.value))
-        assert "VALIDATION_FAILED" in json.dumps(err)
-        assert "stat_energy_from" in json.dumps(err)
+        assert err["error"]["code"] == "VALIDATION_FAILED"
+        assert "stat_energy_from" in json.dumps(err["error"])
 
     async def test_grid_happy_path(self, tools):
         current_prefs = _sample_prefs()
         tools._client.send_websocket_message.side_effect = [
-            {"success": True, "result": current_prefs},
             {"success": True, "result": current_prefs},
             {"success": True, "result": None},
             {"success": True, "result": _empty_validate_result()},
@@ -933,10 +988,87 @@ class TestAddSource:
 
         assert result["success"] is True
         assert result["target_key"] == "energy_sources"
-        save_payload = tools._client.send_websocket_message.call_args_list[2].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert "energy_sources" in save_payload
         assert "device_consumption" not in save_payload
         assert save_payload["energy_sources"][-1] == new_grid
+
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    async def test_non_grid_happy_path(self, tools, source_type):
+        """solar/battery/gas append to energy_sources just like grid does."""
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        new_source = {
+            "type": source_type,
+            "stat_energy_from": f"sensor.{source_type}_in",
+        }
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source=new_source,
+        )
+
+        assert result["success"] is True
+        assert result["target_key"] == "energy_sources"
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
+        assert save_payload["energy_sources"][-1] == new_source
+
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    async def test_non_grid_duplicate_raises_already_exists(self, tools, source_type):
+        """solar/battery/gas reject duplicates by (type, stat_energy_from)."""
+        stat = f"sensor.{source_type}_existing"
+        current_prefs = {
+            **_sample_prefs(),
+            "energy_sources": [
+                # Pre-existing entry with the same (type, stat_energy_from).
+                {"type": source_type, "stat_energy_from": stat},
+            ],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_source",
+                source={"type": source_type, "stat_energy_from": stat},
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
+        assert err["error"]["context"]["type"] == source_type
+        assert err["error"]["context"]["stat_energy_from"] == stat
+        # No save call — duplicate detection short-circuits before _set_prefs.
+        assert tools._client.send_websocket_message.call_count == 1
+
+    async def test_grid_does_not_check_duplicates(self, tools):
+        """Grid sources can have multiple legitimate variants (e.g. different
+        tariffs); the helper appends without a duplicate check."""
+        existing_grid = {"type": "grid", "stat_energy_from": "sensor.grid_main"}
+        current_prefs = {
+            **_sample_prefs(),
+            "energy_sources": [existing_grid],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+
+        # Identical grid entry: must NOT raise — caller is responsible for
+        # de-duplication on grid.
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source=dict(existing_grid),  # same payload
+        )
+
+        assert result["success"] is True
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
+        # Two grid entries now (caller's choice).
+        assert len(save_payload["energy_sources"]) == 2
 
     async def test_dry_run_does_not_write(self, tools):
         current_prefs = _sample_prefs()
@@ -951,74 +1083,108 @@ class TestAddSource:
         assert result["dry_run"] is True
         assert tools._client.send_websocket_message.call_count == 1
 
+    async def test_dry_run_raises_on_duplicate_non_grid(self, tools):
+        """dry_run on a duplicate solar/battery/gas raises before the
+        dry-run short-circuit, matching the add_device dry_run semantic."""
+        current_prefs = {
+            **_sample_prefs(),
+            "energy_sources": [
+                {"type": "solar", "stat_energy_from": "sensor.solar_panel"},
+            ],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_source",
+                source={"type": "solar", "stat_energy_from": "sensor.solar_panel"},
+                dry_run=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
+        assert tools._client.send_websocket_message.call_count == 1
+
 
 # -----------------------------------------------------------------------------
 # ha_manage_energy_prefs — convenience-mode hash-conflict retry
 # -----------------------------------------------------------------------------
 
 
-class TestConvenienceRetryOnHashConflict:
-    async def test_add_device_retries_once_on_hash_conflict(self, tools):
-        """First write attempt sees a fresh-read mismatch (concurrent
-        modification), the retry loop reads fresh and succeeds."""
-        prefs_v1 = _sample_prefs()
-        prefs_v2 = {  # someone else added a device between our read and write
-            **prefs_v1,
-            "device_consumption": [
-                *prefs_v1["device_consumption"],
-                {"stat_consumption": "sensor.intruder"},
-            ],
-        }
+def _resource_locked_error() -> ToolError:
+    """Build a ToolError with the structured RESOURCE_LOCKED payload that
+    ``_set_prefs`` raises on a hash mismatch.
 
+    Mirrors the JSON shape produced by ``raise_tool_error`` so the retry
+    loop's parser sees the same code path as in production.
+    """
+    return ToolError(
+        json.dumps(
+            {
+                "success": False,
+                "error": {
+                    "code": "RESOURCE_LOCKED",
+                    "message": "Energy prefs modified since last read (conflict)",
+                    "context": {"mode": "set"},
+                },
+            }
+        )
+    )
+
+
+class TestConvenienceRetryOnHashConflict:
+    """The convenience path threads the freshly-fetched snapshot into
+    ``_set_prefs`` so the inner re-read + hash check is skipped — which
+    means a real WS sequence cannot organically produce RESOURCE_LOCKED on
+    the convenience path. To exercise the retry mechanism in isolation we
+    monkeypatch ``_set_prefs`` directly. This decouples the retry semantics
+    from the snapshot-threading optimisation."""
+
+    async def test_add_device_retries_once_on_hash_conflict(self, tools, monkeypatch):
+        """First _set_prefs call raises RESOURCE_LOCKED; retry loop reads
+        fresh and the second _set_prefs call succeeds."""
+        prefs = _sample_prefs()
+        # Two _get_prefs WS calls (one per attempt); no save calls hit the
+        # WS layer because _set_prefs itself is mocked.
         tools._client.send_websocket_message.side_effect = [
-            # Attempt 1: initial get → set re-read (mismatch → RESOURCE_LOCKED)
-            {"success": True, "result": prefs_v1},  # initial get
-            {"success": True, "result": prefs_v2},  # set re-read sees v2 → hash diff
-            # Attempt 2: fresh get → set re-read (consistent) → save → validate
-            {"success": True, "result": prefs_v2},  # initial get (retry)
-            {"success": True, "result": prefs_v2},  # set re-read
-            {"success": True, "result": None},  # save_prefs
-            {"success": True, "result": _empty_validate_result()},  # post-save
+            {"success": True, "result": prefs},
+            {"success": True, "result": prefs},
         ]
+
+        success_response = {
+            "success": True,
+            "mode": "set",
+            "config_hash": "newhash" + "0" * 9,
+            "message": "Energy prefs updated.",
+        }
+        set_prefs_mock = AsyncMock(
+            side_effect=[_resource_locked_error(), success_response]
+        )
+        monkeypatch.setattr(tools, "_set_prefs", set_prefs_mock)
 
         result = await tools.ha_manage_energy_prefs(
             mode="add_device",
             stat_consumption="sensor.tv_energy",
         )
         assert result["success"] is True
-        # Retry consumed all 6 mocked calls.
-        assert tools._client.send_websocket_message.call_count == 6
+        assert result["config_hash"] == "newhash" + "0" * 9
+        # Two _get_prefs reads, two _set_prefs invocations.
+        assert tools._client.send_websocket_message.call_count == 2
+        assert set_prefs_mock.call_count == 2
 
-    async def test_retry_exhaustion_raises_resource_locked(self, tools):
-        """Two consecutive hash conflicts: the retry's set re-read also
-        sees a fresh external write. On the final attempt, the inner
-        `except ToolError`'s gate (`attempt + 1 < max_attempts`) is False,
-        so the bare `raise` re-raises the RESOURCE_LOCKED ToolError to
-        the caller."""
-        prefs_v1 = _sample_prefs()
-        prefs_v2 = {  # external write before the first set
-            **prefs_v1,
-            "device_consumption": [
-                *prefs_v1["device_consumption"],
-                {"stat_consumption": "sensor.intruder_a"},
-            ],
-        }
-        prefs_v3 = {  # second external write before the retry's set
-            **prefs_v2,
-            "device_consumption": [
-                *prefs_v2["device_consumption"],
-                {"stat_consumption": "sensor.intruder_b"},
-            ],
-        }
-
+    async def test_retry_exhaustion_raises_resource_locked(self, tools, monkeypatch):
+        """Both attempts' _set_prefs raise RESOURCE_LOCKED. On the final
+        iteration the retry gate (``attempt + 1 < max_attempts``) is False,
+        so the bare ``raise`` propagates the error to the caller."""
+        prefs = _sample_prefs()
         tools._client.send_websocket_message.side_effect = [
-            # Attempt 1: get v1 → set re-read sees v2 → RESOURCE_LOCKED
-            {"success": True, "result": prefs_v1},
-            {"success": True, "result": prefs_v2},
-            # Attempt 2 (retry): get v2 → set re-read sees v3 → RESOURCE_LOCKED again
-            {"success": True, "result": prefs_v2},
-            {"success": True, "result": prefs_v3},
+            {"success": True, "result": prefs},
+            {"success": True, "result": prefs},
         ]
+        set_prefs_mock = AsyncMock(
+            side_effect=[_resource_locked_error(), _resource_locked_error()]
+        )
+        monkeypatch.setattr(tools, "_set_prefs", set_prefs_mock)
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
@@ -1026,6 +1192,206 @@ class TestConvenienceRetryOnHashConflict:
                 stat_consumption="sensor.tv_energy",
             )
         err = json.loads(str(exc_info.value))
-        assert "RESOURCE_LOCKED" in json.dumps(err)
-        # 4 calls total (2 attempts × 2 calls each), no save_prefs ever.
-        assert tools._client.send_websocket_message.call_count == 4
+        assert err["error"]["code"] == "RESOURCE_LOCKED"
+        assert tools._client.send_websocket_message.call_count == 2
+        assert set_prefs_mock.call_count == 2
+
+    async def test_cross_attempt_mutator_divergence_raises_already_exists(
+        self, tools, monkeypatch
+    ):
+        """Attempt 1 hits RESOURCE_LOCKED; on the retry, the fresh read
+        already contains the device (concurrent writer added it), so the
+        mutator raises RESOURCE_ALREADY_EXISTS — that propagates to the
+        caller instead of RESOURCE_LOCKED. Pins the semantic that the
+        retry's mutator runs against fresh state, not the original."""
+        prefs_v1 = _sample_prefs()  # has fridge_energy
+        prefs_v2 = {  # concurrent writer adds tv_energy between our attempts
+            **prefs_v1,
+            "device_consumption": [
+                *prefs_v1["device_consumption"],
+                {"stat_consumption": "sensor.tv_energy"},
+            ],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": prefs_v1},  # attempt 1 read
+            {"success": True, "result": prefs_v2},  # attempt 2 read (post-conflict)
+        ]
+
+        # Attempt 1's _set_prefs raises RESOURCE_LOCKED → retry. Attempt 2
+        # never reaches _set_prefs because the mutator on the fresh read
+        # detects the duplicate and raises RESOURCE_ALREADY_EXISTS.
+        set_prefs_mock = AsyncMock(side_effect=[_resource_locked_error()])
+        monkeypatch.setattr(tools, "_set_prefs", set_prefs_mock)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.tv_energy",
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
+        assert "sensor.tv_energy" in err["error"]["message"]
+        # Two reads, exactly one _set_prefs invocation (attempt 1).
+        assert tools._client.send_websocket_message.call_count == 2
+        assert set_prefs_mock.call_count == 1
+
+    async def test_retry_log_level_is_warning(self, tools, monkeypatch, caplog):
+        """The retry log line uses logger.warning (concurrent-modification
+        events are operational signal, not info-level chatter)."""
+        import logging
+
+        prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": prefs},
+            {"success": True, "result": prefs},
+        ]
+        success_response = {
+            "success": True,
+            "mode": "set",
+            "config_hash": "newhash" + "0" * 9,
+            "message": "Energy prefs updated.",
+        }
+        set_prefs_mock = AsyncMock(
+            side_effect=[_resource_locked_error(), success_response]
+        )
+        monkeypatch.setattr(tools, "_set_prefs", set_prefs_mock)
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_energy"):
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.tv_energy",
+            )
+        retry_records = [
+            rec for rec in caplog.records if "hash conflict on attempt" in rec.message
+        ]
+        assert len(retry_records) == 1
+        assert retry_records[0].levelno == logging.WARNING
+
+
+# -----------------------------------------------------------------------------
+# Convenience-mode Pattern-A wrapping (non-ToolError exceptions)
+# -----------------------------------------------------------------------------
+
+
+class TestConveniencePatternA:
+    """Pattern-A wraps non-ToolError exceptions raised inside
+    ``_mutate_atomic``'s own scope into structured errors carrying
+    ``context={'mode': ..., 'target_key': ...}``.
+
+    Note: ``_get_prefs`` and ``_set_prefs`` each have their own Pattern-A
+    wrappers, so a non-ToolError raised inside either of them is caught
+    there and converted to a ToolError with their context — it never
+    reaches ``_mutate_atomic``'s outer ``except Exception``. To exercise
+    ``_mutate_atomic``'s wrapper specifically, we monkeypatch
+    ``_set_prefs`` to raise a raw exception that propagates up.
+    """
+
+    async def test_non_tool_error_from_set_prefs_wrapped_with_context(
+        self, tools, monkeypatch
+    ):
+        prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": prefs},
+        ]
+        # A raw ConnectionError from _set_prefs (not a ToolError) bypasses
+        # the inner ``except ToolError`` retry gate and is caught by the
+        # outer Pattern-A in _mutate_atomic.
+        monkeypatch.setattr(
+            tools,
+            "_set_prefs",
+            AsyncMock(side_effect=ConnectionError("ws reset mid-save")),
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_energy_prefs(
+                mode="add_device",
+                stat_consumption="sensor.tv_energy",
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        ctx = err["error"]["context"]
+        assert ctx["mode"] == "add_device"
+        assert ctx["target_key"] == "device_consumption"
+
+    async def test_non_tool_error_from_mutator_wrapped_with_context(self, tools):
+        """A non-ToolError raised inside the mutator itself (run inline in
+        ``_mutate_atomic``'s scope) hits the same Pattern-A wrapper."""
+        prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": prefs},
+        ]
+
+        def bad_mutator(_existing):
+            raise RuntimeError("mutator blew up")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools._mutate_atomic(
+                mode="add_device",
+                target_key="device_consumption",
+                mutator=bad_mutator,
+                dry_run=False,
+                preview_payload={},
+            )
+        err = json.loads(str(exc_info.value))
+        ctx = err["error"]["context"]
+        assert ctx["mode"] == "add_device"
+        assert ctx["target_key"] == "device_consumption"
+
+
+# -----------------------------------------------------------------------------
+# Convenience-mode response passthrough
+# -----------------------------------------------------------------------------
+
+
+class TestConvenienceResponsePassthrough:
+    """``_mutate_atomic`` filters its response by overriding a closed set of
+    keys (success/mode/config_hash/target_key/new_count/message) and passing
+    everything else from ``_set_prefs`` through. This guards against the
+    convenience-mode response silently diverging from ``mode='set'`` when
+    new optional fields are added to ``_set_prefs``."""
+
+    async def test_post_save_validation_errors_bubble_through(self, tools):
+        current_prefs = _sample_prefs()
+        # Post-save validate returns errors → _set_prefs sets
+        # post_save_validation_errors + warning. Both must reach the
+        # convenience-mode response.
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},  # save
+            {
+                "success": True,
+                "result": {
+                    "energy_sources": [],
+                    "device_consumption": [[], ["stat not found"]],
+                    "device_consumption_water": [],
+                },
+            },
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+        )
+        assert result["success"] is True
+        assert "post_save_validation_errors" in result
+        assert len(result["post_save_validation_errors"]) == 1
+        assert "warning" in result
+
+    async def test_partial_warning_bubbles_through(self, tools):
+        """When post-save validate itself fails, _set_prefs sets
+        partial=True + a warning. Both must surface on the convenience
+        response."""
+        current_prefs = _sample_prefs()
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},  # save
+            {"success": False, "error": "validate broken"},  # post-save validate
+        ]
+
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_device",
+            stat_consumption="sensor.tv_energy",
+        )
+        assert result["success"] is True
+        assert result["partial"] is True
+        assert "validate broken" in result["warning"]

@@ -266,9 +266,11 @@ class EnergyTools:
                     "an unsubmitted payload). For convenience modes: simulates "
                     "the mutation against a fresh read and reports what would "
                     "change without writing — but still raises "
-                    "RESOURCE_ALREADY_EXISTS (duplicate add_device) or "
-                    "RESOURCE_NOT_FOUND (missing remove_device) when the "
-                    "proposed mutation is not applicable. Default False."
+                    "RESOURCE_ALREADY_EXISTS (duplicate add_device, or duplicate "
+                    "add_source for solar/battery/gas), RESOURCE_NOT_FOUND "
+                    "(missing remove_device), or VALIDATION_FAILED (post-mutator "
+                    "shape error) when the proposed mutation is not applicable. "
+                    "Default False."
                 ),
                 default=False,
             ),
@@ -298,9 +300,13 @@ class EnergyTools:
             str | None,
             Field(
                 description=(
-                    "Optional 'parent' statistic for mode='add_device' — the "
-                    "statistic this device's consumption is already counted "
-                    "in (avoids double-counting in totals). Ignored otherwise."
+                    "Optional 'parent' statistic for mode='add_device'. Set "
+                    "this to a statistic that already INCLUDES this device's "
+                    "consumption (e.g., a whole-home or circuit-level meter "
+                    "that this device feeds into). The Energy Dashboard will "
+                    "subtract this device's reading from the parent so the "
+                    "parent's contribution is not double-counted. Ignored "
+                    "otherwise."
                 ),
                 default=None,
             ),
@@ -323,8 +329,16 @@ class EnergyTools:
                     "Single energy_sources entry for mode='add_source'. Must "
                     "contain 'type' (one of grid|solar|battery|gas) and the "
                     "type-specific required fields (e.g. solar/battery/gas "
-                    "require 'stat_energy_from'). Required for that mode; "
-                    "ignored otherwise."
+                    "require 'stat_energy_from'). Note: HA Core's voluptuous "
+                    "schema for grid sources requires the full field set "
+                    "(cost_adjustment_day, stat_energy_to, stat_cost, "
+                    "entity_energy_price, number_energy_price, "
+                    "entity_energy_price_export, number_energy_price_export, "
+                    "stat_compensation) — the local shape check is narrower, "
+                    "so a minimal {'type': 'grid'} passes locally but "
+                    "surfaces in post_save_validation_errors after writing. "
+                    "Pass the unused fields as None to satisfy the server. "
+                    "Required for mode='add_source'; ignored otherwise."
                 ),
                 default=None,
             ),
@@ -372,9 +386,18 @@ class EnergyTools:
           receive an authorization error from Home Assistant.
         - Convenience modes are NOT idempotent: 'add_device' on an existing
           ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
-          on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' does NOT
-          check for duplicates — appending the same source twice silently
-          produces two entries; the caller is responsible for de-duplication.
+          on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' rejects
+          duplicates by ``(type, stat_energy_from)`` for solar/battery/gas
+          (RESOURCE_ALREADY_EXISTS); grid entries are appended without a
+          duplicate check (multiple grid variants are legitimate, and grid
+          has no single canonical uniqueness key) — the caller is responsible
+          for de-duplicating grid sources.
+        - Convenience modes do NOT bypass the local shape check on dry_run:
+          ``dry_run=True`` still raises ``RESOURCE_ALREADY_EXISTS``
+          (duplicate add_device / add_source), ``RESOURCE_NOT_FOUND``
+          (missing remove_device), or ``VALIDATION_FAILED`` (post-mutator
+          shape error) when the proposed mutation is not applicable. The
+          mutator and shape check both run before the dry-run short-circuit.
         """
         if mode == "get":
             return await self._get_prefs()
@@ -562,12 +585,21 @@ class EnergyTools:
         self,
         config: dict[str, Any],
         config_hash: str,
+        *,
+        current_prefs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Shape-check → hash-check → save → post-save validate.
 
         Shape errors and hash mismatch fail closed. Post-save validation
         errors are reported in the response as a non-fatal warning; the
         save already succeeded.
+
+        ``current_prefs`` is an optional caller-supplied snapshot. When
+        provided, the internal re-read is skipped — the convenience-mode
+        path uses this to avoid a second ``energy/get_prefs`` round trip
+        per attempt (the snapshot was already fetched by ``_mutate_atomic``).
+        The hash check still runs against the provided snapshot as a
+        defensive guard.
         """
         try:
             # 1. Shape check (fast local, fail closed)
@@ -588,32 +620,33 @@ class EnergyTools:
                     )
                 )
 
-            # 2. Fresh read for hash comparison. Map "No prefs" (never
-            # configured) to empty default so the hash-check works on
-            # fresh installations too.
-            current_result = await self._client.send_websocket_message(
-                {
-                    "type": "energy/get_prefs",
-                }
-            )
-            if current_result.get("success"):
-                current_prefs: dict[str, Any] = (
-                    current_result.get("result") or _default_prefs()
+            # 2. Snapshot acquisition. Convenience modes pass their
+            # already-fetched snapshot in to skip the re-read; external
+            # mode='set' callers fall through to a fresh read here. Map
+            # "No prefs" (never configured) to empty default so the
+            # hash-check works on fresh installations too.
+            if current_prefs is None:
+                current_result = await self._client.send_websocket_message(
+                    {
+                        "type": "energy/get_prefs",
+                    }
                 )
-            else:
-                error = current_result.get("error") or "Unknown error"
-                if _is_no_prefs_error(str(error)):
-                    current_prefs = _default_prefs()
+                if current_result.get("success"):
+                    current_prefs = current_result.get("result") or _default_prefs()
                 else:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"Failed to re-read prefs for hash check: {error}",
-                            context={"mode": "set"},
+                    error = current_result.get("error") or "Unknown error"
+                    if _is_no_prefs_error(str(error)):
+                        current_prefs = _default_prefs()
+                    else:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                f"Failed to re-read prefs for hash check: {error}",
+                                context={"mode": "set"},
+                            )
                         )
-                    )
-                    # unreachable; appeases type checkers
-                    current_prefs = {}
+                        # unreachable; appeases type checkers
+                        current_prefs = {}
 
             current_hash = compute_config_hash(current_prefs)
 
@@ -819,11 +852,14 @@ class EnergyTools:
         for ``_shape_check`` reuse, which validates the type-specific
         required fields (e.g. ``stat_energy_from`` for solar/battery/gas).
 
-        Unlike ``_add_device``, this method does NOT detect duplicates —
-        appending the same source twice silently produces two entries.
-        Duplicate semantics for sources are looser than for devices (e.g.,
-        grid sources can have multiple legitimate variants), so de-
-        duplication is left to the caller.
+        Duplicate semantics are asymmetric to ``_add_device`` because
+        ``energy_sources`` does not expose a single uniqueness key across
+        types: solar/battery/gas are keyed on ``stat_energy_from``, but
+        ``grid`` entries can legitimately have multiple variants
+        (different tariffs, multiple meters) where ``stat_energy_from``
+        alone does not identify duplicates. We therefore reject duplicates
+        by ``(type, stat_energy_from)`` for solar/battery/gas only and
+        leave grid de-duplication to the caller.
         """
         if source is None:
             raise_tool_error(
@@ -852,8 +888,14 @@ class EnergyTools:
                     },
                     suggestions=[
                         "Fix the listed errors and retry",
-                        "Required fields per type: grid (no extra), "
-                        "solar/battery/gas need 'stat_energy_from'",
+                        "solar/battery/gas need 'stat_energy_from'; grid needs "
+                        "only 'type' for the local check, but HA Core's voluptuous "
+                        "schema requires the full grid field set "
+                        "(cost_adjustment_day, stat_energy_to, stat_cost, "
+                        "entity_energy_price, number_energy_price, "
+                        "entity_energy_price_export, number_energy_price_export, "
+                        "stat_compensation) — pass them as None when unused or "
+                        "the post-save validate will surface them.",
                     ],
                 )
             )
@@ -861,7 +903,7 @@ class EnergyTools:
         return await self._mutate_atomic(
             mode="add_source",
             target_key="energy_sources",
-            mutator=lambda existing: existing + [source],
+            mutator=lambda existing: self._append_unique_source(existing, source),
             dry_run=dry_run,
             preview_payload={"would_add": source, "target_key": "energy_sources"},
         )
@@ -896,6 +938,50 @@ class EnergyTools:
         return existing + [new_entry]
 
     @staticmethod
+    def _append_unique_source(
+        existing: list[dict[str, Any]],
+        new_source: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Append ``new_source`` to ``existing`` with type-aware duplicate
+        detection.
+
+        Solar/battery/gas entries are keyed on
+        ``(type, stat_energy_from)`` — duplicates raise
+        ``RESOURCE_ALREADY_EXISTS``. Grid entries are appended without a
+        duplicate check (multiple grid variants are legitimate, and grid
+        does not have a single canonical uniqueness key — see
+        ``_add_source`` docstring for rationale). The post-save
+        ``energy/validate`` call still runs on the full payload as a
+        backstop for whatever HA Core flags.
+        """
+        source_type = new_source.get("type")
+        if source_type in {"solar", "battery", "gas"}:
+            stat = new_source.get("stat_energy_from")
+            for entry in existing:
+                if (
+                    entry.get("type") == source_type
+                    and entry.get("stat_energy_from") == stat
+                ):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_ALREADY_EXISTS,
+                            f"Source of type='{source_type}' with "
+                            f"stat_energy_from='{stat}' already in energy_sources",
+                            context={
+                                "mode": "add_source",
+                                "type": source_type,
+                                "stat_energy_from": stat,
+                                "target_key": "energy_sources",
+                            },
+                            suggestions=[
+                                "Use mode='get' to inspect the current sources",
+                                "Use mode='set' to replace the existing entry",
+                            ],
+                        )
+                    )
+        return existing + [new_source]
+
+    @staticmethod
     def _remove_device_by_stat(
         existing: list[dict[str, Any]],
         stat_consumption: str,
@@ -922,6 +1008,13 @@ class EnergyTools:
             )
         return kept
 
+    # Keys overridden on the convenience-mode response envelope. Anything
+    # else returned by ``_set_prefs`` (post_save_validation_errors, warning,
+    # partial, plus any future additions) passes through.
+    _CONVENIENCE_RESPONSE_OVERRIDES = frozenset(
+        {"success", "mode", "config_hash", "target_key", "new_count", "message"}
+    )
+
     async def _mutate_atomic(
         self,
         *,
@@ -943,47 +1036,84 @@ class EnergyTools:
         a fresh read. Other errors propagate immediately.
 
         For ``dry_run``: runs the mutator against a fresh read (so duplicate /
-        not-found errors surface), then returns ``preview_payload`` plus the
-        new shape — without writing.
+        not-found errors surface), shape-checks the resulting list as a
+        backstop matching the real-run path, then returns ``preview_payload``
+        plus the new shape — without writing. Short-circuits before the retry
+        loop since dry_run never writes.
+
+        The convenience path threads the freshly-fetched snapshot into
+        ``_set_prefs`` so the inner ``energy/get_prefs`` re-read is skipped
+        — halving the read cost on the happy path.
         """
         try:
+            if dry_run:
+                current = await self._get_prefs()
+                current_config: dict[str, Any] = current["config"]
+                existing_list = list(current_config.get(target_key, []))
+                new_list = mutator(existing_list)
+
+                # Backstop shape-check, mirroring the real-run path through
+                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent
+                # if the entry-construction logic ever changes.
+                shape_errors = _shape_check({target_key: new_list})
+                if shape_errors:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            f"Resulting {target_key} shape invalid: "
+                            f"{len(shape_errors)} error(s)",
+                            context={
+                                "mode": mode,
+                                "target_key": target_key,
+                                "shape_errors": shape_errors,
+                            },
+                        )
+                    )
+
+                return {
+                    "success": True,
+                    "mode": mode,
+                    "dry_run": True,
+                    **preview_payload,
+                    "current_count": len(existing_list),
+                    "new_count": len(new_list),
+                }
+
             max_attempts = 2
             for attempt in range(max_attempts):
                 current = await self._get_prefs()
-                current_config: dict[str, Any] = current["config"]
+                current_config = current["config"]
                 current_hash: str = current["config_hash"]
 
                 existing_list = list(current_config.get(target_key, []))
                 new_list = mutator(existing_list)
 
-                if dry_run:
-                    return {
-                        "success": True,
-                        "mode": mode,
-                        "dry_run": True,
-                        **preview_payload,
-                        "current_count": len(existing_list),
-                        "new_count": len(new_list),
-                    }
-
                 partial_config = {target_key: new_list}
                 try:
-                    set_result = await self._set_prefs(partial_config, current_hash)
+                    set_result = await self._set_prefs(
+                        partial_config,
+                        current_hash,
+                        current_prefs=current_config,
+                    )
                 except ToolError as exc:
                     # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
                     # Retry once with a fresh read in case of a benign race.
                     # raise_tool_error serialises the structured error as JSON in
                     # the exception message, so we parse rather than substring-match.
+                    err_code: str | None = None
                     try:
                         parsed = json.loads(str(exc))
-                        err_code = parsed.get("error", {}).get("code")
-                    except (json.JSONDecodeError, TypeError):
-                        err_code = None
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        err_dict = parsed.get("error")
+                        if isinstance(err_dict, dict):
+                            err_code = err_dict.get("code")
                     if (
                         err_code == ErrorCode.RESOURCE_LOCKED.value
                         and attempt + 1 < max_attempts
                     ):
-                        logger.info(
+                        logger.warning(
                             f"{mode} on {target_key}: hash conflict on attempt "
                             f"{attempt + 1}, retrying"
                         )
@@ -998,23 +1128,19 @@ class EnergyTools:
                     "new_count": len(new_list),
                     "message": set_result.get("message", f"{mode} succeeded."),
                     **{
-                        k: set_result[k]
-                        for k in ("post_save_validation_errors", "warning", "partial")
-                        if k in set_result
+                        k: v
+                        for k, v in set_result.items()
+                        if k not in self._CONVENIENCE_RESPONSE_OVERRIDES
                     },
                 }
 
-            # Unreachable: range(max_attempts) iterates max_attempts > 0 times,
-            # and every iteration either returns or raises. The only `continue`
-            # path is gated on `attempt + 1 < max_attempts`, which is False on
-            # the final iteration — so the bare `raise` above always fires
-            # there. Kept as a type-soundness sentinel for mypy.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_UNEXPECTED,
-                    f"{mode}: exhausted retries without a definitive result",
-                    context={"mode": mode, "target_key": target_key},
-                )
+            # Unreachable as long as every iteration either returns or raises:
+            # the only ``continue`` is gated on ``attempt + 1 < max_attempts``,
+            # which is False on the final iteration — so the bare ``raise``
+            # in the except block always fires there.
+            raise AssertionError(
+                f"_mutate_atomic({mode}, {target_key}): "
+                "retry loop exited without a return or raise"
             )
 
         except ToolError:
