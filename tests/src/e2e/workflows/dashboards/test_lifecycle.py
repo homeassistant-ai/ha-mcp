@@ -437,8 +437,11 @@ class TestDashboardIdentifierResolution:
             },
         )
         internal_id = create_data["dashboard_id"]
-        assert internal_id != "test-981-set-by-id"
-        assert "-" not in internal_id  # pre-resolver must run before hyphen check
+        # Literal compare on the canonical id form — survives an HA-side
+        # change of the slugify separator with a clearer failure message
+        # than ``"-" not in internal_id``. The pre-resolver must run before
+        # the hyphen-check on this id (it has no hyphen by construction).
+        assert internal_id == "test_981_set_by_id"
 
         try:
             # Update via internal id — pre-resolver replaces it with url_path
@@ -504,6 +507,22 @@ class TestDashboardIdentifierResolution:
             )
             assert transform_data["success"] is True
             assert transform_data["action"] == "python_transform"
+
+            # Re-read and assert the transform actually wrote new content —
+            # without this, a regression that turns the python_transform
+            # branch into a no-op save (success-but-untouched) would still
+            # pass. Mirrors the v1→v2 verification pattern in
+            # test_set_via_internal_id_pre_resolves above.
+            verify_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": "test-981-mixed-hash"}
+            )
+            assert (
+                verify_data["config"]["views"][0]["cards"][0]["content"]
+                == "transformed"
+            ), (
+                "python_transform reported success but the persisted config "
+                "did not change — likely no-op save regression"
+            )
         finally:
             await mcp.call_tool_success(
                 "ha_config_delete_dashboard", {"url_path": "test-981-mixed-hash"}

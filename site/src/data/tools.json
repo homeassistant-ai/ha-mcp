@@ -563,15 +563,15 @@
   {
     "name": "ha_config_delete_dashboard",
     "title": "Delete Dashboard",
-    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This permanently deletes the dashboard and all its configuration.\nCannot be undone. Does not work on YAML-mode dashboards.\n\nAccepts either the internal dashboard ID or the URL path.\nThe tool resolves url_path to internal ID automatically.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")\n\nNote: The default dashboard cannot be deleted via this method.",
+    "description": "Delete a storage-mode dashboard completely.\n\nWARNING: This permanently deletes the dashboard and all its configuration.\nCannot be undone. Does not work on YAML-mode dashboards.\n\nAccepts either the URL path or the internal dashboard ID. HA internal IDs\nmay differ from url_path (e.g. hyphens → underscores); the tool resolves\neither form to the actual registry ID before deletion.\n\nEXAMPLES:\n- Delete dashboard: ha_config_delete_dashboard(\"mobile-dashboard\")\n\nNote: The default dashboard cannot be deleted via this method.",
     "inputSchema": {
       "properties": {
-        "dashboard_id": {
-          "type": "Annotated[str, Field(description=\"Dashboard ID or URL path to delete (e.g., 'my-dashboard' or 'my_dashboard')\")]"
+        "url_path": {
+          "type": "Annotated[str, Field(description=\"Dashboard URL path or internal ID to delete (e.g., 'my-dashboard' or 'my_dashboard'). Both forms are accepted.\")]"
         }
       },
       "required": [
-        "dashboard_id"
+        "url_path"
       ]
     },
     "annotations": {
