@@ -410,7 +410,8 @@ class EnergyTools:
           keys is enforced, so a per-key submission still fully replaces
           that key's value as the save endpoint requires. Mismatch on any
           locked key returns ``RESOURCE_LOCKED`` with the offending keys
-          in ``context.mismatched_keys``.
+          in the response's top-level ``mismatched_keys`` (context fields
+          are flattened to the response root by ``create_error_response``).
         - A local shape check runs before every write; malformed payloads
           are rejected with a ``shape_errors`` list.
         - After a successful write, the tool calls ``energy/validate`` and
@@ -638,7 +639,9 @@ class EnergyTools:
         key individually — set-equality is enforced between the
         ``config``-present top-level keys and the dict's top-level keys
         (unknown keys silently dropped on both sides). Per-key mismatch
-        surfaces every offending key in ``context.mismatched_keys``.
+        surfaces every offending key in the response's top-level
+        ``mismatched_keys`` (``create_error_response`` flattens the
+        ``context`` dict onto the response root).
 
         ``current_prefs`` is an optional caller-supplied snapshot. When
         provided, the internal re-read is skipped — the convenience-mode

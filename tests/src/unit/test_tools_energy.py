@@ -763,7 +763,7 @@ class TestSetPrefsPerKeyHash:
         err = json.loads(str(exc_info.value))
         assert "RESOURCE_LOCKED" in json.dumps(err)
         # Only the stale key surfaces in mismatched_keys.
-        assert err["context"]["mismatched_keys"] == ["device_consumption"]
+        assert err["mismatched_keys"] == ["device_consumption"]
         # No save WS call.
         assert tools._client.send_websocket_message.call_count == 1
 
@@ -789,8 +789,8 @@ class TestSetPrefsPerKeyHash:
             )
         err = json.loads(str(exc_info.value))
         assert "VALIDATION_FAILED" in json.dumps(err)
-        assert err["context"]["missing_in_hash"] == ["energy_sources"]
-        assert err["context"]["extra_in_hash"] == []
+        assert err["missing_in_hash"] == ["energy_sources"]
+        assert err["extra_in_hash"] == []
         # Hash check is the gate — no save happened.
         assert tools._client.send_websocket_message.call_count == 1
 
@@ -814,8 +814,8 @@ class TestSetPrefsPerKeyHash:
             )
         err = json.loads(str(exc_info.value))
         assert "VALIDATION_FAILED" in json.dumps(err)
-        assert err["context"]["extra_in_hash"] == ["energy_sources"]
-        assert err["context"]["missing_in_hash"] == []
+        assert err["extra_in_hash"] == ["energy_sources"]
+        assert err["missing_in_hash"] == []
         assert tools._client.send_websocket_message.call_count == 1
 
     async def test_unknown_top_level_keys_silently_dropped(self, tools):
