@@ -118,11 +118,14 @@ def _sanitize_log_text(text: str) -> str:
         "[REDACTED_JWT]",
         text,
     )
-    # Bearer tokens — preserve original casing of "Bearer"/"bearer"
+    # Bearer tokens — match any casing (BEARER, Bearer, bearer, BeArEr, …)
+    # via re.IGNORECASE, but preserve the original casing in the output by
+    # echoing m.group(1) back through the lambda.
     text = re.sub(
-        r"\b([Bb]earer)\s+\S+",
+        r"\b(bearer)\s+\S+",
         lambda m: f"{m.group(1)} [REDACTED]",
         text,
+        flags=re.IGNORECASE,
     )
     # Generic key=value credentials (api_key, token, secret, password, etc.).
     # Negative lookbehind for a letter so OPENAI_API_KEY=... still matches

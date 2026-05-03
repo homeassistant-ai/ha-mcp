@@ -8,6 +8,8 @@ import pytest
 from ha_mcp import __version__
 from ha_mcp.tools.tools_bug_report import (
     _fetch_addon_logs,
+    _format_logs_for_report,
+    _format_startup_logs,
     _sanitize_log_text,
     register_bug_report_tools,
 )
@@ -573,12 +575,18 @@ class TestSanitizeLogText:
             assert "[REDACTED]" in result
 
     def test_bearer_preserves_casing(self):
-        # Capital and lowercase variants both get redacted; original casing kept.
-        upper = _sanitize_log_text("Authorization: Bearer abc123token")
-        lower = _sanitize_log_text("auth: bearer abc123token")
-        assert "abc123" not in upper and "abc123" not in lower
-        assert "Bearer [REDACTED]" in upper
-        assert "bearer [REDACTED]" in lower
+        # All casings get redacted via re.IGNORECASE; the lambda echoes
+        # m.group(1) so the original casing is preserved in the output.
+        cases = [
+            ("Authorization: Bearer abc123token", "Bearer [REDACTED]"),
+            ("auth: bearer abc123token", "bearer [REDACTED]"),
+            ("HDR: BEARER abc123token", "BEARER [REDACTED]"),
+            ("hdr: BeArEr abc123token", "BeArEr [REDACTED]"),
+        ]
+        for text, expected in cases:
+            result = _sanitize_log_text(text)
+            assert "abc123" not in result, f"abc123 leaked in {result!r}"
+            assert expected in result, f"missing {expected!r} in {result!r}"
 
     def test_handles_multiple_secrets_in_one_line(self):
         text = "token=abc123 connected to 192.168.1.5 with bearer xyz789"
@@ -727,3 +735,69 @@ class TestFetchAddonLogs:
             result = await _fetch_addon_logs()
 
         assert result == ""
+
+
+# Shared JWT fixture for the format-helper boundary tests below. 108 chars.
+_JWT_SAMPLE = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+)
+
+
+class TestFormatLogsForReportSanitization:
+    """Boy-scout-2 regression: sanitize-before-truncate for error_message."""
+
+    def test_jwt_split_at_100char_error_truncation_is_redacted(self):
+        # _format_logs_for_report truncates each error_message to the first
+        # 100 chars after sanitization. Position the JWT so the cut would
+        # land mid-JWT under the buggy truncate-then-sanitize order; the
+        # surviving JWT prefix wouldn't match the JWT regex (no signature)
+        # and would leak `eyJhbG…` into the report.
+        prefix_len = 50
+        # Cut at offset 100 = prefix_len (50) + jwt_chars_to_drop (50).
+        # JWT (108 chars) extends past the cut into the truncated region.
+        error = "x" * prefix_len + _JWT_SAMPLE + "x" * 200
+        logs = [
+            {
+                "timestamp": "2024-12-01T10:00:00",
+                "tool_name": "ha_test",
+                "success": False,
+                "execution_time_ms": 50,
+                "error_message": error,
+            }
+        ]
+
+        formatted = _format_logs_for_report(logs)
+
+        # No JWT fragment leaks (the buggy order would leave eyJhbG... in the
+        # truncated tail because the regex requires the full 3-part JWT shape).
+        assert "eyJhbG" not in formatted
+        # Positive proof: sanitization ran first, so the marker survives the
+        # 100-char cut.
+        assert "[REDACTED_JWT]" in formatted
+
+
+class TestFormatStartupLogsSanitization:
+    """Boy-scout-2 regression: sanitize-before-truncate for startup messages."""
+
+    def test_jwt_split_at_200char_message_truncation_is_redacted(self):
+        # _format_startup_logs truncates message to 200 chars after sanitize.
+        # Same shape as the _format_logs_for_report test, but with the JWT
+        # placed across the 200-char boundary.
+        prefix_len = 150
+        # Cut at offset 200 = prefix_len (150) + jwt_chars_to_drop (50).
+        message = "x" * prefix_len + _JWT_SAMPLE + "x" * 200
+        logs = [
+            {
+                "elapsed_seconds": 1.23,
+                "level": "INFO",
+                "logger": "ha_mcp.startup",
+                "message": message,
+            }
+        ]
+
+        formatted = _format_startup_logs(logs)
+
+        assert "eyJhbG" not in formatted
+        assert "[REDACTED_JWT]" in formatted
