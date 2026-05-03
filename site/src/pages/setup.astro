@@ -66,12 +66,22 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
           Get Started - Easy Setup
         </div>
-        <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+        <div class="grid md:grid-cols-3 gap-6 max-w-3xl mx-auto">
           <a href={withBase('/guide-macos')} class="quick-start-card group">
             <div class="flex items-center gap-4">
               <PlatformIcon icon="apple" size={40} class="text-[var(--text-secondary)]" />
               <div class="text-left">
                 <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">macOS + Claude Desktop</h3>
+                <p class="text-slate-400">Complete guided setup</p>
+              </div>
+            </div>
+            <span class="quick-start-badge" title="10 minutes to get you started. No subscription needed.">Quick start</span>
+          </a>
+          <a href={withBase('/guide-linux')} class="quick-start-card group">
+            <div class="flex items-center gap-4">
+              <PlatformIcon icon="linux" size={40} class="text-[var(--text-secondary)]" />
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Linux + Claude Desktop</h3>
                 <p class="text-slate-400">Complete guided setup</p>
               </div>
             </div>
