@@ -177,3 +177,166 @@ class TestParseYamlPath:
     def test_rejects_other_dotted_path(self, parse):
         _, _, err = parse("homeassistant.customize")
         assert err is not None
+
+
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock as MM
+
+
+class TestHandleEditYamlConfigDashboards:
+    """Integration of dashboard branch into handle_edit_yaml_config."""
+
+    @pytest.fixture
+    def hass(self, tmp_path):
+        """Minimal hass mock that runs executor jobs synchronously."""
+        h = MM()
+        h.config = MM()
+        h.config.config_dir = str(tmp_path)
+        # Run executor jobs inline so we can assert filesystem state
+        async def _run(fn, *args):
+            return fn(*args)
+        h.async_add_executor_job = AsyncMock(side_effect=_run)
+        # check_config service returns 'ok'
+        h.services = MM()
+        h.services.async_call = AsyncMock(return_value={"errors": None})
+        return h
+
+    @pytest.fixture
+    def call_factory(self):
+        """Build a ServiceCall-like object."""
+        def _make(data):
+            call = MM()
+            call.data = data
+            return call
+        return _make
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_register_yaml_mode_dashboard(self, tmp_path, hass, call_factory):
+        """A new lovelace.dashboards.<url_path> entry is added under that key only."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("default_config:\n")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "lovelace.dashboards.energy-dash",
+                        "content": (
+                            "mode: yaml\n"
+                            "title: Energy\n"
+                            "filename: dashboards/energy.yaml\n"
+                            "show_in_sidebar: true\n"
+                        ),
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is True, result
+        text = cfg.read_text()
+        assert "lovelace:" in text
+        assert "dashboards:" in text
+        assert "energy-dash:" in text
+        assert "default_config:" in text
+        # Must NOT introduce lovelace.mode
+        assert "mode: yaml" in text  # appears under the dashboard entry though
+        # Make sure 'mode:' isn't a sibling of 'dashboards:' under 'lovelace:'
+        # (i.e., lovelace key should only contain 'dashboards')
+        import yaml
+        parsed = yaml.safe_load(text)
+        assert set(parsed["lovelace"].keys()) == {"dashboards"}
+
+    def test_rejects_filename_traversal(self, tmp_path, hass, call_factory):
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "lovelace.dashboards.bad-dash",
+                        "content": (
+                            "mode: yaml\n"
+                            "title: Bad\n"
+                            "filename: ../secrets.yaml\n"
+                        ),
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is False
+        assert "filename" in result["error"]
+
+    def test_rejects_reserved_url_path(self, tmp_path, hass, call_factory):
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "lovelace.dashboards.lovelace",
+                        "content": "mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is False
+        assert "reserved" in result["error"].lower()
+
+    def test_remove_dashboard_entry_only(self, tmp_path, hass, call_factory):
+        """`remove` only deletes the targeted dashboard, not the whole lovelace key."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(
+            "lovelace:\n"
+            "  dashboards:\n"
+            "    energy-dash:\n"
+            "      mode: yaml\n"
+            "      title: Energy\n"
+            "      filename: dashboards/energy.yaml\n"
+            "    weather-dash:\n"
+            "      mode: yaml\n"
+            "      title: Weather\n"
+            "      filename: dashboards/weather.yaml\n"
+        )
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "remove",
+                        "yaml_path": "lovelace.dashboards.energy-dash",
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is True
+        import yaml
+        parsed = yaml.safe_load(cfg.read_text())
+        assert "energy-dash" not in parsed["lovelace"]["dashboards"]
+        assert "weather-dash" in parsed["lovelace"]["dashboards"]

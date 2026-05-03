@@ -231,6 +231,315 @@ def _validate_dashboard_filename(filename: str) -> str | None:
     return None
 
 
+def _build_edit_yaml_config_handler(hass):
+    """Build and return the async handle_edit_yaml_config handler.
+
+    Extracted to module level so it can be tested without registering
+    the full integration.
+    """
+    config_dir = Path(hass.config.config_dir)
+
+    async def handle_edit_yaml_config(call) -> dict:
+        """Handle the edit_yaml_config service call."""
+        ry = make_yaml()
+        rel_path = call.data["file"]
+        action = call.data["action"]
+        yaml_path = call.data["yaml_path"]
+        content = call.data.get("content")
+        do_backup = call.data.get("backup", True)
+
+        # Validate file path — only configuration.yaml and packages/*.yaml
+        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+        if normalized.startswith("..") or normalized.startswith("/"):
+            return {
+                "success": False,
+                "error": "Path traversal is not allowed.",
+            }
+
+        is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
+        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
+            normalized, "packages/**/*.yaml"
+        )
+        if not is_config_yaml and not is_package:
+            return {
+                "success": False,
+                "error": (
+                    f"File '{rel_path}' is not allowed. "
+                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
+                ),
+            }
+
+        # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
+        kind, path_parts, path_err = _parse_and_validate_yaml_path(yaml_path)
+        if path_err is not None:
+            return {"success": False, "error": path_err}
+
+        # Validate content is valid YAML for add/replace
+        parsed_content = None
+        if action in ("add", "replace"):
+            if not content:
+                return {
+                    "success": False,
+                    "error": f"'content' is required for action '{action}'.",
+                }
+            try:
+                parsed_content = ry.load(StringIO(content))
+            except YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Invalid YAML content: {err}",
+                }
+            if parsed_content is None:
+                return {
+                    "success": False,
+                    "error": "Content parsed as null/empty. Provide non-empty YAML.",
+                }
+
+        target_file = config_dir / normalized
+        backup_path_str = None
+
+        try:
+            # Read existing file content (or start with empty dict)
+            if target_file.exists():
+                raw_content = await hass.async_add_executor_job(target_file.read_text)
+                try:
+                    data = ry.load(StringIO(raw_content)) or {}
+                except YAMLError as err:
+                    return {
+                        "success": False,
+                        "error": f"Cannot parse existing file '{rel_path}': {err}",
+                    }
+                if not isinstance(data, dict):
+                    return {
+                        "success": False,
+                        "error": f"File '{rel_path}' root is not a YAML mapping.",
+                    }
+            else:
+                if action == "remove":
+                    return {
+                        "success": False,
+                        "error": f"File does not exist: {rel_path}",
+                    }
+                data = {}
+                raw_content = ""
+
+            # Create backup before editing (from already-read content, not disk)
+            if do_backup and raw_content:
+                backup_dir = config_dir / "www" / "yaml_backups"
+                await hass.async_add_executor_job(
+                    lambda: backup_dir.mkdir(parents=True, exist_ok=True)
+                )
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = normalized.replace(os.sep, "_")
+                backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
+                await hass.async_add_executor_job(
+                    backup_file.write_text, raw_content
+                )
+                backup_path_str = str(backup_file.relative_to(config_dir))
+                _LOGGER.info("Backup created: %s", backup_path_str)
+
+            # Perform the action — branch on kind
+            if kind == "lovelace_dashboard":
+                url_path = path_parts[2]
+
+                # filename validation for add/replace
+                if action in ("add", "replace"):
+                    if not isinstance(parsed_content, dict):
+                        return {
+                            "success": False,
+                            "error": "lovelace.dashboards.<url_path> content must be a YAML mapping",
+                        }
+                    fn_err = _validate_dashboard_filename(
+                        parsed_content.get("filename", "")
+                    )
+                    if fn_err is not None:
+                        return {"success": False, "error": fn_err}
+
+                # Walk/create lovelace.dashboards
+                lovelace = data.setdefault("lovelace", {})
+                if not isinstance(lovelace, dict):
+                    return {
+                        "success": False,
+                        "error": "Existing 'lovelace' key is not a YAML mapping",
+                    }
+                dashboards = lovelace.setdefault("dashboards", {})
+                if not isinstance(dashboards, dict):
+                    return {
+                        "success": False,
+                        "error": "Existing 'lovelace.dashboards' is not a YAML mapping",
+                    }
+
+                if action == "add":
+                    if url_path in dashboards:
+                        existing = dashboards[url_path]
+                        if isinstance(existing, dict) and isinstance(parsed_content, dict):
+                            existing.update(parsed_content)
+                        else:
+                            return {
+                                "success": False,
+                                "error": (
+                                    f"Type mismatch for dashboard '{url_path}': use 'replace' "
+                                    "to overwrite."
+                                ),
+                            }
+                    else:
+                        dashboards[url_path] = parsed_content
+                elif action == "replace":
+                    dashboards[url_path] = parsed_content
+                elif action == "remove":
+                    if url_path not in dashboards:
+                        return {
+                            "success": False,
+                            "error": (
+                                f"Dashboard '{url_path}' not found under lovelace.dashboards."
+                            ),
+                        }
+                    del dashboards[url_path]
+                    # Clean up empty parent containers to keep the file tidy
+                    if not dashboards:
+                        del lovelace["dashboards"]
+                    if not lovelace:
+                        del data["lovelace"]
+
+            else:
+                # Single-key apply logic
+                yaml_key = path_parts[0]
+                if action == "add":
+                    if yaml_key in data:
+                        existing = data[yaml_key]
+                        # Merge: list extends list, dict merges dict
+                        if isinstance(existing, list) and isinstance(parsed_content, list):
+                            data[yaml_key] = existing + parsed_content
+                        elif isinstance(existing, dict) and isinstance(parsed_content, dict):
+                            existing.update(parsed_content)
+                        else:
+                            return {
+                                "success": False,
+                                "error": (
+                                    f"Type mismatch for key '{yaml_key}': "
+                                    f"existing is {type(existing).__name__}, "
+                                    f"new content is {type(parsed_content).__name__}. "
+                                    "Use action='replace' to overwrite."
+                                ),
+                            }
+                    else:
+                        data[yaml_key] = parsed_content
+                elif action == "replace":
+                    data[yaml_key] = parsed_content
+                elif action == "remove":
+                    if yaml_key not in data:
+                        return {
+                            "success": False,
+                            "error": f"Key '{yaml_key}' not found in '{rel_path}'.",
+                        }
+                    del data[yaml_key]
+
+            # Serialize back to YAML
+            try:
+                new_content = yaml_dumps(ry, data)
+            except YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Failed to serialize YAML: {err}",
+                }
+
+            # Validate the result parses cleanly
+            try:
+                ry.load(StringIO(new_content))
+            except YAMLError as err:
+                return {
+                    "success": False,
+                    "error": f"Generated YAML failed validation: {err}",
+                }
+
+            # Create parent directories if needed (for new package files)
+            if not target_file.parent.exists():
+                await hass.async_add_executor_job(
+                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
+                )
+
+            # Atomic write: write to temp file, then rename into place
+            def _atomic_write() -> None:
+                tmp_file = target_file.with_suffix(".tmp")
+                tmp_file.write_text(new_content)
+                os.replace(str(tmp_file), str(target_file))
+
+            await hass.async_add_executor_job(_atomic_write)
+
+            stat = target_file.stat()
+            modified_dt = datetime.fromtimestamp(stat.st_mtime)
+
+            _LOGGER.info(
+                "YAML config edited: %s (action=%s, key=%s)",
+                rel_path,
+                action,
+                yaml_path,
+            )
+
+            result: dict = {
+                "success": True,
+                "file": rel_path,
+                "action": action,
+                "yaml_path": yaml_path,
+                "size": stat.st_size,
+                "modified": modified_dt.isoformat(),
+            }
+            if backup_path_str:
+                result["backup_path"] = backup_path_str
+
+            # Surface the post-edit action required to activate the change
+            if kind == "lovelace_dashboard":
+                post_info = {"post_action": "restart_required"}
+            else:
+                post_info = YAML_KEY_POST_ACTIONS.get(
+                    path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
+                )
+            result.update(post_info)
+
+            # Run HA config check to verify the file is loadable
+            try:
+                check_result = await hass.services.async_call(
+                    "homeassistant",
+                    "check_config",
+                    {},
+                    blocking=True,
+                    return_response=True,
+                )
+                if isinstance(check_result, dict):
+                    errors = check_result.get("errors")
+                    if errors:
+                        result["config_check"] = "errors"
+                        result["config_check_errors"] = errors
+                        _LOGGER.warning(
+                            "Config check found errors after editing %s: %s",
+                            rel_path,
+                            errors,
+                        )
+                    else:
+                        result["config_check"] = "ok"
+            except Exception as check_err:
+                result["config_check"] = "unavailable"
+                result["config_check_error"] = str(check_err)
+                _LOGGER.debug("Config check unavailable: %s", check_err)
+
+            return result
+
+        except PermissionError:
+            _LOGGER.error("Permission denied editing: %s", rel_path)
+            return {
+                "success": False,
+                "error": f"Permission denied: {rel_path}",
+            }
+        except OSError as err:
+            _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
+            return {
+                "success": False,
+                "error": str(err),
+            }
+
+    return handle_edit_yaml_config
+
+
 def _parse_and_validate_yaml_path(
     yaml_path: str,
 ) -> tuple[str, tuple[str, ...], str | None]:
@@ -596,242 +905,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "error": str(err),
             }
 
-    async def handle_edit_yaml_config(call: ServiceCall) -> ServiceResponse:
-        """Handle the edit_yaml_config service call."""
-        ry = make_yaml()
-        rel_path = call.data["file"]
-        action = call.data["action"]
-        yaml_path = call.data["yaml_path"]
-        content = call.data.get("content")
-        do_backup = call.data.get("backup", True)
-
-        # Validate file path — only configuration.yaml and packages/*.yaml
-        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
-        if normalized.startswith("..") or normalized.startswith("/"):
-            return {
-                "success": False,
-                "error": "Path traversal is not allowed.",
-            }
-
-        is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
-        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
-            normalized, "packages/**/*.yaml"
-        )
-        if not is_config_yaml and not is_package:
-            return {
-                "success": False,
-                "error": (
-                    f"File '{rel_path}' is not allowed. "
-                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
-                ),
-            }
-
-        # Validate yaml_path against allowlist
-        if yaml_path not in ALLOWED_YAML_KEYS:
-            return {
-                "success": False,
-                "error": (
-                    f"Key '{yaml_path}' is not in the allowed list. "
-                    f"Allowed keys: {', '.join(sorted(ALLOWED_YAML_KEYS))}"
-                ),
-            }
-
-        # Validate content is valid YAML for add/replace
-        parsed_content: Any = None
-        if action in ("add", "replace"):
-            if not content:
-                return {
-                    "success": False,
-                    "error": f"'content' is required for action '{action}'.",
-                }
-            try:
-                parsed_content = ry.load(StringIO(content))
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Invalid YAML content: {err}",
-                }
-            if parsed_content is None:
-                return {
-                    "success": False,
-                    "error": "Content parsed as null/empty. Provide non-empty YAML.",
-                }
-
-        target_file = config_dir / normalized
-        backup_path_str: str | None = None
-
-        try:
-            # Read existing file content (or start with empty dict)
-            if target_file.exists():
-                raw_content = await hass.async_add_executor_job(target_file.read_text)
-                try:
-                    data = ry.load(StringIO(raw_content)) or {}
-                except YAMLError as err:
-                    return {
-                        "success": False,
-                        "error": f"Cannot parse existing file '{rel_path}': {err}",
-                    }
-                if not isinstance(data, dict):
-                    return {
-                        "success": False,
-                        "error": f"File '{rel_path}' root is not a YAML mapping.",
-                    }
-            else:
-                if action == "remove":
-                    return {
-                        "success": False,
-                        "error": f"File does not exist: {rel_path}",
-                    }
-                data = {}
-                raw_content = ""
-
-            # Create backup before editing (from already-read content, not disk)
-            if do_backup and raw_content:
-                backup_dir = config_dir / "www" / "yaml_backups"
-                await hass.async_add_executor_job(
-                    lambda: backup_dir.mkdir(parents=True, exist_ok=True)
-                )
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_name = normalized.replace(os.sep, "_")
-                backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
-                await hass.async_add_executor_job(
-                    backup_file.write_text, raw_content
-                )
-                backup_path_str = str(backup_file.relative_to(config_dir))
-                _LOGGER.info("Backup created: %s", backup_path_str)
-
-            # Perform the action
-            if action == "add":
-                if yaml_path in data:
-                    existing = data[yaml_path]
-                    # Merge: list extends list, dict merges dict
-                    if isinstance(existing, list) and isinstance(parsed_content, list):
-                        data[yaml_path] = existing + parsed_content
-                    elif isinstance(existing, dict) and isinstance(
-                        parsed_content, dict
-                    ):
-                        existing.update(parsed_content)
-                    else:
-                        return {
-                            "success": False,
-                            "error": (
-                                f"Type mismatch for key '{yaml_path}': "
-                                f"existing is {type(existing).__name__}, "
-                                f"new content is {type(parsed_content).__name__}. "
-                                "Use action='replace' to overwrite."
-                            ),
-                        }
-                else:
-                    data[yaml_path] = parsed_content
-            elif action == "replace":
-                data[yaml_path] = parsed_content
-            elif action == "remove":
-                if yaml_path not in data:
-                    return {
-                        "success": False,
-                        "error": f"Key '{yaml_path}' not found in '{rel_path}'.",
-                    }
-                del data[yaml_path]
-
-            # Serialize back to YAML
-            try:
-                new_content = yaml_dumps(ry, data)
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Failed to serialize YAML: {err}",
-                }
-
-            # Validate the result parses cleanly
-            try:
-                ry.load(StringIO(new_content))
-            except YAMLError as err:
-                return {
-                    "success": False,
-                    "error": f"Generated YAML failed validation: {err}",
-                }
-
-            # Create parent directories if needed (for new package files)
-            if not target_file.parent.exists():
-                await hass.async_add_executor_job(
-                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
-                )
-
-            # Atomic write: write to temp file, then rename into place
-            def _atomic_write() -> None:
-                tmp_file = target_file.with_suffix(".tmp")
-                tmp_file.write_text(new_content)
-                os.replace(str(tmp_file), str(target_file))
-
-            await hass.async_add_executor_job(_atomic_write)
-
-            stat = target_file.stat()
-            modified_dt = datetime.fromtimestamp(stat.st_mtime)
-
-            _LOGGER.info(
-                "YAML config edited: %s (action=%s, key=%s)",
-                rel_path,
-                action,
-                yaml_path,
-            )
-
-            result: dict[str, Any] = {
-                "success": True,
-                "file": rel_path,
-                "action": action,
-                "yaml_path": yaml_path,
-                "size": stat.st_size,
-                "modified": modified_dt.isoformat(),
-            }
-            if backup_path_str:
-                result["backup_path"] = backup_path_str
-
-            # Surface the post-edit action required to activate the change
-            post_info = YAML_KEY_POST_ACTIONS.get(
-                yaml_path, YAML_KEY_DEFAULT_POST_ACTION
-            )
-            result.update(post_info)
-
-            # Run HA config check to verify the file is loadable
-            try:
-                check_result = await hass.services.async_call(
-                    "homeassistant",
-                    "check_config",
-                    {},
-                    blocking=True,
-                    return_response=True,
-                )
-                if isinstance(check_result, dict):
-                    errors = check_result.get("errors")
-                    if errors:
-                        result["config_check"] = "errors"
-                        result["config_check_errors"] = errors
-                        _LOGGER.warning(
-                            "Config check found errors after editing %s: %s",
-                            rel_path,
-                            errors,
-                        )
-                    else:
-                        result["config_check"] = "ok"
-            except Exception as check_err:
-                result["config_check"] = "unavailable"
-                result["config_check_error"] = str(check_err)
-                _LOGGER.debug("Config check unavailable: %s", check_err)
-
-            return result
-
-        except PermissionError:
-            _LOGGER.error("Permission denied editing: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Permission denied: {rel_path}",
-            }
-        except OSError as err:
-            _LOGGER.error("Error editing YAML config %s: %s", rel_path, err)
-            return {
-                "success": False,
-                "error": str(err),
-            }
+    handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
 
     # Register all services with response support
     hass.services.async_register(
