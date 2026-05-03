@@ -439,7 +439,7 @@ class TestIntegrationLogLevel:
     }
 
     async def test_list_entries_include_log_level(self, mcp_client):
-        """Every listed entry should expose a log_level field (DEFAULT when unset)."""
+        """Every listed entry should expose log_level + log_level_raw."""
         result = await mcp_client.call_tool("ha_get_integration", {})
         data = assert_mcp_success(result, "list with log_level")
 
@@ -457,8 +457,19 @@ class TestIntegrationLogLevel:
                 or entry["log_level"].startswith("LEVEL_")
             ), f"Unexpected log_level value: {entry['log_level']}"
 
+            assert "log_level_raw" in entry, (
+                f"Entry {entry.get('domain')} missing log_level_raw field"
+            )
+            raw = entry["log_level_raw"]
+            assert raw is None or isinstance(raw, int), (
+                f"log_level_raw must be int or None, got {type(raw).__name__}"
+            )
+            # When no override is set, log_level is DEFAULT and raw is None.
+            if entry["log_level"] == "DEFAULT":
+                assert raw is None, "DEFAULT log_level should pair with raw=None"
+
     async def test_single_entry_includes_log_level(self, mcp_client):
-        """Single-entry response surfaces the log_level field.
+        """Single-entry response surfaces the log_level + log_level_raw fields.
 
         Round-trip against logger.set_level is already covered by
         test_logs_logger_source_reflects_set_level in tests/src/e2e/tools/test_logbook.py.
@@ -483,6 +494,16 @@ class TestIntegrationLogLevel:
         assert (
             level in self._ACCEPTED or level.startswith("LEVEL_")
         ), f"Unexpected log_level value: {level}"
+
+        assert "log_level_raw" in single_data, (
+            "Single entry should include log_level_raw"
+        )
+        raw = single_data["log_level_raw"]
+        assert raw is None or isinstance(raw, int), (
+            f"log_level_raw must be int or None, got {type(raw).__name__}"
+        )
+        if level == "DEFAULT":
+            assert raw is None, "DEFAULT log_level should pair with raw=None"
 
 
 @pytest.mark.integrations

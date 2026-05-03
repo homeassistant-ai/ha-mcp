@@ -293,7 +293,7 @@ class TestGetLoggerLevels:
     """Test get_logger_levels helper — wraps logger/log_info WS call."""
 
     @pytest.mark.asyncio
-    async def test_parses_numeric_levels_to_names(self):
+    async def test_parses_numeric_levels_to_names_and_raws(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
             return_value={
@@ -306,7 +306,39 @@ class TestGetLoggerLevels:
             }
         )
         levels = await get_logger_levels(client)
-        assert levels == {"mqtt": "DEBUG", "automation": "INFO", "ollama": "ERROR"}
+        assert levels == {
+            "mqtt": {"name": "DEBUG", "raw": 10},
+            "automation": {"name": "INFO", "raw": 20},
+            "ollama": {"name": "ERROR", "raw": 40},
+        }
+
+    @pytest.mark.asyncio
+    async def test_string_levels_have_none_raw(self):
+        """When HA returns the level as a string already, raw is None."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"domain": "mqtt", "level": "warning"}],
+            }
+        )
+        assert await get_logger_levels(client) == {
+            "mqtt": {"name": "WARNING", "raw": None},
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_standard_int_level_preserved_raw(self):
+        """Non-standard ints (e.g. 25) keep the raw int alongside a LEVEL_<n> name."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"domain": "weird", "level": 25}],
+            }
+        )
+        assert await get_logger_levels(client) == {
+            "weird": {"name": "LEVEL_25", "raw": 25},
+        }
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_ws_failure_response(self):
@@ -349,7 +381,9 @@ class TestGetLoggerLevels:
                 ],
             }
         )
-        assert await get_logger_levels(client) == {"ok": "DEBUG"}
+        assert await get_logger_levels(client) == {
+            "ok": {"name": "DEBUG", "raw": 10},
+        }
 
     @pytest.mark.asyncio
     async def test_non_list_result_returns_empty(self):

@@ -293,11 +293,16 @@ def normalize_log_level(level: Any) -> str | None:
     return None
 
 
-async def get_logger_levels(client: Any) -> dict[str, str]:
+async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     """Fetch current HA integration log levels via the ``logger/log_info`` WS command.
 
-    Returns a mapping of integration domain (e.g. ``"mqtt"``) to canonical level
-    name (``"DEBUG"``, ``"INFO"``, ``"WARNING"``, ``"ERROR"``, ``"CRITICAL"``, etc.).
+    Returns a mapping of integration domain (e.g. ``"mqtt"``) to a dict with:
+
+    - ``name``: canonical level name (``"DEBUG"``, ``"INFO"``, ``"WARNING"``,
+      ``"ERROR"``, ``"CRITICAL"``, ``"NOTSET"``, or ``"LEVEL_<n>"`` for
+      non-standard ints).
+    - ``raw``: the original numeric level (``int``) when HA returned an int,
+      otherwise ``None`` (e.g. when the level was already provided as a string).
 
     Best-effort enrichment: returns an empty dict on connection/IO failures so
     callers can treat it as "no custom levels". Programming errors are not
@@ -322,17 +327,21 @@ async def get_logger_levels(client: Any) -> dict[str, str]:
     if not isinstance(entries, list):
         return {}
 
-    levels: dict[str, str] = {}
+    levels: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         domain = entry.get("domain")
         if not isinstance(domain, str) or not domain:
             continue
-        name = normalize_log_level(entry.get("level"))
+        raw_level = entry.get("level")
+        name = normalize_log_level(raw_level)
         if name is None:
             continue
-        levels[domain] = name
+        levels[domain] = {
+            "name": name,
+            "raw": raw_level if isinstance(raw_level, int) and not isinstance(raw_level, bool) else None,
+        }
     return levels
 
 
