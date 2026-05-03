@@ -167,6 +167,18 @@ def maybe_persist_secret_path(
         )
 
 
+def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool:
+    """Read ``key`` from ``config`` as a bool, falling back to ``default``.
+
+    Mirrors the ``raw = config.get(key, default); raw if isinstance(raw, bool) else default``
+    pattern used inline in ``main()`` for other options. Extracted so the
+    verify_ssl plumbing can be unit-tested without standing up the full
+    addon container.
+    """
+    raw = config.get(key, default)
+    return raw if isinstance(raw, bool) else default
+
+
 SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
 
 
@@ -293,8 +305,7 @@ def main() -> int:
             disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
-            raw_verify_ssl = config.get("verify_ssl", True)
-            verify_ssl = raw_verify_ssl if isinstance(raw_verify_ssl, bool) else True
+            verify_ssl = resolve_bool_option(config, "verify_ssl", True)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -325,6 +336,7 @@ def main() -> int:
     maybe_persist_secret_path(config, secret_path, supervisor_token)
 
     log_info(f"Backup hint mode: {backup_hint}")
+    log_info(f"Verify SSL: {verify_ssl}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"

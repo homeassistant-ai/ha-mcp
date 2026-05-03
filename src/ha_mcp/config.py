@@ -54,11 +54,7 @@ class Settings(BaseSettings):
     timeout: int = Field(30, alias="HA_TIMEOUT")
     max_retries: int = Field(3, alias="HA_MAX_RETRIES")
 
-    # SSL/TLS verification for the Home Assistant connection.
-    # Set to False to skip certificate validation when connecting via a
-    # self-signed cert or a hostname that doesn't match the certificate
-    # (e.g. https://homeassistant.local:8123). Disabling this weakens
-    # security — only use it for trusted local networks.
+    # False = skip TLS verification (self-signed / hostname mismatch). Trusted networks only.
     verify_ssl: bool = Field(True, alias="HA_VERIFY_SSL")
 
     # Tool configuration
@@ -238,3 +234,13 @@ def get_global_settings() -> Settings:
     if _settings is None:
         _settings = get_settings()
     return _settings
+
+
+def _reset_global_settings() -> None:
+    """Drop the cached settings singleton.
+
+    Test-only seam so suites that mutate ``HA_*`` env vars can force a
+    re-read without reaching into module-private state.
+    """
+    global _settings
+    _settings = None

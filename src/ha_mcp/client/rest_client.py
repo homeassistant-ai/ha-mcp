@@ -5,11 +5,26 @@ Home Assistant HTTP client with authentication and error handling.
 import asyncio
 import json
 import logging
+import ssl
 from typing import Any
 
 import httpx
 
 from ..config import get_global_settings
+
+
+def _is_ssl_error(exc: BaseException) -> bool:
+    """True if ``exc`` (or anything in its cause chain) is an SSL error.
+
+    httpx wraps ``ssl.SSLError`` inside ``httpx.ConnectError``; the only
+    reliable check is to walk ``__cause__`` / ``__context__``.
+    """
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, ssl.SSLError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +87,9 @@ class HomeAssistantClient:
             token: Long-lived access token (defaults to config)
             timeout: Request timeout in seconds (defaults to config)
             verify_ssl: Whether to verify the HA server's TLS certificate
-                (defaults to ``settings.verify_ssl``, which is True). Pass
-                False to allow self-signed certs or hostname mismatches.
+                (defaults to ``settings.verify_ssl``). Pass False to allow
+                self-signed certs or hostname mismatches.
         """
-        # Load settings whenever any value falls back to config defaults
         if base_url is None or token is None or verify_ssl is None:
             settings = get_global_settings()
             self.base_url = (base_url or settings.homeassistant_url).rstrip("/")
@@ -164,6 +178,12 @@ class HomeAssistantClient:
             return response
 
         except httpx.ConnectError as e:
+            if _is_ssl_error(e) and self.verify_ssl:
+                raise HomeAssistantConnectionError(
+                    f"TLS verification failed for {self.base_url}: {e}. "
+                    "If this is a self-signed certificate or hostname "
+                    "mismatch, set HA_VERIFY_SSL=false to skip verification."
+                ) from e
             raise HomeAssistantConnectionError(
                 f"Failed to connect to Home Assistant: {e}"
             ) from e

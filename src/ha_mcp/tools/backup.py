@@ -179,7 +179,9 @@ async def create_backup(
 
     try:
         # Connect to WebSocket
-        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
         if error:
             raise_tool_error(error or create_error_response(
                 ErrorCode.CONNECTION_FAILED,
@@ -300,7 +302,9 @@ async def restore_backup(
 
     try:
         # Connect to WebSocket
-        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
         if error:
             raise_tool_error(error or create_error_response(
                 ErrorCode.CONNECTION_FAILED,

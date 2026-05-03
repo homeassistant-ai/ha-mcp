@@ -232,7 +232,9 @@ async def _supervisor_api_call(
     """
     ws_client = None
     try:
-        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
         if error or ws_client is None:
             return error or create_connection_error(
                 "Failed to establish WebSocket connection",

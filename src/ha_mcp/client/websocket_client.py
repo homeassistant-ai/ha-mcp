@@ -21,7 +21,11 @@ from urllib.parse import urlparse
 import websockets
 
 from ..config import get_global_settings
-from .rest_client import HomeAssistantCommandError, HomeAssistantConnectionError
+from .rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+    _is_ssl_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +171,25 @@ class HomeAssistantWebSocketClient:
             token: Home Assistant long-lived access token
             verify_ssl: Whether to verify the HA server's TLS certificate
                 for ``wss://`` connections. Defaults to
-                ``settings.verify_ssl`` (True). Pass False to allow
-                self-signed certs or hostname mismatches.
+                ``settings.verify_ssl``. Pass False to allow self-signed
+                certs or hostname mismatches.
         """
         self.base_url = url.rstrip("/")
         self.token = token
         if verify_ssl is None:
-            verify_ssl = get_global_settings().verify_ssl
+            try:
+                verify_ssl = get_global_settings().verify_ssl
+            except Exception as e:
+                # A bad env var elsewhere should not silently flip TLS off:
+                # log which key tripped and fall back to the secure default.
+                logger.warning(
+                    "Could not load settings while resolving verify_ssl "
+                    "(%s); falling back to verify_ssl=True.",
+                    e,
+                )
+                verify_ssl = True
         self.verify_ssl = verify_ssl
+        self._warned_verify_disabled = False
         self.websocket: websockets.ClientConnection | None = None
         self.background_task: asyncio.Task | None = None
         self._send_lock: asyncio.Lock | None = None
@@ -205,18 +220,22 @@ class HomeAssistantWebSocketClient:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
 
-            # Build an SSL context only for wss:// — passing ssl= to
-            # websockets.connect on a plain ws:// URL would force TLS.
+            # Only configure an SSLContext for wss://; ws:// (Supervisor
+            # proxy) doesn't use TLS and gets ssl=None.
             ssl_ctx: ssl.SSLContext | None = None
             if self.ws_url.startswith("wss://"):
                 ssl_ctx = ssl.create_default_context()
                 if not self.verify_ssl:
-                    logger.warning(
-                        "TLS verification disabled for Home Assistant "
-                        "WebSocket (HA_VERIFY_SSL=false). Connecting to "
-                        "%s with hostname/cert checks off.",
-                        self.ws_url,
-                    )
+                    if not self._warned_verify_disabled:
+                        # Once per client — pool reconnects/HA restarts
+                        # otherwise flood logs with the same warning.
+                        logger.warning(
+                            "TLS verification disabled for Home Assistant "
+                            "WebSocket (HA_VERIFY_SSL=false). Connecting to "
+                            "%s with hostname/cert checks off.",
+                            self.ws_url,
+                        )
+                        self._warned_verify_disabled = True
                     ssl_ctx.check_hostname = False
                     ssl_ctx.verify_mode = ssl.CERT_NONE
 
@@ -265,7 +284,16 @@ class HomeAssistantWebSocketClient:
             return True
 
         except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
+            if _is_ssl_error(e) and self.verify_ssl:
+                logger.error(
+                    "WebSocket TLS verification failed for %s: %s. "
+                    "If this is a self-signed certificate or hostname "
+                    "mismatch, set HA_VERIFY_SSL=false to skip verification.",
+                    self.ws_url,
+                    e,
+                )
+            else:
+                logger.error(f"WebSocket connection failed: {e}")
             await self.disconnect()
             return False
 
