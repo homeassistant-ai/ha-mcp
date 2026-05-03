@@ -28,7 +28,7 @@ get uniform behavior on fresh and configured instances alike.
 import json
 import logging
 from collections.abc import Callable
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -626,7 +626,7 @@ class EnergyTools:
     async def _set_prefs(
         self,
         config: dict[str, Any],
-        config_hash: str | dict[str, str],
+        config_hash: str | dict[_PrefsKey, str],
         *,
         current_prefs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -770,10 +770,15 @@ class EnergyTools:
                         )
                     )
 
+                # ``submitted_keys`` was validated against
+                # ``_PREFS_TOP_LEVEL_KEYS`` above, so each ``key`` is in
+                # fact a ``_PrefsKey``. Mypy can't narrow ``str`` from
+                # ``sorted(set[str])`` automatically, hence the explicit
+                # ``cast`` at the dict subscript.
                 mismatched_keys = [
                     key
                     for key in sorted(submitted_keys)
-                    if config_hash[key]
+                    if config_hash[cast(_PrefsKey, key)]
                     != compute_config_hash({key: current_prefs.get(key, [])})
                 ]
                 if mismatched_keys:
