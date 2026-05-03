@@ -666,6 +666,15 @@ class TestTargetUrlValidation:
         ok, reason = validate("http://h:9583/private_aaaaaaaaaaaaaaaa")
         assert ok, reason
 
+    def test_accepts_non_private_path(self, validate):
+        """Custom MCP servers may sit at any path; only /private_* triggers length check."""
+        ok, reason = validate("http://localhost:8123/api/")
+        assert ok, reason
+
+    def test_accepts_arbitrary_other_path(self, validate):
+        ok, reason = validate("http://example.com/some/other/mcp")
+        assert ok, reason
+
     def test_rejects_truncated_secret_path(self, validate):
         ok, reason = validate("http://127.0.0.1:9583/private_ZZZZZZZ")
         assert not ok
@@ -673,16 +682,6 @@ class TestTargetUrlValidation:
 
     def test_rejects_15char_token_at_boundary(self, validate):
         ok, reason = validate("http://h/private_aaaaaaaaaaaaaaa")  # 15 chars
-        assert not ok
-        assert "secret path" in reason
-
-    def test_rejects_missing_secret_path(self, validate):
-        ok, reason = validate("http://127.0.0.1:9583/")
-        assert not ok
-        assert "secret path" in reason
-
-    def test_rejects_root_path(self, validate):
-        ok, reason = validate("http://127.0.0.1:9583")
         assert not ok
         assert "secret path" in reason
 
@@ -715,7 +714,7 @@ class TestTargetUrlValidation:
         assert not ok
         assert "path parameters" in reason
 
-    def test_rejects_invalid_chars_in_token(self, validate):
+    def test_rejects_invalid_chars_in_private_token(self, validate):
         ok, reason = validate("http://h/private_has%20space_aaaaaaa")
         # urlparse keeps the percent-encoding in path; regex rejects '%' chars.
         assert not ok

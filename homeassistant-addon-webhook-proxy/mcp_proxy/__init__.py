@@ -33,15 +33,18 @@ DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
-# as a sanity floor — a truncated/corrupted config that yields a shorter token
-# is the failure mode this validator exists to catch.
+# as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
+# token, which is the failure mode this length check exists to catch.
 _SECRET_PATH_RE = re.compile(r"^/private_[A-Za-z0-9_-]{16,}$")
 
 
 def _validate_target_url(target_url: str) -> tuple[bool, str]:
-    """Check that target_url has the shape we expect.
+    """Check that target_url is a well-formed http(s) URL.
 
-    Returns (is_valid, reason).
+    When the path starts with `/private_` we additionally enforce the
+    ha-mcp secret-path shape so a truncated token (the issue we're guarding
+    against) is rejected. Other paths are accepted as-is — users with a
+    custom MCP server pointed at a different path are not constrained.
     """
     parsed = urlparse(target_url)
 
@@ -51,10 +54,10 @@ def _validate_target_url(target_url: str) -> tuple[bool, str]:
         return False, "URL is missing host"
     if parsed.params or parsed.query or parsed.fragment:
         return False, "URL must not contain query, fragment, or path parameters"
-    if not _SECRET_PATH_RE.match(parsed.path):
-        # Don't echo parsed.path — it contains the secret token.
+    if parsed.path.startswith("/private_") and not _SECRET_PATH_RE.match(parsed.path):
+        # Don't echo parsed.path — it contains the (truncated) secret token.
         return False, (
-            "path does not look like a valid secret path "
+            "secret path is too short or malformed "
             "(expected /private_<token> with token of at least 16 characters)"
         )
     return True, ""
