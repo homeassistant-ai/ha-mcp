@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     timeout: int = Field(30, alias="HA_TIMEOUT")
     max_retries: int = Field(3, alias="HA_MAX_RETRIES")
 
+    # SSL/TLS verification for the Home Assistant connection.
+    # Set to False to skip certificate validation when connecting via a
+    # self-signed cert or a hostname that doesn't match the certificate
+    # (e.g. https://homeassistant.local:8123). Disabling this weakens
+    # security — only use it for trusted local networks.
+    verify_ssl: bool = Field(True, alias="HA_VERIFY_SSL")
+
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import ssl
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -158,15 +159,22 @@ class WebSocketConnectionState:
 class HomeAssistantWebSocketClient:
     """WebSocket client for Home Assistant real-time communication."""
 
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, verify_ssl: bool | None = None):
         """Initialize WebSocket client.
 
         Args:
             url: Home Assistant URL (e.g., 'https://homeassistant.local:8123')
             token: Home Assistant long-lived access token
+            verify_ssl: Whether to verify the HA server's TLS certificate
+                for ``wss://`` connections. Defaults to
+                ``settings.verify_ssl`` (True). Pass False to allow
+                self-signed certs or hostname mismatches.
         """
         self.base_url = url.rstrip("/")
         self.token = token
+        if verify_ssl is None:
+            verify_ssl = get_global_settings().verify_ssl
+        self.verify_ssl = verify_ssl
         self.websocket: websockets.ClientConnection | None = None
         self.background_task: asyncio.Task | None = None
         self._send_lock: asyncio.Lock | None = None
@@ -197,6 +205,21 @@ class HomeAssistantWebSocketClient:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
 
+            # Build an SSL context only for wss:// — passing ssl= to
+            # websockets.connect on a plain ws:// URL would force TLS.
+            ssl_ctx: ssl.SSLContext | None = None
+            if self.ws_url.startswith("wss://"):
+                ssl_ctx = ssl.create_default_context()
+                if not self.verify_ssl:
+                    logger.warning(
+                        "TLS verification disabled for Home Assistant "
+                        "WebSocket (HA_VERIFY_SSL=false). Connecting to "
+                        "%s with hostname/cert checks off.",
+                        self.ws_url,
+                    )
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
+
             # Connect to WebSocket
             # Include Authorization header for Supervisor proxy compatibility
             # (required when connecting via http://supervisor/core/websocket)
@@ -205,6 +228,7 @@ class HomeAssistantWebSocketClient:
                 ping_interval=30,
                 ping_timeout=10,
                 additional_headers={"Authorization": f"Bearer {self.token}"},
+                ssl=ssl_ctx,
                 # Increase max message size to 20MB for large responses
                 # (e.g., HACS repository list can be 2MB+)
                 max_size=20 * 1024 * 1024,

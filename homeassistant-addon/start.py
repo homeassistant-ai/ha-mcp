@@ -266,6 +266,7 @@ def main() -> int:
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
+    verify_ssl = True  # default
     config_read_ok = True
 
     if config_file.exists():
@@ -292,6 +293,8 @@ def main() -> int:
             disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
+            raw_verify_ssl = config.get("verify_ssl", True)
+            verify_ssl = raw_verify_ssl if isinstance(raw_verify_ssl, bool) else True
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -335,6 +338,7 @@ def main() -> int:
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
     os.environ["PINNED_TOOLS"] = pinned_tools_raw
+    os.environ["HA_VERIFY_SSL"] = str(verify_ssl).lower()
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 
