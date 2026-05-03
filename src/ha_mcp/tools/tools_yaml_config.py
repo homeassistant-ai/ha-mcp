@@ -28,6 +28,59 @@ from .util_helpers import coerce_bool_param, unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
+_LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
+
+
+async def _check_storage_mode_dashboard_collision(
+    client: Any, yaml_path: str
+) -> dict[str, Any] | None:
+    """Return a structured-error dict if a storage-mode dashboard owns the
+    requested url_path; otherwise None.
+
+    Only runs for yaml_path values starting with 'lovelace.dashboards.'.
+    """
+    if not yaml_path.startswith(_LOVELACE_DASHBOARD_PREFIX):
+        return None
+    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
+    try:
+        result = await client.send_websocket_message(
+            {"type": "lovelace/dashboards/list"}
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "lovelace/dashboards/list WS query failed (%s); skipping collision check",
+            exc,
+        )
+        return None
+
+    if isinstance(result, dict) and "result" in result:
+        dashboards = result["result"]
+    elif isinstance(result, list):
+        dashboards = result
+    else:
+        return None
+
+    for entry in dashboards or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("url_path") == url_path
+            and entry.get("mode") == "storage"
+        ):
+            return create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                (
+                    f"A storage-mode dashboard already owns url_path '{url_path}'. "
+                    "Delete it via ha_config_delete_dashboard or pick a different "
+                    "url_path before registering a YAML-mode dashboard."
+                ),
+                context={"url_path": url_path, "existing_id": entry.get("id")},
+                suggestions=[
+                    f"ha_config_delete_dashboard(url_path='{url_path}')",
+                    "Pick a different url_path for your YAML-mode dashboard.",
+                ],
+            )
+    return None
+
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
@@ -159,6 +212,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)
+
+            # Storage-mode dashboard collision check (only for lovelace.dashboards.*)
+            collision = await _check_storage_mode_dashboard_collision(client, yaml_path)
+            if collision is not None:
+                raise_tool_error(collision)
 
             # Check if custom component is available
             await _assert_mcp_tools_available(client)
