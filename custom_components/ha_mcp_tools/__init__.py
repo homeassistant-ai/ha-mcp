@@ -239,7 +239,7 @@ def _build_edit_yaml_config_handler(hass):
     """
     config_dir = Path(hass.config.config_dir)
 
-    async def handle_edit_yaml_config(call) -> dict:
+    async def handle_edit_yaml_config(call: ServiceCall) -> dict[str, Any]:
         """Handle the edit_yaml_config service call."""
         ry = make_yaml()
         rel_path = call.data["file"]
@@ -275,7 +275,7 @@ def _build_edit_yaml_config_handler(hass):
             return {"success": False, "error": path_err}
 
         # Validate content is valid YAML for add/replace
-        parsed_content = None
+        parsed_content: Any = None
         if action in ("add", "replace"):
             if not content:
                 return {
@@ -476,7 +476,7 @@ def _build_edit_yaml_config_handler(hass):
                 yaml_path,
             )
 
-            result: dict = {
+            result: dict[str, Any] = {
                 "success": True,
                 "file": rel_path,
                 "action": action,
