@@ -752,6 +752,99 @@ class TestCallAddonApiErrors:
         # The off-host hint about HA Core reachability must NOT appear here.
         assert not any(client.base_url in s for s in suggestions), suggestions
 
+    @pytest.mark.asyncio
+    async def test_http_401_response_hints_at_auth(self, mock_ingress_session):
+        """A 401 from the add-on points at auth/token/session, NOT at IP
+        restriction. addon_config is dropped because it's a credential
+        problem, not a misconfigured add-on."""
+        client = _make_mock_client()
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 401
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["status_code"] == 401
+        suggestion = result["suggestion"].lower()
+        # Auth-flavored hint expected.
+        assert any(token in suggestion for token in ("auth", "token", "scope", "session")), (
+            result["suggestion"]
+        )
+        # IP-restriction hint must NOT fire on 401 — it would misdirect.
+        assert "nginx" not in suggestion, result["suggestion"]
+        assert "ip restriction" not in suggestion, result["suggestion"]
+        # addon_config is irrelevant for a credential problem.
+        assert "addon_config" not in result, result
+
+    @pytest.mark.asyncio
+    async def test_http_403_response_hints_at_ip_restriction(
+        self, mock_ingress_session
+    ):
+        """A 403 keeps the existing 'Nginx IP restriction' hint and
+        addon_config attachment — the LLM uses addon_config to spot
+        leave_front_door_open / port toggles."""
+        client = _make_mock_client()
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["status_code"] == 403
+        suggestion = result["suggestion"].lower()
+        # Existing IP-restriction wording preserved on 403.
+        assert "nginx" in suggestion or "ip restriction" in suggestion, (
+            result["suggestion"]
+        )
+        # addon_config attached so the LLM can spot relevant settings.
+        assert "addon_config" in result, result
+        for key in ("options", "ports", "host_network", "ingress_port"):
+            assert key in result["addon_config"], result["addon_config"]
+
 
 class TestCreateIngressSession:
     """Tests for _create_ingress_session error and success paths.

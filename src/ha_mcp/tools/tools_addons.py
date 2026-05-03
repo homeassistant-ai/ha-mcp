@@ -1285,16 +1285,21 @@ async def _call_addon_api(
 
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
-        # On 403/401, include addon config so the LLM can spot relevant settings
-        # (e.g., "leave_front_door_open", auth toggles, port mappings)
-        if response.status_code in (401, 403):
-            addon_options = addon.get("options")
-            addon_ports = addon.get("network") or addon.get("ports")
-            addon_host_network = addon.get("host_network")
+        # 401 = auth credential problem (token/scope/session); IP-restriction
+        # hint and addon_config attachment would misdirect.
+        # 403 = forbidden (likely Nginx ACL); addon_config helps the LLM spot
+        # relevant toggles like leave_front_door_open and port mappings.
+        if response.status_code == 401:
+            result["suggestion"] = (
+                "Authentication failed. The ingress session may have expired, "
+                "or your HA token may lack the required scope. Verify the "
+                "token has admin rights and try again."
+            )
+        elif response.status_code == 403:
             result["addon_config"] = {
-                "options": addon_options,
-                "ports": addon_ports,
-                "host_network": addon_host_network,
+                "options": addon.get("options"),
+                "ports": addon.get("network") or addon.get("ports"),
+                "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
             result["suggestion"] = (
