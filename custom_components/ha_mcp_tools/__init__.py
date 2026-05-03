@@ -231,6 +231,81 @@ def _validate_dashboard_filename(filename: str) -> str | None:
     return None
 
 
+def _list_files_sync(
+    target_dir: Path, config_dir: Path, pattern: str | None
+) -> dict[str, Any]:
+    """Bundle list_files blocking I/O for a single executor offload.
+
+    Returns either {"files": [...]} or {"_error": <kind>} so the async caller
+    can format the structured error response without re-entering the executor.
+    """
+    if not target_dir.exists():
+        return {"_error": "not_found"}
+    if not target_dir.is_dir():
+        return {"_error": "not_a_dir"}
+    files: list[dict[str, Any]] = []
+    for item in target_dir.iterdir():
+        if pattern and not fnmatch.fnmatch(item.name, pattern):
+            continue
+        stat = item.stat()
+        files.append(
+            {
+                "name": item.name,
+                "path": str(item.relative_to(config_dir)),
+                "is_dir": item.is_dir(),
+                "size": stat.st_size if item.is_file() else 0,
+                "modified": stat.st_mtime,
+            }
+        )
+    files.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+    return {"files": files}
+
+
+def _read_file_sync(target_file: Path) -> dict[str, Any]:
+    """Bundle read_file blocking I/O for a single executor offload."""
+    if not target_file.exists():
+        return {"_error": "not_found"}
+    if not target_file.is_file():
+        return {"_error": "not_a_file"}
+    stat = target_file.stat()
+    content = target_file.read_text()
+    return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
+
+
+def _write_file_sync(
+    target_file: Path,
+    content: str,
+    overwrite: bool,
+    create_dirs: bool,
+    config_dir: Path,
+) -> dict[str, Any]:
+    """Bundle write_file blocking I/O for a single executor offload."""
+    exists = target_file.exists()
+    if exists and not overwrite:
+        return {"_error": "exists_no_overwrite"}
+    if create_dirs:
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+    elif not target_file.parent.exists():
+        return {
+            "_error": "no_parent",
+            "parent": str(target_file.parent.relative_to(config_dir)),
+        }
+    target_file.write_text(content)
+    stat = target_file.stat()
+    return {"size": stat.st_size, "mtime": stat.st_mtime, "is_new": not exists}
+
+
+def _delete_file_sync(target_file: Path) -> dict[str, Any]:
+    """Bundle delete_file blocking I/O for a single executor offload."""
+    if not target_file.exists():
+        return {"_error": "not_found"}
+    if not target_file.is_file():
+        return {"_error": "not_a_file"}
+    stat = target_file.stat()
+    target_file.unlink()
+    return {"size": stat.st_size}
+
+
 def _build_edit_yaml_config_handler(hass):
     """Build and return the async handle_edit_yaml_config handler.
 
@@ -300,7 +375,8 @@ def _build_edit_yaml_config_handler(hass):
 
         try:
             # Read existing file content (or start with empty dict)
-            if target_file.exists():
+            target_exists = await hass.async_add_executor_job(target_file.exists)
+            if target_exists:
                 raw_content = await hass.async_add_executor_job(target_file.read_text)
                 try:
                     data = ry.load(StringIO(raw_content)) or {}
@@ -452,11 +528,11 @@ def _build_edit_yaml_config_handler(hass):
                     "error": f"Generated YAML failed validation: {err}",
                 }
 
-            # Create parent directories if needed (for new package files)
-            if not target_file.parent.exists():
-                await hass.async_add_executor_job(
-                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
-                )
+            # Create parent directories if needed (for new package files).
+            # mkdir(exist_ok=True) is idempotent so no pre-check is required.
+            await hass.async_add_executor_job(
+                lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
+            )
 
             # Atomic write: write to temp file, then rename into place
             def _atomic_write() -> None:
@@ -466,7 +542,7 @@ def _build_edit_yaml_config_handler(hass):
 
             await hass.async_add_executor_job(_atomic_write)
 
-            stat = target_file.stat()
+            stat = await hass.async_add_executor_job(target_file.stat)
             modified_dt = datetime.fromtimestamp(stat.st_mtime)
 
             _LOGGER.info(
@@ -621,49 +697,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         target_dir = config_dir / rel_path
 
-        if not target_dir.exists():
-            return {
-                "success": False,
-                "error": f"Directory does not exist: {rel_path}",
-                "files": [],
-            }
-
-        if not target_dir.is_dir():
-            return {
-                "success": False,
-                "error": f"Path is not a directory: {rel_path}",
-                "files": [],
-            }
-
         try:
-            files = []
-            for item in target_dir.iterdir():
-                # Apply pattern filter if provided
-                if pattern and not fnmatch.fnmatch(item.name, pattern):
-                    continue
-
-                stat = item.stat()
-                files.append(
-                    {
-                        "name": item.name,
-                        "path": str(item.relative_to(config_dir)),
-                        "is_dir": item.is_dir(),
-                        "size": stat.st_size if item.is_file() else 0,
-                        "modified": stat.st_mtime,
-                    }
-                )
-
-            # Sort by name
-            files.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-
-            return {
-                "success": True,
-                "path": rel_path,
-                "pattern": pattern,
-                "files": files,
-                "count": len(files),
-            }
-
+            result = await hass.async_add_executor_job(
+                _list_files_sync, target_dir, config_dir, pattern
+            )
         except PermissionError:
             _LOGGER.error("Permission denied accessing: %s", rel_path)
             return {
@@ -678,6 +715,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "error": str(err),
                 "files": [],
             }
+
+        err_kind = result.get("_error")
+        if err_kind == "not_found":
+            return {
+                "success": False,
+                "error": f"Directory does not exist: {rel_path}",
+                "files": [],
+            }
+        if err_kind == "not_a_dir":
+            return {
+                "success": False,
+                "error": f"Path is not a directory: {rel_path}",
+                "files": [],
+            }
+
+        files = result["files"]
+        return {
+            "success": True,
+            "path": rel_path,
+            "pattern": pattern,
+            "files": files,
+            "count": len(files),
+        }
 
     async def handle_read_file(call: ServiceCall) -> ServiceResponse:
         """Handle the read_file service call."""
@@ -699,67 +759,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         target_file = config_dir / rel_path
 
-        if not target_file.exists():
-            return {
-                "success": False,
-                "error": f"File does not exist: {rel_path}",
-            }
-
-        if not target_file.is_file():
-            return {
-                "success": False,
-                "error": f"Path is not a file: {rel_path}",
-            }
-
         try:
-            stat = target_file.stat()
-            modified_dt = datetime.fromtimestamp(stat.st_mtime)
-
-            # Read file content
-            content = await hass.async_add_executor_job(target_file.read_text)
-
-            # Apply special handling for specific files
-            normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
-
-            # Mask secrets.yaml
-            if normalized == "secrets.yaml":
-                content = _mask_secrets_content(content)
-
-            # Apply tail for log files
-            if normalized == "home-assistant.log":
-                lines = content.split("\n")
-                limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
-                if len(lines) > limit:
-                    content = "\n".join(lines[-limit:])
-                    truncated = True
-                else:
-                    truncated = False
-
-                return {
-                    "success": True,
-                    "path": rel_path,
-                    "content": content,
-                    "size": stat.st_size,
-                    "modified": modified_dt.isoformat(),
-                    "lines_returned": min(len(lines), limit),
-                    "total_lines": len(lines),
-                    "truncated": truncated,
-                }
-
-            # Apply tail for other files if requested
-            if tail_lines:
-                lines = content.split("\n")
-                if len(lines) > tail_lines:
-                    content = "\n".join(lines[-tail_lines:])
-
-            return {
-                "success": True,
-                "path": rel_path,
-                "content": content,
-                "size": stat.st_size,
-                "modified": modified_dt.isoformat(),
-            }
-
+            result = await hass.async_add_executor_job(_read_file_sync, target_file)
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
             return {
@@ -779,6 +780,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "error": str(err),
             }
 
+        err_kind = result.get("_error")
+        if err_kind == "not_found":
+            return {
+                "success": False,
+                "error": f"File does not exist: {rel_path}",
+            }
+        if err_kind == "not_a_file":
+            return {
+                "success": False,
+                "error": f"Path is not a file: {rel_path}",
+            }
+
+        modified_dt = datetime.fromtimestamp(result["mtime"])
+        content = result["content"]
+        stat_size = result["size"]
+
+        # Apply special handling for specific files
+        normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
+
+        # Mask secrets.yaml
+        if normalized == "secrets.yaml":
+            content = _mask_secrets_content(content)
+
+        # Apply tail for log files
+        if normalized == "home-assistant.log":
+            lines = content.split("\n")
+            limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
+            if len(lines) > limit:
+                content = "\n".join(lines[-limit:])
+                truncated = True
+            else:
+                truncated = False
+
+            return {
+                "success": True,
+                "path": rel_path,
+                "content": content,
+                "size": stat_size,
+                "modified": modified_dt.isoformat(),
+                "lines_returned": min(len(lines), limit),
+                "total_lines": len(lines),
+                "truncated": truncated,
+            }
+
+        # Apply tail for other files if requested
+        if tail_lines:
+            lines = content.split("\n")
+            if len(lines) > tail_lines:
+                content = "\n".join(lines[-tail_lines:])
+
+        return {
+            "success": True,
+            "path": rel_path,
+            "content": content,
+            "size": stat_size,
+            "modified": modified_dt.isoformat(),
+        }
+
     async def handle_write_file(call: ServiceCall) -> ServiceResponse:
         """Handle the write_file service call."""
         rel_path = call.data["path"]
@@ -796,47 +855,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         target_file = config_dir / rel_path
 
-        # Check if file exists and overwrite is not allowed
-        if target_file.exists() and not overwrite:
-            return {
-                "success": False,
-                "error": f"File already exists: {rel_path}. Set overwrite=true to replace.",
-            }
-
         try:
-            # Create parent directories if needed
-            if create_dirs:
-                await hass.async_add_executor_job(
-                    lambda: target_file.parent.mkdir(parents=True, exist_ok=True)
-                )
-
-            # Check parent directory exists
-            if not target_file.parent.exists():
-                return {
-                    "success": False,
-                    "error": f"Parent directory does not exist: {target_file.parent.relative_to(config_dir)}",
-                }
-
-            # Determine if this is a new file
-            is_new = not target_file.exists()
-
-            # Write the file
-            await hass.async_add_executor_job(target_file.write_text, content)
-
-            stat = target_file.stat()
-            modified_dt = datetime.fromtimestamp(stat.st_mtime)
-
-            _LOGGER.info("Wrote file: %s (%d bytes)", rel_path, stat.st_size)
-
-            return {
-                "success": True,
-                "path": rel_path,
-                "size": stat.st_size,
-                "modified": modified_dt.isoformat(),
-                "created": is_new,
-                "message": f"File {'created' if is_new else 'updated'} successfully",
-            }
-
+            result = await hass.async_add_executor_job(
+                _write_file_sync,
+                target_file,
+                content,
+                overwrite,
+                create_dirs,
+                config_dir,
+            )
         except PermissionError:
             _LOGGER.error("Permission denied writing: %s", rel_path)
             return {
@@ -849,6 +876,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "success": False,
                 "error": str(err),
             }
+
+        err_kind = result.get("_error")
+        if err_kind == "exists_no_overwrite":
+            return {
+                "success": False,
+                "error": f"File already exists: {rel_path}. Set overwrite=true to replace.",
+            }
+        if err_kind == "no_parent":
+            return {
+                "success": False,
+                "error": f"Parent directory does not exist: {result['parent']}",
+            }
+
+        size = result["size"]
+        modified_dt = datetime.fromtimestamp(result["mtime"])
+        is_new = result["is_new"]
+
+        _LOGGER.info("Wrote file: %s (%d bytes)", rel_path, size)
+
+        return {
+            "success": True,
+            "path": rel_path,
+            "size": size,
+            "modified": modified_dt.isoformat(),
+            "created": is_new,
+            "message": f"File {'created' if is_new else 'updated'} successfully",
+        }
 
     async def handle_delete_file(call: ServiceCall) -> ServiceResponse:
         """Handle the delete_file service call."""
@@ -864,34 +918,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         target_file = config_dir / rel_path
 
-        if not target_file.exists():
-            return {
-                "success": False,
-                "error": f"File does not exist: {rel_path}",
-            }
-
-        if not target_file.is_file():
-            return {
-                "success": False,
-                "error": f"Path is not a file (cannot delete directories): {rel_path}",
-            }
-
         try:
-            # Get file info before deletion for the response
-            stat = target_file.stat()
-
-            # Delete the file
-            await hass.async_add_executor_job(target_file.unlink)
-
-            _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, stat.st_size)
-
-            return {
-                "success": True,
-                "path": rel_path,
-                "deleted_size": stat.st_size,
-                "message": f"File deleted successfully: {rel_path}",
-            }
-
+            result = await hass.async_add_executor_job(_delete_file_sync, target_file)
         except PermissionError:
             _LOGGER.error("Permission denied deleting: %s", rel_path)
             return {
@@ -904,6 +932,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "success": False,
                 "error": str(err),
             }
+
+        err_kind = result.get("_error")
+        if err_kind == "not_found":
+            return {
+                "success": False,
+                "error": f"File does not exist: {rel_path}",
+            }
+        if err_kind == "not_a_file":
+            return {
+                "success": False,
+                "error": f"Path is not a file (cannot delete directories): {rel_path}",
+            }
+
+        size = result["size"]
+        _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, size)
+
+        return {
+            "success": True,
+            "path": rel_path,
+            "deleted_size": size,
+            "message": f"File deleted successfully: {rel_path}",
+        }
 
     handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
 
