@@ -261,6 +261,26 @@ async def test_energy_add_source_roundtrip(mcp_client):
         await _cleanup_test_source(mcp_client, stat)
 
 
+def _non_grid_source_payload(source_type: str, stat: str) -> dict:
+    """Build a server-schema-conformant source payload per type.
+
+    The local ``_shape_check`` only requires ``stat_energy_from`` for
+    solar/battery/gas, but HA Core's voluptuous schema requires more for
+    some types (battery requires ``stat_energy_to`` and rejects None).
+    These payloads track what the server actually accepts, not what the
+    local check passes — the asymmetry is intentional (see B1 in the
+    tool docstring) and the unit suite covers the local-shape-only path
+    separately.
+    """
+    if source_type == "battery":
+        return {
+            "type": "battery",
+            "stat_energy_from": stat,
+            "stat_energy_to": f"{stat}_to",
+        }
+    return {"type": source_type, "stat_energy_from": stat}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
 async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
@@ -273,7 +293,7 @@ async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
     config_hash).
     """
     stat = f"sensor.test_e2e_{source_type}_in"
-    new_source = {"type": source_type, "stat_energy_from": stat}
+    new_source = _non_grid_source_payload(source_type, stat)
     try:
         add_result = await mcp_client.call_tool(
             "ha_manage_energy_prefs",

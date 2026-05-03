@@ -1039,8 +1039,10 @@ class TestAddSource:
             )
         err = json.loads(str(exc_info.value))
         assert err["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
-        assert err["error"]["context"]["type"] == source_type
-        assert err["error"]["context"]["stat_energy_from"] == stat
+        # create_error_response spreads context fields onto the top-level
+        # response, not under err["error"]["context"].
+        assert err["type"] == source_type
+        assert err["stat_energy_from"] == stat
         # No save call — duplicate detection short-circuits before _set_prefs.
         assert tools._client.send_websocket_message.call_count == 1
 
@@ -1309,9 +1311,11 @@ class TestConveniencePatternA:
             )
         err = json.loads(str(exc_info.value))
         assert err["success"] is False
-        ctx = err["error"]["context"]
-        assert ctx["mode"] == "add_device"
-        assert ctx["target_key"] == "device_consumption"
+        # create_error_response spreads context fields onto the top-level
+        # response (see errors.py:256-258); they're NOT nested under
+        # err["error"]["context"].
+        assert err["mode"] == "add_device"
+        assert err["target_key"] == "device_consumption"
 
     async def test_non_tool_error_from_mutator_wrapped_with_context(self, tools):
         """A non-ToolError raised inside the mutator itself (run inline in
@@ -1333,9 +1337,8 @@ class TestConveniencePatternA:
                 preview_payload={},
             )
         err = json.loads(str(exc_info.value))
-        ctx = err["error"]["context"]
-        assert ctx["mode"] == "add_device"
-        assert ctx["target_key"] == "device_consumption"
+        assert err["mode"] == "add_device"
+        assert err["target_key"] == "device_consumption"
 
 
 # -----------------------------------------------------------------------------
