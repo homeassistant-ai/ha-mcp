@@ -7,6 +7,7 @@ This module provides common helper functions used across multiple tool registrat
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, overload
 
@@ -17,6 +18,9 @@ from ..client.rest_client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Strips ANSI terminal escape codes from container/log output.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
 def coerce_bool_param(

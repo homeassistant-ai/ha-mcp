@@ -56,3 +56,22 @@ configuration:
       required for filesystem tools to function. Only enable if you want to
       allow the AI assistant to use the installer tool. Requires restart to
       take effect.
+  tool_search_max_results:
+    name: Tool search max results
+    description: >-
+      Maximum number of tools returned by ha_search_tools when tool
+      search is enabled. Lower values (2-3) save context tokens but
+      may miss relevant tools. Range: 2-10. Requires restart.
+  disabled_tools:
+    name: Disabled tools (text fallback)
+    description: >-
+      Comma-separated tool names to disable. For a visual interface,
+      click "Open Web UI" on the addon info page. This field seeds the initial config
+      when the web UI hasn't been used yet. Requires restart.
+  pinned_tools:
+    name: Pinned tools (text fallback)
+    description: >-
+      Comma-separated tool names to pin (always visible in tool search).
+      For a visual interface, click "Open Web UI" on the addon info page. This field
+      seeds the initial config when the web UI hasn't been used yet.
+      Requires restart.

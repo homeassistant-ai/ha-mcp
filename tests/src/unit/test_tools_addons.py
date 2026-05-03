@@ -8,7 +8,15 @@ import pytest
 import websockets.exceptions
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws, list_addons
+from ha_mcp.tools.tools_addons import (
+    _apply_response_transform,
+    _call_addon_api,
+    _call_addon_ws,
+    _is_signal_message,
+    _slice_ws_messages,
+    _summarize_ws_messages,
+    list_addons,
+)
 
 # Standard mock return for a running addon with Ingress support
 _RUNNING_ADDON_INFO = {
@@ -707,6 +715,584 @@ class TestCallAddonWsErrors:
         )
 
 
+class TestSliceWsMessages:
+    """Tests for the _slice_ws_messages helper (pure function)."""
+
+    def test_no_offset_no_limit_returns_all(self):
+        """Without offset/limit, all collected messages pass through."""
+        messages = [1, 2, 3, 4, 5]
+        sliced, meta = _slice_ws_messages(messages, offset=0, limit=None)
+        assert sliced == messages
+        assert meta == {"total_collected": 5, "offset": 0, "returned": 5}
+
+    def test_limit_truncates(self):
+        """Limit caps the returned count."""
+        sliced, meta = _slice_ws_messages([1, 2, 3, 4, 5], offset=0, limit=3)
+        assert sliced == [1, 2, 3]
+        assert meta["returned"] == 3
+        assert meta["limit"] == 3
+
+    def test_offset_skips_head(self):
+        """Offset drops the first N messages."""
+        sliced, _ = _slice_ws_messages([1, 2, 3, 4, 5], offset=2, limit=None)
+        assert sliced == [3, 4, 5]
+
+    def test_offset_plus_limit(self):
+        """Offset + limit selects a window."""
+        sliced, meta = _slice_ws_messages([1, 2, 3, 4, 5], offset=1, limit=2)
+        assert sliced == [2, 3]
+        assert meta["offset"] == 1
+        assert meta["limit"] == 2
+        assert meta["returned"] == 2
+
+    def test_offset_beyond_total_returns_empty(self):
+        """Offset past the end yields an empty slice but stable metadata."""
+        sliced, meta = _slice_ws_messages([1, 2, 3], offset=10, limit=None)
+        assert sliced == []
+        assert meta["total_collected"] == 3
+        assert meta["returned"] == 0
+
+    def test_negative_offset_clamped_to_zero(self):
+        """Negative offset is clamped — no reverse slicing."""
+        sliced, _ = _slice_ws_messages([1, 2, 3], offset=-5, limit=None)
+        assert sliced == [1, 2, 3]
+
+    def test_negative_limit_clamped_to_zero(self):
+        """Negative limit is clamped to zero (empty return)."""
+        sliced, _ = _slice_ws_messages([1, 2, 3], offset=0, limit=-1)
+        assert sliced == []
+
+
+class TestIsSignalMessage:
+    """Tests for the _is_signal_message heuristic."""
+
+    def test_info_log_is_signal(self):
+        assert _is_signal_message("INFO Reading configuration")
+
+    def test_warning_log_is_signal(self):
+        assert _is_signal_message("WARNING Something looks off")
+        assert _is_signal_message("WARN deprecated setting")
+
+    def test_error_log_is_signal(self):
+        assert _is_signal_message("ERROR Compile failed")
+        assert _is_signal_message({"level": "ERROR", "msg": "boom"})
+
+    def test_exit_event_is_signal(self):
+        assert _is_signal_message({"event": "exit", "code": 0})
+        assert _is_signal_message({"returncode": 1})
+
+    def test_config_valid_is_signal(self):
+        assert _is_signal_message("Configuration is valid!")
+
+    def test_yaml_dump_line_is_not_signal(self):
+        """Plain YAML-shaped lines are non-signal (expected to be elided)."""
+        assert not _is_signal_message("  - platform: gpio")
+        assert not _is_signal_message("sensor:")
+        assert not _is_signal_message("    pin: GPIO0")
+
+
+class TestSummarizeWsMessages:
+    """Tests for the _summarize_ws_messages heuristic."""
+
+    def test_short_non_signal_run_passes_through(self):
+        """A run shorter than the threshold is not elided."""
+        messages = ["  key1: val", "  key2: val", "  key3: val"]
+        result, meta = _summarize_ws_messages(messages, run_threshold=10)
+        assert result == messages
+        assert meta["elided_count"] == 0
+
+    def test_long_non_signal_run_is_elided(self):
+        """A run ≥ threshold is collapsed with context kept at each end."""
+        messages = [f"  line_{i}: value" for i in range(50)]
+        result, meta = _summarize_ws_messages(
+            messages, run_threshold=10, context_keep=2
+        )
+        # 2 head + 1 elision marker + 2 tail = 5 entries
+        assert len(result) == 5
+        assert result[0] == "  line_0: value"
+        assert result[1] == "  line_1: value"
+        assert isinstance(result[2], dict)
+        assert result[2]["elided"] == 46
+        assert "summarize=False" in result[2]["note"]
+        assert result[3] == "  line_48: value"
+        assert result[4] == "  line_49: value"
+        assert meta["original_count"] == 50
+        assert meta["elided_count"] == 46
+
+    def test_signal_messages_split_runs(self):
+        """Signal messages break non-signal runs so each run is checked separately."""
+        messages = (
+            [f"  k{i}: v" for i in range(5)]
+            + ["INFO something happened"]
+            + [f"  k{i}: v" for i in range(5)]
+        )
+        result, meta = _summarize_ws_messages(messages, run_threshold=10)
+        # Neither 5-long run is ≥ threshold → nothing elided
+        assert result == messages
+        assert meta["elided_count"] == 0
+
+    def test_mixed_with_esphome_validate_shape(self):
+        """Simulates a realistic ESPHome /validate stream: header signals, big
+        YAML dump, trailing success signal."""
+        messages = (
+            ["INFO Reading configuration motion1.yaml..."]
+            + [f"    key_{i}: val_{i}" for i in range(100)]
+            + [
+                "INFO Configuration is valid!",
+                {"event": "exit", "code": 0},
+            ]
+        )
+        result, meta = _summarize_ws_messages(messages, run_threshold=10)
+        # 1 header INFO + (2 context + 1 elided + 2 context) + 2 trailing signals
+        assert len(result) == 8
+        assert "Reading configuration" in str(result[0])
+        assert result[1] == "    key_0: val_0"
+        assert isinstance(result[3], dict)
+        assert result[3]["elided"] == 96
+        assert "Configuration is valid" in str(result[6])
+        assert result[7] == {"event": "exit", "code": 0}
+        assert meta["elided_count"] == 96
+
+    def test_heterogeneous_dict_and_string_list(self):
+        """Transforms and summarize both accept list[dict | str] (explicit shape contract)."""
+        messages: list = [
+            {"level": "INFO", "text": "hi"},
+            "plain string 1",
+            "plain string 2",
+            {"event": "exit"},
+        ]
+        result, meta = _summarize_ws_messages(messages, run_threshold=10)
+        # Short run, no elision
+        assert result == messages
+        assert meta["original_count"] == 4
+
+
+class TestApplyResponseTransform:
+    """Tests for _apply_response_transform wrapper."""
+
+    def test_filter_list(self):
+        """A reassigning expression narrows a list."""
+        messages = [{"level": "INFO"}, {"level": "ERROR"}, {"level": "INFO"}]
+        result = _apply_response_transform(
+            messages,
+            "response = [m for m in response if m.get('level') == 'ERROR']",
+        )
+        assert result == [{"level": "ERROR"}]
+
+    def test_in_place_mutation(self):
+        """An in-place mutation is reflected in the return value."""
+        messages = [1, 2, 3]
+        result = _apply_response_transform(messages, "response.append(4)")
+        assert result == [1, 2, 3, 4]
+
+    def test_heterogeneous_shape(self):
+        """Mixed dict/string messages (WS shape) can be transformed."""
+        messages = [
+            {"level": "INFO", "msg": "start"},
+            "raw text",
+            {"level": "ERROR", "msg": "boom"},
+            "another raw",
+        ]
+        # Filter by stringified form — works uniformly on dicts and strings.
+        result = _apply_response_transform(
+            messages,
+            "response = [m for m in response if 'ERROR' in str(m) or 'raw' in str(m)]",
+        )
+        assert len(result) == 3
+        assert "raw text" in result
+        assert {"level": "ERROR", "msg": "boom"} in result
+
+    def test_invalid_expression_raises_tool_error(self):
+        """Forbidden operations raise ToolError with VALIDATION_FAILED."""
+        with pytest.raises(ToolError) as exc_info:
+            _apply_response_transform([1, 2, 3], "import os")
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "python_transform failed" in result["error"]["message"]
+
+    def test_runtime_error_raises_tool_error(self):
+        """Runtime execution errors surface as ToolError with preview."""
+        with pytest.raises(ToolError) as exc_info:
+            _apply_response_transform(
+                {}, "response['missing']['key'] = 1"
+            )
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "python_transform failed" in result["error"]["message"]
+
+
+class TestCallAddonWsNewParams:
+    """Integration tests for message_limit/offset/summarize/python_transform in _call_addon_ws."""
+
+    @pytest.mark.asyncio
+    async def test_message_limit_caps_collection(self):
+        """message_limit lowers the collection cap so we stop early."""
+        client = _make_mock_client()
+
+        # Produce many messages, then a close
+        messages_to_send = [f"msg {i}" for i in range(100)]
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = messages_to_send + [
+                websockets.exceptions.ConnectionClosed(None, None)
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/compile",
+                message_limit=5,
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "message_limit"
+        assert result["message_count"] == 5
+        assert result["pagination"]["total_collected"] == 5
+        assert result["pagination"]["limit"] == 5
+
+    @pytest.mark.asyncio
+    async def test_safety_ceiling_distinct_from_message_limit(self):
+        """Hitting the global ceiling without a caller-set message_limit
+        reports closed_by="safety_ceiling", not "message_limit"."""
+        client = _make_mock_client()
+
+        messages_to_send = [f"msg {i}" for i in range(10)]
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._MAX_WS_MESSAGES",
+                5,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = messages_to_send + [
+                websockets.exceptions.ConnectionClosed(None, None)
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/compile",
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "safety_ceiling"
+        assert result["message_count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_message_offset_skips_head(self):
+        """message_offset drops the first N messages from the returned list."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                "msg 0",
+                "msg 1",
+                "msg 2",
+                "msg 3",
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/logs",
+                message_offset=2,
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["messages"] == ["msg 2", "msg 3"]
+        assert result["pagination"]["offset"] == 2
+        assert result["pagination"]["total_collected"] == 4
+
+    @pytest.mark.asyncio
+    async def test_summarize_elides_yaml_dump(self):
+        """The summarize pass collapses a long non-signal run from the WS stream."""
+        client = _make_mock_client()
+
+        # 30 plain YAML-ish lines with one surrounding INFO on each end
+        yaml_lines = [f"  key_{i}: value" for i in range(30)]
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = (
+                ["INFO Reading configuration..."]
+                + yaml_lines
+                + [
+                    "INFO Configuration is valid!",
+                    websockets.exceptions.ConnectionClosed(None, None),
+                ]
+            )
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/validate")
+
+        assert result["success"] is True
+        # 1 header + 2 context + 1 elision + 2 context + 1 footer = 7
+        assert result["message_count"] == 7
+        assert "summary" in result
+        assert result["summary"]["elided_count"] == 26
+        # Verify the elision marker is present
+        assert any(
+            isinstance(m, dict) and m.get("elided") == 26 for m in result["messages"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_summarize_false_returns_raw_stream(self):
+        """With summarize=False, no elision happens."""
+        client = _make_mock_client()
+
+        yaml_lines = [f"  key_{i}: value" for i in range(30)]
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = yaml_lines + [
+                websockets.exceptions.ConnectionClosed(None, None)
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client, "test_addon", "/validate", summarize=False
+            )
+
+        assert result["success"] is True
+        assert result["message_count"] == 30
+        assert "summary" not in result
+
+    @pytest.mark.asyncio
+    async def test_python_transform_filters_messages(self):
+        """python_transform post-processes the message list after summarize."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                '{"level": "INFO", "msg": "start"}',
+                '{"level": "ERROR", "msg": "boom"}',
+                '{"level": "INFO", "msg": "done"}',
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/validate",
+                summarize=False,
+                python_transform=(
+                    "response = [m for m in response if 'ERROR' in str(m)]"
+                ),
+            )
+
+        assert result["success"] is True
+        assert result["transformed"] is True
+        assert result["pre_transform_message_count"] == 3
+        assert result["message_count"] == 1
+        assert result["messages"][0]["level"] == "ERROR"
+
+    @pytest.mark.asyncio
+    async def test_python_transform_invalid_raises(self):
+        """Invalid python_transform surfaces VALIDATION_FAILED as ToolError."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                "msg",
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(
+                    client,
+                    "test_addon",
+                    "/logs",
+                    python_transform="import os",
+                )
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "python_transform failed" in result["error"]["message"]
+
+
+class TestCallAddonApiPythonTransform:
+    """Tests for python_transform in HTTP mode (_call_addon_api)."""
+
+    @pytest.mark.asyncio
+    async def test_transform_applies_to_json_array(self):
+        """Transform reshapes a JSON array response before return."""
+        client = _make_mock_client()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = [
+                {"id": 1, "name": "alice"},
+                {"id": 2, "name": "bob"},
+            ]
+            mock_client_ctx = AsyncMock()
+            mock_client_ctx.request = AsyncMock(return_value=mock_response)
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_client_ctx)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(
+                client,
+                "test_addon",
+                "/users",
+                python_transform="response = [u['id'] for u in response]",
+            )
+
+        assert result["success"] is True
+        assert result["transformed"] is True
+        assert result["response"] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_transform_applies_to_dict_body(self):
+        """Transform on dict content-type."""
+        client = _make_mock_client()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = {"status": "ok", "details": "..." * 100}
+            mock_client_ctx = AsyncMock()
+            mock_client_ctx.request = AsyncMock(return_value=mock_response)
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_client_ctx)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(
+                client,
+                "test_addon",
+                "/status",
+                python_transform="del response['details']",
+            )
+
+        assert result["success"] is True
+        assert result["transformed"] is True
+        assert result["response"] == {"status": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_transform_invalid_raises(self):
+        """HTTP mode: invalid transform raises ToolError."""
+        client = _make_mock_client()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = {"x": 1}
+            mock_client_ctx = AsyncMock()
+            mock_client_ctx.request = AsyncMock(return_value=mock_response)
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_client_ctx)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(
+                    client,
+                    "test_addon",
+                    "/x",
+                    python_transform="open('/etc/passwd')",
+                )
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "python_transform failed" in result["error"]["message"]
+
+
 # Mock Supervisor API responses for list_addons tests
 _ADDONS_LIST_RESPONSE = {
     "success": True,
@@ -1287,6 +1873,87 @@ class TestManageAddon:
         error = _parse_tool_error(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "method" in error["error"]["message"] or "INVALID" in error["error"]["message"]
+
+    # --- New WS response-control params (issue #992) ---
+
+    @pytest.mark.asyncio
+    async def test_ws_params_forwarded_to_call_addon_ws(self, manage_addon_tool):
+        """message_limit/offset/summarize/python_transform reach _call_addon_ws."""
+        with patch(
+            "ha_mcp.tools.tools_addons._call_addon_ws",
+            return_value={"success": True, "messages": []},
+        ) as mock_ws:
+            await manage_addon_tool(
+                slug="test_addon",
+                path="/validate",
+                websocket=True,
+                message_limit=25,
+                message_offset=5,
+                summarize=False,
+                python_transform="response = response[:1]",
+            )
+
+        call_kwargs = mock_ws.call_args[1]
+        assert call_kwargs["message_limit"] == 25
+        assert call_kwargs["message_offset"] == 5
+        assert call_kwargs["summarize"] is False
+        assert call_kwargs["python_transform"] == "response = response[:1]"
+
+    @pytest.mark.asyncio
+    async def test_http_python_transform_forwarded(self, manage_addon_tool):
+        """python_transform reaches _call_addon_api in HTTP mode."""
+        with patch(
+            "ha_mcp.tools.tools_addons._call_addon_api",
+            return_value={"success": True, "response": []},
+        ) as mock_api:
+            await manage_addon_tool(
+                slug="test_addon",
+                path="/flows",
+                python_transform="response = [f['id'] for f in response]",
+            )
+        assert (
+            mock_api.call_args[1]["python_transform"]
+            == "response = [f['id'] for f in response]"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ws_only_params_rejected_in_http_mode(self, manage_addon_tool):
+        """HTTP mode rejects message_limit/offset/summarize."""
+        with pytest.raises(ToolError) as exc_info:
+            await manage_addon_tool(
+                slug="test_addon",
+                path="/flows",
+                message_limit=10,
+            )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "WebSocket" in error["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_ws_params_rejected_in_config_mode(self, manage_addon_tool):
+        """Config mode rejects the new WS-only params."""
+        with pytest.raises(ToolError) as exc_info:
+            await manage_addon_tool(
+                slug="test_addon",
+                auto_update=False,
+                message_limit=10,
+            )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "message_limit" in error["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_python_transform_rejected_in_config_mode(self, manage_addon_tool):
+        """Config mode rejects python_transform."""
+        with pytest.raises(ToolError) as exc_info:
+            await manage_addon_tool(
+                slug="test_addon",
+                auto_update=False,
+                python_transform="response = []",
+            )
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "python_transform" in error["error"]["message"]
 
 
 class TestSupervisorApiCall:

@@ -7,7 +7,7 @@ callers are already authenticated MCP users with full HA access.
 """
 
 import ast
-from typing import Any
+from typing import Any, cast
 
 
 class PythonSandboxError(Exception):
@@ -131,6 +131,38 @@ BLOCKED_FUNCTIONS = {
 }
 
 
+# Minimal set of builtins exposed to sandboxed expressions. All entries are
+# pure (no side effects, no I/O, no imports) and commonly needed by data
+# transforms — type checks, length, numeric/string coercion, simple
+# collection helpers. Expanding this list is fine if another pure builtin
+# is genuinely needed; adding anything that touches the filesystem, network,
+# or interpreter state is not.
+_SAFE_BUILTINS: dict[str, Any] = {
+    "isinstance": isinstance,
+    "len": len,
+    "range": range,
+    "enumerate": enumerate,
+    "zip": zip,
+    "sorted": sorted,
+    "reversed": reversed,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "any": any,
+    "all": all,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict,
+    "tuple": tuple,
+    "set": set,
+    "round": round,
+}
+
+
 def validate_expression(expr: str) -> tuple[bool, str]:
     """
     Validate Python expression is safe to execute.
@@ -208,16 +240,80 @@ def _validate_call_node(node: ast.Call) -> str | None:
     return None
 
 
-def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
+def safe_execute_expression(
+    expr: str,
+    variables: dict[str, Any],
+    result_key: str,
+) -> Any:
     """
-    Execute validated Python expression in restricted environment.
+    Execute a validated Python expression in a restricted environment.
+
+    The expression runs with ``variables`` available as locals. After
+    execution, the value bound to ``result_key`` is returned. This supports
+    both in-place mutation (``response.append(...)``) and reassignment
+    (``response = [...]``) — in the reassignment case the returned object
+    is the new one, not the original reference.
 
     Args:
         expr: Python expression to execute
-        config: Dashboard configuration dict (will be modified in-place)
+        variables: Mapping of variable names to values exposed to the expression
+        result_key: Name of the variable in ``variables`` whose post-execution
+            value should be returned
 
     Returns:
-        Modified config dict
+        The value of ``result_key`` in the local namespace after execution
+
+    Raises:
+        PythonSandboxError: If expression validation fails or execution errors
+
+    Examples:
+        >>> safe_execute_expression(
+        ...     "response = [m for m in response if m.get('level') == 'ERROR']",
+        ...     {"response": [{"level": "INFO"}, {"level": "ERROR"}]},
+        ...     "response",
+        ... )
+        [{'level': 'ERROR'}]
+    """
+    valid, error = validate_expression(expr)
+    if not valid:
+        raise PythonSandboxError(f"Expression validation failed: {error}")
+
+    if result_key not in variables:
+        raise PythonSandboxError(
+            f"result_key {result_key!r} not found in variables",
+        )
+
+    safe_globals: dict[str, Any] = {
+        "__builtins__": _SAFE_BUILTINS,
+        "__name__": "__main__",
+        "__doc__": None,
+    }
+    safe_locals: dict[str, Any] = dict(variables)
+
+    try:
+        exec(expr, safe_globals, safe_locals)
+    except Exception as e:
+        raise PythonSandboxError(f"Execution error: {type(e).__name__}: {e}") from e
+
+    return safe_locals[result_key]
+
+
+def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Execute validated Python expression against a ``config`` dict.
+
+    Thin wrapper around :func:`safe_execute_expression` that exposes the
+    input as the variable ``config`` (used by dashboard/automation/script
+    transforms).
+
+    Args:
+        expr: Python expression to execute
+        config: Configuration dict (may be modified in-place)
+
+    Returns:
+        The value bound to ``config`` after execution — typically the same
+        dict mutated in place, but also supports expressions that reassign
+        ``config`` to a new object.
 
     Raises:
         PythonSandboxError: If expression validation fails or execution errors
@@ -227,29 +323,13 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
         >>> safe_execute("config['views'][0]['cards'][0]['icon'] = 'new'", config)
         {'views': [{'cards': [{'icon': 'new'}]}]}
     """
-    # Validate expression
-    valid, error = validate_expression(expr)
-    if not valid:
-        raise PythonSandboxError(f"Expression validation failed: {error}")
-
-    # Execute in restricted environment
-    # No builtins to prevent access to dangerous functions
-    safe_globals: dict[str, Any] = {
-        "__builtins__": {},
-        "__name__": "__main__",
-        "__doc__": None,
-    }
-
-    safe_locals: dict[str, Any] = {
-        "config": config,
-    }
-
-    try:
-        exec(expr, safe_globals, safe_locals)
-    except Exception as e:
-        raise PythonSandboxError(f"Execution error: {type(e).__name__}: {e}") from e
-
-    return config
+    # safe_execute_expression returns Any (generic over result_key); at this
+    # call site the result is always the dict bound to `config`, so narrow
+    # for mypy and existing callers that depend on the dict interface.
+    return cast(
+        dict[str, Any],
+        safe_execute_expression(expr, {"config": config}, "config"),
+    )
 
 
 def get_security_documentation() -> str:
@@ -270,12 +350,15 @@ PYTHON TRANSFORM SECURITY:
 - Loops: for, while, if/else
 - Comprehensions: [x for x in ...]
 - String methods: startswith, endswith, lower, upper, split, join
+- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
+  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
+  tuple, set
 
 ❌ FORBIDDEN:
 - Imports: import, from, __import__
 - File operations: open, read, write
 - Dunder access: __class__, __bases__, __subclasses__
-- Dangerous builtins: eval, exec, compile
+- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr
 - Function definitions: def, class
 - Exception handling: try/except (use validation instead)
 """.strip()
