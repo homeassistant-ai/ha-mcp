@@ -73,6 +73,22 @@ def _default_prefs() -> dict[str, Any]:
     }
 
 
+def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
+    """Per-top-level-key hashes for partial-update optimistic locking.
+
+    Each top-level key is wrapped in its own single-key dict before hashing,
+    so the per-key hash captures both the key name and its value — an agent
+    cannot accidentally use, say, an ``energy_sources`` hash to authorise a
+    ``device_consumption`` write. ``prefs.get(key, [])`` mirrors the
+    "missing top-level key = empty list" semantics codified by
+    ``_default_prefs``.
+    """
+    return {
+        key: compute_config_hash({key: prefs.get(key, [])})
+        for key in _PREFS_TOP_LEVEL_KEYS
+    }
+
+
 def _is_no_prefs_error(error_msg: str) -> bool:
     """True if an error string from send_websocket_message indicates
     ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
@@ -243,14 +259,25 @@ class EnergyTools:
             ),
         ] = None,
         config_hash: Annotated[
-            str | None,
+            str | dict[str, str] | None,
             Field(
                 description=(
                     "Hash returned by the previous mode='get' call. REQUIRED "
                     "for mode='set' unless dry_run=True. Rejected if the "
                     "server-side config has changed since that read — re-read "
-                    "and retry. Ignored by convenience modes (they read fresh "
-                    "internally)."
+                    "and retry. Two forms accepted: pass the full-blob "
+                    "config_hash (str) to lock against the entire prefs object, "
+                    "or pass the config_hash_per_key dict from a mode='get' "
+                    "response (dict[str, str], keyed by 'energy_sources' / "
+                    "'device_consumption' / 'device_consumption_water') to "
+                    "lock only the top-level keys you are submitting in "
+                    "'config'. The per-key form is fail-closed: every "
+                    "top-level key submitted in 'config' must have a matching "
+                    "entry in the dict, and vice versa. Unknown keys (outside "
+                    "the canonical top-level set) are silently dropped on "
+                    "both sides, mirroring the existing local-shape-check "
+                    "behaviour. Ignored by convenience modes (they read "
+                    "fresh internally)."
                 ),
                 default=None,
             ),
@@ -375,6 +402,15 @@ class EnergyTools:
           the user had configured — silently, with no error. mode='set'
           requires a fresh ``config_hash`` for optimistic locking; convenience
           modes hide this entirely.
+        - ``config_hash`` accepts both a single ``str`` (full-blob lock) and
+          a ``dict[str, str]`` keyed by top-level keys (per-key lock, taken
+          from the ``config_hash_per_key`` field of the mode='get' response).
+          The per-key form lets an agent submit only the top-level key it
+          wants to change — set-equality between ``config`` keys and dict
+          keys is enforced, so a per-key submission still fully replaces
+          that key's value as the save endpoint requires. Mismatch on any
+          locked key returns ``RESOURCE_LOCKED`` with the offending keys
+          in ``context.mismatched_keys``.
         - A local shape check runs before every write; malformed payloads
           are rejected with a ``shape_errors`` list.
         - After a successful write, the tool calls ``energy/validate`` and
@@ -481,6 +517,7 @@ class EnergyTools:
                         "mode": "get",
                         "config": prefs,
                         "config_hash": compute_config_hash(prefs),
+                        "config_hash_per_key": _compute_per_key_hashes(prefs),
                         "note": (
                             "Energy Dashboard has never been configured on "
                             "this instance; returning empty default."
@@ -500,6 +537,7 @@ class EnergyTools:
                 "mode": "get",
                 "config": prefs,
                 "config_hash": compute_config_hash(prefs),
+                "config_hash_per_key": _compute_per_key_hashes(prefs),
             }
 
         except ToolError:
@@ -584,7 +622,7 @@ class EnergyTools:
     async def _set_prefs(
         self,
         config: dict[str, Any],
-        config_hash: str,
+        config_hash: str | dict[str, str],
         *,
         current_prefs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -594,12 +632,20 @@ class EnergyTools:
         errors are reported in the response as a non-fatal warning; the
         save already succeeded.
 
+        ``config_hash`` accepts two forms. A ``str`` locks against the
+        full prefs blob (the original optimistic-locking contract). A
+        ``dict[str, str]`` keyed by top-level keys locks each submitted
+        key individually — set-equality is enforced between the
+        ``config``-present top-level keys and the dict's top-level keys
+        (unknown keys silently dropped on both sides). Per-key mismatch
+        surfaces every offending key in ``context.mismatched_keys``.
+
         ``current_prefs`` is an optional caller-supplied snapshot. When
         provided, the internal re-read is skipped — the convenience-mode
         path uses this to avoid a second ``energy/get_prefs`` round trip
         per attempt (the snapshot was already fetched by ``_mutate_atomic``).
-        The hash check still runs against the provided snapshot as a
-        defensive guard.
+        Convenience modes always pass a ``str`` hash; the dict form is
+        only reachable via direct mode='set' callers.
         """
         try:
             # 1. Shape check (fast local, fail closed)
@@ -648,21 +694,83 @@ class EnergyTools:
                         # unreachable; appeases type checkers
                         current_prefs = {}
 
-            current_hash = compute_config_hash(current_prefs)
-
-            if current_hash != config_hash:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_LOCKED,
-                        "Energy prefs modified since last read (conflict)",
-                        context={"mode": "set"},
-                        suggestions=[
-                            "Call ha_manage_energy_prefs(mode='get') again",
-                            "Re-apply your changes to the fresh config",
-                            "Pass the new config_hash back in",
-                        ],
+            if isinstance(config_hash, dict):
+                # Per-key form: validate (and hence allow saving) only the
+                # top-level keys whose hashes were supplied. Set-equality is
+                # fail-closed; unknown keys (outside the canonical top-level
+                # set) are silently dropped on both sides — mirrors the
+                # permissive-drop semantics of _shape_check / the save loop.
+                submitted_keys = {
+                    k for k in config if k in _PREFS_TOP_LEVEL_KEYS
+                }
+                hashed_keys = {
+                    k for k in config_hash if k in _PREFS_TOP_LEVEL_KEYS
+                }
+                if submitted_keys != hashed_keys:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            "Per-key config_hash keys must match the "
+                            "top-level keys submitted in 'config'",
+                            context={
+                                "mode": "set",
+                                "submitted_keys": sorted(submitted_keys),
+                                "hashed_keys": sorted(hashed_keys),
+                                "missing_in_hash": sorted(
+                                    submitted_keys - hashed_keys
+                                ),
+                                "extra_in_hash": sorted(
+                                    hashed_keys - submitted_keys
+                                ),
+                            },
+                            suggestions=[
+                                "Pass exactly one config_hash_per_key entry "
+                                "per top-level key in 'config'",
+                                "Use the str form of config_hash to lock "
+                                "the full prefs blob instead",
+                            ],
+                        )
                     )
-                )
+
+                mismatched_keys = [
+                    key
+                    for key in sorted(submitted_keys)
+                    if config_hash[key]
+                    != compute_config_hash({key: current_prefs.get(key, [])})
+                ]
+                if mismatched_keys:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_LOCKED,
+                            "Energy prefs modified since last read on "
+                            f"top-level key(s): {', '.join(mismatched_keys)}"
+                            " (conflict)",
+                            context={
+                                "mode": "set",
+                                "mismatched_keys": mismatched_keys,
+                            },
+                            suggestions=[
+                                "Call ha_manage_energy_prefs(mode='get') again",
+                                "Re-apply your changes to the fresh config",
+                                "Pass the new config_hash_per_key back in",
+                            ],
+                        )
+                    )
+            else:
+                current_hash = compute_config_hash(current_prefs)
+                if current_hash != config_hash:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_LOCKED,
+                            "Energy prefs modified since last read (conflict)",
+                            context={"mode": "set"},
+                            suggestions=[
+                                "Call ha_manage_energy_prefs(mode='get') again",
+                                "Re-apply your changes to the fresh config",
+                                "Pass the new config_hash back in",
+                            ],
+                        )
+                    )
 
             # 3. Save
             save_payload: dict[str, Any] = {"type": "energy/save_prefs"}
@@ -723,6 +831,7 @@ class EnergyTools:
                 "success": True,
                 "mode": "set",
                 "config_hash": new_hash,
+                "config_hash_per_key": _compute_per_key_hashes(new_prefs),
                 "message": "Energy prefs updated.",
             }
             if post_save_errors:
