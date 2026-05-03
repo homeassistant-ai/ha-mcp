@@ -31,7 +31,9 @@ from .const import (
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
+    DASHBOARD_URL_PATH_PATTERN,
     DOMAIN,
+    RESERVED_DASHBOARD_URL_PATHS,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
@@ -227,6 +229,67 @@ def _validate_dashboard_filename(filename: str) -> str | None:
     if ".." in parts:
         return "filename must not contain path traversal segments"
     return None
+
+
+def _parse_and_validate_yaml_path(
+    yaml_path: str,
+) -> tuple[str, tuple[str, ...], str | None]:
+    """Parse and validate a yaml_path argument.
+
+    Two accepted shapes:
+    1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
+    2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
+
+    Returns (kind, parts, error). On error, kind is '' and parts is ().
+    """
+    if not yaml_path or not isinstance(yaml_path, str):
+        return "", (), "yaml_path must be a non-empty string"
+
+    parts = tuple(yaml_path.split("."))
+
+    # Shape 1: single key
+    if len(parts) == 1:
+        key = parts[0]
+        if key in ALLOWED_YAML_KEYS:
+            return "single", parts, None
+        return (
+            "",
+            (),
+            (
+                f"Key '{yaml_path}' is not in the allowed list. "
+                f"Allowed keys: {', '.join(sorted(ALLOWED_YAML_KEYS))}. "
+                "For YAML-mode dashboards use 'lovelace.dashboards.<url_path>'."
+            ),
+        )
+
+    # Shape 2: lovelace.dashboards.<url_path>
+    if parts[:2] != ("lovelace", "dashboards") or len(parts) != 3:
+        return (
+            "",
+            (),
+            (
+                f"Dotted yaml_path '{yaml_path}' is not supported. "
+                "The only accepted dotted form is 'lovelace.dashboards.<url_path>'."
+            ),
+        )
+
+    url_path = parts[2]
+    if url_path in RESERVED_DASHBOARD_URL_PATHS:
+        return (
+            "",
+            (),
+            f"url_path '{url_path}' is reserved by Home Assistant and cannot be used.",
+        )
+    if not DASHBOARD_URL_PATH_PATTERN.fullmatch(url_path):
+        return (
+            "",
+            (),
+            (
+                f"url_path '{url_path}' is invalid. Must be lowercase letters/digits "
+                "separated by hyphens (e.g., 'energy-dashboard')."
+            ),
+        )
+    return "lovelace_dashboard", parts, None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

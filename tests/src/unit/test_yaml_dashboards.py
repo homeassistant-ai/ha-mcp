@@ -120,3 +120,60 @@ class TestValidateDashboardFilename:
         err = validate(filename)
         assert err is not None, f"{filename} should be rejected"
         assert isinstance(err, str)
+
+
+class TestParseYamlPath:
+    """yaml_path must accept either a single allowed key OR
+    a 3-segment dotted path 'lovelace.dashboards.<url_path>'."""
+
+    @pytest.fixture(scope="class")
+    def parse(self):
+        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+        return _parse_and_validate_yaml_path
+
+    def test_accepts_single_allowed_key(self, parse):
+        kind, parts, err = parse("template")
+        assert err is None
+        assert kind == "single"
+        assert parts == ("template",)
+
+    def test_accepts_lovelace_dashboards_dotted(self, parse):
+        kind, parts, err = parse("lovelace.dashboards.energy-dash")
+        assert err is None
+        assert kind == "lovelace_dashboard"
+        assert parts == ("lovelace", "dashboards", "energy-dash")
+
+    def test_rejects_unknown_single_key(self, parse):
+        _, _, err = parse("frontend")
+        assert err is not None
+        assert "not in the allowed list" in err
+
+    def test_rejects_bare_lovelace(self, parse):
+        _, _, err = parse("lovelace")
+        assert err is not None
+
+    def test_rejects_lovelace_mode(self, parse):
+        _, _, err = parse("lovelace.mode")
+        assert err is not None
+        assert "lovelace.dashboards.<url_path>" in err
+
+    def test_rejects_lovelace_dashboards_without_url_path(self, parse):
+        _, _, err = parse("lovelace.dashboards")
+        assert err is not None
+
+    def test_rejects_too_many_segments(self, parse):
+        _, _, err = parse("lovelace.dashboards.foo.bar")
+        assert err is not None
+
+    def test_rejects_reserved_url_path(self, parse):
+        _, _, err = parse("lovelace.dashboards.lovelace")
+        assert err is not None
+        assert "reserved" in err.lower()
+
+    def test_rejects_invalid_url_path_format(self, parse):
+        _, _, err = parse("lovelace.dashboards.UPPER")
+        assert err is not None
+
+    def test_rejects_other_dotted_path(self, parse):
+        _, _, err = parse("homeassistant.customize")
+        assert err is not None
