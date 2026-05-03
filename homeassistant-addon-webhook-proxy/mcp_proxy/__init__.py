@@ -32,31 +32,29 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
-# Real ha-mcp generates a 22-char base64url token after `/private_`. A shorter
-# token indicates a truncated/corrupted config (issue #1020 defect 1).
+# ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
+# as a sanity floor — a truncated/corrupted config that yields a shorter token
+# is the failure mode this validator exists to catch.
 _SECRET_PATH_RE = re.compile(r"^/private_[A-Za-z0-9_-]{16,}$")
 
 
 def _validate_target_url(target_url: str) -> tuple[bool, str]:
     """Check that target_url has the shape we expect.
 
-    Returns (is_valid, reason). The URL must be http(s)://host with a path
-    matching `/private_<token>` where the token is at least 16 characters.
-    Catches the issue #1020 truncation, where the parsed secret_path was
-    ~7 characters instead of the expected 22.
+    Returns (is_valid, reason).
     """
-    try:
-        parsed = urlparse(target_url)
-    except ValueError as err:
-        return False, f"unparseable URL ({err})"
+    parsed = urlparse(target_url)
 
     if parsed.scheme not in ("http", "https"):
         return False, f"scheme must be http or https, got {parsed.scheme!r}"
     if not parsed.netloc:
         return False, "URL is missing host"
+    if parsed.params or parsed.query or parsed.fragment:
+        return False, "URL must not contain query, fragment, or path parameters"
     if not _SECRET_PATH_RE.match(parsed.path):
+        # Don't echo parsed.path — it contains the secret token.
         return False, (
-            f"path {parsed.path!r} does not look like a valid secret path "
+            "path does not look like a valid secret path "
             "(expected /private_<token> with token of at least 16 characters)"
         )
     return True, ""
@@ -83,7 +81,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up MCP Webhook Proxy from a config entry."""
-    proxy_config = await hass.async_add_executor_job(_read_config)
+    try:
+        proxy_config = await hass.async_add_executor_job(_read_config)
+    except (OSError, json.JSONDecodeError) as err:
+        _LOGGER.error("MCP Proxy: Failed to read %s: %s", CONFIG_FILE, err)
+        raise ConfigEntryError(
+            f"Failed to read {CONFIG_FILE}: {err}. Restart the Webhook Proxy "
+            "addon to regenerate the config file."
+        ) from err
+
     if proxy_config is None:
         _LOGGER.info(
             "MCP Proxy: No config found at %s. "
@@ -109,10 +115,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         masked_target = target_url
     masked_wh = webhook_id[:6] + "..." if len(webhook_id) > 6 else "***"
 
-    # Validate target_url shape before registering — without this a corrupted
-    # URL (e.g. issue #1020 secret-path truncation) would propagate silently and
-    # the config entry would deceptively report `loaded` while every webhook
-    # request returns 404.
+    # Validate target_url shape before registering. Without this, a corrupted
+    # URL (e.g. a truncated secret-path) propagates silently and the config
+    # entry reports `loaded` while every webhook request returns 404.
     is_valid, reason = _validate_target_url(target_url)
     if not is_valid:
         _LOGGER.error(
@@ -161,14 +166,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _read_config() -> dict | None:
-    """Read proxy config from JSON file (blocking I/O)."""
+    """Read proxy config from JSON file (blocking I/O).
+
+    Returns None only when the file does not exist (fresh install). Read or
+    parse errors propagate as OSError/JSONDecodeError so the caller can
+    distinguish "no config yet" from "config is corrupted".
+    """
     if not CONFIG_FILE.exists():
         return None
-    try:
-        return json.loads(CONFIG_FILE.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        _LOGGER.error("MCP Proxy: Failed to read %s: %s", CONFIG_FILE, e)
-        return None
+    return json.loads(CONFIG_FILE.read_text())
 
 
 async def _handle_webhook(
