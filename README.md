@@ -60,6 +60,21 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 </details>
 
 <details>
+<summary><b>🐧 Linux</b></summary>
+
+1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
+2. Open **Terminal** and run:
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-linux.sh | sh
+   ```
+3. [Download Claude Desktop](https://claude.ai/download) (or restart it)
+4. Ask Claude: **"Can you see my Home Assistant?"**
+
+You're now connected to the demo environment!
+
+</details>
+
+<details>
 <summary><b>🪟 Windows</b></summary>
 
 1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
