@@ -249,6 +249,48 @@ class TestDeleteHelpersIntegrations:
         delete_call = mock_client.send_websocket_message.call_args_list[1]
         assert delete_call[0][0]["input_button_id"] == "uid-123"
 
+    async def test_simple_path_disabled_entity_resolves_via_registry(
+        self, tools, mock_client
+    ):
+        """Issue #1057 regression: a disabled entity (registered but absent
+        from the state machine) must be resolved via the entity registry,
+        not silently treated as already-deleted.
+
+        Pre-fix behavior: state_check returned None, the loop hit ``continue``
+        and skipped the registry lookup for all 3 attempts; the code then
+        fell through to direct_id and finally to the ``already_deleted``
+        short-circuit, leaving the registry entry in place while the tool
+        reported success. Post-fix: the registry lookup runs every iteration,
+        finds the disabled entity's unique_id, and the standard delete path
+        cleans it up properly.
+        """
+        # Disabled entity: not in state machine.
+        mock_client.get_entity_state.return_value = None
+        # Registry has the entity with a unique_id; the type/delete then succeeds.
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-disabled-456"}},
+            {"success": True},
+        ]
+
+        result = await tools.ha_delete_helpers_integrations(
+            target="my_disabled_button",
+            helper_type="input_button",
+            confirm=True,
+            wait=False,
+        )
+        assert result["success"] is True
+        assert result["method"] == "websocket_delete"
+        assert result["unique_id"] == "uid-disabled-456"
+        # Crucially: the registry lookup ran (not skipped via the old
+        # state_check ``continue``) and the entity was NOT misclassified
+        # as already_deleted.
+        assert result.get("fallback_used") != "already_deleted"
+        # The registry call actually happened — the bug was that
+        # send_websocket_message was never called during the retry loop.
+        registry_call = mock_client.send_websocket_message.call_args_list[0]
+        assert registry_call[0][0]["type"] == "config/entity_registry/get"
+        assert registry_call[0][0]["entity_id"] == "input_button.my_disabled_button"
+
     async def test_simple_path_fallback_direct_id(self, tools, mock_client):
         """Registry has no unique_id → direct_id fallback succeeds."""
         # 3 retries all return "no unique_id", then direct delete succeeds

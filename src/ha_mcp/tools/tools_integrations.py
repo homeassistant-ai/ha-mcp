@@ -982,7 +982,11 @@ class IntegrationTools:
                     f"(attempt {attempt + 1}/{max_retries})"
                 )
 
-                # Fast state check first
+                # Fast state check first. Disabled entities are removed from
+                # the state machine but remain in the entity registry, so a
+                # missing state_check must NOT skip the registry lookup below
+                # (see issue #1057). The retry/sleep is preserved as a race-
+                # condition guard for entities that just transitioned state.
                 try:
                     state_check = await client.get_entity_state(entity_id)
                     if not state_check:
@@ -990,10 +994,9 @@ class IntegrationTools:
                             wait_time = 0.5 * (2**attempt)
                             logger.debug(
                                 f"Entity {entity_id} not in state, waiting "
-                                f"{wait_time}s before retry..."
+                                f"{wait_time}s before fallthrough to registry"
                             )
                             await asyncio.sleep(wait_time)
-                            continue
                 except HomeAssistantAPIError as e:
                     # State check is best-effort here; an APIError (e.g. 404)
                     # is informational. Auth/connection errors must propagate
