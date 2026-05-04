@@ -118,14 +118,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/sudo -u ${SETUP_USER} /usr/bin/git -C ${SETUP_HOME}/ha-mcp pull --ff-only
+ExecStart=/usr/bin/sudo -i -u ${SETUP_USER} /usr/bin/git -C ${SETUP_HOME}/ha-mcp pull --ff-only
+ExecStart=/usr/bin/docker image prune -af
 ExecStartPost=/usr/bin/systemctl restart hamcp-demo
 SVCEOF
 
 cat > /etc/systemd/system/hamcp-demo-update.timer << SVCEOF
 [Unit]
 Description=HA-MCP Demo Weekly Update Timer
-Requires=hamcp-demo-update.service
 
 [Timer]
 OnCalendar=Mon *-*-* 03:00:00
