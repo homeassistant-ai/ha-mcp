@@ -171,6 +171,24 @@ class TestShapeCheckValidateOnly:
         bad = {"device_consumption": [{"name": "no-stat"}]}
         assert _shape_check(bad, validate_only={}) == []
 
+    def test_listed_key_with_empty_index_set_skips_per_entry_but_keeps_structural(self):
+        # ``{key: set()}`` is "key listed, no per-entry indices" — distinct
+        # from ``{}`` (skip everything). The list-shape structural check
+        # still fires for that key; per-entry checks are skipped. This is
+        # the shape ``_remove_*`` mutators pass through ``_appended_tail_indices``
+        # after a shrink (no new entries to validate, surviving entries
+        # already passed HA validation).
+        bad = {
+            "device_consumption": [
+                {"name": "no-stat-bad-1"},
+                {"name": "no-stat-bad-2"},
+            ],
+        }
+        assert (
+            _shape_check(bad, validate_only={"device_consumption": set()})
+            == []
+        )
+
     def test_unlisted_key_is_skipped(self):
         # Bad entry under device_consumption — but validate_only only asks
         # for energy_sources, so device_consumption is skipped entirely.
@@ -1288,42 +1306,83 @@ class TestConvenienceModesPreExistingInvalid:
             {"name": "broken_no_stat"},
         ]
 
-    async def test_add_device_dry_run_succeeds_with_invalid_pre_existing(
-        self, tools
+    @pytest.mark.parametrize(
+        "mode, kwargs, invalid_prefs",
+        [
+            (
+                "add_device",
+                {"stat_consumption": "sensor.new"},
+                {
+                    "energy_sources": [],
+                    "device_consumption": [{"name": "broken_no_stat"}],
+                    "device_consumption_water": [],
+                },
+            ),
+            (
+                "add_source",
+                {
+                    "source": {
+                        "type": "battery",
+                        "stat_energy_from": "sensor.battery_in",
+                        "stat_energy_to": "sensor.battery_out",
+                    },
+                },
+                {
+                    "energy_sources": [{"type": "solar"}],  # missing stat_energy_from
+                    "device_consumption": [],
+                    "device_consumption_water": [],
+                },
+            ),
+            (
+                "remove_device",
+                {"stat_consumption": "sensor.fridge_energy"},
+                {
+                    "energy_sources": [],
+                    "device_consumption": [
+                        {"stat_consumption": "sensor.fridge_energy"},
+                        {"name": "broken_no_stat"},  # broken sibling, not removed
+                    ],
+                    "device_consumption_water": [],
+                },
+            ),
+        ],
+        ids=["add_device", "add_source", "remove_device"],
+    )
+    async def test_dry_run_succeeds_with_invalid_pre_existing(
+        self, tools, mode, kwargs, invalid_prefs
     ):
-        """Dry-run path's backstop ``_shape_check`` is also scoped to the
-        appended tail (mirroring the real-run path)."""
-        invalid_prefs = {
-            "energy_sources": [],
-            "device_consumption": [{"name": "broken_no_stat"}],
-            "device_consumption_water": [],
-        }
+        """Dry-run path's backstop ``_shape_check`` is scoped to the
+        appended tail (mirroring the real-run path) for every convenience-
+        mode mutator. Symmetry with the real-run regression block above
+        guards against future divergence between the two ``_mutate_atomic``
+        branches.
+        """
         tools._client.send_websocket_message.return_value = {
             "success": True,
             "result": invalid_prefs,
         }
 
         result = await tools.ha_manage_energy_prefs(
-            mode="add_device",
-            stat_consumption="sensor.new",
-            dry_run=True,
+            mode=mode, dry_run=True, **kwargs
         )
         assert result["success"] is True
         assert result["dry_run"] is True
 
-    async def test_add_device_still_rejects_a_genuinely_invalid_new_entry(
+    async def test_direct_set_mode_still_validates_full_config_when_validate_only_is_none(
         self, tools
     ):
-        """The fix does NOT silence validation of the genuinely new entry —
-        it only stops re-validating pre-existing siblings. A new entry that
-        fails the per-entry shape check still raises VALIDATION_FAILED.
-        Verified via the convenience helper's structural-by-construction
-        guarantee: ``_add_device`` constructs a well-formed entry from
-        typed parameters, so the only surface for a "bad new entry" is
-        ``mode='set'`` directly. See ``TestSetPrefs.test_shape_error_*``
-        for that path; this test pins the boundary by confirming the
-        snapshot's broken sibling is NOT silenced when ``mode='set'`` is
-        used directly with an unscoped ``validate_only=None`` (default).
+        """Boundary pin: the ``validate_only`` scoping only applies on
+        convenience-mode write paths (``add_*``/``remove_*``), which thread
+        an explicit ``validate_only={target_key: appended_indices}`` through
+        ``_set_prefs``. Direct ``mode='set'`` keeps the original full-
+        validation contract (``validate_only=None`` default), so a
+        snapshot's broken sibling still surfaces — the fix does NOT
+        silently relax the direct-set path.
+
+        The convenience helpers' "bad new entry" surface is closed by
+        structural-by-construction (``_add_device`` builds a well-formed
+        entry from typed parameters); see ``TestSetPrefs.test_shape_error_*``
+        for the direct-set per-entry coverage.
         """
         invalid_prefs = {
             "energy_sources": [],

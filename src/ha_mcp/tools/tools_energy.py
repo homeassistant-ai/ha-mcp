@@ -241,6 +241,47 @@ def _shape_check(
     return errors
 
 
+def _appended_tail_indices(existing: list[Any], new: list[Any]) -> set[int]:
+    """Return the indices in ``new`` that lie past the end of ``existing``.
+
+    Per issue #1086, this builds the ``validate_only`` index set scoped to the
+    appended tail of an append-only / shrink-only mutation, so pre-existing
+    HA-validated siblings are not re-checked on every add/remove:
+
+    - Append-only mutators (``_add_*``): returns indices of the new entries.
+    - Shrink-only mutators (``_remove_*``): returns an empty set — nothing
+      new to validate, and the surviving entries already passed HA validation.
+
+    Refuses in-place mutators where ``len(new) == len(existing)`` but the
+    contents differ — the appended-tail formula would yield an empty index
+    set on a list whose entries actually changed, silently bypassing
+    per-entry validation. Add explicit handling (e.g. an
+    ``_indices_of_modified_entries`` helper) before introducing such a
+    mutator; do not extend this one.
+    """
+    if len(new) == len(existing) and new != existing:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                "_appended_tail_indices: in-place mutation detected "
+                "(same length, different content) — the appended-tail "
+                "validation heuristic only covers append-only / shrink-only "
+                "mutators. Add explicit per-entry validation handling for "
+                "in-place mutators before reusing this helper.",
+                context={
+                    "existing_len": len(existing),
+                    "new_len": len(new),
+                },
+                suggestions=[
+                    "If introducing a _replace_* / _update_* mutator, "
+                    "compute the indices of modified entries explicitly "
+                    "and pass those to _shape_check via validate_only.",
+                ],
+            )
+        )
+    return set(range(len(existing), len(new)))
+
+
 class EnergyTools:
     """Energy Dashboard preference management tools for Home Assistant."""
 
@@ -1237,18 +1278,10 @@ class EnergyTools:
                 new_list = mutator(existing_list)
 
                 # Backstop shape-check, mirroring the real-run path through
-                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent
-                # if the entry-construction logic ever changes. ``validate_only``
-                # scopes it to the appended tail (per issue #1086): for add_*
-                # this is the new entry, for remove_* this is an empty set so
-                # nothing is re-validated. The heuristic assumes append-only /
-                # shrink-only mutators (current set: _add_*, _remove_*). An
-                # in-place mutator (where len(new) == len(existing) but content
-                # changed) would yield an empty appended_indices and skip the
-                # per-entry pass entirely — revisit before adding such a mutator.
-                appended_indices = set(
-                    range(len(existing_list), len(new_list))
-                )
+                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent if
+                # the entry-construction logic ever changes. See
+                # ``_appended_tail_indices`` for the validate_only contract.
+                appended_indices = _appended_tail_indices(existing_list, new_list)
                 shape_errors = _shape_check(
                     {target_key: new_list},
                     validate_only={target_key: appended_indices},
@@ -1286,19 +1319,11 @@ class EnergyTools:
                 new_list = mutator(existing_list)
 
                 partial_config = {target_key: new_list}
-                # Per issue #1086: validate only the appended tail entries,
-                # so a pre-existing (HA-validated) entry that would now fail
-                # a tightened ``_shape_check`` cannot block an unrelated
-                # add. For remove_* this set is empty — nothing new to
-                # re-validate. The heuristic assumes append-only / shrink-
-                # only mutators (current set: _add_*, _remove_*). An
-                # in-place mutator (where len(new) == len(existing) but
-                # content changed) would yield an empty appended_indices
-                # and skip the per-entry pass entirely — revisit before
-                # adding such a mutator.
-                appended_indices = set(
-                    range(len(existing_list), len(new_list))
-                )
+                # Per issue #1086: validate only the appended tail so a
+                # pre-existing HA-validated entry cannot block an unrelated
+                # add/remove. See ``_appended_tail_indices`` for the
+                # validate_only contract.
+                appended_indices = _appended_tail_indices(existing_list, new_list)
                 try:
                     set_result = await self._set_prefs(
                         partial_config,
@@ -1348,10 +1373,21 @@ class EnergyTools:
             # Unreachable as long as every iteration either returns or raises:
             # the only ``continue`` is gated on ``attempt + 1 < max_attempts``,
             # which is False on the final iteration — so the bare ``raise``
-            # in the except block always fires there.
-            raise AssertionError(
-                f"_mutate_atomic({mode}, {target_key}): "
-                "retry loop exited without a return or raise"
+            # in the except block always fires there. Surface as an actionable
+            # structured error rather than a bare AssertionError that would
+            # otherwise fall through to ``except Exception`` and lose context.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"_mutate_atomic({mode}, {target_key}): retry loop exited "
+                    "without a return or raise",
+                    context={"mode": mode, "target_key": target_key},
+                    suggestions=[
+                        "This indicates a bug in the optimistic-concurrency "
+                        "loop logic — please file an issue with the mode and "
+                        "target_key from the context.",
+                    ],
+                )
             )
 
         except ToolError:
