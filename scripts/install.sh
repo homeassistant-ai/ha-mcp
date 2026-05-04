@@ -178,7 +178,7 @@ printf "\n"
 printf "${YELLOW}Next steps:${NC}\n"
 printf "\n"
 if [ "$CLAUDE_NOT_INSTALLED" = true ]; then
-    printf "$CLAUDE_DESKTOP_STEP}"
+    printf "$CLAUDE_DESKTOP_STEP"
     printf "  2. Create a free account at claude.ai (if you haven't)\n"
     printf "  3. Open Claude Desktop and ask: \"Can you see my Home Assistant?\"\n"
 else
