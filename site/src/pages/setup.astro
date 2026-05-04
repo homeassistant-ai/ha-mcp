@@ -152,10 +152,11 @@ const clientsData = [
     "logo": "/logos/zed.svg",
     "transports": ["stdio"],
     "configFormat": "json",
-    "configLocation": "~/.config/zed/settings.json",
+    "configLocation": "macOS/Linux: ~/.config/zed/settings.json\nWindows: %APPDATA%\\Zed\\settings.json\nProject-specific: .zed/settings.json (overrides global)",
     "accuracy": 4,
     "order": 13,
     "httpNote": "stdio only - limited HTTP support",
+    "clientNote": "Settings file supports JSON with // comments.",
   },
   {
     "id": "continue",
@@ -1393,6 +1394,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
       if (state.proxy === 'cloudflared') {
         proxyInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Cloudflare Tunnel</h4>
+          <p class="text-slate-400 text-xs mb-3">No port forwarding required, free tier available, works behind CGNAT. Optional: layer Cloudflare Access on top of the tunnel for SSO/policy-based authentication.</p>
           <p class="text-slate-300 mb-3">Install cloudflared:</p>
           <pre class="code-block"><code># macOS
 brew install cloudflared
@@ -1481,6 +1483,10 @@ ingress:
             <li>Enable HTTPS with a valid certificate</li>
             <li>Pass through WebSocket connections</li>
           </ul>
+          <div class="mt-3 text-xs text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Caddy</strong> — automatic HTTPS via Let's Encrypt out of the box; requires a public IP or dynamic DNS for the ACME challenge.</p>
+            <p><strong class="text-slate-300">Nginx + Let's Encrypt</strong> — traditional setup with full control; pair with <a href="https://certbot.eff.org/" target="_blank" class="text-blue-400 hover:underline">certbot</a> for cert issuance and renewal.</p>
+          </div>
         </div>`;
       }
       instructions.push(proxyInstr);
@@ -1875,6 +1881,22 @@ mcpServers:
     type: streamable-http
     url: "${mcpUrl}"`;
       }
+      // Continue: auth-headers alternative for authenticated remote servers
+      if (!isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">If your MCP server requires a Bearer token, add a <code class="bg-slate-800 px-1 rounded">requestOptions.headers</code> block. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">mcpServers:
+  - name: home-assistant
+    type: streamable-http
+    url: "${mcpUrl}"
+    requestOptions:
+      headers:
+        Authorization: "Bearer YOUR_TOKEN"</pre>
+          </div>
+        </div>`);
+      }
     } else if (state.client.configFormat === 'cli') {
       if (state.client.id === 'gemini-cli') {
         // Gemini CLI
@@ -1903,6 +1925,25 @@ mcpServers:
             <div class="mt-2 text-slate-400">Inside an interactive Gemini session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows status, <code class="bg-slate-800 px-1 rounded">/mcp refresh</code> reconnects after config changes.</div>
           </div>
         </div>`);
+        // Gemini CLI: auth-headers alternative (CLI flag doesn't support headers — manual settings.json edit)
+        if (!isStdio) {
+          instructions.push(`<div class="instruction-block">
+            <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+            <div class="text-sm text-slate-300 space-y-2">
+              <p class="text-slate-400">The <code class="bg-slate-800 px-1 rounded">gemini mcp add</code> command does not accept custom headers. For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.gemini/settings.json</code> (or project-level <code class="bg-slate-800 px-1 rounded">.gemini/settings.json</code>) directly:</p>
+              <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "mcpServers": {
+    "home-assistant": {
+      "httpUrl": "${mcpUrl}",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}</pre>
+            </div>
+          </div>`);
+        }
       } else if (state.client.id === 'codex') {
         // Codex CLI
         if (isStdio) {
@@ -1921,8 +1962,22 @@ mcpServers:
             <div><code class="bg-slate-800 px-1 rounded">codex mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
             <div><code class="bg-slate-800 px-1 rounded">codex mcp get home-assistant</code> <span class="text-slate-400">— show server config</span></div>
             <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Codex stores config in TOML at <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> — shared between the CLI and the Codex Desktop app (Settings → MCP → Add Server in the desktop UI emits the same TOML).</div>
           </div>
         </div>`);
+        // Codex: auth-headers TOML alternative for authenticated remote servers
+        if (!isStdio) {
+          instructions.push(`<div class="instruction-block">
+            <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+            <div class="text-sm text-slate-300 space-y-2">
+              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> directly — the <code class="bg-slate-800 px-1 rounded">codex mcp add</code> command does not accept custom headers:</p>
+              <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">[mcp_servers.home-assistant]
+url = "${mcpUrl}"
+[mcp_servers.home-assistant.headers]
+Authorization = "Bearer YOUR_TOKEN"</pre>
+            </div>
+          </div>`);
+        }
       } else {
         // Claude Code
         if (isStdio) {
