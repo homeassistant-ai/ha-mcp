@@ -67,9 +67,6 @@ sudo systemctl restart hamcp-demo
 # Live logs
 sudo journalctl -u hamcp-demo -f
 
-# Full log file
-tail -f /var/log/hamcp-demo.log
-
 # Weekly update timer — next run and last result
 sudo systemctl list-timers hamcp-demo-update.timer
 sudo journalctl -u hamcp-demo-update --no-pager -n 20
@@ -80,9 +77,6 @@ sudo journalctl -u hamcp-demo-update --no-pager -n 20
 ```bash
 # Service log (startup, HA output, errors)
 sudo journalctl -u hamcp-demo -f
-
-# Full combined log file
-tail -f /var/log/hamcp-demo.log
 
 # Home Assistant container logs
 docker logs -f $(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assistant" -q)

@@ -104,8 +104,6 @@ Environment=HA_TEST_PORT=${HA_PORT}
 ExecStart=${UV_PATH} run hamcp-test-env --no-interactive
 Restart=on-failure
 RestartSec=30s
-StandardOutput=append:/var/log/hamcp-demo.log
-StandardError=append:/var/log/hamcp-demo.log
 TimeoutStopSec=60
 
 [Install]
@@ -115,17 +113,13 @@ SVCEOF
 cat > /etc/systemd/system/hamcp-demo-update.service << SVCEOF
 [Unit]
 Description=HA-MCP Demo Weekly Update
-After=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=${SETUP_USER}
-Group=${SETUP_USER}
-WorkingDirectory=${SETUP_HOME}/ha-mcp
-ExecStart=/bin/bash -c 'git pull --ff-only'
-ExecStartPost=/bin/sudo /bin/systemctl restart hamcp-demo
-StandardOutput=append:/var/log/hamcp-demo.log
-StandardError=append:/var/log/hamcp-demo.log
+ExecStart=/usr/bin/sudo -u ${SETUP_USER} /usr/bin/git -C ${SETUP_HOME}/ha-mcp pull --ff-only
+ExecStartPost=/usr/bin/systemctl restart hamcp-demo
 SVCEOF
 
 cat > /etc/systemd/system/hamcp-demo-update.timer << SVCEOF
@@ -142,9 +136,8 @@ Persistent=true
 WantedBy=timers.target
 SVCEOF
 
-# Allow SETUP_USER to restart the service without a password (needed by update timer)
-echo "${SETUP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart hamcp-demo" > /etc/sudoers.d/hamcp-demo
-chmod 440 /etc/sudoers.d/hamcp-demo
+# Remove sudoers rule if it exists from a previous install (no longer needed)
+rm -f /etc/sudoers.d/hamcp-demo
 
 systemctl daemon-reload
 systemctl enable hamcp-demo.service
@@ -209,6 +202,7 @@ AUTOEOF
 info "Cleaning up old containers and processes..."
 docker ps -aq --filter "ancestor=ghcr.io/home-assistant/home-assistant" | xargs -r docker rm -f 2>/dev/null || true
 docker ps -aq --filter "ancestor=testcontainers/ryuk" | xargs -r docker rm -f 2>/dev/null || true
+pkill -u "$SETUP_USER" -f "hamcp-test-env" 2>/dev/null || true
 
 #=============================================================================
 # 10. START HA-MCP VIA SYSTEMD
@@ -247,7 +241,6 @@ if [[ $HA_READY -eq 1 ]]; then
     echo ""
     echo "Logs:        docker logs -f $CONTAINER"
     echo "Service log: journalctl -u hamcp-demo -f"
-    echo "Full log:    tail -f /var/log/hamcp-demo.log"
     echo "=============================================="
 else
     echo ""
