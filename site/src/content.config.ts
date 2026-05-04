@@ -13,6 +13,7 @@ const clients = defineCollection({
     accuracy: z.number().min(1).max(5),
     order: z.number().default(99),
     httpNote: z.string().optional(),
+    clientNote: z.string().optional(),
     beta: z.boolean().optional(),
   }),
 });

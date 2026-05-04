@@ -1715,7 +1715,16 @@ mcpServers:
 
     // Notes
     if (state.client.configLocation) {
-      notes += `<p class="text-slate-400 mb-2"><strong>Config location:</strong> <code class="bg-slate-800 px-1 rounded">${state.client.configLocation}</code></p>`;
+      const locations = state.client.configLocation.split('\n').map(l => l.trim()).filter(Boolean);
+      if (locations.length === 1) {
+        notes += `<p class="text-slate-400 mb-2"><strong>Config location:</strong> <code class="bg-slate-800 px-1 rounded">${locations[0]}</code></p>`;
+      } else {
+        const items = locations.map(l => `<li><code class="bg-slate-800 px-1 rounded">${l}</code></li>`).join('');
+        notes += `<div class="text-slate-400 mb-2"><strong>Config location:</strong><ul class="ml-4 mt-1 list-disc">${items}</ul></div>`;
+      }
+    }
+    if (state.client.clientNote) {
+      notes += `<p class="text-amber-400 mb-2">${state.client.clientNote}</p>`;
     }
     if (state.client.httpNote && !isStdio) {
       notes += `<p class="text-amber-400">${state.client.httpNote}</p>`;
