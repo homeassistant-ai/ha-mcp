@@ -1059,6 +1059,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         uvInstall = `<div class="instruction-block">
           <h4 class="instruction-title">Install uv (Linux)</h4>
           <pre class="code-block"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+          <p class="text-xs text-slate-400 mt-2">Or via your package manager: <code>pacman -S uv</code> (Arch), <code>apk add uv</code> (Alpine)</p>
         </div>`;
       } else if (platformId === 'windows') {
         uvInstall = `<div class="instruction-block">
@@ -1144,16 +1145,29 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           memory: 256M</code></pre>
             <p class="text-slate-400 text-xs mt-2"><code>read_only: true</code> pairs with <code>tmpfs: /tmp</code> because the Python runtime writes temporary files there; <code>cap_drop: [ALL]</code> drops every Linux kernel capability the container would otherwise inherit; <code>no-new-privileges:true</code> blocks privilege escalation via setuid binaries. See Docker Compose's <a href="https://docs.docker.com/reference/compose-file/services/" target="_blank" class="text-blue-400 hover:underline">services reference</a> for the full schema.</p>
           </details>
+          <details class="mt-2">
+            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Container management</summary>
+            <div class="text-sm text-slate-300 space-y-1 mt-3">
+              <div><code class="bg-slate-800 px-1 rounded">docker logs ha-mcp -f</code> <span class="text-slate-400">— follow server logs</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker stop ha-mcp</code> <span class="text-slate-400">— stop the container</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker rm ha-mcp</code> <span class="text-slate-400">— remove the stopped container</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker pull ghcr.io/homeassistant-ai/ha-mcp:latest</code> <span class="text-slate-400">— pull latest image, then re-create the container to update</span></div>
+            </div>
+          </details>
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Home Assistant Add-on</h4>
+          <p class="text-slate-300 text-sm mb-3">The add-on auto-discovers the HA connection, generates a secure secret path, and configures the token — no manual setup needed.</p>
           <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
           </a>
           <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the add-on store</p>
-          <p class="text-slate-300">3. Start and check the logs for your MCP URL</p>
+          <p class="text-slate-300 mb-2">3. Start the add-on, then open <strong>Settings → Add-ons → Home Assistant MCP Server → Logs</strong> tab (these are the add-on logs, not the main HA logs)</p>
+          <p class="text-slate-300 mb-2">4. Copy the MCP server URL from the log line — it looks like:</p>
+          <pre class="code-block text-xs"><code>MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw</code></pre>
+          <p class="text-xs text-slate-500 mt-2">Defaults: port <code>9583</code>, 128-bit random secret path, persisted across restarts.</p>
         </div>`;
       }
       instructions.push(deployInstr);
@@ -1195,6 +1209,14 @@ cloudflared tunnel route dns ha-mcp mcp.yourdomain.com
 
 # Run with permanent URL
 cloudflared tunnel run ha-mcp</code></pre>
+            <p class="text-blue-200/80 text-xs mt-3">Persistent tunnels also need a config file at <code class="bg-slate-800 px-1 rounded">~/.cloudflared/config.yml</code> mapping the hostname to the local port:</p>
+            <pre class="code-block mt-2 text-xs"><code>tunnel: ha-mcp
+credentials-file: /path/to/.cloudflared/&lt;tunnel-id&gt;.json
+
+ingress:
+  - hostname: ha-mcp.yourdomain.com
+    service: http://localhost:8086
+  - service: http_status:404</code></pre>
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
