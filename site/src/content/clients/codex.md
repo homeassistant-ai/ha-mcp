@@ -6,7 +6,7 @@ transports: ['stdio', 'streamable-http']
 configFormat: cli
 configLocation: ~/.codex/config.toml
 accuracy: 4
-order: 13
+order: 16
 ---
 
 ## Configuration

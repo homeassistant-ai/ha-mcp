@@ -666,6 +666,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "safe_mode": config.get("safe_mode", False),
                         "internal_url": config.get("internal_url"),
                         "external_url": config.get("external_url"),
+                        # No default: distinguish HA-not-exposing-the-key (None)
+                        # from empty-allowlist ([]) — security-relevant for agents.
+                        "allowlist_external_dirs": config.get(
+                            "allowlist_external_dirs"
+                        ),
                     }
                 )
             result["system_info"] = system_info

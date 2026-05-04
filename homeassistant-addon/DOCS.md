@@ -227,6 +227,20 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 **Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
 
+### verify_ssl (Advanced)
+
+**Default:** `true`
+
+Verify the Home Assistant server's TLS certificate.
+
+The add-on talks to HA via the Supervisor proxy (`http://supervisor/core`), so this option has no effect for the default install. Disable it only if you have reconfigured the add-on to point at an HTTPS endpoint whose certificate doesn't match the hostname being called — for example a local HTTPS endpoint at `https://homeassistant.local:8123`, or a public hostname fronted by a reverse proxy whose certificate is issued for a different name.
+
+When disabled, both the REST and WebSocket clients connect with hostname checking and certificate verification turned off, and a warning is logged once per client.
+
+**Note:** Disabling weakens transport security. Leave this on unless you know you need it. The OAuth flow inherits the server-wide setting — there's no per-user verify_ssl override.
+
+Requires add-on restart to take effect.
+
 ### enable_tool_search
 
 **Default:** `false`

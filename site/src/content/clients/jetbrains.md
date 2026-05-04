@@ -6,7 +6,7 @@ transports: ['stdio']
 configFormat: json
 configLocation: Settings → Tools → AI Assistant → MCP Servers
 accuracy: 4
-order: 9
+order: 12
 httpNote: stdio only - use mcp-remote for HTTP servers
 ---
 

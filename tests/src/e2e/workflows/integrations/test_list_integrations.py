@@ -9,6 +9,7 @@ The actual integrations available will vary based on the test setup.
 """
 
 import logging
+from typing import ClassVar
 
 import pytest
 
@@ -421,6 +422,88 @@ async def test_integration_discovery(mcp_client):
     logger.info(
         f"Integration discovery test passed: found {data['total_count']} integrations"
     )
+
+
+@pytest.mark.integrations
+class TestIntegrationLogLevel:
+    """Verify ha_get_integration surfaces per-integration log levels (#956)."""
+
+    _ACCEPTED: ClassVar[set[str]] = {
+        "DEFAULT",
+        "NOTSET",
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    }
+
+    async def test_list_entries_include_log_level(self, mcp_client):
+        """Every listed entry should expose log_level + log_level_raw."""
+        result = await mcp_client.call_tool("ha_get_integration", {})
+        data = assert_mcp_success(result, "list with log_level")
+
+        if data["total_count"] == 0:
+            pytest.skip("No integrations available to check log_level")
+
+        for entry in data["entries"]:
+            assert "log_level" in entry, (
+                f"Entry {entry.get('domain')} missing log_level field"
+            )
+            assert isinstance(entry["log_level"], str), "log_level must be a string"
+            # Accept canonical names, "DEFAULT", or "LEVEL_<n>" for non-standard ints
+            assert (
+                entry["log_level"] in self._ACCEPTED
+                or entry["log_level"].startswith("LEVEL_")
+            ), f"Unexpected log_level value: {entry['log_level']}"
+
+            assert "log_level_raw" in entry, (
+                f"Entry {entry.get('domain')} missing log_level_raw field"
+            )
+            raw = entry["log_level_raw"]
+            assert raw is None or isinstance(raw, int), (
+                f"log_level_raw must be int or None, got {type(raw).__name__}"
+            )
+            # When no override is set, log_level is DEFAULT and raw is None.
+            if entry["log_level"] == "DEFAULT":
+                assert raw is None, "DEFAULT log_level should pair with raw=None"
+
+    async def test_single_entry_includes_log_level(self, mcp_client):
+        """Single-entry response surfaces the log_level + log_level_raw fields.
+
+        Round-trip against logger.set_level is already covered by
+        test_logs_logger_source_reflects_set_level in tests/src/e2e/tools/test_logbook.py.
+        Here we just verify the single-entry code path populates the field —
+        flipping levels concurrently with other workers proved too flaky to
+        assert a specific value.
+        """
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = assert_mcp_success(list_result, "fetch integrations")
+        if list_data["total_count"] == 0:
+            pytest.skip("No integrations available")
+
+        entry_id = list_data["entries"][0]["entry_id"]
+        single_result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        single_data = assert_mcp_success(single_result, "single entry w/ log_level")
+
+        assert "log_level" in single_data, "Single entry should include log_level"
+        level = single_data["log_level"]
+        assert isinstance(level, str), "log_level must be a string"
+        assert (
+            level in self._ACCEPTED or level.startswith("LEVEL_")
+        ), f"Unexpected log_level value: {level}"
+
+        assert "log_level_raw" in single_data, (
+            "Single entry should include log_level_raw"
+        )
+        raw = single_data["log_level_raw"]
+        assert raw is None or isinstance(raw, int), (
+            f"log_level_raw must be int or None, got {type(raw).__name__}"
+        )
+        if level == "DEFAULT":
+            assert raw is None, "DEFAULT log_level should pair with raw=None"
 
 
 @pytest.mark.integrations

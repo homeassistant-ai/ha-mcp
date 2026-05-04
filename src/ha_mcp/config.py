@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     timeout: int = Field(30, alias="HA_TIMEOUT")
     max_retries: int = Field(3, alias="HA_MAX_RETRIES")
 
+    # False = skip TLS verification (self-signed / hostname mismatch). Trusted networks only.
+    verify_ssl: bool = Field(True, alias="HA_VERIFY_SSL")
+
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
@@ -231,3 +234,13 @@ def get_global_settings() -> Settings:
     if _settings is None:
         _settings = get_settings()
     return _settings
+
+
+def _reset_global_settings() -> None:
+    """Drop the cached settings singleton.
+
+    Test-only seam so suites that mutate ``HA_*`` env vars can force a
+    re-read without reaching into module-private state.
+    """
+    global _settings
+    _settings = None

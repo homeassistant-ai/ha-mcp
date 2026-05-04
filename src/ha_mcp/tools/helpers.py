@@ -78,7 +78,7 @@ def extract_tool_error_message(te: ToolError) -> str:
 
 
 async def get_connected_ws_client(
-    base_url: str, token: str
+    base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:
     """
     Create and connect a WebSocket client.
@@ -86,11 +86,15 @@ async def get_connected_ws_client(
     Args:
         base_url: Home Assistant base URL
         token: Authentication token
+        verify_ssl: TLS verification override. Pass ``client.verify_ssl``
+            from the calling REST client so a programmatic
+            ``HomeAssistantClient(verify_ssl=False)`` propagates to the
+            WebSocket too. ``None`` falls back to ``settings.verify_ssl``.
 
     Returns:
         Tuple of (ws_client, error_dict). If connection fails, ws_client is None.
     """
-    ws_client = HomeAssistantWebSocketClient(base_url, token)
+    ws_client = HomeAssistantWebSocketClient(base_url, token, verify_ssl=verify_ssl)
     connected = await ws_client.connect()
     if not connected:
         return None, create_connection_error(

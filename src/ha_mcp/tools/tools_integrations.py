@@ -34,6 +34,7 @@ from .util_helpers import (
     build_pagination_metadata,
     coerce_bool_param,
     coerce_int_param,
+    get_logger_levels,
     wait_for_entity_removed,
 )
 
@@ -233,6 +234,19 @@ class IntegrationTools:
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
+
+        Each entry carries:
+
+        - ``log_level``: the canonical Python logger level name
+          (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
+          integration has a ``logger.set_level`` override, or ``"DEFAULT"``
+          (uppercase sentinel) when no override is set.
+        - ``log_level_raw``: the original numeric level (e.g. ``10`` for DEBUG)
+          when HA returned an int, ``None`` otherwise (no override set, or HA
+          provided a level name as a string).
+
+        This is distinct from the add-on side, where ``ha_get_addon`` returns
+        Supervisor's lowercase ``"default"`` literal — do not cross-compare.
         """
         try:
             include_opts = coerce_bool_param(
@@ -280,11 +294,20 @@ class IntegrationTools:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
             result = await self._client.get_config_entry(entry_id)
+            entry_domain = result.get("domain") if isinstance(result, dict) else None
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
                 "entry": result,
             }
+
+            # Surface the effective Python logger level for this integration
+            # so users can confirm logger.set_level changes took effect.
+            # Emit unconditionally for symmetry with the list path (_format_entry).
+            logger_levels = await get_logger_levels(self._client)
+            level_info = logger_levels.get(entry_domain or "")
+            resp["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            resp["log_level_raw"] = level_info["raw"] if level_info else None
 
             # Optionally fetch options flow schema (logically read-only: start+abort)
             if include_schema and result.get("supports_options"):
@@ -368,9 +391,12 @@ class IntegrationTools:
                 e for e in entries if e.get("domain", "").lower() == domain_lower
             ]
 
+        # Fetch current logger levels once; enrich each entry with its effective level.
+        logger_levels = await get_logger_levels(self._client)
+
         # Format entries for response
         formatted_entries = [
-            self._format_entry(entry, include_opts) for entry in entries
+            self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
 
         # Apply search filter if query provided
@@ -403,7 +429,11 @@ class IntegrationTools:
         return result_data
 
     @staticmethod
-    def _format_entry(entry: dict[str, Any], include_opts: bool | None) -> dict[str, Any]:
+    def _format_entry(
+        entry: dict[str, Any],
+        include_opts: bool | None,
+        logger_levels: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Format a raw config entry into the response shape."""
         formatted_entry: dict[str, Any] = {
             "entry_id": entry.get("entry_id"),
@@ -415,6 +445,16 @@ class IntegrationTools:
             "supports_unload": entry.get("supports_unload", False),
             "disabled_by": entry.get("disabled_by"),
         }
+
+        # Surface the effective Python logger level for this integration
+        # ("DEFAULT" = no override; falls back to the root logger level).
+        # `log_level_raw` is the original numeric level (None when no override
+        # exists or HA returned a string instead of an int).
+        if logger_levels is not None:
+            domain = entry.get("domain") or ""
+            level_info = logger_levels.get(domain)
+            formatted_entry["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            formatted_entry["log_level_raw"] = level_info["raw"] if level_info else None
 
         # Include options when requested (for auditing template definitions, etc.)
         if include_opts:

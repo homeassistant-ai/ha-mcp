@@ -6,7 +6,7 @@ transports: ['stdio']
 configFormat: json
 configLocation: mcp_config.json (in Antigravity UI)
 accuracy: 3
-order: 15
+order: 19
 ---
 
 ## Configuration

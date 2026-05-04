@@ -371,6 +371,26 @@ class TestGetSupervisorLogWrapper:
         )
         assert any("ha_get_addon" in s for s in suggestions)
 
+    @pytest.mark.asyncio
+    async def test_level_param_emits_warning_for_supervisor_source(
+        self, client_with_logs
+    ):
+        """`level` doesn't apply to supervisor logs (raw container text); the
+        validation layer should warn rather than silently drop the parameter.
+        """
+        client_with_logs.get_addon_logs.return_value = "line 1\n"
+        tools = _register_and_collect(client_with_logs)
+
+        result = await tools["ha_get_logs"](
+            source="supervisor", slug="core_mosquitto", level="ERROR"
+        )
+
+        assert result["success"] is True
+        assert "warnings" in result, "Expected a warning when level is set on supervisor"
+        assert any(
+            "level" in w and "supervisor" in w for w in result["warnings"]
+        ), f"Expected level/supervisor warning, got: {result['warnings']}"
+
 
 class TestStaleToolNameReferences:
     """Regression guard for #950 bug 2: stale `ha_list_addons()` suggestions."""

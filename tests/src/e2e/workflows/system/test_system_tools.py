@@ -299,10 +299,17 @@ class TestSystemTools:
             "location_name",
             "time_zone",
             "components_loaded",
+            "allowlist_external_dirs",
         ]
 
         for field in expected_fields:
             assert field in system_info, f"Missing expected field in system_info: {field}"
+
+        # allowlist_external_dirs is list (HA exposed it) or None (HA omitted the key)
+        allowlist = system_info["allowlist_external_dirs"]
+        assert allowlist is None or isinstance(allowlist, list), (
+            "allowlist_external_dirs should be a list or None"
+        )
 
         # Log key information
         logger.info(f"Home Assistant version: {system_info.get('version')}")
@@ -325,6 +332,44 @@ class TestSystemTools:
         logger.info(f"Repair count: {data['repair_count']}")
 
         logger.info("Get system overview test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_minimal_excludes_full_only_fields(self, mcp_client):
+        """
+        Test: full-only system_info fields must not leak at lower detail levels.
+
+        Guards against accidental hoisting of fields out of the
+        `if detail_level == "full":` branch in tools_search.py.
+        """
+        logger.info("Testing minimal overview excludes full-only system_info fields")
+
+        result = await mcp_client.call_tool(
+            "ha_get_overview", {"detail_level": "minimal"}
+        )
+        data = parse_mcp_result(result)
+        assert data.get("success") is True, (
+            f"Minimal overview failed: {data.get('error')}"
+        )
+
+        full_only_fields = {
+            "country",
+            "currency",
+            "unit_system",
+            "latitude",
+            "longitude",
+            "elevation",
+            "components_loaded",
+            "safe_mode",
+            "internal_url",
+            "external_url",
+            "allowlist_external_dirs",
+        }
+        leaked = full_only_fields & data.get("system_info", {}).keys()
+        assert not leaked, (
+            f"full-only fields leaked at detail_level='minimal': {leaked}"
+        )
+
+        logger.info("Minimal overview leak guard completed successfully")
 
     @pytest.mark.asyncio
     async def test_get_system_health(self, mcp_client):

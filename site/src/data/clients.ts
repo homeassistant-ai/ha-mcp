@@ -394,6 +394,10 @@ HOMEASSISTANT_TOKEN = "your_long_lived_token"`,
     configFormat: 'json',
     configLocation: '~/.config/opencode/opencode.json (global) or opencode.json (project)',
     description: 'AI coding agent by Anomaly with native MCP support over stdio and streamable HTTP.',
+    // uvx-stdio shape (type, command, enabled, environment) is mirrored in
+    // site/src/content/clients/opencode.md and site/src/pages/setup.astro — keep aligned.
+    // Note: the Docker variant in setup.astro intentionally omits the top-level
+    // `environment` key (env vars are inlined as `-e KEY=VAL` in the command array).
     config: `{
   "$schema": "https://opencode.ai/config.json",
   "mcp": {

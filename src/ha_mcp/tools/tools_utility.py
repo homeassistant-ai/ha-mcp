@@ -15,7 +15,12 @@ from fastmcp.exceptions import ToolError
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
-from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
+from .util_helpers import (
+    add_timezone_metadata,
+    coerce_bool_param,
+    coerce_int_param,
+    normalize_log_level,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +84,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_logs(
-        source: Literal["logbook", "system", "error_log", "supervisor"] = "logbook",
+        source: Literal["logbook", "system", "error_log", "supervisor", "logger"] = "logbook",
         # Shared parameters
         limit: int | str | None = None,
         search: str | None = None,
@@ -102,8 +107,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "system": Structured system log entries (errors, warnings) via system_log/list
         - "error_log": Raw home-assistant.log text
         - "supervisor": Add-on container logs (requires slug parameter)
+        - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
-        **Shared params:** limit, search (keyword filter on entries/lines)
+        **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
         **Supervisor params:** slug (add-on slug, e.g. "core_mosquitto")
@@ -130,10 +136,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"Parameters {', '.join(ignored)} only apply to source='logbook'; "
                 f"ignored for source='{source}'"
             )
-        if source == "logbook" and level is not None:
+        if source in ("logbook", "logger", "supervisor") and level is not None:
             warnings.append(
                 "Parameter 'level' only applies to source='system' or 'error_log'; "
-                "ignored for source='logbook'"
+                f"ignored for source='{source}'"
             )
 
         # --- source="logbook" ---
@@ -169,6 +175,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 search=search,
                 level=level,
             )
+            if warnings:
+                result["warnings"] = warnings
+            return result
+
+        # --- source="logger" ---
+        if source == "logger":
+            result = await _get_logger_info(limit=limit, search=search)
             if warnings:
                 result["warnings"] = warnings
             return result
@@ -505,6 +518,97 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 suggestions=[
                     "Check Home Assistant connection",
                     "The error log may be empty if no errors have occurred",
+                ],
+            )
+
+    # ---- Logger info source ----
+
+    async def _get_logger_info(
+        limit: int | str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch per-integration log levels via the ``logger/log_info`` WS command."""
+        effective_limit = _coerce_limit(limit)
+
+        try:
+            result = await client.send_websocket_message({"type": "logger/log_info"})
+
+            if not result.get("success"):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to retrieve logger info"),
+                        suggestions=[
+                            "Verify the 'logger' integration is enabled in Home Assistant",
+                            "Check Home Assistant WebSocket connection",
+                        ],
+                    )
+                )
+
+            raw_entries = result.get("result", [])
+            if not isinstance(raw_entries, list):
+                raw_entries = []
+
+            loggers: list[dict[str, Any]] = []
+            for entry in raw_entries:
+                if not isinstance(entry, dict):
+                    continue
+                domain = entry.get("domain")
+                if not isinstance(domain, str) or not domain:
+                    continue
+                raw_level = entry.get("level")
+                level_name = normalize_log_level(raw_level)
+                if level_name is None:
+                    continue
+                loggers.append(
+                    {
+                        "domain": domain,
+                        "level": level_name,
+                        "level_raw": raw_level if isinstance(raw_level, int) else None,
+                    }
+                )
+
+            filters_applied: dict[str, str] = {}
+            if search:
+                search_lower = search.lower()
+                loggers = [
+                    entry for entry in loggers
+                    if search_lower in entry["domain"].lower()
+                ]
+                filters_applied["search"] = search
+
+            loggers.sort(key=lambda entry: entry["domain"])
+
+            total_entries = len(loggers)
+            loggers = loggers[:effective_limit]
+
+            data: dict[str, Any] = {
+                "success": True,
+                "source": "logger",
+                "loggers": loggers,
+                "total_entries": total_entries,
+                "returned_entries": len(loggers),
+                "limit": effective_limit,
+            }
+            if filters_applied:
+                data["filters_applied"] = filters_applied
+
+            return data
+
+        except ToolError:
+            raise
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantAPIError,
+            TimeoutError,
+            OSError,
+        ) as e:
+            exception_to_structured_error(
+                e,
+                context={"source": "logger"},
+                suggestions=[
+                    "Check Home Assistant WebSocket connection",
+                    "Verify the 'logger' integration is enabled",
                 ],
             )
 

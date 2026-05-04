@@ -23,6 +23,7 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `tool_search_max_results` | Max results from `ha_search_tools` (range 2-10) | `5` |
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary) | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
+| `verify_ssl` | Verify the HA server's TLS certificate. Disable for self-signed certs or hostname mismatches. Weakens security — leave on unless needed. | `true` |
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
 

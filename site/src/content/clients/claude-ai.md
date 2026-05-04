@@ -5,7 +5,7 @@ logo: /logos/claude.svg
 transports: ['sse', 'streamable-http']
 configFormat: ui
 accuracy: 4
-order: 8
+order: 10
 httpNote: Requires HTTPS - Remote deployment required
 ---
 
