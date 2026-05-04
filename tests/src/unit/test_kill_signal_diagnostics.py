@@ -191,20 +191,43 @@ class TestFormatDiagnosticBlock:
         assert "VmRSS: 131072 kB" in block
         assert "oom_score_adj: -500" in block
 
-    def test_falls_back_when_sender_metadata_missing(self) -> None:
+    def test_cross_namespace_sender_renders_explicit_label(self) -> None:
+        # si_pid == 0 means the sender was outside our PID namespace
+        # (typically Supervisor or the host process) and its PID didn't
+        # translate. The block should call this out instead of showing
+        # bare "0" + "<unavailable>", which would read as a capture
+        # failure rather than the (informative) cross-namespace case.
         block = format_diagnostic_block(
             signum=15,
-            si_code=0x80,  # SI_KERNEL
+            si_code=0,  # SI_USER + si_pid=0 == cross-namespace kill (e.g. Supervisor stop)
             sender_pid=0,
             sender_comm="",
             sender_cmdline="",
             proc_status={},
         )
 
-        assert "SI_KERNEL" in block
+        assert "Sender PID:     0 (cross-namespace; likely Supervisor or host process)" in block
+        assert "Sender comm:    <cross-namespace>" in block
+        assert "Sender cmdline: <cross-namespace>" in block
+        assert "<unavailable — non-Linux or /proc not mounted>" in block
+
+    def test_in_namespace_sender_with_missing_proc_renders_unavailable(self) -> None:
+        # In-namespace sender (sender_pid > 0) but /proc/<pid>/comm
+        # came back empty (race: sender exited before we read /proc).
+        # Should still say "<unavailable>" for the missing fields, not
+        # the cross-namespace label.
+        block = format_diagnostic_block(
+            signum=15,
+            si_code=0,
+            sender_pid=17,
+            sender_comm="",
+            sender_cmdline="",
+            proc_status={},
+        )
+
+        assert "Sender PID:     17" in block
         assert "Sender comm:    <unavailable>" in block
         assert "Sender cmdline: <unavailable>" in block
-        assert "<unavailable — non-Linux or /proc not mounted>" in block
 
     @pytest.mark.parametrize(
         ("code", "name"),

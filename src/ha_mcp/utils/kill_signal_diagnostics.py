@@ -213,15 +213,30 @@ def format_diagnostic_block(
     sig_name = signal.Signals(signum).name if signum in signal.Signals.__members__.values() else str(signum)
     code_name = _SI_CODE_NAMES.get(si_code, f"SI_UNKNOWN({si_code})")
 
+    # si_pid == 0 from the kernel means the sender was outside our PID
+    # namespace (typically Supervisor or the host) — its PID didn't
+    # translate, so /proc/0/{comm,cmdline} can't resolve. Render an
+    # explicit label so the diagnostic isn't read as "we failed to
+    # capture the sender" — the cross-namespace case is itself the
+    # signal in #1109-style reports.
+    if sender_pid == 0:
+        sender_pid_str = "0 (cross-namespace; likely Supervisor or host process)"
+        sender_comm_str = "<cross-namespace>"
+        sender_cmdline_str = "<cross-namespace>"
+    else:
+        sender_pid_str = str(sender_pid)
+        sender_comm_str = sender_comm or "<unavailable>"
+        sender_cmdline_str = sender_cmdline or "<unavailable>"
+
     lines = [
         "=" * 80,
         "ADVANCED DEBUG LOGGING — kill-signal diagnostics",
         "=" * 80,
         f"Signal:         {sig_name} ({signum})",
         f"si_code:        {code_name}",
-        f"Sender PID:     {sender_pid}",
-        f"Sender comm:    {sender_comm or '<unavailable>'}",
-        f"Sender cmdline: {sender_cmdline or '<unavailable>'}",
+        f"Sender PID:     {sender_pid_str}",
+        f"Sender comm:    {sender_comm_str}",
+        f"Sender cmdline: {sender_cmdline_str}",
         "",
         "Process state (from /proc/self/status):",
     ]

@@ -31,7 +31,6 @@ options:
   enable_skills_as_tools: true
   enable_tool_search: false
   verify_ssl: true
-  advanced_debug_logging: false
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
