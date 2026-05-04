@@ -3,4 +3,7 @@
 # install.sh handles both macOS and Linux; use it directly:
 # curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install.sh | sh
 set -e
-curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install.sh | sh
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install.sh -o "$TMPFILE"
+sh "$TMPFILE"
