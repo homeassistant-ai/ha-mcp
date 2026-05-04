@@ -696,25 +696,22 @@ class TestInputButtonCRUD:
             f"{delete_data.get('method')} (unique_id={delete_data.get('unique_id')})"
         )
 
-        # VERIFY entity is actually gone from the registry — the bug let the
-        # tool report success while leaving the registry entry behind.
+        # VERIFY entity is actually gone from the registry — pre-fix the
+        # tool reported success while leaving the registry entry behind.
+        # Post-delete, ha_get_entity returns success=False with "Entity not
+        # found" in the message; the exact error code may be
+        # ENTITY_NOT_FOUND or SERVICE_CALL_FAILED depending on which layer
+        # surfaces it first, so the assertion targets the message.
         get_data = await safe_call_tool(
             mcp_client, "ha_get_entity", {"entity_id": entity_id}
         )
-        if get_data.get("success", True) is False:
-            # ENTITY_NOT_FOUND is the expected post-delete state
-            err_code = get_data.get("error", {}).get("code", "")
-            assert "NOT_FOUND" in err_code.upper(), (
-                f"Unexpected error after delete: {get_data}"
-            )
-        else:
-            # Successful response means entity_entry should be empty/None
-            entry = get_data.get("entity_entry") or get_data.get("data", {}).get(
-                "entity_entry"
-            )
-            assert not entry, (
-                f"Entity still present in registry after delete: {get_data}"
-            )
+        assert get_data.get("success", True) is False, (
+            f"Entity still present in registry after delete: {get_data}"
+        )
+        err_msg = (get_data.get("error", {}).get("message") or "").lower()
+        assert "not found" in err_msg, (
+            f"Expected 'not found' in error message, got: {get_data}"
+        )
 
         logger.info(
             f"Issue #1057 regression test passed: disabled "
