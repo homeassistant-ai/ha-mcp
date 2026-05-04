@@ -458,7 +458,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 
 **Adding a new client / platform / connection / deployment:**
 
-1. Add an entry to the appropriate inline array (insert at the right `order` position).
+1. Add an entry to the appropriate inline array (insert at the right `order` position). Keep each array ordered by the `order` field — the wizard renders entries in array order without re-sorting.
 2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match neighboring patterns: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with click steps. See `cursor` / `chatgpt` / `claude-code` / `cloudflared` for examples.
 3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
 

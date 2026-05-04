@@ -31,6 +31,7 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
+        <li class="ml-4"><a href="#quick-test" class="text-blue-400 hover:underline">Test ha-mcp Without Configuring a Client</a></li>
         <li class="ml-4"><a href="#uvx-background" class="text-blue-400 hover:underline">Keep ha-mcp-web Running in the Background</a></li>
         <li class="ml-4"><a href="#docker-port" class="text-blue-400 hover:underline">Docker: Changing the Port</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
@@ -307,6 +308,13 @@ source ~/.zshrc
             <li>Check that your tunnel (Cloudflare, ngrok, etc.) is still running and the URL has not changed.</li>
             <li>Verify the server is reachable by visiting the MCP URL directly in your browser — you should see a response from the server.</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="quick-test">
+          <h3 class="text-lg font-medium text-white mb-2">Test ha-mcp without configuring a client</h3>
+          <p class="text-slate-300 mb-3">Before setting up a client, you can run a quick smoke test against the public demo server to confirm <code class="bg-slate-800 px-1 rounded">uvx</code> is installed and ha-mcp launches correctly:</p>
+          <pre class="code-block"><code>HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">This starts ha-mcp in stdio mode connected to the public demo Home Assistant instance. Press <strong>Ctrl+C</strong> to stop. If it launches without errors, your environment is ready — replace the URL and token with your own values to connect to your Home Assistant.</p>
         </div>
 
         <div class="faq-item" id="uvx-background">
