@@ -88,7 +88,7 @@ configuration:
   advanced_debug_logging:
     name: Advanced debug logging
     description: >-
-      Captures extra diagnostic info on kill/shutdown — sender PID,
-      memory state, and recent tool activity. Useful when reporting
-      unexplained add-on stops or crash loops. Off by default to keep
-      logs concise. Requires restart to take effect.
+      Captures extra diagnostic info on kill/shutdown — sender PID
+      and memory state. Useful when reporting unexplained add-on
+      stops or crash loops. Off by default to keep logs concise.
+      Requires restart to take effect.
