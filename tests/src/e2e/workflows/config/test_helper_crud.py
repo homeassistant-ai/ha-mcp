@@ -696,12 +696,8 @@ class TestInputButtonCRUD:
             f"{delete_data.get('method')} (unique_id={delete_data.get('unique_id')})"
         )
 
-        # VERIFY entity is actually gone from the registry — pre-fix the
-        # tool reported success while leaving the registry entry behind.
-        # Post-delete, ha_get_entity returns success=False with "Entity not
-        # found" in the message; the exact error code may be
-        # ENTITY_NOT_FOUND or SERVICE_CALL_FAILED depending on which layer
-        # surfaces it first, so the assertion targets the message.
+        # Verify entity is gone — error code varies (ENTITY_NOT_FOUND vs
+        # SERVICE_CALL_FAILED), so the assertion targets the message.
         get_data = await safe_call_tool(
             mcp_client, "ha_get_entity", {"entity_id": entity_id}
         )
