@@ -390,12 +390,16 @@ def main() -> int:
     from ha_mcp.settings_ui import register_settings_routes
 
     if advanced_debug_logging:
-        # Install kill-signal diagnostics so a future SIGTERM (e.g. the
-        # unexplained shutdowns reported in #1109) leaves a record of who
-        # sent the signal and what state the process was in. Off by default;
-        # users opt in via the "Advanced debug logging" addon option.
-        from ha_mcp.utils.kill_signal_diagnostics import install_kill_signal_diagnostics
-        install_kill_signal_diagnostics()
+        # Captures sender PID + /proc state on SIGTERM/SIGINT/SIGHUP.
+        # Wrapped because diagnostics must never block addon startup.
+        try:
+            from ha_mcp.utils.kill_signal_diagnostics import (
+                install_kill_signal_diagnostics,
+            )
+            if not install_kill_signal_diagnostics():
+                log_info("advanced_debug_logging requested but handler not installed; continuing")
+        except Exception as e:
+            log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
 
     register_browser_landing(mcp, secret_path)
     # Mount settings UI routes both at root (for HA ingress proxy) and
