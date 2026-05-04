@@ -296,6 +296,7 @@ jobs:
         uses: google-github-actions/run-gemini-cli@v0
         env:
           GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
         with:
           gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
           gemini_model: 'gemini-3-flash-preview'
@@ -317,6 +318,7 @@ jobs:
         uses: google-github-actions/run-gemini-cli@v0
         env:
           GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
           ISSUE_NUMBER: '${{ steps.issue_number.outputs.number }}'
           ISSUE_TITLE: '${{ steps.issue_data.outputs.issue_title }}'
           ISSUE_BODY: '${{ steps.issue_data.outputs.issue_body }}'
