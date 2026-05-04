@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from ha_mcp.utils import kill_signal_diagnostics as ksd
 from ha_mcp.utils.kill_signal_diagnostics import (
     _SI_CODE_NAMES,
