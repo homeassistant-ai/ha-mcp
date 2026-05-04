@@ -620,6 +620,107 @@ class TestInputButtonCRUD:
         )
         logger.info("Input button cleanup complete")
 
+    async def test_disabled_input_button_deletion_resolves_via_registry(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Issue #1057 regression: a disabled helper (registered but absent
+        from the state machine) must be resolved via the entity registry,
+        not silently treated as already-deleted.
+
+        End-to-end mirror of the unit test
+        ``test_simple_path_disabled_entity_resolves_via_registry``: creates a
+        helper, disables its entity via ``ha_set_entity(enabled=False)``,
+        deletes it, and asserts the deletion took the standard
+        ``websocket_delete`` path (not the ``already_deleted`` fallback that
+        masked the bug pre-fix).
+        """
+        helper_name = "E2E Disabled Button"
+
+        # CREATE input_button
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_button",
+                "name": helper_name,
+                "icon": "mdi:gesture-tap-button",
+            },
+        )
+        create_data = assert_mcp_success(create_result, "Create input_button")
+        entity_id = get_entity_id_from_response(create_data, "input_button")
+        assert entity_id, f"Missing entity_id: {create_data}"
+        cleanup_tracker.track("input_button", entity_id)
+        logger.info(f"Created input_button: {entity_id}")
+
+        # Wait until entity is queryable
+        state_reached = await wait_for_entity_state(
+            mcp_client, entity_id, "unknown", timeout=10
+        )
+        assert state_reached, f"Entity {entity_id} not registered within timeout"
+
+        # DISABLE entity at registry level — this is what reproduces the bug
+        disable_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "enabled": False},
+        )
+        disable_data = assert_mcp_success(disable_result, "Disable entity")
+        assert disable_data.get("entity_entry", {}).get("disabled_by") == "user", (
+            f"Entity not registry-disabled: {disable_data}"
+        )
+        logger.info(f"Disabled entity {entity_id} (disabled_by=user)")
+
+        # DELETE — pre-fix this fell through to the ``already_deleted``
+        # short-circuit, leaving the registry entry in place. Post-fix the
+        # registry lookup runs every iteration and finds the unique_id.
+        delete_result = await mcp_client.call_tool(
+            "ha_delete_helpers_integrations",
+            {
+                "helper_type": "input_button",
+                "target": entity_id,
+                "confirm": True,
+            },
+        )
+        delete_data = assert_mcp_success(delete_result, "Delete disabled helper")
+
+        # Crucially: the standard registry-driven delete path ran, NOT the
+        # already_deleted fallback that masked the bug.
+        assert delete_data.get("fallback_used") != "already_deleted", (
+            f"Bug regression — disabled entity hit already_deleted fallback. "
+            f"Delete data: {delete_data}"
+        )
+        assert delete_data.get("method") == "websocket_delete", (
+            f"Expected websocket_delete via unique_id; got "
+            f"method={delete_data.get('method')}, data={delete_data}"
+        )
+        logger.info(
+            f"Disabled helper deleted via "
+            f"{delete_data.get('method')} (unique_id={delete_data.get('unique_id')})"
+        )
+
+        # VERIFY entity is actually gone from the registry — the bug let the
+        # tool report success while leaving the registry entry behind.
+        get_data = await safe_call_tool(
+            mcp_client, "ha_get_entity", {"entity_id": entity_id}
+        )
+        if get_data.get("success", True) is False:
+            # ENTITY_NOT_FOUND is the expected post-delete state
+            err_code = get_data.get("error", {}).get("code", "")
+            assert "NOT_FOUND" in err_code.upper(), (
+                f"Unexpected error after delete: {get_data}"
+            )
+        else:
+            # Successful response means entity_entry should be empty/None
+            entry = get_data.get("entity_entry") or get_data.get("data", {}).get(
+                "entity_entry"
+            )
+            assert not entry, (
+                f"Entity still present in registry after delete: {get_data}"
+            )
+
+        logger.info(
+            f"Issue #1057 regression test passed: disabled "
+            f"{entity_id} cleanly resolved via registry"
+        )
+
 
 @pytest.mark.asyncio
 @pytest.mark.config
