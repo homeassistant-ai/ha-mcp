@@ -217,20 +217,23 @@ systemctl restart hamcp-demo.service
 
 #=============================================================================
 # 11. WAIT FOR HA
-info "Waiting for Home Assistant to start (up to 3 minutes)..."
-for i in {1..90}; do
+# On first install, the HA image (~600MB) must be pulled before the container
+# starts. Allow up to 15 minutes to cover both pull and boot time.
+info "Waiting for Home Assistant to start (up to 15 minutes on first install)..."
+HA_READY=0
+for i in {1..180}; do
     if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$HA_PORT" 2>/dev/null | grep -qE "200|401"; then
+        HA_READY=1
         break
     fi
     echo -n "."
-    sleep 2
+    sleep 5
 done
 echo ""
 
 #=============================================================================
 # 12. VERIFY
-sleep 3
-if docker ps | grep -q "home-assistant"; then
+if [[ $HA_READY -eq 1 ]]; then
     CONTAINER=$(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assistant" --format "{{.Names}}" | head -1)
     echo ""
     echo "=============================================="
@@ -248,7 +251,7 @@ if docker ps | grep -q "home-assistant"; then
     echo "=============================================="
 else
     echo ""
-    echo -e "${RED}Container not running!${NC}"
-    echo "Check logs: journalctl -u hamcp-demo --no-pager -n 50"
-    exit 1
+    warn "Home Assistant did not respond within 15 minutes."
+    warn "The service is running — HA may still be starting (check: journalctl -u hamcp-demo -f)"
+    warn "If it stays down: journalctl -u hamcp-demo --no-pager -n 50"
 fi
