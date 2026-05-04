@@ -19,8 +19,10 @@ gh issue view "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --json title,body,labe
 **Create a worktree from repo root:**
 ```bash
 cd "$(git rev-parse --show-toplevel)"
+git checkout master && git pull origin master
 git worktree add "worktree/issue-$ARGUMENTS" -b "feature/issue-$ARGUMENTS"
-cd worktree/issue-$ARGUMENTS
+git -C "worktree/issue-$ARGUMENTS" submodule update --init --recursive
+cd "worktree/issue-$ARGUMENTS"
 ```
 
 ## Phase 2: Implement
@@ -44,13 +46,17 @@ PR_NUMBER=$(gh pr create --draft \
   --title "<descriptive title>" \
   --body "Closes #$ARGUMENTS
 
-## Changes
-[description]" | grep -oE '[0-9]+$')
+## What does this PR do?
+[description]
+
+## Future improvements
+<!-- Out-of-scope improvements noticed during implementation -->
+" | grep -oE '[0-9]+$')
 ```
 
-Wait for CI (~3 min):
+Wait for CI:
 ```bash
-sleep 180 && gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp
+gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp --watch
 ```
 
 Before marking ready (`gh pr ready`), update the PR description to reflect all changes made.
@@ -81,7 +87,7 @@ gh api graphql -f query='mutation($threadId: ID!) { resolveReviewThread(input: {
 
 **After pushing fixes**, wait and re-check:
 ```bash
-sleep 180 && gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
+gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp --watch
 ```
 
 ## Phase 5: Final Report

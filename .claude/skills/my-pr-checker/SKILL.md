@@ -17,18 +17,18 @@ gh pr view "$ARGUMENTS" --repo homeassistant-ai/ha-mcp \
   --json title,body,state,reviews,statusCheckRollup,headRefName,additions,deletions,changedFiles
 
 # CI checks
-gh pr checks $ARGUMENTS --repo homeassistant-ai/ha-mcp
+gh pr checks "$ARGUMENTS" --repo homeassistant-ai/ha-mcp
 
 # Inline review comments
-gh api repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments \
+gh api repos/homeassistant-ai/ha-mcp/pulls/"$ARGUMENTS"/comments \
   --jq '.[] | {id, path, line, author: .user.login, body}'
 
 # PR-level comments
-gh api repos/homeassistant-ai/ha-mcp/issues/$ARGUMENTS/comments \
+gh api repos/homeassistant-ai/ha-mcp/issues/"$ARGUMENTS"/comments \
   --jq '.[] | {id, author: .user.login, body}'
 
 # Unresolved review threads
-gh api graphql -f query='query { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:$ARGUMENTS) { reviewThreads(first:100) { nodes { id isResolved path line comments(first:1) { nodes { databaseId body author { login } } } } } } } }'
+gh api graphql -f query="query { repository(owner:\"homeassistant-ai\", name:\"ha-mcp\") { pullRequest(number:$ARGUMENTS) { reviewThreads(first:100) { nodes { id isResolved path line comments(first:1) { nodes { databaseId body author { login } } } } } } } }"
 ```
 
 ## Step 2: Triage Comments
@@ -42,7 +42,7 @@ Dismiss if: incorrect suggestion, reduces readability, conflicts with project pa
 ## Step 3: Fix Code Issues
 
 ```bash
-gh pr checkout $ARGUMENTS --repo homeassistant-ai/ha-mcp
+gh pr checkout "$ARGUMENTS" --repo homeassistant-ai/ha-mcp
 # make changes
 git add <files>
 git commit -m "fix: address review feedback - [description]"
@@ -51,22 +51,23 @@ git push
 
 Fix unrelated test failures encountered (document in final summary).
 
-After each push, if the scope changed, update the PR description — the PR is already ready so reviewers see it immediately.
-
-After each push, update the PR description if the changes affect what the PR does.
+After each push, if the scope changed, update the PR description:
+```bash
+gh pr edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "..."
+```
 
 ## Step 4: Resolve Each Thread (both steps required)
 
 ```bash
 # 1a. Reply on inline thread
-gh api repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments/<COMMENT_ID>/replies \
+gh api repos/homeassistant-ai/ha-mcp/pulls/"$ARGUMENTS"/comments/<COMMENT_ID>/replies \
   -f body="✅ Fixed in [commit]. [explanation]"
 # or for dismissed:
-gh api repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments/<COMMENT_ID>/replies \
+gh api repos/homeassistant-ai/ha-mcp/pulls/"$ARGUMENTS"/comments/<COMMENT_ID>/replies \
   -f body="📝 Not addressing because [reason]."
 
 # 1b. PR-level summary comment (when there are multiple inline threads)
-gh pr review $ARGUMENTS --repo homeassistant-ai/ha-mcp \
+gh pr review "$ARGUMENTS" --repo homeassistant-ai/ha-mcp \
   --comment --body "✅ Addressed review feedback in [commit]. [summary]"
 
 # 2. Resolve thread via GraphQL
@@ -79,8 +80,7 @@ gh api graphql -f query='mutation($threadId: ID!) { resolveReviewThread(input: {
 ## Step 5: Wait and Re-check
 
 ```bash
-sleep 210
-gh pr checks $ARGUMENTS --repo homeassistant-ai/ha-mcp
+gh pr checks "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --watch
 ```
 
 Repeat Steps 1–5 until:
@@ -90,8 +90,15 @@ Repeat Steps 1–5 until:
 
 ## Step 6: Final Report
 
+If improvements were identified during review, add them to the PR description's **Future improvements** section first:
 ```bash
-gh pr comment $ARGUMENTS --repo homeassistant-ai/ha-mcp --body "## PR Assessment Summary
+gh pr edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "..."
+```
+(Edit the existing `## Future improvements` section, or append it if absent.)
+
+Then post a summary comment:
+```bash
+gh pr comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "## PR Assessment Summary
 
 ✅ **Status**: Ready for review/merge
 
@@ -101,11 +108,15 @@ gh pr comment $ARGUMENTS --repo homeassistant-ai/ha-mcp --body "## PR Assessment
 **Problems Encountered:**
 - [issues faced and how resolved]
 - [unrelated test failures fixed, if any]
-
-**Future improvements:**
-- [large/out-of-scope improvements noted — document here rather than opening separate PRs]
 "
 ```
+
+## Special Operations
+
+When needed:
+- **Rebase**: `gh pr checkout "$ARGUMENTS" && git rebase master && git push --force-with-lease`
+- **Delete comment**: `gh api -X DELETE repos/homeassistant-ai/ha-mcp/issues/comments/<id>`
+- **Update title**: `gh pr edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --title "new title"`
 
 ## Rules
 
