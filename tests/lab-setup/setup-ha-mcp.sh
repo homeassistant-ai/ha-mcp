@@ -82,15 +82,69 @@ else
 fi
 
 #=============================================================================
-# 6. CRONTAB (startup + weekly reset)
-info "Setting up crontab..."
-CRON_REBOOT="@reboot sleep 10 && cd $SETUP_HOME/ha-mcp && HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive >> /tmp/hamcp.log 2>&1"
-CRON_WEEKLY="0 3 * * 1 cd $SETUP_HOME/ha-mcp && git pull --ff-only && docker stop \$(docker ps -q --filter ancestor=ghcr.io/home-assistant/home-assistant) 2>/dev/null; docker rm \$(docker ps -aq --filter ancestor=ghcr.io/home-assistant/home-assistant) 2>/dev/null; docker image prune -af 2>/dev/null; HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive >> /tmp/hamcp.log 2>&1"
-(
-    sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -v "hamcp-test-env" || true
-    echo "$CRON_REBOOT"
-    echo "$CRON_WEEKLY"
-) | sudo -u "$SETUP_USER" crontab -
+# 6. SYSTEMD SERVICE (replaces cron - ensures only one instance runs, auto-restarts)
+info "Setting up systemd service..."
+
+# Remove old cron entries if they exist (migration from cron-based setup)
+sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -v "hamcp-test-env" | sudo -u "$SETUP_USER" crontab - 2>/dev/null || true
+
+cat > /etc/systemd/system/hamcp-demo.service << SVCEOF
+[Unit]
+Description=HA-MCP Demo Test Environment
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=${SETUP_USER}
+Group=${SETUP_USER}
+WorkingDirectory=${SETUP_HOME}/ha-mcp
+Environment=HA_TEST_PORT=${HA_PORT}
+ExecStart=${UV_PATH} run hamcp-test-env --no-interactive
+Restart=on-failure
+RestartSec=30s
+StandardOutput=append:/var/log/hamcp-demo.log
+StandardError=append:/var/log/hamcp-demo.log
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+cat > /etc/systemd/system/hamcp-demo-update.service << SVCEOF
+[Unit]
+Description=HA-MCP Demo Weekly Update
+After=docker.service
+
+[Service]
+Type=oneshot
+User=${SETUP_USER}
+Group=${SETUP_USER}
+WorkingDirectory=${SETUP_HOME}/ha-mcp
+ExecStart=/bin/bash -c 'git pull --ff-only'
+ExecStartPost=/bin/systemctl restart hamcp-demo
+StandardOutput=append:/var/log/hamcp-demo.log
+StandardError=append:/var/log/hamcp-demo.log
+SVCEOF
+
+cat > /etc/systemd/system/hamcp-demo-update.timer << SVCEOF
+[Unit]
+Description=HA-MCP Demo Weekly Update Timer
+Requires=hamcp-demo-update.service
+
+[Timer]
+OnCalendar=Mon *-*-* 03:00:00
+AccuracySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable hamcp-demo.service
+systemctl enable hamcp-demo-update.timer
+systemctl start hamcp-demo-update.timer
 
 #=============================================================================
 # 7. CADDY
@@ -146,19 +200,20 @@ APT::Periodic::AutocleanInterval "7";
 AUTOEOF
 
 #=============================================================================
-# 9. STOP OLD CONTAINERS
-info "Cleaning up old containers..."
+# 9. STOP OLD CONTAINERS + PROCESSES
+info "Cleaning up old containers and processes..."
 docker ps -aq --filter "ancestor=ghcr.io/home-assistant/home-assistant" | xargs -r docker rm -f 2>/dev/null || true
+docker ps -aq --filter "ancestor=testcontainers/ryuk" | xargs -r docker rm -f 2>/dev/null || true
 
 #=============================================================================
-# 10. START HA-MCP
-info "Starting hamcp-test-env..."
-sudo -u "$SETUP_USER" sg docker -c "cd $SETUP_HOME/ha-mcp && HA_TEST_PORT=$HA_PORT $UV_PATH run hamcp-test-env --no-interactive > /tmp/hamcp.log 2>&1 &"
+# 10. START HA-MCP VIA SYSTEMD
+info "Starting hamcp-demo service..."
+systemctl restart hamcp-demo.service
 
 #=============================================================================
 # 11. WAIT FOR HA
-info "Waiting for Home Assistant to start..."
-for i in {1..60}; do
+info "Waiting for Home Assistant to start (up to 3 minutes)..."
+for i in {1..90}; do
     if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$HA_PORT" 2>/dev/null | grep -qE "200|401"; then
         break
     fi
@@ -168,7 +223,7 @@ done
 echo ""
 
 #=============================================================================
-# 11. VERIFY
+# 12. VERIFY
 sleep 3
 if docker ps | grep -q "home-assistant"; then
     CONTAINER=$(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assistant" --format "{{.Names}}" | head -1)
@@ -183,11 +238,12 @@ if docker ps | grep -q "home-assistant"; then
     echo "Credentials: dev / dev"
     echo ""
     echo "Logs:        docker logs -f $CONTAINER"
-    echo "Startup log: tail -f /tmp/hamcp.log"
+    echo "Service log: journalctl -u hamcp-demo -f"
+    echo "Full log:    tail -f /var/log/hamcp-demo.log"
     echo "=============================================="
 else
     echo ""
     echo -e "${RED}Container not running!${NC}"
-    echo "Check logs: cat /tmp/hamcp.log"
+    echo "Check logs: journalctl -u hamcp-demo --no-pager -n 50"
     exit 1
 fi
