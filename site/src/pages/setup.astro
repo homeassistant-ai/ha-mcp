@@ -1364,6 +1364,14 @@ cloudflared tunnel run ha-mcp</code></pre>
               "home-assistant": opencodeStdio
             }
           }, null, 2);
+        } else if (state.client.id === 'github-copilot-agents') {
+          // GitHub Copilot Agents reads .vscode/mcp.json with a bare top-level "servers" key
+          // (no "mcpServers" wrapper, no "mcp" wrapper — those are different config files).
+          config = JSON.stringify({
+            servers: {
+              "home-assistant": stdioConfig
+            }
+          }, null, 2);
         } else {
           config = JSON.stringify({
             mcpServers: {
@@ -1448,6 +1456,17 @@ cloudflared tunnel run ha-mcp</code></pre>
                 type: "remote",
                 url: mcpUrl,
                 enabled: true
+              }
+            }
+          }, null, 2);
+        } else if (state.client.id === 'github-copilot-agents') {
+          // GitHub Copilot Agents reads .vscode/mcp.json with a bare top-level "servers" key
+          // and uses transport:"sse" for non-local connections (no streamableHttp support).
+          config = JSON.stringify({
+            servers: {
+              "home-assistant": {
+                url: mcpUrl,
+                transport: "sse"
               }
             }
           }, null, 2);
