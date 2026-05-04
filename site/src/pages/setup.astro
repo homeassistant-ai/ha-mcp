@@ -1335,7 +1335,7 @@ cloudflared tunnel run ha-mcp</code></pre>
         } else if (isOpenCode) {
           // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env"
           // The uvx-stdio shape (type, command, enabled, environment) is mirrored in
-          // site/src/content/clients/opencode.md and site/src/data/clients.ts — keep all three aligned.
+          // site/src/content/clients/opencode.md and site/src/data/clients.ts — keep aligned.
           // The Docker branch below intentionally omits the top-level `environment` key (env vars are
           // inlined as `-e KEY=VAL` in the command array), so the asymmetry is deliberate.
           const opencodeStdio = isDocker

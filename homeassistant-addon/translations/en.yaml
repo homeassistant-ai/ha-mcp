@@ -26,3 +26,13 @@ configuration:
       deferred tools or with smaller context windows. Tools are found via
       ha_search_tools and executed via categorized proxies (read/write/delete).
       Requires restart to take effect.
+  verify_ssl:
+    name: Verify TLS certificate
+    description: >-
+      Verify the Home Assistant server's TLS certificate. The add-on
+      connects via the Supervisor proxy, so this normally has no effect
+      and should stay enabled. Disable only if you've reconfigured the
+      add-on to talk to HA over a public HTTPS hostname with a self-signed
+      certificate or hostname mismatch. Disabling weakens transport
+      security — leave on unless you know you need it. Requires restart
+      to take effect.

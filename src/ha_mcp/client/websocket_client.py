@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import ssl
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -20,7 +21,11 @@ from urllib.parse import urlparse
 import websockets
 
 from ..config import get_global_settings
-from .rest_client import HomeAssistantCommandError, HomeAssistantConnectionError
+from .rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+    _is_ssl_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,15 +163,33 @@ class WebSocketConnectionState:
 class HomeAssistantWebSocketClient:
     """WebSocket client for Home Assistant real-time communication."""
 
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, verify_ssl: bool | None = None):
         """Initialize WebSocket client.
 
         Args:
             url: Home Assistant URL (e.g., 'https://homeassistant.local:8123')
             token: Home Assistant long-lived access token
+            verify_ssl: Whether to verify the HA server's TLS certificate
+                for ``wss://`` connections. Defaults to
+                ``settings.verify_ssl``. Pass False to allow self-signed
+                certs or hostname mismatches.
         """
         self.base_url = url.rstrip("/")
         self.token = token
+        if verify_ssl is None:
+            try:
+                verify_ssl = get_global_settings().verify_ssl
+            except Exception as e:
+                # A bad env var elsewhere should not silently flip TLS off:
+                # log which key tripped and fall back to the secure default.
+                logger.warning(
+                    "Could not load settings while resolving verify_ssl "
+                    "(%s); falling back to verify_ssl=True.",
+                    e,
+                )
+                verify_ssl = True
+        self.verify_ssl = verify_ssl
+        self._warned_verify_disabled = False
         self.websocket: websockets.ClientConnection | None = None
         self.background_task: asyncio.Task | None = None
         self._send_lock: asyncio.Lock | None = None
@@ -197,6 +220,25 @@ class HomeAssistantWebSocketClient:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
 
+            # Only configure an SSLContext for wss://; ws:// (Supervisor
+            # proxy) doesn't use TLS and gets ssl=None.
+            ssl_ctx: ssl.SSLContext | None = None
+            if self.ws_url.startswith("wss://"):
+                ssl_ctx = ssl.create_default_context()
+                if not self.verify_ssl:
+                    if not self._warned_verify_disabled:
+                        # Once per client — pool reconnects/HA restarts
+                        # otherwise flood logs with the same warning.
+                        logger.warning(
+                            "TLS verification disabled for Home Assistant "
+                            "WebSocket (HA_VERIFY_SSL=false). Connecting to "
+                            "%s with hostname/cert checks off.",
+                            self.ws_url,
+                        )
+                        self._warned_verify_disabled = True
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
+
             # Connect to WebSocket
             # Include Authorization header for Supervisor proxy compatibility
             # (required when connecting via http://supervisor/core/websocket)
@@ -205,6 +247,7 @@ class HomeAssistantWebSocketClient:
                 ping_interval=30,
                 ping_timeout=10,
                 additional_headers={"Authorization": f"Bearer {self.token}"},
+                ssl=ssl_ctx,
                 # Increase max message size to 20MB for large responses
                 # (e.g., HACS repository list can be 2MB+)
                 max_size=20 * 1024 * 1024,
@@ -241,7 +284,16 @@ class HomeAssistantWebSocketClient:
             return True
 
         except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
+            if _is_ssl_error(e) and self.verify_ssl:
+                logger.error(
+                    "WebSocket TLS verification failed for %s: %s. "
+                    "If this is a self-signed certificate or hostname "
+                    "mismatch, set HA_VERIFY_SSL=false to skip verification.",
+                    self.ws_url,
+                    e,
+                )
+            else:
+                logger.error(f"WebSocket connection failed: {e}")
             await self.disconnect()
             return False
 

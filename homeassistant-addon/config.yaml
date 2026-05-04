@@ -30,12 +30,14 @@ options:
   enable_skills: true
   enable_skills_as_tools: true
   enable_tool_search: false
+  verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_skills: bool?
   enable_skills_as_tools: bool?
   enable_tool_search: bool?
+  verify_ssl: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

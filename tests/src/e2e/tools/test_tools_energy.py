@@ -313,3 +313,75 @@ async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
         ), f"Added {source_type} source should appear; got sources={sources}"
     finally:
         await _cleanup_test_source(mcp_client, stat)
+
+
+@pytest.mark.asyncio
+async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
+    """Issue #1049: ``mode='get'`` exposes ``config_hash_per_key``, and
+    ``mode='set'`` accepts a per-top-level-key dict-form ``config_hash``
+    over the wire (Pydantic union in the tool schema). One round-trip
+    proves the new shape transports cleanly.
+
+    Mutates only ``device_consumption``; cleans up afterwards by
+    restoring the original list under a fresh per-key hash.
+    """
+    initial = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    assert_mcp_success(initial)
+    initial_data = initial.data
+    assert "config_hash_per_key" in initial_data, (
+        "mode='get' must surface config_hash_per_key alongside config_hash"
+    )
+    per_key = initial_data["config_hash_per_key"]
+    for key in ("energy_sources", "device_consumption", "device_consumption_water"):
+        assert key in per_key, f"per-key hash for '{key}' missing"
+        assert isinstance(per_key[key], str) and len(per_key[key]) == 16
+
+    original_dc = list(initial_data["config"]["device_consumption"])
+    test_stat = "sensor.e2e_per_key_hash_test"
+    new_dc = original_dc + [{"stat_consumption": test_stat}]
+
+    try:
+        write = await mcp_client.call_tool(
+            "ha_manage_energy_prefs",
+            {
+                "mode": "set",
+                "config": {"device_consumption": new_dc},
+                "config_hash": {
+                    "device_consumption": per_key["device_consumption"],
+                },
+            },
+        )
+        assert_mcp_success(write)
+        assert "config_hash_per_key" in write.data, (
+            "set response must surface fresh config_hash_per_key for "
+            "chained writes without an intermediate get"
+        )
+
+        verify = await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get"}
+        )
+        assert_mcp_success(verify)
+        verify_dc = verify.data["config"]["device_consumption"]
+        assert any(
+            d.get("stat_consumption") == test_stat for d in verify_dc
+        ), f"Per-key set must persist; got device_consumption={verify_dc}"
+    finally:
+        # Restore original device_consumption under a fresh per-key hash.
+        cleanup_initial = await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get"}
+        )
+        if cleanup_initial.data.get("success"):
+            cleanup_per_key = cleanup_initial.data.get("config_hash_per_key", {})
+            if "device_consumption" in cleanup_per_key:
+                await mcp_client.call_tool(
+                    "ha_manage_energy_prefs",
+                    {
+                        "mode": "set",
+                        "config": {"device_consumption": original_dc},
+                        "config_hash": {
+                            "device_consumption": cleanup_per_key[
+                                "device_consumption"
+                            ],
+                        },
+                    },
+                )
