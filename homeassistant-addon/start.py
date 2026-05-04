@@ -279,6 +279,7 @@ def main() -> int:
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
     verify_ssl = True  # default
+    advanced_debug_logging = False  # default
     config_read_ok = True
 
     if config_file.exists():
@@ -306,6 +307,7 @@ def main() -> int:
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
             verify_ssl = resolve_bool_option(config, "verify_ssl", True)
+            advanced_debug_logging = resolve_bool_option(config, "advanced_debug_logging", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -337,6 +339,7 @@ def main() -> int:
 
     log_info(f"Backup hint mode: {backup_hint}")
     log_info(f"Verify SSL: {verify_ssl}")
+    log_info(f"Advanced debug logging: {advanced_debug_logging}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -385,6 +388,14 @@ def main() -> int:
         register_browser_landing,
     )
     from ha_mcp.settings_ui import register_settings_routes
+
+    if advanced_debug_logging:
+        # Install kill-signal diagnostics so a future SIGTERM (e.g. the
+        # unexplained shutdowns reported in #1109) leaves a record of who
+        # sent the signal and what state the process was in. Off by default;
+        # users opt in via the "Advanced debug logging" addon option.
+        from ha_mcp.utils.kill_signal_diagnostics import install_kill_signal_diagnostics
+        install_kill_signal_diagnostics()
 
     register_browser_landing(mcp, secret_path)
     # Mount settings UI routes both at root (for HA ingress proxy) and
