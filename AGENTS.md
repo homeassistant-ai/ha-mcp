@@ -439,6 +439,33 @@ src/ha_mcp/
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
 
+## Site Content Collections
+
+The setup wizard at `site/src/pages/setup.astro` reads four content collections via Astro's `getCollection`:
+
+```
+site/src/content/clients/<id>.yaml       # 19 supported AI clients
+site/src/content/platforms/<id>.yaml     # macOS / Linux / Windows / Docker
+site/src/content/connections/<id>.yaml   # local / network / remote
+site/src/content/deployment/<id>.yaml    # uvx / docker / ha-addon / cloudflared / webhook-proxy
+```
+
+**These files are pure metadata (YAML, schema in `site/src/content.config.ts`).** They have no body content — the wizard never invokes `.render()` or reads `.body`. All user-facing setup prose lives in:
+
+- `site/src/pages/setup.astro` — the wizard's per-client / per-platform / per-deployment instruction-block templates (keyed off `state.client.id`, `platformId`, etc.).
+- `site/src/pages/faq.astro` — troubleshooting, version-specific gotchas, restart-related help.
+- `site/src/pages/guide-macos.astro` / `guide-windows.astro` — OS-specific install walkthroughs.
+
+**When adding a new client / platform / connection / deployment:**
+
+1. Add a `<id>.yaml` file with the required frontmatter fields (see schema in `content.config.ts`).
+2. Add a wizard branch in `setup.astro` for any client-specific config shape, instruction text, or transport quirk. Match the structural pattern of neighboring branches (UI clients use `<div class="instruction-block">` extensions; CLI clients push management-commands blocks to `instructions`).
+3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro` rather than re-introducing body content into the YAML file.
+
+**Do not author markdown body content into these YAML files.** Anything you write there is invisible to users — the file is metadata, not a content document. If you find yourself wanting prose, the right home is one of the rendered `.astro` pages above.
+
+History: PR #1097 / #1106 / #1108 traced and removed ~1900 lines of unrendered body content from these files; see those issues for the full audit if you're considering re-introducing prose into the YAML files.
+
 ## Writing MCP Tools
 
 ### Naming Convention
