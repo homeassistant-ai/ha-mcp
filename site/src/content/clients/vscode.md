@@ -7,6 +7,7 @@ configFormat: json
 configLocation: Settings → Extensions → GitHub Copilot → MCP
 accuracy: 5
 order: 4
+clientNote: "Requires GitHub Copilot extension. Reload VS Code after config changes."
 ---
 
 ## Configuration

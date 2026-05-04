@@ -7,6 +7,7 @@ configFormat: ui
 accuracy: 4
 order: 17
 httpNote: Requires Streamable HTTP - local or remote server
+clientNote: "Requires Open WebUI v0.6.31+ for MCP support."
 ---
 
 ## Configuration

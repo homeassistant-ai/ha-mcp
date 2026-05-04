@@ -29,6 +29,10 @@ const withBase = (path: string) => {
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
+        <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
+        <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
+        <li class="ml-4"><a href="#uvx-background" class="text-blue-400 hover:underline">Keep ha-mcp-web Running in the Background</a></li>
+        <li class="ml-4"><a href="#docker-port" class="text-blue-400 hover:underline">Docker: Changing the Port</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
@@ -206,6 +210,9 @@ source ~/.zshrc
 %USERPROFILE%\.local\bin\uvx.exe --version</code></pre>
             </div>
           </div>
+          <div class="mt-4 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
+            <p class="text-slate-300 text-sm"><strong class="text-white">Claude Desktop note:</strong> Claude Desktop does <strong>not</strong> inherit your shell's PATH. If <code class="bg-slate-800 px-1 rounded">uvx</code> is not found even after restarting, use the absolute path in your config instead of <code class="bg-slate-800 px-1 rounded">uvx</code>. Find it with <code class="bg-slate-800 px-1 rounded">which uvx</code> in your terminal, then set <code class="bg-slate-800 px-1 rounded">"command": "/Users/&lt;you&gt;/.local/bin/uvx"</code> (macOS/Linux) or the equivalent Windows path.</p>
+          </div>
         </div>
 
         <div class="faq-item">
@@ -269,6 +276,62 @@ source ~/.zshrc
             <li><strong>Subsequent requests</strong> - Should be faster (packages cached)</li>
             <li><strong>Alternative</strong> - Use Docker for consistent performance</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="antigravity-troubleshooting">
+          <h3 class="text-lg font-medium text-white mb-2">Antigravity client troubleshooting</h3>
+          <ul class="text-slate-300 space-y-3 list-disc list-inside">
+            <li>
+              <strong>"Unexpected server output" error:</strong> Add <code class="bg-slate-800 px-1 rounded">FASTMCP_SHOW_SERVER_BANNER=false</code> to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
+            </li>
+            <li>
+              <strong>"EOF" errors:</strong> Use absolute paths for the command, not relative paths. Antigravity does not resolve relative paths in the same working directory as your shell.
+            </li>
+            <li>
+              <strong>First run timeout:</strong> Run <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest --version</code> in your terminal first to download and cache the package before Antigravity tries to start it.
+            </li>
+            <li>
+              <strong>Tools load but fail when called:</strong> Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.
+            </li>
+            <li>
+              <strong>Connection issues after config changes:</strong> Restart the Agent session in Antigravity after saving any config changes.
+            </li>
+          </ul>
+        </div>
+
+        <div class="faq-item" id="claude-ai-connection">
+          <h3 class="text-lg font-medium text-white mb-2">Claude.ai connection issues</h3>
+          <p class="text-slate-300 mb-3">If tools stop responding or the connector appears disconnected in Claude.ai:</p>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>Restart both Claude.ai and the MCP server.</strong> Refresh the Claude.ai page in your browser and restart the ha-mcp process (or Docker container). Either side can hold stale connection state.</li>
+            <li>Check that your tunnel (Cloudflare, ngrok, etc.) is still running and the URL has not changed.</li>
+            <li>Verify the server is reachable by visiting the MCP URL directly in your browser — you should see a response from the server.</li>
+          </ol>
+        </div>
+
+        <div class="faq-item" id="uvx-background">
+          <h3 class="text-lg font-medium text-white mb-2">Keep ha-mcp-web running in the background</h3>
+          <p class="text-slate-300 mb-3">To run the ha-mcp HTTP server detached from the terminal so it survives logout:</p>
+          <pre class="code-block"><code>nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
+          <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">nohup</code> detaches the process from the terminal and redirects output to <code class="bg-slate-800 px-1 rounded">/dev/null</code>. The trailing <code class="bg-slate-800 px-1 rounded">&amp;</code> sends it to the background. For more robust setups (auto-restart on crash, start on boot), use <strong>systemd</strong> or the <strong>Home Assistant add-on</strong> instead.</p>
+        </div>
+
+        <div class="faq-item" id="docker-port">
+          <h3 class="text-lg font-medium text-white mb-2">Docker: changing the port requires updating both places</h3>
+          <p class="text-slate-300 mb-3">When running ha-mcp-web in Docker, the port is set in <em>two</em> independent places and they must match:</p>
+          <ul class="text-slate-300 space-y-2 list-disc list-inside mb-3">
+            <li>The <strong>second</strong> number in <code class="bg-slate-800 px-1 rounded">-p HOST:CONTAINER</code> — this is the container-side port Docker listens on</li>
+            <li>The <code class="bg-slate-800 px-1 rounded">MCP_PORT</code> environment variable — this is the port ha-mcp binds inside the container</li>
+          </ul>
+          <p class="text-slate-400 mb-2">If these differ, the container starts but requests never reach the server. Example using port 9000:</p>
+          <pre class="code-block"><code>docker run -d --name ha-mcp \
+  -p 9000:9000 \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  -e MCP_PORT=9000 \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-web</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The first number in <code class="bg-slate-800 px-1 rounded">-p</code> (the host port) can be anything — only the second number must match <code class="bg-slate-800 px-1 rounded">MCP_PORT</code>.</p>
         </div>
       </div>
     </section>

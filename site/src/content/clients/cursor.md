@@ -7,6 +7,7 @@ configFormat: json
 configLocation: Settings → Cursor Settings → MCP
 accuracy: 5
 order: 3
+clientNote: "Restart Cursor after config changes"
 ---
 
 ## Configuration

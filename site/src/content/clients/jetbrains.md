@@ -8,6 +8,7 @@ configLocation: Settings → Tools → AI Assistant → MCP Servers
 accuracy: 4
 order: 12
 httpNote: stdio only - use mcp-remote for HTTP servers
+clientNote: "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes."
 ---
 
 ## Configuration

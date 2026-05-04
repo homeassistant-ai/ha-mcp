@@ -9,7 +9,7 @@ configLocation: |
   VS Code: Settings → Extensions → GitHub Copilot → MCP
 accuracy: 4
 order: 5
-httpNote: Requires GitHub Copilot extension and coding agent mode
+clientNote: "Requires GitHub Copilot extension and coding agent mode"
 ---
 
 ## Configuration

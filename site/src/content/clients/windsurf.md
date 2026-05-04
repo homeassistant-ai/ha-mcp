@@ -7,6 +7,7 @@ configFormat: json
 configLocation: ~/.codeium/windsurf/mcp_config.json
 accuracy: 4
 order: 6
+clientNote: "Restart Windsurf after config changes"
 ---
 
 ## Configuration

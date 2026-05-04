@@ -8,6 +8,7 @@ configLocation: Manage MCP Servers → Show Config File in Finder
 accuracy: 4
 order: 15
 httpNote: HTTP transport is experimental (requires v1.100.0+)
+clientNote: "Requires Raycast v1.98.0+ for MCP, v1.100.0+ for HTTP transport. Pro subscription or BYOK required."
 ---
 
 ## Configuration
