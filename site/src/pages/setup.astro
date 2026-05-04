@@ -1322,7 +1322,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         }
       } else if (derivedDeployment === 'docker') {
         const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
-        const secretPathEnv = useSecretPath ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
+        const secretPathEnv = useSecretPath ? `-e MCP_SECRET_PATH=/private_{{RANDOM_STRING}}` : '';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         const composeSecretPathLine = useSecretPath
@@ -1330,7 +1330,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           : '';
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Start Docker Container</h4>
-          <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv.trim() : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
+          <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
           <details class="mt-3">
             <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Production hardening (docker compose)</summary>
