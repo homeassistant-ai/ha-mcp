@@ -39,18 +39,18 @@ If a non-obvious choice has significant consequences, create two mutually exclus
 
 ```bash
 git push -u origin feature/issue-$ARGUMENTS
-gh pr create --draft \
+PR_NUMBER=$(gh pr create --draft \
   --repo homeassistant-ai/ha-mcp \
   --title "<descriptive title>" \
   --body "Closes #$ARGUMENTS
 
 ## Changes
-[description]"
+[description]" | grep -oE '[0-9]+$')
 ```
 
 Wait for CI (~3 min):
 ```bash
-sleep 180 && gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
+sleep 180 && gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp
 ```
 
 Before marking ready (`gh pr ready`), update the PR description to reflect all changes made.
