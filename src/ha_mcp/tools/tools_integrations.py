@@ -971,7 +971,8 @@ class IntegrationTools:
         )
 
         try:
-            # Try to get unique_id with retry logic (race-condition guard)
+            # Resolve unique_id via the entity registry, with a retry loop
+            # for transient registry failures.
             unique_id = None
             registry_result: dict[str, Any] | None = None
             max_retries = 3
@@ -982,9 +983,11 @@ class IntegrationTools:
                     f"(attempt {attempt + 1}/{max_retries})"
                 )
 
-                # State check is informational — disabled entities are
-                # missing from the state machine but resolved via the
-                # registry below (issue #1057).
+                # State check is informational only — disabled entities are
+                # missing from the state machine but resolved via the registry
+                # below (issue #1057). Kept as a debug breadcrumb rather than
+                # removed; full removal is option 3.2 in #1057, deferred to a
+                # separate PR for minimal blast radius here.
                 try:
                     state_check = await client.get_entity_state(entity_id)
                     if not state_check:
@@ -1007,8 +1010,8 @@ class IntegrationTools:
                     registry_result = await client.send_websocket_message(
                         registry_msg
                     )
-                    if registry_result.get("success"):
-                        entity_entry = registry_result.get("result", {})
+                    if (registry_result or {}).get("success"):
+                        entity_entry = (registry_result or {}).get("result") or {}
                         unique_id = entity_entry.get("unique_id")
                         if unique_id:
                             logger.info(
@@ -1073,29 +1076,82 @@ class IntegrationTools:
                             )
                     return response
 
-                # Fallback strategy 2: already-deleted check
+                # Fallback strategy 2: already-deleted check. Confirm via the
+                # registry too — a disabled entity is missing from the state
+                # machine but still registry-resident, so state-absence alone
+                # is not enough to declare success.
                 try:
                     final_state_check = await client.get_entity_state(entity_id)
                     if not final_state_check:
-                        logger.info(
-                            f"Entity {entity_id} no longer exists; "
-                            "treating as already deleted"
+                        registry_still_has_entry = False
+                        try:
+                            verify_result = await client.send_websocket_message(
+                                {
+                                    "type": "config/entity_registry/get",
+                                    "entity_id": entity_id,
+                                }
+                            )
+                            if (verify_result or {}).get("success"):
+                                verify_entry = (verify_result or {}).get("result") or {}
+                                if verify_entry.get("entity_id"):
+                                    registry_still_has_entry = True
+                        except HomeAssistantAPIError as verify_err:
+                            # On verify failure, conservatively assume the
+                            # entry is still there rather than silently
+                            # short-circuit to already_deleted.
+                            logger.debug(
+                                f"Registry verify for {entity_id} failed: "
+                                f"{verify_err}"
+                            )
+                            registry_still_has_entry = True
+
+                        if not registry_still_has_entry:
+                            logger.info(
+                                f"Entity {entity_id} absent from state and "
+                                "registry; treating as already deleted"
+                            )
+                            return {
+                                "success": True,
+                                "action": "delete",
+                                "target": target,
+                                "helper_type": helper_type,
+                                "method": "websocket_delete",
+                                "entry_id": None,
+                                "entity_ids": [entity_id],
+                                "require_restart": False,
+                                "message": (
+                                    f"Helper {target} was already deleted or "
+                                    "never properly registered."
+                                ),
+                                "fallback_used": "already_deleted",
+                            }
+
+                        logger.warning(
+                            f"Entity {entity_id} absent from state but still "
+                            "in registry; not already_deleted"
                         )
-                        return {
-                            "success": True,
-                            "action": "delete",
-                            "target": target,
-                            "helper_type": helper_type,
-                            "method": "websocket_delete",
-                            "entry_id": None,
-                            "entity_ids": [entity_id],
-                            "require_restart": False,
-                            "message": (
-                                f"Helper {target} was already deleted or "
-                                "never properly registered."
-                            ),
-                            "fallback_used": "already_deleted",
-                        }
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                (
+                                    f"Helper {target} could not be deleted: "
+                                    "registry entry exists but unique_id was "
+                                    "absent and the direct-id fallback "
+                                    "delete failed."
+                                ),
+                                suggestions=[
+                                    "Re-enable the entity via "
+                                    "ha_set_entity(enabled=True), then retry "
+                                    "deletion.",
+                                    "Or inspect the entity registry entry "
+                                    "directly to confirm unique_id presence.",
+                                ],
+                                context={
+                                    "target": target,
+                                    "entity_id": entity_id,
+                                },
+                            )
+                        )
                 except HomeAssistantAPIError as e:
                     # 404 here means the state-check itself confirmed the
                     # entity is gone — treat as a soft signal and continue
