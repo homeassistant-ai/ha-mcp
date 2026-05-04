@@ -228,7 +228,7 @@ echo ""
 #=============================================================================
 # 12. VERIFY
 if [[ $HA_READY -eq 1 ]]; then
-    CONTAINER=$(docker ps --filter "ancestor=ghcr.io/home-assistant/home-assistant" --format "{{.Names}}" | head -1)
+    CONTAINER=$(docker ps --format "{{.Image}}\t{{.Names}}" | awk -F'\t' '/home-assistant/{print $2}' | head -1)
     echo ""
     echo "=============================================="
     echo -e "${GREEN}Setup Complete!${NC}"
