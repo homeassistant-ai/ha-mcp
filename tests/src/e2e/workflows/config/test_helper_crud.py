@@ -681,15 +681,19 @@ class TestInputButtonCRUD:
         )
         delete_data = assert_mcp_success(delete_result, "Delete disabled helper")
 
-        # Crucially: the standard registry-driven delete path ran, NOT the
-        # already_deleted fallback that masked the bug.
-        assert delete_data.get("fallback_used") != "already_deleted", (
-            f"Bug regression — disabled entity hit already_deleted fallback. "
-            f"Delete data: {delete_data}"
-        )
+        # Standard registry-driven delete path ran — unique_id was resolved
+        # and no fallback fired. Tighter than `!= "already_deleted"`: also
+        # rejects `direct_id` and any future fallback variant.
         assert delete_data.get("method") == "websocket_delete", (
             f"Expected websocket_delete via unique_id; got "
             f"method={delete_data.get('method')}, data={delete_data}"
+        )
+        assert "unique_id" in delete_data, (
+            f"Standard path not taken (no unique_id in response): {delete_data}"
+        )
+        assert delete_data.get("fallback_used") is None, (
+            f"Expected no fallback; got fallback_used="
+            f"{delete_data.get('fallback_used')!r}, data={delete_data}"
         )
         logger.info(
             f"Disabled helper deleted via "
