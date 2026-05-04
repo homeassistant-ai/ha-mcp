@@ -9,7 +9,9 @@ gating, and the kernel ABI constants the diagnostic block depends on).
 from __future__ import annotations
 
 import ctypes
+import signal
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -37,9 +39,11 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
 def _reset_module_state():
     """Each test starts with a clean install state (idempotency tests need this)."""
     ksd._handler_refs.clear()
+    ksd._chained_handlers.clear()
     ksd._libc = None
     yield
     ksd._handler_refs.clear()
+    ksd._chained_handlers.clear()
     ksd._libc = None
 
 
@@ -300,3 +304,135 @@ class TestInstallKillSignalDiagnostics:
             # Second call short-circuits before touching libc.
             assert install_kill_signal_diagnostics() is True
             assert fake_libc.sigaction.call_count == first_call_count
+
+
+class TestUvicornOverwriteScenario:
+    """Regression tests for the install ordering bug Patch76 caught.
+
+    uvicorn's ``Server.capture_signals`` calls ``signal.signal(SIGTERM,
+    handle_exit)`` which goes through libc's ``sigaction`` *without*
+    ``SA_SIGINFO``, overwriting any handler we'd installed earlier. The
+    fix is to schedule install AFTER uvicorn so it captures uvicorn's
+    handler and chains to it.
+    """
+
+    def test_install_after_signal_signal_captures_existing_handler(self) -> None:
+        # Simulates uvicorn having already installed handle_exit before
+        # we get to install. Our install should snapshot it so the
+        # SA_SIGINFO trampoline can chain back to it.
+        if sys.platform != "linux":
+            pytest.skip("Linux-only branch")
+
+        captured_calls: list[int] = []
+
+        def fake_uvicorn_handle_exit(signum, frame):
+            captured_calls.append(signum)
+
+        # Mimic uvicorn — install via signal.signal without SA_SIGINFO.
+        original = signal.signal(signal.SIGTERM, fake_uvicorn_handle_exit)
+        try:
+            fake_libc = MagicMock()
+            fake_libc.sigaction.return_value = 0
+            with patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+                return_value="libc.so.6",
+            ), patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
+                return_value=fake_libc,
+            ):
+                assert install_kill_signal_diagnostics() is True
+
+            assert ksd._chained_handlers.get(int(signal.SIGTERM)) is fake_uvicorn_handle_exit
+        finally:
+            signal.signal(signal.SIGTERM, original)
+
+    def test_chain_or_reraise_invokes_captured_handler(self) -> None:
+        captured_calls: list[int] = []
+
+        def fake_handler(signum, frame):
+            captured_calls.append(signum)
+
+        ksd._chained_handlers[int(signal.SIGTERM)] = fake_handler
+        ksd._chain_or_reraise(int(signal.SIGTERM))
+        assert captured_calls == [int(signal.SIGTERM)]
+
+    def test_chain_or_reraise_falls_back_to_default_when_no_chain(self) -> None:
+        # SIGHUP is the realistic case: uvicorn doesn't capture it, so
+        # there's no chained handler. The trampoline must fall through
+        # to the libc-direct re-raise path.
+        if sys.platform != "linux":
+            pytest.skip("Linux-only branch")
+        with patch(
+            "ha_mcp.utils.kill_signal_diagnostics._restore_default_and_reraise"
+        ) as mock_restore:
+            ksd._chain_or_reraise(int(signal.SIGHUP))
+        mock_restore.assert_called_once_with(int(signal.SIGHUP))
+
+    def test_chain_or_reraise_falls_back_when_chained_raises(self) -> None:
+        def broken_handler(signum, frame):
+            raise RuntimeError("handler exploded")
+
+        ksd._chained_handlers[int(signal.SIGTERM)] = broken_handler
+        with patch(
+            "ha_mcp.utils.kill_signal_diagnostics._restore_default_and_reraise"
+        ) as mock_restore:
+            ksd._chain_or_reraise(int(signal.SIGTERM))
+        # Even if the chain target explodes, the process must still
+        # head toward termination via the default-disposition path.
+        mock_restore.assert_called_once_with(int(signal.SIGTERM))
+
+
+class TestScheduleInstallAfterUvicorn:
+    def test_waits_until_uvicorn_handler_detected_then_installs(self) -> None:
+        # Scenario: uvicorn hasn't installed yet (signal disposition is
+        # SIG_DFL). We schedule install. Briefly later, "uvicorn"
+        # installs a handler. Our scheduler should detect the handler
+        # within the timeout and call install_*().
+        from ha_mcp.utils.kill_signal_diagnostics import schedule_install_after_uvicorn
+
+        original = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        try:
+            install_calls: list[int] = []
+
+            def fake_install() -> bool:
+                install_calls.append(1)
+                return True
+
+            thread = schedule_install_after_uvicorn(
+                timeout_secs=2.0,
+                poll_interval_secs=0.01,
+                install=fake_install,
+            )
+            time.sleep(0.05)
+            # Simulate uvicorn installing its handler.
+            signal.signal(signal.SIGTERM, lambda s, f: None)
+            thread.join(timeout=2.0)
+
+            assert install_calls == [1]
+        finally:
+            signal.signal(signal.SIGTERM, original)
+
+    def test_falls_back_to_install_after_timeout(self) -> None:
+        # If uvicorn never installs (e.g. addon was started outside the
+        # http transport), install should still run after the timeout
+        # so the user gets at least best-effort coverage.
+        from ha_mcp.utils.kill_signal_diagnostics import schedule_install_after_uvicorn
+
+        original = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        try:
+            install_calls: list[int] = []
+
+            def fake_install() -> bool:
+                install_calls.append(1)
+                return True
+
+            thread = schedule_install_after_uvicorn(
+                timeout_secs=0.05,
+                poll_interval_secs=0.01,
+                install=fake_install,
+            )
+            thread.join(timeout=2.0)
+
+            assert install_calls == [1]
+        finally:
+            signal.signal(signal.SIGTERM, original)

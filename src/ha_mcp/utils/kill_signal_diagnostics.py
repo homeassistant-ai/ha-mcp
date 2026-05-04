@@ -9,12 +9,29 @@ that, on SIGTERM/SIGINT/SIGHUP, captures and logs:
   ``siginfo_t`` (Python's ``signal.signal`` only sees ``signum``).
 - ``/proc/self/status`` snapshot of memory + OOM context.
 
-Then re-raises with the default disposition so Uvicorn shuts down cleanly.
-Linux-only by design (HA add-ons run on HAOS).
+Then chains to whatever handler was previously installed (typically
+uvicorn's ``handle_exit`` for SIGTERM/SIGINT) so the server still shuts
+down cleanly. SIGHUP, which uvicorn doesn't capture, falls back to
+libc-direct ``SIG_DFL`` + re-raise. Linux-only by design.
 
 Without this, the addon only sees that ``mcp.run()`` returned cleanly —
 it can't tell whether Supervisor sent SIGTERM, the OOM killer fired, a
 container watchdog acted, or something else.
+
+Install ordering
+----------------
+``signal.signal(...)`` from CPython calls libc's ``sigaction`` with no
+``SA_SIGINFO`` flag, which overwrites any ``SA_SIGINFO`` handler we
+installed first. uvicorn's ``Server.capture_signals()`` does exactly
+this for SIGTERM and SIGINT immediately after ``serve()`` enters. So
+installing from ``start.py`` *before* ``mcp.run()`` would silently lose
+the SA_SIGINFO bit before any signal arrives.
+
+``schedule_install_after_uvicorn`` spawns a daemon thread that polls
+``signal.getsignal`` until uvicorn's handler is detected (or a timeout
+elapses), then calls ``install_kill_signal_diagnostics`` which captures
+the existing handler and overlays SA_SIGINFO on top. The handler chains
+to the captured handler so uvicorn still receives the shutdown signal.
 
 Async-signal-safety
 -------------------
@@ -25,16 +42,14 @@ The handler is best-effort, not strict POSIX AS-safe:
   ``threading.Lock`` is held by the main thread during normal tool calls
   and would deadlock the handler.
 - It uses ``os.write(STDERR_FILENO, ...)`` (AS-safe) instead of ``print``.
-- It restores default disposition via direct ``libc.signal(sig, SIG_DFL)``
-  and re-raises with ``kill(2)`` (both AS-safe), avoiding CPython's
-  ``signal.signal`` machinery which assumes main-thread + bytecode
-  boundary.
+- It chains to the captured uvicorn handler in pure Python (uvicorn's
+  ``handle_exit`` only sets attributes — synchronous, no locks). The
+  fallback re-raise path uses ``libc.signal(sig, SIG_DFL)`` and
+  ``kill(2)`` directly (both AS-safe).
 - ``/proc`` reads use ``open(2)``, which POSIX classifies as not strictly
   AS-safe. In practice the kernel side of ``/proc`` doesn't take
   userspace-allocator locks, so this is acceptable for an opt-in
-  diagnostic. If the assumption ever breaks, the worst case is a partial
-  diagnostic block — the libc-direct re-raise is still a single AS-safe
-  syscall and the kernel still delivers the default-disposition signal.
+  diagnostic.
 
 ctypes adds one more theoretical risk: the trampoline acquires the GIL
 on entry to Python code. In a single-threaded asyncio event loop (this
@@ -50,6 +65,9 @@ import logging
 import os
 import signal
 import sys
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -224,6 +242,9 @@ def format_diagnostic_block(
 # it a future maintainer will delete it and ship a use-after-free.
 _handler_refs: list[Any] = []
 _libc: Any = None
+# Captured at install time so our handler can chain back to whatever
+# was installed before (typically uvicorn's handle_exit).
+_chained_handlers: dict[int, Any] = {}
 
 
 def _emit_block_safely(block: str) -> None:
@@ -248,6 +269,24 @@ def _restore_default_and_reraise(signum: int) -> None:
         except OSError:
             pass
     os.kill(os.getpid(), signum)
+
+
+def _chain_or_reraise(signum: int) -> None:
+    """Hand control to the previously-installed handler, or re-raise default.
+
+    Uvicorn's ``handle_exit`` only sets ``self.should_exit`` (synchronous,
+    no locks), so calling it directly from this trampoline is safe.
+    """
+    chained = _chained_handlers.get(signum)
+    if callable(chained):
+        try:
+            chained(signum, None)
+            return
+        except Exception:
+            # Fall through to the default-disposition path so the
+            # process still terminates if the chained handler explodes.
+            pass
+    _restore_default_and_reraise(signum)
 
 
 def _make_handler() -> Any:
@@ -283,18 +322,22 @@ def _make_handler() -> Any:
             except OSError:
                 pass
 
-        _restore_default_and_reraise(signum)
+        _chain_or_reraise(signum)
 
     return _SignalHandler(_handler)
 
 
 def install_kill_signal_diagnostics() -> bool:
-    """Install the SA_SIGINFO signal handler. Returns True if at least one
-    signal was installed; False on non-Linux, missing libc, or if every
-    sigaction call failed. Idempotent — second call is a no-op.
+    """Install the SA_SIGINFO signal handler.
 
-    Never raises: callers don't need to wrap in try/except. This contract
-    is load-bearing — diagnostics must not block addon startup.
+    Captures any previously-installed handler (e.g. uvicorn's
+    ``handle_exit``) via ``signal.getsignal`` so the SA_SIGINFO handler
+    can chain to it. Idempotent — second call is a no-op.
+
+    Returns True if at least one signal was installed; False on
+    non-Linux, missing libc, or if every sigaction call failed. Never
+    raises: callers don't need to wrap in try/except. This contract is
+    load-bearing — diagnostics must not block addon startup.
     """
     global _libc
 
@@ -326,6 +369,14 @@ def install_kill_signal_diagnostics() -> bool:
         libc.signal.argtypes = [ctypes.c_int, ctypes.c_void_p]
         _libc = libc
 
+        # Snapshot the existing handler for each instrumented signal
+        # before we overwrite. This is what we chain back to so uvicorn
+        # (or whoever was there) still receives the shutdown signal.
+        for sig in _INSTRUMENTED_SIGNALS:
+            existing = signal.getsignal(int(sig))
+            if callable(existing):
+                _chained_handlers[int(sig)] = existing
+
         handler = _make_handler()
         _handler_refs.append(handler)
 
@@ -353,15 +404,70 @@ def install_kill_signal_diagnostics() -> bool:
             exc,
         )
         _handler_refs.clear()
+        _chained_handlers.clear()
         _libc = None
         return False
 
     if installed_for:
+        chained_signals = sorted(signal.Signals(s).name for s in _chained_handlers)
         logger.info(
-            "advanced_debug_logging enabled — kill-signal diagnostics installed for: %s",
+            "advanced_debug_logging enabled — kill-signal diagnostics installed for: %s "
+            "(chains to existing handlers for: %s)",
             ", ".join(installed_for),
+            ", ".join(chained_signals) or "<none>",
         )
         return True
     _handler_refs.clear()
+    _chained_handlers.clear()
     _libc = None
     return False
+
+
+def schedule_install_after_uvicorn(
+    *,
+    timeout_secs: float = 10.0,
+    poll_interval_secs: float = 0.1,
+    install: Callable[[], bool] = install_kill_signal_diagnostics,
+) -> threading.Thread:
+    """Defer install until uvicorn's ``capture_signals()`` has run.
+
+    uvicorn's ``Server.capture_signals()`` calls
+    ``signal.signal(SIGTERM/SIGINT, handle_exit)`` immediately after
+    ``Server.serve()`` enters. Python's ``signal.signal`` reaches libc's
+    ``sigaction`` *without* ``SA_SIGINFO``, so any handler we installed
+    before ``mcp.run()`` would lose its SA_SIGINFO bit before any signal
+    arrived. This polls ``signal.getsignal(SIGTERM)`` from a daemon
+    thread until uvicorn replaces the default disposition, then calls
+    ``install`` so our SA_SIGINFO handler lands on top and chains to
+    uvicorn's ``handle_exit``.
+
+    If uvicorn never installs (e.g. addon was started without HTTP
+    transport), install runs anyway after ``timeout_secs``.
+
+    Returns the started thread so callers can ``.join()`` in tests.
+    """
+
+    def _wait_then_install() -> None:
+        deadline = time.monotonic() + timeout_secs
+        while time.monotonic() < deadline:
+            current = signal.getsignal(signal.SIGTERM)
+            if callable(current) and current not in (signal.SIG_DFL, signal.SIG_IGN):
+                logger.debug(
+                    "advanced_debug_logging: detected uvicorn signal handler; installing on top"
+                )
+                install()
+                return
+            time.sleep(poll_interval_secs)
+        logger.info(
+            "advanced_debug_logging: uvicorn handler not detected within %.1fs; installing anyway",
+            timeout_secs,
+        )
+        install()
+
+    thread = threading.Thread(
+        target=_wait_then_install,
+        name="kill-signal-diagnostics-install",
+        daemon=True,
+    )
+    thread.start()
+    return thread

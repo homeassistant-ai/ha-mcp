@@ -390,14 +390,15 @@ def main() -> int:
     from ha_mcp.settings_ui import register_settings_routes
 
     if advanced_debug_logging:
-        # Captures sender PID + /proc state on SIGTERM/SIGINT/SIGHUP.
+        # Defers SA_SIGINFO install until uvicorn's capture_signals has
+        # run. Otherwise uvicorn's signal.signal() call would overwrite
+        # our handler before any signal arrived.
         # Wrapped because diagnostics must never block addon startup.
         try:
             from ha_mcp.utils.kill_signal_diagnostics import (
-                install_kill_signal_diagnostics,
+                schedule_install_after_uvicorn,
             )
-            if not install_kill_signal_diagnostics():
-                log_info("advanced_debug_logging requested but handler not installed; continuing")
+            schedule_install_after_uvicorn()
         except Exception as e:
             log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
 
