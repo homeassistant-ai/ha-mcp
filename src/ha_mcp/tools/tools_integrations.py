@@ -982,12 +982,9 @@ class IntegrationTools:
                     f"(attempt {attempt + 1}/{max_retries})"
                 )
 
-                # Informational state check — disabled entities are removed
-                # from the state machine but remain in the entity registry,
-                # so a missing state_check must NOT skip the registry lookup
-                # below (see issue #1057). Retry/backoff is provided by the
-                # post-registry-fail block further down — no separate sleep
-                # needed here.
+                # State check is informational — disabled entities are
+                # missing from the state machine but resolved via the
+                # registry below (issue #1057).
                 try:
                     state_check = await client.get_entity_state(entity_id)
                     if not state_check:
