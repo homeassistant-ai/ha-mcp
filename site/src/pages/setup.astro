@@ -38,7 +38,7 @@ const clientsData = [
     "configFormat": "cli",
     "accuracy": 5,
     "order": 2,
-    "clientNote": "Config changes take effect immediately — no restart needed.",
+    "clientNote": "Config changes don't require an OS-level restart — but newly-added servers may not appear in an active session. If they don't show up, run /mcp inside Claude Code or start a new session.",
   },
   {
     "id": "cursor",
@@ -141,11 +141,11 @@ const clientsData = [
     "logo": "/logos/jetbrains.svg",
     "transports": ["stdio"],
     "configFormat": "json",
-    "configLocation": "Settings → Tools → AI Assistant → MCP Servers",
+    "configLocation": "Settings → Tools → AI Assistant → Model Context Protocol (MCP)",
     "accuracy": 4,
     "order": 12,
     "httpNote": "stdio only - use mcp-remote for HTTP servers",
-    "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes. Migrating from Claude Desktop? Use the 'Import from Claude' button in Settings → Tools → AI Assistant → MCP Servers to auto-import existing servers.",
+    "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes. Migrating from Claude Desktop? The MCP Servers panel has an 'Import from Claude' button to auto-import existing servers.",
   },
   {
     "id": "zed",
@@ -1446,8 +1446,8 @@ ingress:
             <p class="text-slate-300 text-sm mb-2">In the Cloudflared add-on configuration:</p>
             <pre class="code-block text-xs"><code>additional_hosts:
   - hostname: ha-mcp.yourdomain.com
-    service: http://localhost:9583</code></pre>
-            <p class="text-xs text-slate-400 mt-2">Port 9583 is the HA MCP add-on's default. <code>localhost</code> resolves between add-ons via the supervisor's internal network.</p>
+    service: http://homeassistant.local:9583</code></pre>
+            <p class="text-xs text-slate-400 mt-2">Replace <code>homeassistant.local</code> with your HA host's IP or hostname — match the IP from the MCP add-on's log line (e.g. <code>http://192.168.1.100:9583/...</code>). The Cloudflared add-on tunnels from inside its own container, so <code>localhost</code> won't reach the MCP add-on.</p>
           </details>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
@@ -1868,8 +1868,8 @@ ingress:
         instructions.push(`<div class="instruction-block">
           <h4 class="instruction-title">Org &amp; Repository Deployment</h4>
           <div class="text-sm text-slate-300 space-y-2">
-            <p class="text-slate-400"><strong class="text-slate-300">Repository-wide config:</strong> on GitHub, navigate to <strong>Settings → Copilot → Coding agent → MCP configuration</strong>. The MCP config you set there applies to all users who have access to the repo, instead of (or in addition to) the per-user <code class="bg-slate-800 px-1 rounded">.vscode/mcp.json</code> shown above.</p>
-            <p class="text-slate-400"><strong class="text-slate-300">Org / enterprise prerequisite:</strong> the <em>"MCP servers"</em> policy must be enabled for your organization or enterprise before any of the above will work — admins disable it by default. If config changes don't take effect, check the org-level Copilot policy first.</p>
+            <p class="text-slate-400"><strong class="text-slate-300">Repository-wide config:</strong> on GitHub, navigate to <strong>Settings → Copilot → Coding agent → MCP configuration</strong> (the menu node is sometimes labeled <em>Cloud agent</em> depending on UI version). The MCP config you set there applies to all users who have access to the repo, instead of (or in addition to) the per-user <code class="bg-slate-800 px-1 rounded">.vscode/mcp.json</code> shown above.</p>
+            <p class="text-slate-400"><strong class="text-slate-300">Org / enterprise prerequisite:</strong> the <em>"MCP servers in Copilot"</em> policy must be enabled for your organization or enterprise. If config changes don't take effect for some users, check the org-level Copilot policy first — your admin may have it scoped or disabled.</p>
           </div>
         </div>`);
       }
