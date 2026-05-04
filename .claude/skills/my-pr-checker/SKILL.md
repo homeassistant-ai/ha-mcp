@@ -28,7 +28,7 @@ gh api repos/homeassistant-ai/ha-mcp/issues/"$ARGUMENTS"/comments \
   --jq '.[] | {id, author: .user.login, body}'
 
 # Unresolved review threads
-gh api graphql -f query="query { repository(owner:\"homeassistant-ai\", name:\"ha-mcp\") { pullRequest(number:$ARGUMENTS) { reviewThreads(first:100) { nodes { id isResolved path line comments(first:1) { nodes { databaseId body author { login } } } } } } } }"
+gh api graphql -F pr="$ARGUMENTS" -f query='query($pr: Int!) { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { id isResolved path line comments(first:1) { nodes { databaseId body author { login } } } } } } } }'
 ```
 
 ## Step 2: Triage Comments
