@@ -1,5 +1,0 @@
-name: uvx (Python)
-description: Run ha-mcp directly via Python package manager
-icon: python
-forConnections: ['local', 'network']
-order: 1

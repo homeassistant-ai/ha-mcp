@@ -1,5 +1,0 @@
-name: Cloudflare Tunnel
-description: Expose ha-mcp to the internet securely
-icon: cloudflare
-forConnections: ['remote']
-order: 4

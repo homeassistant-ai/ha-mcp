@@ -1,5 +1,0 @@
-name: Remote (Internet)
-transport: https
-description: Access ha-mcp from anywhere via secure HTTPS
-icon: globe
-order: 3

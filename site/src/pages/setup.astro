@@ -2,20 +2,8 @@
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
 import PlatformIcon from '../components/PlatformIcon.astro';
-import { getCollection } from 'astro:content';
 
 const base = import.meta.env.BASE_URL;
-
-const clients = await getCollection('clients');
-const platforms = await getCollection('platforms');
-const connections = await getCollection('connections');
-const deployment = await getCollection('deployment');
-
-// Sort by order
-const sortedClients = clients.sort((a, b) => a.data.order - b.data.order);
-const sortedPlatforms = platforms.sort((a, b) => a.data.order - b.data.order);
-const sortedConnections = connections.sort((a, b) => a.data.order - b.data.order);
-const sortedDeployment = deployment.sort((a, b) => a.data.order - b.data.order);
 
 // Helper to add base URL (ensure path keeps leading slash)
 const withBase = (path: string) => {
@@ -23,24 +11,250 @@ const withBase = (path: string) => {
   return `${base}${cleanPath}`;
 };
 
-// Create serializable data for client-side JS
-const clientsData = sortedClients.map(c => ({
-  id: c.id,
-  ...c.data,
-  logo: withBase(c.data.logo),
-}));
-const platformsData = sortedPlatforms.map(p => ({
-  id: p.id,
-  ...p.data,
-}));
-const connectionsData = sortedConnections.map(c => ({
-  id: c.id,
-  ...c.data,
-}));
-const deploymentData = sortedDeployment.map(d => ({
-  id: d.id,
-  ...d.data,
-}));
+// Wizard data — inlined here so the wizard has a single source of truth.
+// Add a new client / platform / connection / deployment by adding an entry
+// to the appropriate array (pre-sorted by `order`), then add a wizard branch
+// below in the <script> block keyed off the entry's `id`.
+
+const clientsData = [
+  {
+    "id": "claude-desktop",
+    "name": "Claude Desktop",
+    "company": "Anthropic",
+    "logo": "/logos/claude.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\nWindows: %APPDATA%\\Claude\\claude_desktop_config.json\n",
+    "accuracy": 5,
+    "order": 1,
+    "httpNote": "Use mcp-proxy for HTTP connections (see Network/Remote setup)",
+  },
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "company": "Anthropic",
+    "logo": "/logos/claude-code.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "cli",
+    "accuracy": 5,
+    "order": 2,
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "company": "Anysphere",
+    "logo": "/logos/cursor.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Settings → Cursor Settings → MCP",
+    "accuracy": 5,
+    "order": 3,
+    "clientNote": "Restart Cursor after config changes",
+  },
+  {
+    "id": "vscode",
+    "name": "VS Code",
+    "company": "Microsoft",
+    "logo": "/logos/vscode.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Settings → Extensions → GitHub Copilot → MCP",
+    "accuracy": 5,
+    "order": 4,
+    "clientNote": "Requires GitHub Copilot extension. Reload VS Code after config changes.",
+  },
+  {
+    "id": "github-copilot-agents",
+    "name": "GitHub Copilot Agents",
+    "company": "GitHub",
+    "logo": "/logos/github.svg",
+    "transports": ["stdio", "sse"],
+    "configFormat": "json",
+    "configLocation": "Repository: .vscode/mcp.json (in repo root)\nVS Code: Settings → Extensions → GitHub Copilot → MCP\n",
+    "accuracy": 4,
+    "order": 5,
+    "clientNote": "Requires GitHub Copilot extension and coding agent mode",
+  },
+  {
+    "id": "windsurf",
+    "name": "Windsurf",
+    "company": "Codeium",
+    "logo": "/logos/windsurf.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "~/.codeium/windsurf/mcp_config.json",
+    "accuracy": 4,
+    "order": 6,
+    "clientNote": "Restart Windsurf after config changes",
+  },
+  {
+    "id": "cline",
+    "name": "Cline",
+    "company": "Cline",
+    "logo": "/logos/cline.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "VS Code Settings → Cline → MCP Servers",
+    "accuracy": 4,
+    "order": 7,
+  },
+  {
+    "id": "copilot-cli",
+    "name": "Copilot CLI",
+    "company": "GitHub",
+    "logo": "/logos/copilot-cli.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "ui",
+    "configLocation": "~/.copilot/mcp-config.json",
+    "accuracy": 5,
+    "order": 8,
+  },
+  {"id": "chatgpt", "name": "ChatGPT", "company": "OpenAI", "logo": "/logos/openai.svg", "transports": ["sse", "streamable-http"], "configFormat": "ui", "accuracy": 4, "order": 9, "beta": true},
+  {
+    "id": "claude-ai",
+    "name": "Claude.ai",
+    "company": "Anthropic",
+    "logo": "/logos/claude.svg",
+    "transports": ["sse", "streamable-http"],
+    "configFormat": "ui",
+    "accuracy": 4,
+    "order": 10,
+    "httpNote": "Requires HTTPS - Remote deployment required",
+  },
+  {
+    "id": "gemini-cli",
+    "name": "Gemini CLI",
+    "company": "Google",
+    "logo": "/logos/gemini.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "cli",
+    "configLocation": "~/.gemini/settings.json",
+    "accuracy": 4,
+    "order": 11,
+  },
+  {
+    "id": "jetbrains",
+    "name": "JetBrains IDEs",
+    "company": "JetBrains",
+    "logo": "/logos/jetbrains.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "Settings → Tools → AI Assistant → MCP Servers",
+    "accuracy": 4,
+    "order": 12,
+    "httpNote": "stdio only - use mcp-remote for HTTP servers",
+    "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes.",
+  },
+  {
+    "id": "zed",
+    "name": "Zed",
+    "company": "Zed Industries",
+    "logo": "/logos/zed.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "~/.config/zed/settings.json",
+    "accuracy": 4,
+    "order": 13,
+    "httpNote": "stdio only - limited HTTP support",
+  },
+  {
+    "id": "continue",
+    "name": "Continue",
+    "company": "Continue.dev",
+    "logo": "/logos/continue.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "yaml",
+    "configLocation": ".continue/mcpServers/",
+    "accuracy": 4,
+    "order": 14,
+  },
+  {
+    "id": "raycast",
+    "name": "Raycast",
+    "company": "Raycast",
+    "logo": "/logos/raycast.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Manage MCP Servers → Show Config File in Finder",
+    "accuracy": 4,
+    "order": 15,
+    "httpNote": "HTTP transport is experimental (requires v1.100.0+)",
+    "clientNote": "Requires Raycast v1.98.0+ for MCP, v1.100.0+ for HTTP transport. Pro subscription or BYOK required.",
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "company": "OpenAI",
+    "logo": "/logos/codex.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "cli",
+    "configLocation": "~/.codex/config.toml",
+    "accuracy": 4,
+    "order": 16,
+  },
+  {
+    "id": "open-webui",
+    "name": "Open WebUI",
+    "company": "Open WebUI",
+    "logo": "/logos/open-webui.svg",
+    "transports": ["streamable-http"],
+    "configFormat": "ui",
+    "accuracy": 4,
+    "order": 17,
+    "httpNote": "Requires Streamable HTTP - local or remote server",
+    "clientNote": "Requires Open WebUI v0.6.31+ for MCP support.",
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode",
+    "company": "Anomaly",
+    "logo": "/logos/opencode.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "~/.config/opencode/opencode.json (global) or opencode.json (project)",
+    "accuracy": 5,
+    "order": 18,
+  },
+  {
+    "id": "antigravity",
+    "name": "Antigravity",
+    "company": "Google",
+    "logo": "/logos/antigravity.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "mcp_config.json (in Antigravity UI)",
+    "accuracy": 3,
+    "order": 19,
+  },
+].map(c => ({ ...c, logo: withBase(c.logo) }));
+
+const platformsData = [
+  {"id": "macos", "name": "macOS", "icon": "apple", "order": 1},
+  {"id": "linux", "name": "Linux", "icon": "linux", "order": 2},
+  {"id": "windows", "name": "Windows", "icon": "windows", "order": 3},
+  {"id": "docker", "name": "Docker", "icon": "docker", "order": 4},
+];
+
+const connectionsData = [
+  {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on the same computer as your AI client", "icon": "computer", "order": 1},
+  {"id": "network", "name": "Local Network", "transport": "http", "description": "Run ha-mcp as an HTTP server accessible on your LAN", "icon": "network", "order": 2},
+  {"id": "remote", "name": "Remote (Internet)", "transport": "https", "description": "Access ha-mcp from anywhere via secure HTTPS", "icon": "globe", "order": 3},
+];
+
+const deploymentData = [
+  {"id": "uvx", "name": "uvx (Python)", "description": "Run ha-mcp directly via Python package manager", "icon": "python", "forConnections": ["local", "network"], "order": 1},
+  {"id": "docker", "name": "Docker", "description": "Run ha-mcp in a container", "icon": "docker", "forConnections": ["local", "network", "remote"], "order": 2},
+  {"id": "ha-addon", "name": "Home Assistant Add-on", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},
+  {"id": "cloudflared", "name": "Cloudflare Tunnel", "description": "Expose ha-mcp to the internet securely", "icon": "cloudflare", "forConnections": ["remote"], "order": 4},
+  {
+    "id": "webhook-proxy",
+    "name": "Webhook Proxy Add-on",
+    "description": "Remote access via existing reverse proxy (Nabu Casa, Cloudflare, etc.)",
+    "icon": "webhook",
+    "forConnections": ["remote"],
+    "order": 5,
+  },
+];
 
 // Client transport capabilities for filtering
 // stdio-only: clients that need mcp-proxy for HTTP connections
@@ -102,27 +316,27 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           Select Your AI Client
         </h2>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="client-grid">
-          {sortedClients.map((client) => (
+          {clientsData.map((client) => (
             <button
               data-client={client.id}
-              data-transports={JSON.stringify(client.data.transports)}
+              data-transports={JSON.stringify(client.transports)}
               class="option-card group"
             >
               <div class="flex items-center gap-2 mb-1">
-                <img src={withBase(client.data.logo)} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
+                <img src={client.logo} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
                 <div class="min-w-0">
-                  <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.data.name}</h3>
-                  <p class="text-xs text-slate-500">{client.data.company}</p>
+                  <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.name}</h3>
+                  <p class="text-xs text-slate-500">{client.company}</p>
                 </div>
               </div>
               <div class="flex items-center gap-1.5 mt-2">
-                {client.data.transports.includes('stdio') && (
+                {client.transports.includes('stdio') && (
                   <span class="transport-badge bg-green-900/50 text-green-400">stdio</span>
                 )}
-                {(client.data.transports.includes('sse') || client.data.transports.includes('streamable-http')) && (
+                {(client.transports.includes('sse') || client.transports.includes('streamable-http')) && (
                   <span class="transport-badge bg-blue-900/50 text-blue-400">HTTP</span>
                 )}
-                {client.data.beta && (
+                {client.beta && (
                   <span class="transport-badge bg-amber-900/50 text-amber-400">BETA</span>
                 )}
               </div>
@@ -139,25 +353,25 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="selected-badge" id="selected-client"></span>
         </h2>
         <div class="grid md:grid-cols-3 gap-4" id="connection-grid">
-          {sortedConnections.map((conn) => (
+          {connectionsData.map((conn) => (
             <button
               data-connection={conn.id}
-              data-transport={conn.data.transport}
+              data-transport={conn.transport}
               class="option-card-large connection-option"
             >
               <div class="flex items-center gap-2 mb-2">
-                <PlatformIcon icon={conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
+                <PlatformIcon icon={conn.icon} size={22} class="text-[var(--text-secondary)]" />
                 <span class="complexity-badge" data-complexity={conn.id === 'local' ? 'quick' : conn.id === 'network' ? 'complex' : 'advanced'}>
                   {conn.id === 'local' && 'Quick'}
                   {conn.id === 'network' && 'Complex'}
                   {conn.id === 'remote' && 'Advanced'}
                 </span>
               </div>
-              <h3 class="font-semibold text-white mb-1">{conn.data.name}</h3>
-              <p class="text-sm text-slate-400">{conn.data.description}</p>
+              <h3 class="font-semibold text-white mb-1">{conn.name}</h3>
+              <p class="text-sm text-slate-400">{conn.description}</p>
               <div class="mt-3">
                 <span class="px-2 py-1 text-xs rounded bg-slate-700 text-slate-300">
-                  {conn.data.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
+                  {conn.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
                 </span>
               </div>
             </button>
@@ -295,15 +509,15 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </h2>
         <p class="text-slate-400 text-sm mb-4">Choose how to run ha-mcp on your machine</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="platform-grid">
-          {sortedPlatforms.map((platform) => (
+          {platformsData.map((platform) => (
             <button
               data-platform={platform.id}
               class="option-card-large"
             >
               <div class="mb-2 text-[var(--text-secondary)]">
-                <PlatformIcon icon={platform.data.icon} size={28} />
+                <PlatformIcon icon={platform.icon} size={28} />
               </div>
-              <h3 class="font-semibold text-white">{platform.data.name}</h3>
+              <h3 class="font-semibold text-white">{platform.name}</h3>
             </button>
           ))}
         </div>

@@ -1,8 +1,0 @@
-name: Copilot CLI
-company: GitHub
-logo: /logos/copilot-cli.svg
-transports: ['stdio', 'sse', 'streamable-http']
-configFormat: ui
-configLocation: ~/.copilot/mcp-config.json
-accuracy: 5
-order: 8

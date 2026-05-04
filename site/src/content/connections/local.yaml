@@ -1,5 +1,0 @@
-name: Local Machine
-transport: stdio
-description: Run ha-mcp on the same computer as your AI client
-icon: computer
-order: 1

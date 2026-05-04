@@ -1,8 +1,0 @@
-name: Antigravity
-company: Google
-logo: /logos/antigravity.svg
-transports: ['stdio']
-configFormat: json
-configLocation: mcp_config.json (in Antigravity UI)
-accuracy: 3
-order: 19

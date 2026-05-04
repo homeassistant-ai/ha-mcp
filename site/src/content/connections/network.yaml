@@ -1,5 +1,0 @@
-name: Local Network
-transport: http
-description: Run ha-mcp as an HTTP server accessible on your LAN
-icon: network
-order: 2

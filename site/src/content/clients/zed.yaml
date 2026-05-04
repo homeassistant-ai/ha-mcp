@@ -1,9 +1,0 @@
-name: Zed
-company: Zed Industries
-logo: /logos/zed.svg
-transports: ['stdio']
-configFormat: json
-configLocation: ~/.config/zed/settings.json
-accuracy: 4
-order: 13
-httpNote: stdio only - limited HTTP support

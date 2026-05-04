@@ -1,8 +1,0 @@
-name: Codex
-company: OpenAI
-logo: /logos/codex.svg
-transports: ['stdio', 'streamable-http']
-configFormat: cli
-configLocation: ~/.codex/config.toml
-accuracy: 4
-order: 16

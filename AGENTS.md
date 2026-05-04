@@ -439,32 +439,30 @@ src/ha_mcp/
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
 
-## Site Content Collections
+## Setup Wizard
 
-The setup wizard at `site/src/pages/setup.astro` reads four content collections via Astro's `getCollection`:
+The setup wizard at `site/src/pages/setup.astro` is the single source of truth for AI-client setup instructions. Both the metadata (which clients exist, their config formats, transport support, etc.) and the actual instruction prose live in this one file.
 
+**Data structure (top of `setup.astro`):**
+
+```ts
+const clientsData = [...]    // 19 supported AI clients
+const platformsData = [...]  // macOS / Linux / Windows / Docker
+const connectionsData = [...]// local / network / remote
+const deploymentData = [...] // uvx / docker / ha-addon / cloudflared / webhook-proxy
 ```
-site/src/content/clients/<id>.yaml       # 19 supported AI clients
-site/src/content/platforms/<id>.yaml     # macOS / Linux / Windows / Docker
-site/src/content/connections/<id>.yaml   # local / network / remote
-site/src/content/deployment/<id>.yaml    # uvx / docker / ha-addon / cloudflared / webhook-proxy
-```
 
-**These files are pure metadata (YAML, schema in `site/src/content.config.ts`).** They have no body content — the wizard never invokes `.render()` or reads `.body`. All user-facing setup prose lives in:
+Each array is pre-sorted by `order`. Schema fields are read by both the Astro markup section (rendering the picker tiles) and the wizard `<script>` block (`state.client`, `state.connection`, etc.).
 
-- `site/src/pages/setup.astro` — the wizard's per-client / per-platform / per-deployment instruction-block templates (keyed off `state.client.id`, `platformId`, etc.).
-- `site/src/pages/faq.astro` — troubleshooting, version-specific gotchas, restart-related help.
-- `site/src/pages/guide-macos.astro` / `guide-windows.astro` — OS-specific install walkthroughs.
+**Instruction templates** for each client / platform / connection / deployment are JS template literals inside the wizard `<script>` block, keyed off `state.client.id` / `platformId` / `state.connection.id` / `state.proxy`. Cross-cutting troubleshooting and restart-related content lives in `site/src/pages/faq.astro`; OS-specific install walkthroughs live in `guide-macos.astro` / `guide-windows.astro`.
 
 **When adding a new client / platform / connection / deployment:**
 
-1. Add a `<id>.yaml` file with the required frontmatter fields (see schema in `content.config.ts`).
-2. Add a wizard branch in `setup.astro` for any client-specific config shape, instruction text, or transport quirk. Match the structural pattern of neighboring branches (UI clients use `<div class="instruction-block">` extensions; CLI clients push management-commands blocks to `instructions`).
-3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro` rather than re-introducing body content into the YAML file.
+1. Add an entry to the appropriate array at the top of `setup.astro` (insert at the right `order` position).
+2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match the structural pattern of neighboring branches: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with the click steps. Look at the existing `cursor` / `chatgpt` / `claude-code` / `cloudflared` branches for examples.
+3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
 
-**Do not author markdown body content into these YAML files.** Anything you write there is invisible to users — the file is metadata, not a content document. If you find yourself wanting prose, the right home is one of the rendered `.astro` pages above.
-
-History: PR #1097 / #1106 / #1108 traced and removed ~1900 lines of unrendered body content from these files; see those issues for the full audit if you're considering re-introducing prose into the YAML files.
+History: PR #1097 / #1106 / #1108 inlined the wizard data and ~110 setup-instruction nuggets that previously lived in unrendered `.md` files under `site/src/content/`. See those issues if you're considering re-introducing a separate content-collection layer.
 
 ## Writing MCP Tools
 
