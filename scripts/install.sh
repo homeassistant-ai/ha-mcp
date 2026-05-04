@@ -16,11 +16,13 @@ case "$OS" in
     Darwin)
         PLATFORM="macOS"
         CONFIG_DIR="$HOME/Library/Application Support/Claude"
+        CLAUDE_DESKTOP_STEP="  1. Download Claude Desktop: ${BLUE}https://claude.ai/download${NC}\n"
         RESTART_STEP="  1. Quit Claude Desktop: Claude menu > Quit Claude"
         ;;
     Linux)
         PLATFORM="Linux"
         CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Claude"
+        CLAUDE_DESKTOP_STEP="  1. Download Claude Desktop for Linux: ${BLUE}https://github.com/aaddrick/claude-desktop-debian${NC}\n"
         RESTART_STEP="  1. Quit Claude Desktop and reopen it"
         ;;
     *)
@@ -176,7 +178,7 @@ printf "\n"
 printf "${YELLOW}Next steps:${NC}\n"
 printf "\n"
 if [ "$CLAUDE_NOT_INSTALLED" = true ]; then
-    printf "  1. Download Claude Desktop: ${BLUE}https://claude.ai/download${NC}\n"
+    printf "$CLAUDE_DESKTOP_STEP}"
     printf "  2. Create a free account at claude.ai (if you haven't)\n"
     printf "  3. Open Claude Desktop and ask: \"Can you see my Home Assistant?\"\n"
 else
