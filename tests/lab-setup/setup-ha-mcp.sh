@@ -122,7 +122,7 @@ User=${SETUP_USER}
 Group=${SETUP_USER}
 WorkingDirectory=${SETUP_HOME}/ha-mcp
 ExecStart=/bin/bash -c 'git pull --ff-only'
-ExecStartPost=/bin/systemctl restart hamcp-demo
+ExecStartPost=/bin/sudo /bin/systemctl restart hamcp-demo
 StandardOutput=append:/var/log/hamcp-demo.log
 StandardError=append:/var/log/hamcp-demo.log
 SVCEOF
@@ -140,6 +140,10 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 SVCEOF
+
+# Allow SETUP_USER to restart the service without a password (needed by update timer)
+echo "${SETUP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart hamcp-demo" > /etc/sudoers.d/hamcp-demo
+chmod 440 /etc/sudoers.d/hamcp-demo
 
 systemctl daemon-reload
 systemctl enable hamcp-demo.service
