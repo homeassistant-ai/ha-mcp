@@ -1372,6 +1372,35 @@ cloudflared tunnel run ha-mcp</code></pre>
               "home-assistant": stdioConfig
             }
           }, null, 2);
+        } else if (state.client.id === 'antigravity') {
+          // Antigravity: add FASTMCP_SHOW_SERVER_BANNER=false to suppress the startup banner
+          // that triggers "Unexpected server output" errors in Antigravity.
+          let antigravityStdio;
+          if (isDocker) {
+            // Docker: add env var as an additional -e flag in the args array
+            antigravityStdio = {
+              ...dockerConfig,
+              args: [
+                ...dockerConfig.args.slice(0, -1),
+                "-e", "FASTMCP_SHOW_SERVER_BANNER=false",
+                dockerConfig.args[dockerConfig.args.length - 1]
+              ]
+            };
+          } else {
+            // uvx: merge into env object
+            antigravityStdio = {
+              ...uvxConfig,
+              env: {
+                ...uvxConfig.env,
+                FASTMCP_SHOW_SERVER_BANNER: "false"
+              }
+            };
+          }
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": antigravityStdio
+            }
+          }, null, 2);
         } else {
           config = JSON.stringify({
             mcpServers: {
@@ -1537,6 +1566,16 @@ mcpServers:
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
+        // Gemini CLI management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            ${!isStdio ? `<div><code class="bg-slate-800 px-1 rounded block mb-1">gemini mcp add --transport sse home-assistant ${mcpUrl}</code><span class="text-slate-400">Alternative: SSE transport instead of HTTP streaming</span></div>` : ''}
+            <div><code class="bg-slate-800 px-1 rounded">gemini mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">gemini mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Inside an interactive Gemini session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows status, <code class="bg-slate-800 px-1 rounded">/mcp refresh</code> reconnects after config changes.</div>
+          </div>
+        </div>`);
       } else if (state.client.id === 'codex') {
         // Codex CLI
         if (isStdio) {
@@ -1548,6 +1587,15 @@ mcpServers:
         } else {
           config = `codex mcp add home-assistant --url ${mcpUrl}`;
         }
+        // Codex CLI management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp get home-assistant</code> <span class="text-slate-400">— show server config</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+          </div>
+        </div>`);
       } else {
         // Claude Code
         if (isStdio) {
@@ -1566,6 +1614,16 @@ mcpServers:
         } else {
           config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
         }
+        // Claude Code management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            ${!isStdio ? `<div><code class="bg-slate-800 px-1 rounded">claude mcp add --transport sse home-assistant ${mcpUrl}</code> <span class="text-slate-400">— alternative SSE transport</span></div>` : ''}
+            <div><code class="bg-slate-800 px-1 rounded">claude mcp list</code> <span class="text-slate-400">— list all configured MCP servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">claude mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Use <code class="bg-slate-800 px-1 rounded">--scope user</code> to share the server across all projects (default scope is local/project-only).</div>
+          </div>
+        </div>`);
       }
     } else if (state.client.configFormat === 'ui') {
       // UI-based clients get formatted instruction blocks instead of a code box
@@ -1581,6 +1639,13 @@ mcpServers:
                 <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
                 <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
                 <li>Auth: None</li>
+              </ul>
+            </li>
+            <li>To use in a conversation: click <strong>+</strong> → <strong>More</strong> → <strong>Developer Mode</strong> → enable your connector
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>The connector must be enabled each new conversation (current UX limitation)</li>
+                <li>MCP endpoint must be at the root path <code class="bg-slate-800 px-1 rounded">/</code></li>
+                <li>Server must accept UUID-format client IDs</li>
               </ul>
             </li>
           </ol>
@@ -1622,14 +1687,23 @@ mcpServers:
               </ul>
             </li>
           </ol>
+          <div class="mt-3 text-sm text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Usage:</strong> In Quick AI and AI Chat, type <code class="bg-slate-800 px-1 rounded">@home-assistant</code> to invoke the server.</p>
+            <p><strong class="text-slate-300">Deeplink install:</strong> You can also install via <code class="bg-slate-800 px-1 rounded">raycast://mcp/install?&lt;config-json-percent-encoded&gt;</code> as an alternative to the UI.</p>
+            ${!isStdio ? '<p><strong class="text-slate-300">HTTP transport:</strong> Enable HTTP in AI Settings. Use <code class="bg-slate-800 px-1 rounded">httpHeaders: { Authorization: "Bearer &lt;token&gt;" }</code> for authenticated servers.</p>' : ''}
+            <p><a href="https://manual.raycast.com/model-context-protocol" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Raycast MCP docs →</a></p>
+          </div>
         </div>`;
       } else if (state.client.id === 'open-webui') {
         uiSteps = `<div class="instruction-block">
           <h4 class="instruction-title">Open WebUI Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Open <strong>Admin Settings</strong> → <strong>External Tools</strong></li>
+            <li>Navigate to <strong>Admin Panel</strong> → <strong>Settings</strong> → <strong>Tools</strong> → <strong>Manage Tool Servers</strong>
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Note: There is also "External Tools" in user settings — use the <strong>Admin</strong> one here</li>
+              </ul>
+            </li>
             <li>Click <strong>+ (Add Server)</strong></li>
-            <li>Set Type: <strong>MCP (Streamable HTTP)</strong></li>
             <li>Enter:
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                 <li>Server URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
@@ -1638,6 +1712,16 @@ mcpServers:
             </li>
             <li>Click <strong>Save</strong></li>
           </ol>
+          <div class="mt-3 text-sm text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Finding your URL:</strong> Common patterns:</p>
+            <ul class="ml-4 list-disc list-inside space-y-1">
+              <li>Docker HA on same host: <code class="bg-slate-800 px-1 rounded">http://host.docker.internal:8086/mcp</code></li>
+              <li>Local network: <code class="bg-slate-800 px-1 rounded">http://192.168.1.100:8086/mcp</code></li>
+              <li>Cloudflare tunnel: <code class="bg-slate-800 px-1 rounded">https://your-tunnel.trycloudflare.com/secret_abc123</code></li>
+            </ul>
+            <p class="mt-1">For stdio-based servers, use <a href="https://github.com/open-webui/mcpo" class="text-blue-400 hover:underline" target="_blank" rel="noopener">mcpo</a> proxy to bridge stdio to HTTP.</p>
+            <p><a href="https://docs.openwebui.com/features/mcp/" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Open WebUI MCP docs →</a></p>
+          </div>
         </div>`;
       } else if (state.client.id === 'copilot-cli') {
         if (isStdio) {
