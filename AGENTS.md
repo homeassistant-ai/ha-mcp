@@ -443,6 +443,10 @@ src/ha_mcp/
 
 The setup wizard at `site/src/pages/setup.astro` is the single source of truth for AI-client setup instructions. Both the metadata (which clients exist, their config formats, transport support, etc.) and the actual instruction prose live in this one file.
 
+> **⚠️ Deprecated: `site/src/content/{clients,platforms,connections,deployment}/*.md`** — these files **no longer exist**. Earlier versions of this codebase used Astro content collections to feed metadata to the wizard, with the intent that the body markdown of each file would also render as a per-client reference page. The per-client pages were never built, so ~2000 lines of body content authored over five months were invisible to users (#1097). The bodies got migrated into `setup.astro` / `faq.astro` / `guide-*.astro` and the entire content-collection layer was deleted in #1106. **If you find a reference to `site/src/content/clients/*.md` in an old issue, comment, PR description, or external blog post, that path is gone.** The data is inline in `setup.astro` now.
+>
+> **Do not re-create the content collection.** If `setup.astro` feels too big and you want to factor metadata back out into separate files, that is exactly the bug #1097 was filed to fix. Edit the inline arrays.
+
 **Data structure (top of `setup.astro`):**
 
 ```ts
@@ -461,8 +465,6 @@ Each array is pre-sorted by `order`. Schema fields are read by both the Astro ma
 1. Add an entry to the appropriate array at the top of `setup.astro` (insert at the right `order` position).
 2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match the structural pattern of neighboring branches: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with the click steps. Look at the existing `cursor` / `chatgpt` / `claude-code` / `cloudflared` branches for examples.
 3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
-
-History: PR #1097 / #1106 / #1108 inlined the wizard data and ~110 setup-instruction nuggets that previously lived in unrendered `.md` files under `site/src/content/`. See those issues if you're considering re-introducing a separate content-collection layer.
 
 ## Writing MCP Tools
 
