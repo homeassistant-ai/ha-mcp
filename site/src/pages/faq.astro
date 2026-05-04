@@ -285,7 +285,7 @@ source ~/.zshrc
               <strong>"Unexpected server output" error:</strong> Add <code class="bg-slate-800 px-1 rounded">FASTMCP_SHOW_SERVER_BANNER=false</code> to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
             </li>
             <li>
-              <strong>"EOF" errors:</strong> Use absolute paths for the command, not relative paths. Antigravity does not resolve relative paths in the same working directory as your shell.
+              <strong>"EOF" errors:</strong> Use absolute paths for the command, not relative paths.
             </li>
             <li>
               <strong>First run timeout:</strong> Run <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest --version</code> in your terminal first to download and cache the package before Antigravity tries to start it.

@@ -1575,9 +1575,7 @@ ingress:
             }
           }, null, 2);
         } else if (isOpenCode) {
-          // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env"
-          // The uvx-stdio shape (type, command, enabled, environment) is mirrored in
-          // site/src/content/clients/opencode.yaml — keep aligned.
+          // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env".
           // The Docker branch below intentionally omits the top-level `environment` key (env vars are
           // inlined as `-e KEY=VAL` in the command array), so the asymmetry is deliberate.
           const opencodeStdio = isDocker
@@ -1619,7 +1617,6 @@ ingress:
           // that triggers "Unexpected server output" errors in Antigravity.
           let antigravityStdio;
           if (isDocker) {
-            // Docker: add env var as an additional -e flag in the args array
             antigravityStdio = {
               ...dockerConfig,
               args: [
@@ -1629,7 +1626,6 @@ ingress:
               ]
             };
           } else {
-            // uvx: merge into env object
             antigravityStdio = {
               ...uvxConfig,
               env: {
@@ -1753,7 +1749,7 @@ ingress:
         }
       }
 
-      // Task 1: VS Code secure input prompts alternative (stdio only)
+      // VS Code: alternative secure-input-prompts config (stdio path only — HTTP path uses a different shape)
       if (state.client.id === 'vscode' && isStdio) {
         instructions.push(`<div class="instruction-block">
           <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
@@ -1792,8 +1788,9 @@ ingress:
         </div>`);
       }
 
-      // Task 2: GitHub Copilot Agents secure input prompts alternative
-      if (state.client.id === 'github-copilot-agents') {
+      // GitHub Copilot Agents: alternative secure-input-prompts config — only the stdio shape uses inputs[]
+      // (HTTP/SSE config is a url + transport pair with no command/env to substitute into).
+      if (state.client.id === 'github-copilot-agents' && isStdio) {
         instructions.push(`<div class="instruction-block">
           <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
           <div class="text-sm text-slate-300 space-y-2">
@@ -1829,7 +1826,7 @@ ingress:
         </div>`);
       }
 
-      // Task 3: OpenCode management commands & quirks
+      // OpenCode: management commands + corrective notes for users coming from other clients
       if (state.client.id === 'opencode') {
         instructions.push(`<div class="instruction-block">
           <h4 class="instruction-title">Management Commands &amp; Quirks</h4>
@@ -1925,12 +1922,12 @@ mcpServers:
             <div class="mt-2 text-slate-400">Inside an interactive Gemini session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows status, <code class="bg-slate-800 px-1 rounded">/mcp refresh</code> reconnects after config changes.</div>
           </div>
         </div>`);
-        // Gemini CLI: auth-headers alternative (CLI flag doesn't support headers — manual settings.json edit)
+        // Gemini CLI: auth-headers alternative — manual settings.json edit
         if (!isStdio) {
           instructions.push(`<div class="instruction-block">
             <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
             <div class="text-sm text-slate-300 space-y-2">
-              <p class="text-slate-400">The <code class="bg-slate-800 px-1 rounded">gemini mcp add</code> command does not accept custom headers. For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.gemini/settings.json</code> (or project-level <code class="bg-slate-800 px-1 rounded">.gemini/settings.json</code>) directly:</p>
+              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.gemini/settings.json</code> (or project-level <code class="bg-slate-800 px-1 rounded">.gemini/settings.json</code>) directly:</p>
               <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
   "mcpServers": {
     "home-assistant": {
@@ -1970,7 +1967,7 @@ mcpServers:
           instructions.push(`<div class="instruction-block">
             <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
             <div class="text-sm text-slate-300 space-y-2">
-              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> directly — the <code class="bg-slate-800 px-1 rounded">codex mcp add</code> command does not accept custom headers:</p>
+              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> directly:</p>
               <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">[mcp_servers.home-assistant]
 url = "${mcpUrl}"
 [mcp_servers.home-assistant.headers]
