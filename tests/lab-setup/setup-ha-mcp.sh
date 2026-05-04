@@ -22,6 +22,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 #=============================================================================
 [[ $EUID -ne 0 ]] && error "Run as root: sudo $0 [domain]"
+[[ "$SETUP_USER" == "root" ]] && error "Do not run as root directly. Use: sudo $0 [domain]\nIf calling from a root cron job, set: SUDO_USER=youruser $0 [domain]"
 info "Setting up ha-mcp test env for user: $SETUP_USER"
 info "Domain: $DOMAIN"
 
