@@ -23,10 +23,8 @@ OpenCode merges configs from all locations (project overrides global). See [conf
 
 ### stdio Configuration (Local)
 
-<!-- The uvx-stdio shape below (type, command, enabled, environment) is mirrored in: -->
-<!--   - site/src/pages/setup.astro (wizard `isOpenCode` branch) -->
-<!--   - site/src/data/clients.ts (legacy mirror entry) -->
-<!-- Keep these aligned when editing. -->
+<!-- The uvx-stdio shape below (type, command, enabled, environment) is mirrored in -->
+<!-- site/src/pages/setup.astro (wizard `isOpenCode` branch) — keep aligned. -->
 <!-- Note: the Docker variant in setup.astro intentionally omits the top-level -->
 <!-- `environment` key (env vars are inlined as `-e KEY=VAL` in the command array). -->
 
