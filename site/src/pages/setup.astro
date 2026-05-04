@@ -1510,6 +1510,97 @@ cloudflared tunnel run ha-mcp</code></pre>
           }, null, 2);
         }
       }
+
+      // Task 1: VS Code secure input prompts alternative (stdio only)
+      if (state.client.id === 'vscode' && isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">VS Code can prompt you for credentials at first use instead of storing them in the config file. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "mcp": {
+    "inputs": [
+      {
+        "type": "promptString",
+        "id": "ha-url",
+        "description": "Home Assistant URL",
+        "default": "http://homeassistant.local:8123"
+      },
+      {
+        "type": "promptString",
+        "id": "ha-token",
+        "description": "Long-lived access token",
+        "password": true
+      }
+    ],
+    "servers": {
+      "home-assistant": {
+        "command": "uvx",
+        "args": ["ha-mcp@latest"],
+        "env": {
+          "HOMEASSISTANT_URL": "\${input:ha-url}",
+          "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
+        }
+      }
+    }
+  }
+}</pre>
+            <p class="text-slate-400">VS Code will prompt for the URL and token on first use and store them securely.</p>
+          </div>
+        </div>`);
+      }
+
+      // Task 2: GitHub Copilot Agents secure input prompts alternative
+      if (state.client.id === 'github-copilot-agents') {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">GitHub Copilot Agents supports an <code class="bg-slate-800 px-1 rounded">inputs</code> array that prompts for credentials at first use instead of storing them in the file. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "ha-url",
+      "description": "Home Assistant URL",
+      "default": "http://homeassistant.local:8123"
+    },
+    {
+      "type": "promptString",
+      "id": "ha-token",
+      "description": "Long-lived access token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "home-assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "\${input:ha-url}",
+        "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
+      }
+    }
+  }
+}</pre>
+            <p class="text-slate-400"><strong>Note:</strong> The wizard above emits the <code class="bg-slate-800 px-1 rounded">.vscode/mcp.json</code> (repository) shape with a bare top-level <code class="bg-slate-800 px-1 rounded">servers</code> key. If you prefer to configure this in your personal VS Code <code class="bg-slate-800 px-1 rounded">settings.json</code> instead, wrap the entire object in an additional <code class="bg-slate-800 px-1 rounded">"mcp": { ... }</code> key.</p>
+          </div>
+        </div>`);
+      }
+
+      // Task 3: OpenCode management commands & quirks
+      if (state.client.id === 'opencode') {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands &amp; Quirks</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp list</code> <span class="text-slate-400">— list configured servers and their auth status</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp auth home-assistant</code> <span class="text-slate-400">— trigger or refresh authentication</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp logout home-assistant</code> <span class="text-slate-400">— clear stored credentials</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp debug home-assistant</code> <span class="text-slate-400">— diagnose connection issues</span></div>
+            <div class="mt-2 text-slate-400"><strong>OpenCode config quirks:</strong> The top-level key is <code class="bg-slate-800 px-1 rounded">mcp</code> (not <code class="bg-slate-800 px-1 rounded">mcpServers</code>). Local servers use a single <code class="bg-slate-800 px-1 rounded">command</code> array — there is no separate <code class="bg-slate-800 px-1 rounded">args</code> field. Environment variables go under <code class="bg-slate-800 px-1 rounded">environment</code> (not <code class="bg-slate-800 px-1 rounded">env</code>).</div>
+          </div>
+        </div>`);
+      }
+
     } else if (state.client.configFormat === 'yaml') {
       // Continue uses YAML format
       if (isStdio) {
