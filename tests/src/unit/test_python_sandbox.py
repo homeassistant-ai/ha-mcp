@@ -50,6 +50,43 @@ for view in config['views']:
         assert valid is True
 
 
+class TestUnaryOperators:
+    """Regression tests for issue #1115 — negative numbers in expressions."""
+
+    def test_negative_number_literal(self):
+        valid, error = validate_expression("x = -1")
+        assert valid is True, error
+
+    def test_unary_plus_literal(self):
+        valid, error = validate_expression("x = +1")
+        assert valid is True, error
+
+    def test_bitwise_invert(self):
+        valid, error = validate_expression("x = ~1")
+        assert valid is True, error
+
+    def test_negative_in_dict_value(self):
+        expr = 'config["views"][0]["min"] = -10'
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_dashboard_view_with_negative_axis_range(self):
+        """Reproduces issue #1115: appending a card with a negative gauge min."""
+        config = {"views": [{"cards": []}]}
+        expr = (
+            'config["views"][0]["cards"].append('
+            '{"type": "gauge", "entity": "sensor.power", "min": -5000, "max": 5000})'
+        )
+        result = safe_execute(expr, config)
+        assert result["views"][0]["cards"][0]["min"] == -5000
+
+    def test_negation_in_arithmetic(self):
+        config = {"value": 5}
+        expr = 'config["value"] = -config["value"]'
+        result = safe_execute(expr, config)
+        assert result["value"] == -5
+
+
 class TestBlockedOperations:
     """Test that dangerous operations are blocked."""
 
