@@ -1,0 +1,11 @@
+name: GitHub Copilot Agents
+company: GitHub
+logo: /logos/github.svg
+transports: ['stdio', 'sse']
+configFormat: json
+configLocation: |
+  Repository: .vscode/mcp.json (in repo root)
+  VS Code: Settings → Extensions → GitHub Copilot → MCP
+accuracy: 4
+order: 5
+clientNote: "Requires GitHub Copilot extension and coding agent mode"

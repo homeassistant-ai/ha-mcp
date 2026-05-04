@@ -1,0 +1,8 @@
+name: Continue
+company: Continue.dev
+logo: /logos/continue.svg
+transports: ['stdio', 'sse', 'streamable-http']
+configFormat: yaml
+configLocation: .continue/mcpServers/
+accuracy: 4
+order: 14

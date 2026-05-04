@@ -1,0 +1,9 @@
+name: Cursor
+company: Anysphere
+logo: /logos/cursor.svg
+transports: ['stdio', 'sse', 'streamable-http']
+configFormat: json
+configLocation: Settings → Cursor Settings → MCP
+accuracy: 5
+order: 3
+clientNote: "Restart Cursor after config changes"

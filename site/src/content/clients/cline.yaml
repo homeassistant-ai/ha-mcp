@@ -1,0 +1,8 @@
+name: Cline
+company: Cline
+logo: /logos/cline.svg
+transports: ['stdio', 'streamable-http']
+configFormat: json
+configLocation: VS Code Settings → Cline → MCP Servers
+accuracy: 4
+order: 7

@@ -1,0 +1,8 @@
+name: Gemini CLI
+company: Google
+logo: /logos/gemini.svg
+transports: ['stdio', 'sse', 'streamable-http']
+configFormat: cli
+configLocation: ~/.gemini/settings.json
+accuracy: 4
+order: 11

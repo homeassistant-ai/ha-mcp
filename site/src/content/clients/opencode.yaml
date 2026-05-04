@@ -1,0 +1,8 @@
+name: OpenCode
+company: Anomaly
+logo: /logos/opencode.svg
+transports: ['stdio', 'streamable-http']
+configFormat: json
+configLocation: ~/.config/opencode/opencode.json (global) or opencode.json (project)
+accuracy: 5
+order: 18

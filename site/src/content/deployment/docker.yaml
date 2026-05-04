@@ -1,0 +1,5 @@
+name: Docker
+description: Run ha-mcp in a container
+icon: docker
+forConnections: ['local', 'network', 'remote']
+order: 2

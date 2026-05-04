@@ -2,7 +2,7 @@ import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 
 const clients = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/clients' }),
+  loader: glob({ pattern: '**/*.yaml', base: './src/content/clients' }),
   schema: z.object({
     name: z.string(),
     company: z.string(),
@@ -19,7 +19,7 @@ const clients = defineCollection({
 });
 
 const platforms = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/platforms' }),
+  loader: glob({ pattern: '**/*.yaml', base: './src/content/platforms' }),
   schema: z.object({
     name: z.string(),
     icon: z.string(),
@@ -28,7 +28,7 @@ const platforms = defineCollection({
 });
 
 const connections = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/connections' }),
+  loader: glob({ pattern: '**/*.yaml', base: './src/content/connections' }),
   schema: z.object({
     name: z.string(),
     transport: z.enum(['stdio', 'http', 'https']),
@@ -39,7 +39,7 @@ const connections = defineCollection({
 });
 
 const deployment = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/deployment' }),
+  loader: glob({ pattern: '**/*.yaml', base: './src/content/deployment' }),
   schema: z.object({
     name: z.string(),
     description: z.string(),

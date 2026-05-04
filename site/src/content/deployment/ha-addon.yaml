@@ -1,0 +1,5 @@
+name: Home Assistant Add-on
+description: Run ha-mcp inside Home Assistant OS
+icon: home-assistant
+forConnections: ['network', 'remote']
+order: 3

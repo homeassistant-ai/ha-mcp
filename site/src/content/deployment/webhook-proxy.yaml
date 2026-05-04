@@ -1,0 +1,5 @@
+name: Webhook Proxy Add-on
+description: Remote access via existing reverse proxy (Nabu Casa, Cloudflare, etc.)
+icon: webhook
+forConnections: ['remote']
+order: 5

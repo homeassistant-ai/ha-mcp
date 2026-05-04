@@ -1,0 +1,8 @@
+name: ChatGPT
+company: OpenAI
+logo: /logos/openai.svg
+transports: ['sse', 'streamable-http']
+configFormat: ui
+accuracy: 4
+order: 9
+beta: true
