@@ -34,7 +34,7 @@ from fastmcp.server.context import Context
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import log_tool_usage, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,220 @@ _BLOCKED_TOOLS = frozenset({"ha_manage_custom_tool"})
 
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
+
+# Path-prefix denylist for ``_api_post``. These endpoints either have no
+# legitimate sandbox use case or have a wrapping MCP tool that performs
+# validation/lint/hash-locking that raw ``api_post`` would skip. The
+# prefixes are matched after ``_normalize_endpoint`` strips the leading
+# ``api/`` so they are written as plain HA-relative paths.
+_API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
+    (
+        "states/",
+        "Direct writes to /api/states/<entity_id>",
+        "use the appropriate service via call_tool('ha_call_service', ...) "
+        "so the change goes through the integration's state machine",
+    ),
+    (
+        "config/automation/config/",
+        "Direct writes to /api/config/automation/config/*",
+        "use call_tool('ha_config_set_automation', ...) so schema "
+        "validation, reference checks, and hash-locking run",
+    ),
+    (
+        "config/script/config/",
+        "Direct writes to /api/config/script/config/*",
+        "use call_tool('ha_config_set_script', ...)",
+    ),
+    (
+        "config/scene/config/",
+        "Direct writes to /api/config/scene/config/*",
+        "use call_tool('ha_config_set_scene', ...)",
+    ),
+)
+
+# HA Core internal events. Firing one of these via POST /api/events/<name>
+# spoofs HA's own bookkeeping bus and can fan out into user automations
+# listening for ``state_changed`` / ``automation_reloaded`` / etc. without
+# the real subsystem ever having fired. Custom event types stay allowed —
+# only the names HA Core itself emits are blocked.
+_BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset({
+    "state_changed",
+    "service_registered",
+    "service_removed",
+    "service_executed",
+    "automation_reloaded",
+    "script_started",
+    "homeassistant_start",
+    "homeassistant_started",
+    "homeassistant_stop",
+    "homeassistant_close",
+    "homeassistant_final_write",
+    "core_config_updated",
+    "device_registry_updated",
+    "entity_registry_updated",
+    "area_registry_updated",
+    "category_registry_updated",
+    "floor_registry_updated",
+    "label_registry_updated",
+    "lovelace_updated",
+    "panels_updated",
+    "themes_updated",
+    "component_loaded",
+    "recorder_5min_statistics_generated",
+    "recorder_hourly_statistics_generated",
+})
+
+# WebSocket commands the sandbox must not send. Each one either changes
+# persistent state in a way that bypasses a wrapping tool's validation
+# (lovelace, registry mutations) or has no sandbox-appropriate use case
+# at all (``config/core/update`` rewrites the HA installation's location/
+# timezone/currency/lat-long).
+_BLOCKED_WS_COMMANDS: frozenset[str] = frozenset({
+    "config/core/update",
+    "lovelace/config/save",
+    "lovelace/dashboards/create",
+    "lovelace/dashboards/delete",
+    "lovelace/dashboards/update",
+    "config/area_registry/delete",
+    "config/area_registry/disable",
+    "config/area_registry/update",
+    "config/device_registry/delete",
+    "config/device_registry/disable",
+    "config/device_registry/update",
+    "config/entity_registry/delete",
+    "config/entity_registry/disable",
+    "config/entity_registry/update",
+})
+
+
+def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
+    """Map a sandbox exception to ``(code, message, suggestions)``.
+
+    Monty wraps inner exceptions in ``MontyRuntimeError`` with the inner
+    type name embedded in the string representation, so we inspect both
+    ``type(exc).__name__`` and ``str(exc)`` and pick the most specific
+    bucket. Three categories:
+
+    * ``SANDBOX_LIMIT_EXCEEDED`` — memory / time / recursion / invocation
+      limits the sandbox runtime enforces.
+    * ``SANDBOX_SYNTAX_UNSUPPORTED`` — features Monty doesn't implement
+      (imports, classes, ``with``, ``match``, etc.) or hard syntax errors.
+    * ``SANDBOX_RUNTIME_ERROR`` — anything else; opaque runtime failure
+      whose root cause is in the LLM-authored code.
+
+    The suggestions are tailored per category so the LLM can self-recover
+    instead of seeing every failure as "check the Python code for syntax
+    errors" (which was the prior behaviour and actively misled callers
+    when the real cause was a memory cap or a missing module import).
+    """
+    exc_text = str(exc)
+    exc_type = type(exc).__name__
+    short = exc_text[:200]
+
+    def _matches(*needles: str) -> bool:
+        return any(needle in exc_type or needle in exc_text for needle in needles)
+
+    if _matches("MemoryError"):
+        return (
+            ErrorCode.SANDBOX_LIMIT_EXCEEDED,
+            f"Sandbox memory limit exceeded: {short}",
+            [
+                "Reduce memory usage in your code (smaller intermediate "
+                "data structures, no large list accumulation).",
+                "Stream results via call_tool calls rather than building "
+                "them up in-process.",
+                "Operator can raise CODE_MODE_MAX_MEMORY (max 256 MB).",
+            ],
+        )
+    if _matches("RecursionError"):
+        return (
+            ErrorCode.SANDBOX_LIMIT_EXCEEDED,
+            f"Sandbox recursion limit exceeded: {short}",
+            [
+                "Convert deep recursion to iteration (while/for with an "
+                "explicit stack).",
+                "Operator can raise CODE_MODE_MAX_RECURSION (max 10000).",
+            ],
+        )
+    if _matches("TimeoutError", "timed out", "wall-clock", "max_duration"):
+        return (
+            ErrorCode.SANDBOX_LIMIT_EXCEEDED,
+            f"Sandbox time limit exceeded: {short}",
+            [
+                "Optimise the code to finish within the wall-clock limit.",
+                "Break the work into smaller chunks across multiple calls.",
+                "Operator can raise CODE_MODE_MAX_DURATION (max 300s).",
+            ],
+        )
+
+    if _matches("ModuleNotFoundError", "No module named"):
+        return (
+            ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
+            f"Imports are not allowed in the sandbox: {short}",
+            [
+                "Remove all 'import' / 'from ... import' statements.",
+                "Use the injected helpers instead: api_get, api_post, "
+                "ws_send, call_tool, delete_saved_tool.",
+            ],
+        )
+    if _matches("NotImplementedError", "does not yet support", "context manager"):
+        return (
+            ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
+            f"Sandbox does not support this Python feature: {short}",
+            [
+                "Monty's sandboxed interpreter is a Python subset — "
+                "context managers (with), match statements, class "
+                "definitions, and some builtins are unavailable.",
+                "Rewrite using basic statements and the injected helpers.",
+            ],
+        )
+    if _matches("SyntaxError"):
+        return (
+            ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
+            f"Code did not parse: {short}",
+            [
+                "Fix the syntax error and retry.",
+                "Reminder: no class definitions, no imports, no 'with' "
+                "or 'match' statements.",
+            ],
+        )
+
+    return (
+        ErrorCode.SANDBOX_RUNTIME_ERROR,
+        f"Sandbox runtime error: {short}",
+        [
+            f"Exception type: {exc_type}",
+            "Some Python builtins behave differently in Monty (e.g. "
+            "next() requires an iterator, not a list).",
+            "Check the values you're passing to api_get/api_post/"
+            "ws_send/call_tool.",
+            "Use 'await' before any call to api_get/api_post/ws_send/"
+            "call_tool.",
+        ],
+    )
+
+
+def _check_api_post_blocked(normalized: str) -> str | None:
+    """Return a rejection message if ``normalized`` matches the api_post
+    blocklist, or ``None`` if the call should proceed.
+
+    ``normalized`` is the path after ``_normalize_endpoint`` stripped any
+    leading ``/`` and ``api/`` prefix, so for example
+    ``"/api/states/sun.sun"`` arrives here as ``"states/sun.sun"``.
+    """
+    for prefix, what, alternative in _API_POST_BLOCKED_PREFIXES:
+        if normalized.startswith(prefix) or normalized == prefix.rstrip("/"):
+            return f"{what} are blocked from the sandbox; {alternative}."
+    if normalized.startswith("events/"):
+        event_name = normalized[len("events/"):]
+        if event_name in _BLOCKED_HA_INTERNAL_EVENTS:
+            return (
+                f"Firing HA-internal event {event_name!r} from the sandbox "
+                "is blocked because it can spoof HA's own bookkeeping and "
+                "trigger user automations without the underlying real "
+                "event ever happening. Custom event types are allowed."
+            )
+    return None
 
 # Cap on the number of saved tools to prevent runaway growth (a buggy LLM
 # loop could otherwise fill disk with unique save_as names).
@@ -333,6 +547,24 @@ async def _run_sandboxed_code(
         except ValueError as exc:
             logger.warning("api_post rejected endpoint %r: %s", endpoint, exc)
             return {"error": str(exc)}
+        block_reason = _check_api_post_blocked(normalized)
+        if block_reason is not None:
+            # INFO-level so blocked attempts are visible in operator logs
+            # for forensics without flooding INFO during normal operation.
+            logger.info(
+                "sandbox.api_post.blocked endpoint=%r normalized=%r",
+                endpoint,
+                normalized,
+            )
+            return {"error": block_reason}
+        # State-changing call: DEBUG-level audit trail. Operators can
+        # bump the ha_mcp.tools.tools_code logger to DEBUG to see what
+        # the sandbox is actually doing on their HA instance.
+        logger.debug(
+            "sandbox.api_post endpoint=%r data_keys=%s",
+            endpoint,
+            sorted(data.keys()) if isinstance(data, dict) else None,
+        )
         try:
             post_kwargs: dict[str, Any] = {}
             if data is not None:
@@ -355,6 +587,14 @@ async def _run_sandboxed_code(
         sandbox should not include either. Typed as ``Any`` because sandbox
         code is dynamic and may pass non-dict values; the runtime guard
         below converts that into an error dict.
+
+        Commands listed in ``_BLOCKED_WS_COMMANDS`` are rejected with an
+        explanatory error: those either rewrite persistent state in ways
+        that have no sandbox-appropriate use case (``config/core/update``)
+        or bypass the validation in their wrapping MCP tool
+        (``lovelace/config/save`` skips the dashboard-collision check that
+        ``ha_config_set_dashboard`` performs; registry mutations skip
+        their corresponding wrapping tools' invariant checks).
         """
         nonlocal call_count
         call_count += 1
@@ -362,13 +602,26 @@ async def _run_sandboxed_code(
             return {"error": f"WebSocket call limit exceeded ({settings.code_mode_max_invocations})"}
         if not isinstance(message, dict):
             return {"error": "ws_send(message) requires a dict with a 'type' field"}
-        if "type" not in message:
+        msg_type = message.get("type")
+        if not isinstance(msg_type, str):
             return {"error": "ws_send(message) requires a 'type' field"}
+        if msg_type in _BLOCKED_WS_COMMANDS:
+            logger.info("sandbox.ws_send.blocked type=%r", msg_type)
+            return {
+                "error": (
+                    f"WebSocket command {msg_type!r} is blocked from the "
+                    "sandbox. Use the corresponding wrapping tool via "
+                    "call_tool (e.g. ha_config_set_dashboard, "
+                    "ha_config_set_area, ha_update_device, ha_set_entity) "
+                    "so validation runs."
+                )
+            }
+        logger.debug("sandbox.ws_send type=%r", msg_type)
         try:
             return await client.send_websocket_message(message)
         except Exception as exc:
             logger.warning(
-                "ws_send(type=%r) failed", message.get("type"), exc_info=True
+                "ws_send(type=%r) failed", msg_type, exc_info=True
             )
             return {"error": str(exc)[:200]}
 
@@ -666,16 +919,23 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except ToolError:
                 raise
             except Exception as e:
-                exception_to_structured_error(
-                    e,
-                    context={
-                        "sandbox_error_type": type(e).__name__,
-                        "saved_tool_name": run_saved,
-                    },
-                    suggestions=[
-                        "The saved code may no longer work",
-                        "Use ha_manage_custom_tool(code=...) to create an updated version",
-                    ],
+                code, message, suggestions = _classify_sandbox_error(e)
+                raise_tool_error(
+                    create_error_response(
+                        code,
+                        message,
+                        suggestions=[
+                            "The saved code may no longer work in the "
+                            "current sandbox or HA configuration.",
+                            "Use ha_manage_custom_tool(code=...) to "
+                            "create an updated version.",
+                            *suggestions,
+                        ],
+                        context={
+                            "sandbox_error_type": type(e).__name__,
+                            "saved_tool_name": run_saved,
+                        },
+                    )
                 )
 
             return {"success": True, "data": {"result": result, "saved_tool": run_saved}}
@@ -726,18 +986,17 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={
-                    "sandbox_error_type": type(e).__name__,
-                    "justification": justification[:200],
-                },
-                suggestions=[
-                    "Check the Python code for syntax errors",
-                    "Ensure call_tool calls use valid tool names and arguments",
-                    "Remember: no imports, no classes, no match statements",
-                    "Use 'await' when calling call_tool",
-                ],
+            err_code, err_message, err_suggestions = _classify_sandbox_error(e)
+            raise_tool_error(
+                create_error_response(
+                    err_code,
+                    err_message,
+                    suggestions=err_suggestions,
+                    context={
+                        "sandbox_error_type": type(e).__name__,
+                        "justification": justification[:200],
+                    },
+                )
             )
 
         response: dict[str, Any] = {

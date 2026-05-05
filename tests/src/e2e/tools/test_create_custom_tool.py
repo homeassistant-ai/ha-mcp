@@ -1117,3 +1117,385 @@ class TestSavedTools:
             f"Error should mention invalidity: {result}"
         )
         logger.info("delete_saved_tool correctly rejected invalid name")
+
+
+# ---------------------------------------------------------------------------
+# api_post path blocklist (#1, #2, #4 from PR #854 stress-test findings)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeApiPostBlocklist:
+    """Verify _api_post rejects writes to endpoints that bypass wrapping-tool
+    validation or that have no legitimate sandbox use case.
+    """
+
+    async def test_api_post_blocks_state_write(self, mcp_client_with_code_mode):
+        """POST /api/states/<entity_id> is blocked — it can conjure ghost
+        entities and override real ones in the state machine.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post states/* blocklist")
+
+        code = (
+            'result = await api_post("/states/sensor.fake_pwn_sensor",'
+            ' {"state": "1337"})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked state write"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_post must block /api/states/* writes: {data}"
+        )
+        assert "states" in result["error"].lower() or "blocked" in result["error"].lower(), (
+            f"Error should explain the block: {result}"
+        )
+        logger.info("api_post correctly blocked /api/states/* write")
+
+    async def test_api_post_blocks_ha_internal_event(
+        self, mcp_client_with_code_mode
+    ):
+        """POST /api/events/state_changed is blocked — spoofing HA Core
+        internal events can fan out into user automations.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post events HA-internal blocklist")
+
+        code = (
+            'result = await api_post("/events/state_changed",'
+            ' {"entity_id": "sensor.x", "new_state": {}})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked HA-internal event"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_post must block HA-internal events: {data}"
+        )
+        assert "state_changed" in result["error"] or "internal" in result["error"].lower(), (
+            f"Error should mention the blocked event: {result}"
+        )
+        logger.info("api_post correctly blocked /api/events/state_changed")
+
+    async def test_api_post_allows_custom_event(self, mcp_client_with_code_mode):
+        """POST /api/events/<custom_event> is allowed — only HA Core
+        internal event names are blocked, not user-defined types.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post custom event allowed")
+
+        # The endpoint exists in HA REST and accepts arbitrary payloads,
+        # so we just verify the sandbox didn't reject it preemptively.
+        code = (
+            'result = await api_post("/events/my_app_completed", {"foo": "bar"})\n'
+            '{"has_error": "error" in result if isinstance(result, dict)'
+            ' else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict)'
+            ' else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: custom event allowed"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        # The HA endpoint may return an "error" field for legitimate reasons
+        # (e.g. RBAC), but our sandbox-side blocklist must not be the cause.
+        if result["has_error"]:
+            err = result["error"].lower()
+            assert "blocked" not in err and "internal" not in err, (
+                f"Custom event must not be sandbox-blocked: {result}"
+            )
+        logger.info("api_post correctly allowed custom event type")
+
+    async def test_api_post_blocks_automation_config_write(
+        self, mcp_client_with_code_mode
+    ):
+        """POST /api/config/automation/config/* is blocked — bypasses the
+        validation in ha_config_set_automation.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post automation config blocklist")
+
+        code = (
+            'result = await api_post("/config/automation/config/abcd1234",'
+            ' {"alias": "X", "trigger": [], "action": []})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked automation config"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_post must block automation/config/*: {data}"
+        )
+        assert "ha_config_set_automation" in result["error"], (
+            f"Error should point at the wrapping tool: {result}"
+        )
+        logger.info("api_post correctly blocked automation config write")
+
+    async def test_api_post_blocks_script_and_scene_config_writes(
+        self, mcp_client_with_code_mode
+    ):
+        """POST /api/config/{script,scene}/config/* are blocked for the same
+        reason as automation: bypasses wrapping-tool validation.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post script/scene blocklist")
+
+        for kind in ("script", "scene"):
+            code = (
+                f'result = await api_post("/config/{kind}/config/abcd1234",'
+                f' {{"name": "X"}})\n'
+                '{"has_error": "error" in result if isinstance(result, dict) else False,'
+                ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+            )
+            data = await safe_call_tool(
+                mcp_client_with_code_mode,
+                TOOL_NAME,
+                {"code": code, "justification": f"E2E test: blocked {kind} config"},
+            )
+            assert data.get("success") is True, f"Sandbox should succeed: {data}"
+            result = data["data"]["result"]
+            assert result["has_error"] is True, (
+                f"api_post must block {kind}/config/*: {data}"
+            )
+            assert f"ha_config_set_{kind}" in result["error"], (
+                f"Error should point at the wrapping tool: {result}"
+            )
+            logger.info("api_post correctly blocked %s config write", kind)
+
+
+# ---------------------------------------------------------------------------
+# ws_send command blocklist (#3, #5 from PR #854 stress-test findings)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeWsSendBlocklist:
+    """Verify _ws_send rejects WebSocket commands that rewrite persistent
+    state or bypass wrapping-tool validation.
+    """
+
+    async def test_ws_send_blocks_core_config_update(
+        self, mcp_client_with_code_mode
+    ):
+        """config/core/update is blocked — it persistently rewrites the HA
+        installation's location/timezone/currency/lat-long.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send config/core/update blocklist")
+
+        code = (
+            'result = await ws_send({"type": "config/core/update",'
+            ' "location_name": "PWN_LAB"})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked core config update"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"ws_send must block config/core/update: {data}"
+        )
+        assert "config/core/update" in result["error"], (
+            f"Error should mention the blocked command: {result}"
+        )
+        logger.info("ws_send correctly blocked config/core/update")
+
+    async def test_ws_send_blocks_lovelace_config_save(
+        self, mcp_client_with_code_mode
+    ):
+        """lovelace/config/save is blocked — bypasses ha_config_set_dashboard
+        which performs the storage-mode collision check.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send lovelace/config/save blocklist")
+
+        code = (
+            'result = await ws_send({"type": "lovelace/config/save",'
+            ' "url_path": "lovelace", "config": {}})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked lovelace save"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"ws_send must block lovelace/config/save: {data}"
+        )
+        assert "lovelace/config/save" in result["error"], (
+            f"Error should mention the blocked command: {result}"
+        )
+        logger.info("ws_send correctly blocked lovelace/config/save")
+
+    async def test_ws_send_blocks_registry_mutations(
+        self, mcp_client_with_code_mode
+    ):
+        """Registry mutation commands are blocked — must go through their
+        wrapping tools (ha_config_set_area, ha_update_device, ha_set_entity).
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send registry mutation blocklist")
+
+        for ws_type in (
+            "config/area_registry/update",
+            "config/device_registry/update",
+            "config/entity_registry/update",
+        ):
+            code = (
+                f'result = await ws_send({{"type": "{ws_type}", "id": "x"}})\n'
+                '{"has_error": "error" in result if isinstance(result, dict) else False,'
+                ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+            )
+            data = await safe_call_tool(
+                mcp_client_with_code_mode,
+                TOOL_NAME,
+                {"code": code, "justification": f"E2E test: blocked {ws_type}"},
+            )
+            assert data.get("success") is True, f"Sandbox should succeed: {data}"
+            result = data["data"]["result"]
+            assert result["has_error"] is True, (
+                f"ws_send must block {ws_type}: {data}"
+            )
+            assert ws_type in result["error"], (
+                f"Error should mention the blocked command: {result}"
+            )
+            logger.info("ws_send correctly blocked %s", ws_type)
+
+    async def test_ws_send_allows_registry_list(self, mcp_client_with_code_mode):
+        """Registry LIST queries stay allowed — only mutations are blocked."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send registry list allowed")
+
+        code = (
+            'result = await ws_send({"type": "config/area_registry/list"})\n'
+            '{"is_dict": isinstance(result, dict),'
+            ' "has_blocked_error": isinstance(result, dict) and "blocked" in'
+            ' str(result.get("error", "")).lower()}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: registry list allowed"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_blocked_error"] is False, (
+            f"area_registry/list must not be sandbox-blocked: {data}"
+        )
+        logger.info("ws_send correctly allowed area_registry/list")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox error classification (#4 mitigation)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeErrorClassification:
+    """Verify Monty runtime failures map to the right SANDBOX_* error code
+    with targeted suggestions, not the previous generic INTERNAL_ERROR.
+    """
+
+    async def test_import_returns_syntax_unsupported(
+        self, mcp_client_with_code_mode
+    ):
+        """An ``import`` statement maps to SANDBOX_SYNTAX_UNSUPPORTED with a
+        suggestion that names the injected helpers, not 'check the syntax'.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Error classification: imports")
+
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "import time\ntime.time()",
+                "justification": "E2E test: import classification",
+            },
+        )
+        assert data.get("success") is False, f"Should fail: {data}"
+        err = data.get("error", {})
+        err_code = err.get("code") if isinstance(err, dict) else ""
+        err_message = (
+            str(err.get("message", "")) if isinstance(err, dict) else str(err)
+        )
+        err_suggestions = err.get("suggestions", []) if isinstance(err, dict) else []
+        assert err_code == "SANDBOX_SYNTAX_UNSUPPORTED", (
+            f"Expected SANDBOX_SYNTAX_UNSUPPORTED, got {err_code}: {data}"
+        )
+        joined = " ".join(str(s) for s in err_suggestions).lower()
+        assert "import" in joined or "helper" in joined, (
+            f"Suggestions should reference imports/helpers, got: {err_suggestions}"
+        )
+        logger.info("Import classification correct: %s", err_message[:120])
+
+    async def test_class_returns_syntax_unsupported(
+        self, mcp_client_with_code_mode
+    ):
+        """``class`` definitions are unsupported by Monty; should map to
+        SANDBOX_SYNTAX_UNSUPPORTED.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Error classification: class")
+
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "class Foo:\n    pass\nFoo()",
+                "justification": "E2E test: class classification",
+            },
+        )
+        assert data.get("success") is False, f"Should fail: {data}"
+        err = data.get("error", {})
+        err_code = err.get("code") if isinstance(err, dict) else ""
+        assert err_code == "SANDBOX_SYNTAX_UNSUPPORTED", (
+            f"Expected SANDBOX_SYNTAX_UNSUPPORTED, got {err_code}: {data}"
+        )
+        logger.info("Class classification correct")
+
+    async def test_syntax_error_returns_syntax_unsupported(
+        self, mcp_client_with_code_mode
+    ):
+        """A bare syntax error also maps to SANDBOX_SYNTAX_UNSUPPORTED."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Error classification: syntax")
+
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "def foo(:\n  pass",
+                "justification": "E2E test: syntax classification",
+            },
+        )
+        assert data.get("success") is False, f"Should fail: {data}"
+        err = data.get("error", {})
+        err_code = err.get("code") if isinstance(err, dict) else ""
+        assert err_code == "SANDBOX_SYNTAX_UNSUPPORTED", (
+            f"Expected SANDBOX_SYNTAX_UNSUPPORTED, got {err_code}: {data}"
+        )
+        logger.info("Syntax error classification correct")

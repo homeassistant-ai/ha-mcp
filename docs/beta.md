@@ -83,6 +83,16 @@ This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as
 
 **Outbound HTTP is restricted to your HA instance.** `api_get` / `api_post` reject absolute URLs (`http://...`, `https://...`), protocol-relative URLs (`//host/...`), and userinfo (`user@host/...`). This stops a prompt-injected LLM from redirecting the request elsewhere and exfiltrating the HA bearer token via the still-attached `Authorization` header. Only HA-relative paths reach the underlying httpx client.
 
+**Safer-path enforcement on REST and WebSocket.** Several endpoints have wrapping MCP tools that perform validation, lint, hash-locking, or invariant checks; raw `api_post` / `ws_send` would skip those. The sandbox blocks a small denylist on each surface:
+
+- `api_post`: writes to `/api/states/<entity_id>` (which can conjure ghost entities), `/api/events/<HA-internal-event-name>` (Core internal events that can fan out into user automations), and `/api/config/{automation,script,scene}/config/*` (forced through `ha_config_set_automation` / `ha_config_set_script` / `ha_config_set_scene`).
+- `ws_send`: `config/core/update` (rewrites HA's location/timezone/currency in `.storage/core.config`), `lovelace/config/save` and `lovelace/dashboards/{create,delete,update}` (forced through `ha_config_set_dashboard`), and `config/{area,device,entity}_registry/{delete,disable,update}` (forced through `ha_config_set_area` / `ha_update_device` / `ha_set_entity` etc.).
+- Service calls (`POST /api/services/<domain>/<service>`), webhook firing (`POST /api/webhook/<id>`), custom event types (`POST /api/events/my_event_name`), and registry **read** queries (e.g. `config/area_registry/list`) all stay allowed.
+
+**Sandbox failures are classified.** When sandboxed code raises, the error response now uses one of three codes — `SANDBOX_LIMIT_EXCEEDED` (memory / time / recursion / invocation cap), `SANDBOX_SYNTAX_UNSUPPORTED` (imports, classes, `with`, `match`, hard syntax errors) or `SANDBOX_RUNTIME_ERROR` (everything else) — with suggestions tailored to the category. Previously every Monty failure surfaced as `INTERNAL_ERROR` with "check the Python code for syntax errors" advice, which actively misled callers when the real cause was a memory cap or a missing module import.
+
+**Sandbox actions are auditable.** Every state-changing sandbox call (`POST /api/...`, every `ws_send`) logs a structured `sandbox.api_post`/`sandbox.ws_send` line at DEBUG level. Blocked attempts log at INFO level. To get a forensic trail, set `logger ha_mcp.tools.tools_code: debug` (or equivalent) in your add-on configuration.
+
 **ARM platforms require the async sandbox path.** On systems where `Monty.run_async` is unavailable, the tool fails fast with a clear error rather than falling back silently.
 
 **Recommended prerequisites:**
