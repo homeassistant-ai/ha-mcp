@@ -535,8 +535,14 @@ jobs:
 
             </details>
 
+      # Skip on cancellation. concurrency.cancel-in-progress means every
+      # superseded run (user posts a follow-up comment that retriggers triage)
+      # would otherwise land here and overwrite the in-flight placeholder with
+      # a "bot unavailable" notice — that's noise, not a failure. The
+      # replacement run will post the real analysis. Job timeout also surfaces
+      # as cancellation and we accept losing the placeholder in that rare case.
       - name: Update comment and labels
-        if: always() && steps.initial_comment.outputs.comment_id
+        if: ${{ !cancelled() && steps.initial_comment.outputs.comment_id }}
         uses: actions/github-script@v9
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
@@ -552,19 +558,18 @@ jobs:
             const geminiSummary = process.env.GEMINI_SUMMARY || '';
             const geminiOutcome = process.env.GEMINI_OUTCOME || '';
 
-            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error; the failure has been logged in the workflow run for maintainer review. Your issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
-
-            // Treat both hard failures and cancellations (incl. job timeout) as
-            // terminal: the trailing fail-job step turns them into a red X.
-            const TERMINAL_OUTCOMES = ['failure', 'cancelled'];
+            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error. Your issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
             let extraLabels = [];
 
             // CLI step failures must NEVER expose raw stderr to issue authors.
-            if (TERMINAL_OUTCOMES.includes(evaluateOutcome) || TERMINAL_OUTCOMES.includes(geminiOutcome)) {
-              core.error(`Gemini triage step did not complete cleanly (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
+            // Step-level `cancelled` (e.g. step-timeout, rare) is treated like
+            // failure here; job-level cancellation is filtered by the step's
+            // `if: !cancelled()` guard above and never reaches this script.
+            if (evaluateOutcome === 'failure' || geminiOutcome === 'failure') {
+              core.error(`Gemini triage step failed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
               analysisBody = GENERIC_FAILURE_BODY;
             } else if (geminiSummary) {
               const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
@@ -587,8 +592,9 @@ jobs:
               // gets dressed up as a polite info request to the user. Accept
               // bulleted (`*`/`-`/`•`), numbered (`1.`), or bold-led
               // (`**Item**`) lines — Gemini emits all three flavors despite
-              // the prompt asking for `*`. 4000-char cap is a "this looks like
-              // an LLM monologue" heuristic; GH's hard limit is 65536.
+              // the prompt asking for `*`. The 4000-char cap is a "this looks
+              // like an LLM monologue, not a missing-info checklist" heuristic;
+              // it has nothing to do with GitHub's 65536-char comment limit.
               const trimmed = evaluateResult.trim();
               const looksLikeMissingInfo = /(^|\n)\s*([*\-•]|\d+\.|\*\*)/.test(trimmed);
               const tooShort = trimmed.length < 20;
@@ -609,31 +615,46 @@ jobs:
               analysisBody = GENERIC_FAILURE_BODY;
             }
 
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: commentId,
-              body: analysisBody
-            });
+            try {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body: analysisBody
+              });
+            } catch (err) {
+              // Failed to update the placeholder. Surface it loudly — the
+              // user is staring at "🤖 analyzing..." and we owe them at
+              // least a red Actions run so a maintainer notices.
+              core.setFailed(`updateComment failed for placeholder ${commentId}: ${err.message}`);
+              return;
+            }
 
             if (shouldAddTriagedLabel) {
               const issueNumber = ${{ steps.issue_number.outputs.number }};
               const labelsToAdd = ['triaged', ...extraLabels];
               core.info(`Adding labels: ${labelsToAdd.join(', ')}`);
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                labels: labelsToAdd
-              });
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  labels: labelsToAdd
+                });
+              } catch (err) {
+                // If `triaged` doesn't get applied, the should_run gate at
+                // the top of this workflow will re-trigger triage on every
+                // future comment, piling up placeholders. Fail loudly so a
+                // maintainer adds the label by hand.
+                core.setFailed(`addLabels failed for issue #${issueNumber} (${labelsToAdd.join(',')}): ${err.message}. Issue will re-trigger triage on next comment until 'triaged' is applied manually.`);
+              }
             }
 
+      # Surface Gemini step failures as a red X. Only fires on actual `failure`
+      # outcomes — `cancelled` is intentionally excluded so concurrency
+      # cancel-in-progress (a normal occurrence) doesn't paint runs red.
       - name: Fail job if Gemini steps failed
-        if: |
-          always() && (
-            steps.evaluate.outcome == 'failure' || steps.evaluate.outcome == 'cancelled' ||
-            steps.gemini_analysis.outcome == 'failure' || steps.gemini_analysis.outcome == 'cancelled'
-          )
+        if: ${{ !cancelled() && (steps.evaluate.outcome == 'failure' || steps.gemini_analysis.outcome == 'failure') }}
         run: |
-          echo "::error::Gemini triage did not complete cleanly (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
+          echo "::error::Gemini triage failed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
           exit 1
