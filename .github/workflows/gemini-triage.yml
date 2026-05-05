@@ -293,7 +293,8 @@ jobs:
       - name: Evaluate completeness and generate response
         id: evaluate
         if: needs.should_run.outputs.skip_preanalysis != 'true'
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ''
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
@@ -315,7 +316,8 @@ jobs:
       - name: Full analysis (if COMPLETE or author commented)
         id: gemini_analysis
         if: contains(steps.evaluate.outputs.summary, 'COMPLETE') || needs.should_run.outputs.skip_preanalysis == 'true'
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ''
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
@@ -538,27 +540,31 @@ jobs:
         uses: actions/github-script@v9
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
-          EVALUATE_ERROR: ${{ steps.evaluate.outputs.error }}
+          EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
           GEMINI_SUMMARY: ${{ steps.gemini_analysis.outputs.summary }}
-          GEMINI_ERROR: ${{ steps.gemini_analysis.outputs.error }}
+          GEMINI_OUTCOME: ${{ steps.gemini_analysis.outcome }}
           COMMENT_ID: ${{ steps.initial_comment.outputs.comment_id }}
-          SKIP_PREANALYSIS: ${{ needs.should_run.outputs.skip_preanalysis }}
         with:
           script: |
             const commentId = process.env.COMMENT_ID;
             const evaluateResult = process.env.EVALUATE_RESULT || '';
-            const evaluateError = process.env.EVALUATE_ERROR || '';
+            const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
             const geminiSummary = process.env.GEMINI_SUMMARY || '';
-            const geminiError = process.env.GEMINI_ERROR || '';
-            const skipPreanalysis = process.env.SKIP_PREANALYSIS === 'true';
+            const geminiOutcome = process.env.GEMINI_OUTCOME || '';
+
+            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error and a maintainer has been notified via the Actions run. Your issue will be reviewed manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
             let extraLabels = [];
 
-            if (geminiSummary) {
-              // Full analysis completed
-              // Extract TRIAGE_LABELS from the hidden comment before displaying
+            // CLI step failures must NEVER expose raw stderr to issue authors.
+            // The fail-job step at the end of the job turns these into a red X
+            // in the Actions UI so maintainers actually see them.
+            if (evaluateOutcome === 'failure' || geminiOutcome === 'failure') {
+              core.error(`Gemini triage step failed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
+              analysisBody = GENERIC_FAILURE_BODY;
+            } else if (geminiSummary) {
               const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
               if (labelMatch) {
                 const validLabels = ['bug', 'enhancement', 'question', 'documentation', 'duplicate', 'invalid'];
@@ -568,27 +574,34 @@ jobs:
                 if (rejected.length > 0) {
                   core.warning(`Ignoring unrecognized labels from LLM: ${rejected.join(', ')}`);
                 }
+              } else {
+                core.warning('LLM did not emit a TRIAGE_LABELS comment; issue will only get the "triaged" label.');
               }
-              // Strip the hidden comment from the displayed body
               analysisBody = geminiSummary.replace(/\n?<!--\s*TRIAGE_LABELS:.*?-->\n?/g, '').trimEnd();
               shouldAddTriagedLabel = true;
             } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
-              // Missing info - use evaluation's generated message
-              analysisBody = `## ℹ️ Information Needed\n\n`;
-              analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
-              analysisBody += evaluateResult + '\n\n';
-              analysisBody += `---\n\n`;
-              analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
-              analysisBody += `*🤖 Automated triage by Issue Bot*`;
-            } else if (geminiError) {
-              analysisBody = `❌ **Analysis failed**\n\nAn error occurred:\n\n\`\`\`\n${geminiError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
-            } else if (evaluateError) {
-              analysisBody = `❌ **Evaluation failed**\n\nAn error occurred:\n\n\`\`\`\n${evaluateError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+              // Missing-info path: validate the LLM's output before posting it
+              // verbatim. A safety-filter refusal or off-format response would
+              // otherwise be dressed up as a polite request to the user.
+              const trimmed = evaluateResult.trim();
+              const looksLikeBullets = /^[*\-•]/m.test(trimmed);
+              const tooLong = trimmed.length > 4000;
+              if (!looksLikeBullets || tooLong) {
+                core.error(`evaluate output failed shape check (length=${trimmed.length}, looksLikeBullets=${looksLikeBullets}); posting generic notice instead.`);
+                analysisBody = GENERIC_FAILURE_BODY;
+              } else {
+                analysisBody = `## ℹ️ Information Needed\n\n`;
+                analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
+                analysisBody += trimmed + '\n\n';
+                analysisBody += `---\n\n`;
+                analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
+                analysisBody += `*🤖 Automated triage by Issue Bot*`;
+              }
             } else {
-              analysisBody = `⚠️ **No output generated.**\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+              core.error(`Triage produced no usable output (evaluateOutcome=${evaluateOutcome}, geminiOutcome=${geminiOutcome}); posting generic notice.`);
+              analysisBody = GENERIC_FAILURE_BODY;
             }
 
-            // Update comment
             await github.rest.issues.updateComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -596,7 +609,6 @@ jobs:
               body: analysisBody
             });
 
-            // Add triaged label (and any extra classification labels) when analysis is done
             if (shouldAddTriagedLabel) {
               const issueNumber = ${{ steps.issue_number.outputs.number }};
               const labelsToAdd = ['triaged', ...extraLabels];
@@ -608,3 +620,9 @@ jobs:
                 labels: labelsToAdd
               });
             }
+
+      - name: Fail job if Gemini steps failed
+        if: always() && (steps.evaluate.outcome == 'failure' || steps.gemini_analysis.outcome == 'failure')
+        run: |
+          echo "::error::Gemini triage failed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
+          exit 1
