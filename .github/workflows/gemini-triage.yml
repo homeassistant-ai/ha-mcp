@@ -528,7 +528,7 @@ jobs:
             - `google_web_search <query>` - Search web for error messages or external docs
 
             **Critical Rules:**
-            - **TIME BUDGET**: You have ~8 minutes. Limit yourself to ~10 tool calls total. If you can't find something after 2 searches, move on. Focus on the single most likely root cause.
+            - **TIME BUDGET**: You have ~8 minutes. Aim for ~10 tool calls; if you genuinely need more (long issue, multiple files), the harness allows up to 50 turns total — use them sparingly. If you can't find something after 2 searches, move on. Focus on the single most likely root cause.
             - **YOU ARE READ-ONLY**: You cannot modify files, create PRs, or make code changes
             - If you identify a fix, provide it as a diff in the Technical Analysis section
             - ONLY reference file paths you actually found with `grep` or `find`
@@ -683,11 +683,20 @@ jobs:
             let extraLabels = [];
 
             // CLI step failures must NEVER expose raw stderr to issue authors.
-            // Step-level `cancelled` (e.g. step-timeout, rare) is treated like
-            // failure here; job-level cancellation is filtered by the step's
+            // Match anything that isn't `success` or `skipped` — that includes
+            // step-level `failure`, step-level `cancelled` (e.g. step-timeout,
+            // rare), and any future outcome value the action may emit. We
+            // explicitly do NOT include `skipped`: the evaluate step is
+            // skipped via `skip_preanalysis`, and the analysis step is
+            // skipped on the missing-info path; both are normal flow, not
+            // failures. Job-level cancellation is filtered by the step's
             // `if: !cancelled()` guard above and never reaches this script.
-            if (evaluateOutcome === 'failure' || geminiOutcome === 'failure') {
-              core.error(`Gemini triage step failed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
+            const stepHadNonSuccess = (
+              (evaluateOutcome && evaluateOutcome !== 'success' && evaluateOutcome !== 'skipped') ||
+              (geminiOutcome && geminiOutcome !== 'success' && geminiOutcome !== 'skipped')
+            );
+            if (stepHadNonSuccess) {
+              core.error(`Gemini triage step did not succeed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
               analysisBody = GENERIC_FAILURE_BODY;
               shouldAddFailedLabel = true;
             } else if (geminiSummary) {
@@ -748,9 +757,16 @@ jobs:
                 /^i'?m (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
                 /^we (cannot|can'?t|are unable)\s+(help|assist|comply|fulfill)/i,
                 /^i refuse to\b/i,
-                // Policy / guideline refusals — narrower phrases that don't
-                // realistically appear in non-refusal prose
-                /\b(safety policy|content policy|i refuse|won'?t help|cannot assist)\b/i,
+                // Policy / guideline refusals — narrow noun-phrases that don't
+                // realistically appear in non-refusal prose. Earlier revisions
+                // included bare `\bcannot assist\b` and `\bi refuse\b` here;
+                // both are removed because they false-positive on legitimate
+                // missing-info phrasing like "The user can run X; without it,
+                // I refuse to guess". `cannot assist` as a refusal lead-in is
+                // already covered by the anchored verb-pairing pattern above
+                // (`^i cannot ... (assist|...)`), and `i refuse to` is covered
+                // by its own anchored pattern.
+                /\b(safety policy|content policy|won'?t help)\b/i,
                 /\bviolates? (my|our|the) (guidelines|policies|terms)\b/i,
               ];
               const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
@@ -820,6 +836,12 @@ jobs:
               // so the issue's label state reflects the final outcome (this matters
               // when a maintainer recovers a stuck issue via workflow_dispatch).
               // 404 = label wasn't there to begin with; that's fine and not an error.
+              // For other failures (5xx, network, auth) we only warn rather than
+              // setFailed: the should_run gate at the top of this workflow checks
+              // `triaged` BEFORE `triage-failed`, so a stale `triage-failed` label
+              // alongside `triaged` doesn't actually block re-triage — the issue's
+              // label set looks inconsistent until a maintainer cleans it up, but
+              // no behavior breaks.
               try {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
@@ -851,20 +873,42 @@ jobs:
                   labels: ['triage-failed']
                 });
               } catch (err) {
-                // Don't `setFailed` here — the failure-path job is already
-                // going to exit 1 in the trailing "Fail job if Gemini
-                // steps failed" step, and this label is a circuit breaker
-                // not a correctness gate. Warn so a maintainer notices if
-                // the label wasn't applied (without it, the loop persists).
+                // Warn instead of setFailed — the run is already going red
+                // either via the trailing "Fail job if Gemini steps failed"
+                // step (when a CLI step had a non-success outcome) or via
+                // the explicit setFailed below (when divert paths fired
+                // without any step failure). The label itself is a circuit
+                // breaker not a correctness gate, so a missed addLabels
+                // here only reverts to pre-#1131 behavior; the warning
+                // surfaces in the Actions log so a maintainer can apply
+                // the label by hand if needed.
                 core.warning(`addLabels failed for 'triage-failed' on issue #${issueNumber}: ${err.message}. Triage may retrigger on next comment until label is applied manually.`);
+              }
+
+              // Divert paths (refusal/too-long/no-output at lines 767/783)
+              // set `shouldAddFailedLabel = true` even though both Gemini
+              // steps returned `success`. The trailing "Fail job if Gemini
+              // steps failed" step won't fire in those cases, so without
+              // this `setFailed` the run exits green even though the user
+              // got a "temporarily unavailable" notice — exactly the silent
+              // failure pattern this PR is meant to eliminate. Skip when a
+              // step already had a non-success outcome to avoid stacking
+              // redundant failure messages.
+              if (!stepHadNonSuccess) {
+                core.setFailed(`Triage diverted to generic notice with no Gemini step failure (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}). See "Update comment and labels" log above for the divert reason (refusal pattern, too-long output, or no usable output).`);
               }
             }
 
-      # Surface Gemini step failures as a red X. Only fires on actual `failure`
-      # outcomes — `cancelled` is intentionally excluded so concurrency
-      # cancel-in-progress (a normal occurrence) doesn't paint runs red.
+      # Surface Gemini step failures as a red X. Fires on any non-success/
+      # non-skipped outcome (`failure`, step-level `cancelled` from a step
+      # timeout, or any future outcome value). Job-level cancellation from
+      # concurrency `cancel-in-progress` is filtered by the `!cancelled()`
+      # guard so superseded runs don't paint red. Divert paths (refusal/
+      # too-long/no-output) where both steps returned `success` are surfaced
+      # by `core.setFailed` inside the "Update comment and labels" script,
+      # not here.
       - name: Fail job if Gemini steps failed
-        if: ${{ !cancelled() && (steps.evaluate.outcome == 'failure' || steps.gemini_analysis.outcome == 'failure') }}
+        if: ${{ !cancelled() && ((steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped') || (steps.gemini_analysis.outcome != 'success' && steps.gemini_analysis.outcome != 'skipped')) }}
         run: |
-          echo "::error::Gemini triage failed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
+          echo "::error::Gemini triage step did not succeed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
           exit 1

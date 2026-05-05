@@ -109,7 +109,7 @@ When implementing features or debugging, consult these resources:
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
 | `triaged` | Automated Gemini triage complete |
-| `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on author comments. Clear it (or run via `workflow_dispatch`) to retry. |
+| `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
 
 ### Issue Analysis Workflow
