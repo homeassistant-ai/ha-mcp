@@ -12,7 +12,7 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 | `ha_write_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_delete_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on) / `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` (env var) | Installs the `ha_mcp_tools` custom component via HACS. |
-| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on) / `ENABLE_CODE_MODE=true` (env var) | Sandboxed Python "escape hatch" that lets AI assistants write, run, and save custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`) or registered MCP tools (`call_tool`). |
+| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on) / `ENABLE_CODE_MODE=true` (env var) | Sandboxed Python "escape hatch" that lets AI assistants write, run, and save custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), or call registered MCP tools (`call_tool`). |
 
 ## How to enable
 
@@ -71,9 +71,9 @@ These tools provide direct file access to your Home Assistant filesystem and req
 
 ### `ha_manage_custom_tool`
 
-This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as an escape hatch for operations no built-in tool covers. It also lets the AI save tools for reuse via `save_as` / `run_saved` / `list_saved`. Sandbox code can either hit the HA REST API directly (`api_get`/`api_post`) or call other registered MCP tools (`call_tool`). The sandbox blocks filesystem and network I/O, but operators should still be aware of the following:
+This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as an escape hatch for operations no built-in tool covers. It also lets the AI save tools for reuse via `save_as` / `run_saved` / `list_saved`. Sandbox code can hit the HA REST API directly (`api_get`/`api_post`), send HA WebSocket commands (`ws_send`), or call other registered MCP tools (`call_tool`). The sandbox blocks filesystem and network I/O, but operators should still be aware of the following:
 
-**The AI gets to write and run code on your HA instance.** Even though the sandbox prevents it from touching the filesystem or the public network, code can still call any tool the MCP server has registered, including write/destructive tools, and can hit any endpoint reachable via the HA REST API. Treat this like giving the AI a generic "do whatever existing tools allow you to do, in any combination" capability — not a tightly scoped per-feature tool.
+**The AI gets to write and run code on your HA instance.** Even though the sandbox prevents it from touching the filesystem or the public network, code can still call any tool the MCP server has registered, including write/destructive tools, and can hit any endpoint reachable via the HA REST or WebSocket API. The WebSocket surface in particular covers most registry CRUD (areas, devices, entities, automations) and template rendering — so this is effectively "do whatever HA's own UI can do, in any combination." Treat this like giving the AI a generic "do whatever existing tools allow you to do, in any combination" capability — not a tightly scoped per-feature tool.
 
 **Saved tools are stored in process memory only.** Tools you ask the AI to `save_as` live in the running ha-mcp process. They are lost on add-on / server restart. There is no on-disk persistence and no `ha_remove_saved_tool` — the only way to drop a saved tool is to restart.
 

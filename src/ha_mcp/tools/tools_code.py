@@ -5,8 +5,9 @@ Provides an "escape hatch" (ha_manage_custom_tool) that lets LLMs write and run
 custom Python code when no existing tool covers the request, with optional
 save/reuse and listing of saved tools.  Code runs in pydantic-monty — a
 Rust-based sandboxed Python interpreter with no filesystem or network access.
-The only I/O channel is ``call_tool(name, args)`` which delegates to the
-registered MCP tools.
+Sandbox code can talk to Home Assistant through three external functions:
+``api_get``/``api_post`` for the REST API, ``ws_send`` for WebSocket commands,
+and ``call_tool`` for delegating to other registered MCP tools.
 
 **Requires** ``ENABLE_CODE_MODE=true`` (disabled by default).
 
@@ -87,8 +88,9 @@ async def _run_sandboxed_code(
     """Execute code in the pydantic-monty sandbox.
 
     External functions available to sandbox code:
-    - api_get(endpoint) — GET request to HA REST API (primary escape hatch)
+    - api_get(endpoint) — GET request to HA REST API
     - api_post(endpoint, data) — POST request to HA REST API
+    - ws_send(message) — send a HA WebSocket command and return its result
     - call_tool(name, args) — call a registered MCP tool (for existing tools)
     """
     call_count = 0
@@ -149,6 +151,29 @@ async def _run_sandboxed_code(
         except Exception as exc:
             return {"error": str(exc)[:200]}
 
+    async def _ws_send(message: Any) -> Any:
+        """Send a Home Assistant WebSocket command and return its result.
+
+        ``message`` must be a dict with at least a ``type`` field, e.g.
+        ``{"type": "config/area_registry/list"}``.  The MCP server's shared
+        WebSocket client adds the message ``id`` and handles auth, so the
+        sandbox should not include either. Typed as ``Any`` because sandbox
+        code is dynamic and may pass non-dict values; the runtime guard
+        below converts that into an error dict.
+        """
+        nonlocal call_count
+        call_count += 1
+        if call_count > settings.code_mode_max_invocations:
+            return {"error": f"WebSocket call limit exceeded ({settings.code_mode_max_invocations})"}
+        if not isinstance(message, dict):
+            return {"error": "ws_send(message) requires a dict with a 'type' field"}
+        if "type" not in message:
+            return {"error": "ws_send(message) requires a 'type' field"}
+        try:
+            return await client.send_websocket_message(message)
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+
     async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         """Bridge: sandbox code → MCP tool execution."""
         nonlocal call_count
@@ -189,6 +214,7 @@ async def _run_sandboxed_code(
         "external_functions": {
             "api_get": _api_get,
             "api_post": _api_post,
+            "ws_send": _ws_send,
             "call_tool": _call_tool,
         },
         "limits": ResourceLimits(
@@ -274,17 +300,29 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Set ``list_saved=True`` to list all saved tools
 
         **Available functions in sandbox:**
-        - ``api_get(endpoint)`` — GET request to HA REST API (primary escape hatch)
+        - ``api_get(endpoint)`` — GET request to HA REST API
         - ``api_post(endpoint, data)`` — POST request to HA REST API
+        - ``ws_send(message)`` — send a HA WebSocket command (e.g. registry
+          lookups, ``render_template``, dashboard ops). ``message`` must include
+          a ``"type"`` field; the MCP server adds ``id`` and handles auth.
         - ``call_tool(name, args)`` — call a registered MCP tool
 
-        Use ``api_get``/``api_post`` for HA operations not covered by existing
-        tools.  Use ``call_tool`` when an existing tool already does what you need.
+        Use ``api_get``/``api_post`` for REST operations not covered by existing
+        tools.  Use ``ws_send`` when the operation is only available over the
+        Home Assistant WebSocket API (most registry CRUD, template rendering,
+        and Lovelace operations).  Use ``call_tool`` when an existing tool
+        already does what you need.
 
         Example — check repairs (no built-in tool for this):
         ```python
         repairs = await api_get("/repairs/issues")
         repairs
+        ```
+
+        Example — list areas via WebSocket:
+        ```python
+        result = await ws_send({"type": "config/area_registry/list"})
+        result.get("result", [])
         ```
 
         Example — chain existing tools:

@@ -493,6 +493,100 @@ class TestCodeModeApiAccess:
 
 
 # ---------------------------------------------------------------------------
+# Direct HA WebSocket access (ws_send)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeWebSocket:
+    """Test direct HA WebSocket access from sandbox."""
+
+    async def test_ws_send_area_registry_list(self, mcp_client_with_code_mode):
+        """ws_send can list areas via the area_registry/list WS command."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send area registry list")
+
+        code = (
+            'result = await ws_send({"type": "config/area_registry/list"})\n'
+            'areas = result.get("result", result if isinstance(result, list) else [])\n'
+            '{"count": len(areas) if isinstance(areas, list) else 0,'
+            ' "is_list": isinstance(areas, list)}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: ws_send area registry list"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["is_list"] is True, f"Areas should be a list: {data}"
+        logger.info("ws_send fetched %d areas", result["count"])
+
+    async def test_ws_send_render_template(self, mcp_client_with_code_mode):
+        """ws_send can render a Jinja2 template via the WS render_template command."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send render_template")
+
+        code = (
+            'result = await ws_send({"type": "render_template",'
+            ' "template": "{{ 40 + 2 }}"})\n'
+            'result'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: ws_send render_template"},
+        )
+        assert data.get("success") is True, f"Should succeed: {data}"
+        # render_template returns the rendered value (string "42") in the result
+        assert "42" in str(data["data"]["result"]), (
+            f"Template should render to 42: {data}"
+        )
+        logger.info("ws_send successfully rendered template")
+
+    async def test_ws_send_invalid_message_type(self, mcp_client_with_code_mode):
+        """ws_send with a non-dict message returns an error dict, not an exception."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send invalid message type")
+
+        code = (
+            'result = await ws_send("not_a_dict")\n'
+            '{"has_error": "error" in result, "error": result.get("error", "")}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: ws_send input validation"},
+        )
+        # Sandbox should succeed — ws_send returns error data, not an exception
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, f"Should return error dict: {data}"
+        logger.info("ws_send correctly rejected non-dict message")
+
+    async def test_ws_send_missing_type_field(self, mcp_client_with_code_mode):
+        """ws_send with a dict missing the 'type' field returns an error dict."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "ws_send missing type")
+
+        code = (
+            'result = await ws_send({"foo": "bar"})\n'
+            '{"has_error": "error" in result, "error": result.get("error", "")}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: ws_send missing type field"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, f"Should return error dict: {data}"
+        assert "type" in result["error"].lower(), (
+            f"Error should mention the missing 'type' field: {result}"
+        )
+        logger.info("ws_send correctly rejected message without 'type'")
+
+
+# ---------------------------------------------------------------------------
 # Sandbox security
 # ---------------------------------------------------------------------------
 
