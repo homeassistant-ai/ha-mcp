@@ -710,19 +710,27 @@ jobs:
               // includes) so "INCOMPLETE" / "MARKED_COMPLETE" / etc. don't
               // collide with the sentinel if a future prompt rewrite drifts.
               const trimmed = evaluateResult.trim();
+              // Refusal patterns. The first-person verbs are anchored to the
+              // start AND paired with a help-action object so that legitimate
+              // missing-info prose like "I cannot find the version in the
+              // issue body" or "I cannot determine which addon is affected"
+              // doesn't false-positive — those are info requests, not
+              // refusals. Genuine Gemini refusals always pair the verb with
+              // help/assist/comply/etc. and lead the response.
               const REFUSAL_PATTERNS = [
-                // Common refusal lead-ins, anchored to start
+                // Common refusal lead-ins
                 /^(unfortunately|sorry|i'?m sorry|i apologize|my apologies|error:)/i,
                 /^as an? (ai|language model|assistant|llm)\b/i,
-                // First-person refusal verbs anywhere in the response. Some
-                // false-positive risk on "I cannot find the file you
-                // mentioned" — accepted because the alternative (refusals
-                // dressed as info requests) is the worse failure mode.
-                /\bi (cannot|can'?t|won'?t|am unable|'m unable|'m not able|refuse to)\b/i,
-                /\bwe (cannot|can'?t|are unable)\b/i,
-                // Policy / guideline refusals
+                // First-person refusal verb + help-action pairing
+                /^i (cannot|can'?t|won'?t)\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|provide that|provide this|continue|process this)/i,
+                /^i am (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
+                /^i'?m (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
+                /^we (cannot|can'?t|are unable)\s+(help|assist|comply|fulfill)/i,
+                /^i refuse to\b/i,
+                // Policy / guideline refusals — narrower phrases that don't
+                // realistically appear in non-refusal prose
                 /\b(safety policy|content policy|i refuse|won'?t help|cannot assist)\b/i,
-                /\bviolates? (my |our |the )?(guidelines|policies|terms)\b/i,
+                /\bviolates? (my|our|the) (guidelines|policies|terms)\b/i,
               ];
               const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
               const tooLong = trimmed.length > 4000;
