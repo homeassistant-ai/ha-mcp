@@ -179,6 +179,28 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     return raw if isinstance(raw, bool) else default
 
 
+_STALE_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
+
+
+def cleanup_stale_migration_marker(data_dir: Path) -> None:
+    """Remove the one-time enable_skills_as_tools migration marker.
+
+    The marker was created by the previous version's
+    ``migrate_skills_as_tools_default`` (removed in #1133). It is now
+    unused on every install; cleaning it up prevents permanent ``/data``
+    litter for users who upgraded across the toggle removal. ``unlink``
+    is best-effort — a stale dotfile is harmless if removal fails.
+    """
+    marker = data_dir / _STALE_MIGRATION_MARKER
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(
+            f"Failed to remove stale migration marker {marker}: {e}. "
+            "Safe to ignore — the file is unused."
+        )
+
+
 def main() -> int:
     """Start the Home Assistant MCP Server."""
     log_info("Starting Home Assistant MCP Server...")
@@ -186,6 +208,7 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    cleanup_stale_migration_marker(data_dir)
     config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default

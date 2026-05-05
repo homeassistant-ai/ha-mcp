@@ -13,7 +13,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
@@ -27,6 +27,26 @@ if TYPE_CHECKING:
 
     from .config import Settings
     from .server import HomeAssistantSmartMCPServer
+
+
+class ToolStub(TypedDict):
+    """Metadata advertised in the settings UI for a tool that isn't visible
+    in ``local_provider._list_tools()``.
+
+    Two reasons a tool needs a stub: it's added by a FastMCP transform at
+    runtime (``TRANSFORM_GENERATED_TOOLS``), or it's feature-gated and
+    only registers when a setting is on (``FEATURE_GATED_TOOLS``). The
+    consumer (`_get_tool_metadata`) renders the same shape for both;
+    ``disabled_by`` is the only field that differs and signals UI
+    placement of the "Beta — set X" hint.
+    """
+
+    title: str
+    primary_tag: str
+    description: str
+    readOnlyHint: NotRequired[bool]
+    destructiveHint: NotRequired[bool]
+    disabled_by: NotRequired[str]
 
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
@@ -57,7 +77,7 @@ MANDATORY_TOOLS: set[str] = {
 # server.py is not imported here to avoid a top-level cycle, but the
 # ``test_transform_generated_tool_names_match_class_constants`` unit test
 # fails fast if either side drifts.
-TRANSFORM_GENERATED_TOOLS: dict[str, dict[str, str]] = {
+TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {
     "ha_list_resources": {
         "title": "List Resources",
         "primary_tag": "System",
@@ -66,7 +86,7 @@ TRANSFORM_GENERATED_TOOLS: dict[str, dict[str, str]] = {
             "skill:// URIs. Fallback for clients that do not support MCP "
             "resources natively."
         ),
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
     "ha_read_resource": {
         "title": "Read Resource",
@@ -75,7 +95,7 @@ TRANSFORM_GENERATED_TOOLS: dict[str, dict[str, str]] = {
             "Read a skill or resource by URI. Fallback for clients that do "
             "not support MCP resources natively."
         ),
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
 }
 
@@ -86,48 +106,48 @@ TRANSFORM_GENERATED_TOOLS: dict[str, dict[str, str]] = {
 # it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
 # source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py)
 # — a future rename or removal needs to land in both places.
-FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
+FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
         "primary_tag": "System",
         "description": "Add, replace, or remove top-level keys in configuration.yaml or package files.",
         "disabled_by": "enable_yaml_config_editing",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_list_files": {
         "title": "List Files",
         "primary_tag": "Files",
         "description": "List files in a directory within the Home Assistant config.",
         "disabled_by": "enable_filesystem_tools",
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
     "ha_read_file": {
         "title": "Read File",
         "primary_tag": "Files",
         "description": "Read a file from the Home Assistant config directory.",
         "disabled_by": "enable_filesystem_tools",
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
     "ha_write_file": {
         "title": "Write File",
         "primary_tag": "Files",
         "description": "Write a file to allowed directories in the Home Assistant config.",
         "disabled_by": "enable_filesystem_tools",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_delete_file": {
         "title": "Delete File",
         "primary_tag": "Files",
         "description": "Delete a file from allowed directories.",
         "disabled_by": "enable_filesystem_tools",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_install_mcp_tools": {
         "title": "Install MCP Tools Component",
         "primary_tag": "Utilities",
         "description": "Install the ha_mcp_tools custom component via HACS.",
         "disabled_by": "enable_custom_component_integration",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
 }
 
@@ -199,6 +219,35 @@ def save_tool_config(config: dict[str, Any]) -> None:
         logger.exception("Failed to save tool config to %s", path)
 
 
+def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
+    """Render a ToolStub as the dict shape ``_get_tool_metadata`` returns.
+
+    Both transform-generated and feature-gated stubs share the same UI
+    representation; the only meaningful difference is whether
+    ``disabled_by`` carries the safety-toggle name (which the JS
+    template renders as a "Beta — set X" hint). Annotations come
+    through as bools and are dropped from the final dict when False
+    so the JSON payload stays small.
+    """
+    annotations: dict[str, bool] = {}
+    if meta.get("readOnlyHint"):
+        annotations["readOnlyHint"] = True
+    if meta.get("destructiveHint"):
+        annotations["destructiveHint"] = True
+
+    rendered: dict[str, Any] = {
+        "name": name,
+        "title": meta["title"],
+        "description": meta["description"],
+        "tags": [meta["primary_tag"]],
+        "primary_tag": meta["primary_tag"],
+        "annotations": annotations,
+    }
+    if "disabled_by" in meta:
+        rendered["disabled_by"] = meta["disabled_by"]
+    return rendered
+
+
 async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
@@ -245,39 +294,14 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
     for name, transform_meta in TRANSFORM_GENERATED_TOOLS.items():
         if name in registered_names:
             continue
-        transform_annotations: dict[str, bool] = {}
-        if transform_meta.get("readOnlyHint") == "true":
-            transform_annotations["readOnlyHint"] = True
-        if transform_meta.get("destructiveHint") == "true":
-            transform_annotations["destructiveHint"] = True
-        tools.append({
-            "name": name,
-            "title": transform_meta["title"],
-            "description": transform_meta["description"],
-            "tags": [transform_meta["primary_tag"]],
-            "primary_tag": transform_meta["primary_tag"],
-            "annotations": transform_annotations,
-        })
+        tools.append(_render_stub(name, transform_meta))
         registered_names.add(name)
 
     # Inject stub entries for feature-gated tools that aren't registered
     for name, meta in FEATURE_GATED_TOOLS.items():
         if name in registered_names:
             continue
-        stub_annotations: dict[str, bool] = {}
-        if meta.get("readOnlyHint") == "true":
-            stub_annotations["readOnlyHint"] = True
-        if meta.get("destructiveHint") == "true":
-            stub_annotations["destructiveHint"] = True
-        tools.append({
-            "name": name,
-            "title": meta["title"],
-            "description": meta["description"],
-            "tags": [meta["primary_tag"]],
-            "primary_tag": meta["primary_tag"],
-            "annotations": stub_annotations,
-            "disabled_by": meta["disabled_by"],
-        })
+        tools.append(_render_stub(name, meta))
 
     tools.sort(key=lambda t: (t["primary_tag"], t["name"]))
     return tools

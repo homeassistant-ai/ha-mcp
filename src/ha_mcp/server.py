@@ -627,7 +627,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ha_read_resource) for clients that don't support MCP resources
         natively. Per-tool visibility is managed via the web settings UI;
         users who want either tool off can disable it there.
+
+        Each phase tracks success in ``status`` so the final summary log
+        line tells operators at a glance whether the skill system is
+        healthy, partially degraded, or fully unavailable. Without that
+        summary, three independent ``logger.exception`` calls leave
+        operators reconstructing state from scattered log lines.
         """
+        status: dict[str, str | int] = {
+            "provider": "skipped",
+            "transform": "skipped",
+            "guidance_tools": 0,
+        }
+
         # Phase 1: Import SkillsDirectoryProvider
         try:
             from fastmcp.server.providers.skills import SkillsDirectoryProvider
@@ -635,6 +647,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning(
                 "SkillsDirectoryProvider not available in fastmcp, skipping skills"
             )
+            self._log_skill_registration_summary(status)
             return
 
         # Phase 2: Register skills as MCP resources
@@ -645,6 +658,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     "Skills directory not found at %s, skipping skill registration",
                     Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 )
+                self._log_skill_registration_summary(status)
                 return
 
             self.mcp.add_provider(
@@ -653,8 +667,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
             )
             logger.info("Registered bundled skills as MCP resources")
+            status["provider"] = "ok"
         except Exception:
             logger.exception("Failed to register skills as resources")
+            status["provider"] = "failed"
+            self._log_skill_registration_summary(status)
             return
 
         # Phase 3: Expose skills as tools so clients without resource
@@ -664,16 +681,44 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.info(
                 "Skills also exposed as tools (ha_list_resources / ha_read_resource)"
             )
+            status["transform"] = "ok"
         except Exception:
             logger.exception(
                 "Failed to expose skills as tools (resources still available)"
             )
+            status["transform"] = "failed"
 
         # Phase 4: Register skill guidance tools for clients that don't read
         # server instructions (e.g., claude.ai). The tool description contains
         # the trigger conditions so the AI sees them in the tool listing.
         # Names stored for pinning in search transforms (always-visible).
         self._register_skill_guidance_tools(skills_dir)
+        status["guidance_tools"] = len(self._skill_tool_names)
+
+        self._log_skill_registration_summary(status)
+
+    @staticmethod
+    def _log_skill_registration_summary(status: dict[str, str | int]) -> None:
+        """Emit one-line summary of skill registration outcome.
+
+        ``info`` when both provider and transform succeeded; ``warning``
+        otherwise. This is the line operators should grep for when a
+        user reports missing skill features — the per-phase exception
+        logs above carry the stack traces, but this one tells you which
+        phase to look at.
+        """
+        provider = status.get("provider")
+        transform = status.get("transform")
+        guidance = status.get("guidance_tools", 0)
+
+        message = (
+            "Skill system summary: provider=%s, transform=%s, guidance_tools=%d"
+        )
+        args = (provider, transform, guidance)
+        if provider == "ok" and transform == "ok":
+            logger.info(message, *args)
+        else:
+            logger.warning(message, *args)
 
     def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
         """Register a lightweight guidance tool per skill.
