@@ -38,10 +38,14 @@ demo:
 template:
   - sensor:
       - name: demo Temperature
+        unique_id: e2e_demo_temperature
         state: "{{ 22.5 }}"
         device_class: temperature
+        state_class: measurement
         unit_of_measurement: "°C"
       - name: demo Outside Temperature
+        unique_id: e2e_demo_outside_temperature
         state: "{{ 10.0 }}"
         device_class: temperature
+        state_class: measurement
         unit_of_measurement: "°C"
