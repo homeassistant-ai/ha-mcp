@@ -790,7 +790,9 @@ def register_settings_routes(
         # Short timeout — the supervisor kills our process during restart so
         # the connection will drop. A connection drop is actually success.
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, verify=server.client.verify_ssl
+            ) as client:
                 resp = await client.post(
                     "http://supervisor/addons/self/restart",
                     headers={"Authorization": f"Bearer {token}"},
