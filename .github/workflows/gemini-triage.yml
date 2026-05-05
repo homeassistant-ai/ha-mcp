@@ -552,17 +552,19 @@ jobs:
             const geminiSummary = process.env.GEMINI_SUMMARY || '';
             const geminiOutcome = process.env.GEMINI_OUTCOME || '';
 
-            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error and a maintainer has been notified via the Actions run. Your issue will be reviewed manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
+            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error; the failure has been logged in the workflow run for maintainer review. Your issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
+
+            // Treat both hard failures and cancellations (incl. job timeout) as
+            // terminal: the trailing fail-job step turns them into a red X.
+            const TERMINAL_OUTCOMES = ['failure', 'cancelled'];
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
             let extraLabels = [];
 
             // CLI step failures must NEVER expose raw stderr to issue authors.
-            // The fail-job step at the end of the job turns these into a red X
-            // in the Actions UI so maintainers actually see them.
-            if (evaluateOutcome === 'failure' || geminiOutcome === 'failure') {
-              core.error(`Gemini triage step failed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
+            if (TERMINAL_OUTCOMES.includes(evaluateOutcome) || TERMINAL_OUTCOMES.includes(geminiOutcome)) {
+              core.error(`Gemini triage step did not complete cleanly (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
               analysisBody = GENERIC_FAILURE_BODY;
             } else if (geminiSummary) {
               const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
@@ -581,13 +583,18 @@ jobs:
               shouldAddTriagedLabel = true;
             } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
               // Missing-info path: validate the LLM's output before posting it
-              // verbatim. A safety-filter refusal or off-format response would
-              // otherwise be dressed up as a polite request to the user.
+              // verbatim. A safety-filter refusal or off-format prose no longer
+              // gets dressed up as a polite info request to the user. Accept
+              // bulleted (`*`/`-`/`•`), numbered (`1.`), or bold-led
+              // (`**Item**`) lines — Gemini emits all three flavors despite
+              // the prompt asking for `*`. 4000-char cap is a "this looks like
+              // an LLM monologue" heuristic; GH's hard limit is 65536.
               const trimmed = evaluateResult.trim();
-              const looksLikeBullets = /^[*\-•]/m.test(trimmed);
+              const looksLikeMissingInfo = /(^|\n)\s*([*\-•]|\d+\.|\*\*)/.test(trimmed);
+              const tooShort = trimmed.length < 20;
               const tooLong = trimmed.length > 4000;
-              if (!looksLikeBullets || tooLong) {
-                core.error(`evaluate output failed shape check (length=${trimmed.length}, looksLikeBullets=${looksLikeBullets}); posting generic notice instead.`);
+              if (!looksLikeMissingInfo || tooShort || tooLong) {
+                core.error(`evaluate output failed shape check (length=${trimmed.length}, looksLikeMissingInfo=${looksLikeMissingInfo}); posting generic notice instead.`);
                 analysisBody = GENERIC_FAILURE_BODY;
               } else {
                 analysisBody = `## ℹ️ Information Needed\n\n`;
@@ -622,7 +629,11 @@ jobs:
             }
 
       - name: Fail job if Gemini steps failed
-        if: always() && (steps.evaluate.outcome == 'failure' || steps.gemini_analysis.outcome == 'failure')
+        if: |
+          always() && (
+            steps.evaluate.outcome == 'failure' || steps.evaluate.outcome == 'cancelled' ||
+            steps.gemini_analysis.outcome == 'failure' || steps.gemini_analysis.outcome == 'cancelled'
+          )
         run: |
-          echo "::error::Gemini triage failed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
+          echo "::error::Gemini triage did not complete cleanly (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
           exit 1
