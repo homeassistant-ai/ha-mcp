@@ -24,20 +24,19 @@ host_network: true
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
-# NOTE: enable_yaml_config_editing, enable_filesystem_tools, and
-# enable_custom_component_integration are intentionally NOT exposed here.
-# They are dev-channel-only beta features — see docs/beta.md. Do not re-mirror
-# from homeassistant-addon-dev/config.yaml without reading that doc first.
+# NOTE: enable_yaml_config_editing, enable_filesystem_tools,
+# enable_custom_component_integration, and enable_code_mode are
+# intentionally NOT exposed here. They are dev-channel-only beta
+# features — see docs/beta.md. Do not re-mirror from
+# homeassistant-addon-dev/config.yaml without reading that doc first.
 options:
   backup_hint: "normal"
   enable_tool_search: false
-  enable_code_mode: false
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_tool_search: bool?
-  enable_code_mode: bool?
   verify_ssl: bool?
   advanced_debug_logging: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
