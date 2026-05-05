@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any, ClassVar
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from ..client.rest_client import HomeAssistantClient
@@ -534,7 +535,10 @@ class DeviceControlTools:
         return valid
 
     async def bulk_device_control(
-        self, operations: list[dict[str, Any]], parallel: bool = True
+        self,
+        operations: list[dict[str, Any]],
+        parallel: bool = True,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Control multiple devices with bulk operation support.
@@ -542,6 +546,7 @@ class DeviceControlTools:
         Args:
             operations: List of device control operations
             parallel: Whether to execute operations in parallel
+            ctx: Optional FastMCP Context for progress reporting
 
         Returns:
             Bulk operation results
@@ -563,11 +568,35 @@ class DeviceControlTools:
                 operations, skipped_operations
             )
 
+            if ctx is not None:
+                await ctx.info(
+                    f"bulk_device_control: {len(valid_operations)} valid op(s), "
+                    f"{len(skipped_operations)} skipped, "
+                    f"mode={'parallel' if parallel else 'sequential'}"
+                )
+                await ctx.report_progress(
+                    progress=0,
+                    total=len(valid_operations),
+                    message="dispatching operations",
+                )
+
             # Execute only valid operations
             if parallel:
                 await self._execute_parallel(valid_operations, results, operation_ids)
             else:
-                await self._execute_sequential(valid_operations, results, operation_ids)
+                await self._execute_sequential(
+                    valid_operations, results, operation_ids, ctx=ctx
+                )
+
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=len(valid_operations),
+                    total=len(valid_operations),
+                    message=(
+                        f"dispatched {len(operation_ids)} op(s); "
+                        "use get_bulk_operation_status to verify completion"
+                    ),
+                )
 
             return self._build_bulk_response(
                 operations, results, operation_ids, skipped_operations, parallel
@@ -631,8 +660,10 @@ class DeviceControlTools:
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
         results: list[dict[str, Any]],
         operation_ids: list[str],
+        ctx: Context | None = None,
     ) -> None:
-        for _i, op, entity_id, action in valid_operations:
+        total = len(valid_operations)
+        for i, (_orig_index, op, entity_id, action) in enumerate(valid_operations):
             try:
                 result = await self.control_device_smart(
                     entity_id=entity_id,
@@ -651,6 +682,12 @@ class DeviceControlTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     f"Exception during execution: {e!s}",
                 ))
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=i + 1,
+                    total=total,
+                    message=f"{entity_id} {action} dispatched",
+                )
 
     def _build_bulk_response(
         self,

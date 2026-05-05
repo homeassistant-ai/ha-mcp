@@ -8,6 +8,7 @@ import logging
 from typing import Annotated, Any, cast
 
 import httpx
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -393,7 +394,9 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: str | list[dict[str, Any]], parallel: bool | str = True
+        operations: str | list[dict[str, Any]],
+        parallel: bool | str = True,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
         # Coerce boolean parameter that may come as string from XML-style calls
@@ -424,7 +427,7 @@ class ServiceTools:
 
         operations_list = cast(list[dict[str, Any]], parsed_operations)
         result = await self._device_tools.bulk_device_control(
-            operations=operations_list, parallel=parallel_bool
+            operations=operations_list, parallel=parallel_bool, ctx=ctx
         )
         return cast(dict[str, Any], result)
 
