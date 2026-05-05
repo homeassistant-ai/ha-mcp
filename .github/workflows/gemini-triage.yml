@@ -684,9 +684,10 @@ jobs:
               }
               analysisBody = geminiSummary.replace(/\n?<!--\s*TRIAGE_LABELS:.*?-->\n?/g, '').trimEnd();
               shouldAddTriagedLabel = true;
-            } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
+            } else if (evaluateResult && evaluateResult.trim() !== 'COMPLETE') {
               // Missing-info path. The evaluate step said the issue isn't
-              // ready for full analysis, so its output is a question for the
+              // ready for full analysis (its output isn't the literal
+              // "COMPLETE" sentinel), so the output is a question for the
               // user. Trust the prose — but guard against two ways it can
               // go wrong:
               //
@@ -705,13 +706,23 @@ jobs:
               //
               // The 4000-char cap is a "looks like an LLM monologue, not a
               // missing-info checklist" heuristic; unrelated to GitHub's
-              // 65536-char comment limit.
+              // 65536-char comment limit. Strict trim()==='COMPLETE' (not
+              // includes) so "INCOMPLETE" / "MARKED_COMPLETE" / etc. don't
+              // collide with the sentinel if a future prompt rewrite drifts.
               const trimmed = evaluateResult.trim();
               const REFUSAL_PATTERNS = [
-                /^i (cannot|can't|won't|am unable|'m unable|'m not able|do not|don't have)/i,
-                /^(sorry|i'?m sorry|i apologize|my apologies)/i,
-                /^error:/i,
-                /\b(safety policy|content policy|i refuse|won't help|cannot assist)\b/i,
+                // Common refusal lead-ins, anchored to start
+                /^(unfortunately|sorry|i'?m sorry|i apologize|my apologies|error:)/i,
+                /^as an? (ai|language model|assistant|llm)\b/i,
+                // First-person refusal verbs anywhere in the response. Some
+                // false-positive risk on "I cannot find the file you
+                // mentioned" — accepted because the alternative (refusals
+                // dressed as info requests) is the worse failure mode.
+                /\bi (cannot|can'?t|won'?t|am unable|'m unable|'m not able|refuse to)\b/i,
+                /\bwe (cannot|can'?t|are unable)\b/i,
+                // Policy / guideline refusals
+                /\b(safety policy|content policy|i refuse|won'?t help|cannot assist)\b/i,
+                /\bviolates? (my |our |the )?(guidelines|policies|terms)\b/i,
               ];
               const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
               const tooLong = trimmed.length > 4000;
