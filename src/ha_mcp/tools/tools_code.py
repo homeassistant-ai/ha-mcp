@@ -5,11 +5,16 @@ Provides an "escape hatch" (ha_manage_custom_tool) that lets LLMs write and run
 custom Python code when no existing tool covers the request, with optional
 save/reuse and listing of saved tools.  Code runs in pydantic-monty — a
 Rust-based sandboxed Python interpreter with no filesystem or arbitrary
-network access. Sandbox code can talk to Home Assistant through four external
+network access. Sandbox code can talk to Home Assistant through five external
 functions: ``api_get`` and ``api_post`` for the REST API,
-``ws_send`` for WebSocket commands, and ``call_tool`` for delegating to other
-registered MCP tools. ``api_get``/``api_post`` reject absolute URLs so the HA
+``ws_send`` for WebSocket commands, ``call_tool`` for delegating to other
+registered MCP tools, and ``delete_saved_tool`` for removing a previously
+saved custom tool. ``api_get``/``api_post`` reject absolute URLs so the HA
 bearer token cannot be redirected off-instance.
+
+Saved tools persist to disk when ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the
+addon sets this by default), letting users build their own "MCP within an
+MCP" — a personal library of one-off tools that survives restarts.
 
 **Requires** ``ENABLE_CODE_MODE=true`` (disabled by default).
 
@@ -19,6 +24,9 @@ See: https://github.com/homeassistant-ai/ha-mcp/issues/726
 import json
 import logging
 import re
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -30,10 +38,12 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for saved custom tools (session-scoped, not persistent).
+# In-memory cache for saved custom tools, optionally persisted to disk.
 # WARNING: This is shared across all clients in the same server process.
 # In multi-user modes (OAuth, HTTP), one user's saved tools are visible to
-# all other users.  Scope to per-session/user before multi-user support.
+# all other users. Scope to per-session/user before multi-user support.
+# When ``settings.code_mode_saved_tools_path`` is set, the cache is hydrated
+# from disk on registration and persisted on every save_as / delete.
 _saved_tools: dict[str, dict[str, str]] = {}
 
 # Tools that sandbox code must not call (prevents recursive self-invocation)
@@ -41,6 +51,133 @@ _BLOCKED_TOOLS = frozenset({"ha_manage_custom_tool"})
 
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
+
+# Cap on the number of saved tools to prevent runaway growth (a buggy LLM
+# loop could otherwise fill disk with unique save_as names).
+_MAX_SAVED_TOOLS = 256
+
+# Schema version for the on-disk saved-tools file. Bump when the shape
+# changes so _load_saved_tools can migrate or refuse old files cleanly.
+_SAVED_TOOLS_SCHEMA_VERSION = 1
+
+
+def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
+    """Load saved tools from a JSON file, filtering malformed entries.
+
+    Returns an empty dict if the path is unset, the file doesn't exist
+    yet, or the contents are unreadable / unparseable. A corrupt file is
+    logged at WARNING but does not raise — the user can still save new
+    tools and the bad file will be overwritten on the next persist.
+    """
+    if not path_str:
+        return {}
+    path = Path(path_str)
+    if not path.exists():
+        logger.debug("Saved-tools file %s does not exist yet; starting empty", path)
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Failed to load saved tools from %s (%s); starting empty",
+            path,
+            exc,
+        )
+        return {}
+
+    if not isinstance(data, dict):
+        logger.warning(
+            "Saved-tools file %s top-level is %s, expected dict; ignoring",
+            path,
+            type(data).__name__,
+        )
+        return {}
+
+    tools_raw = data.get("saved_tools", {})
+    if not isinstance(tools_raw, dict):
+        logger.warning(
+            "Saved-tools file %s 'saved_tools' is %s, expected dict; ignoring",
+            path,
+            type(tools_raw).__name__,
+        )
+        return {}
+
+    valid: dict[str, dict[str, str]] = {}
+    for name, info in tools_raw.items():
+        if not (isinstance(name, str) and _SAVE_NAME_PATTERN.match(name)):
+            logger.warning(
+                "Skipping saved tool with invalid name %r in %s", name, path
+            )
+            continue
+        if not isinstance(info, dict):
+            logger.warning(
+                "Skipping saved tool %r in %s: entry is not a dict", name, path
+            )
+            continue
+        code = info.get("code")
+        justification = info.get("justification", "")
+        if not isinstance(code, str) or not code:
+            logger.warning(
+                "Skipping saved tool %r in %s: missing or invalid code",
+                name,
+                path,
+            )
+            continue
+        if not isinstance(justification, str):
+            justification = ""
+        valid[name] = {"code": code, "justification": justification}
+        if len(valid) >= _MAX_SAVED_TOOLS:
+            logger.warning(
+                "Saved-tools file %s contains more than %d tools; truncating",
+                path,
+                _MAX_SAVED_TOOLS,
+            )
+            break
+
+    logger.info("Loaded %d saved tool(s) from %s", len(valid), path)
+    return valid
+
+
+def _save_saved_tools(path_str: str, tools: dict[str, dict[str, str]]) -> None:
+    """Persist the saved-tools cache to a JSON file atomically.
+
+    Writes to ``path.tmp`` first and uses ``os.replace`` to swap it in,
+    so a crash mid-write cannot corrupt the existing file. Failures are
+    logged at WARNING — a write failure does not raise into the sandbox
+    or the MCP client because the in-memory cache still holds the new
+    entry; persistence is best-effort.
+    """
+    if not path_str:
+        return
+    path = Path(path_str)
+    payload = {
+        "version": _SAVED_TOOLS_SCHEMA_VERSION,
+        "saved_at": datetime.now(UTC).isoformat(),
+        "saved_tools": tools,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Write to a temp file in the same directory so os.replace is
+        # guaranteed to be atomic (cross-filesystem replace on POSIX is
+        # not). delete=False because we'll replace it ourselves.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            json.dump(payload, tmp, indent=2, sort_keys=True)
+            tmp_path = Path(tmp.name)
+        tmp_path.replace(path)
+    except OSError as exc:
+        logger.warning(
+            "Failed to persist saved tools to %s (%s); cache remains in memory",
+            path,
+            exc,
+        )
 
 
 def _extract_tool_result(result: Any) -> Any:
@@ -276,6 +413,30 @@ async def _run_sandboxed_code(
         # Monty can only handle basic Python types, so serialize everything.
         return _extract_tool_result(result)
 
+    def _delete_saved_tool(name: Any) -> dict[str, Any]:
+        """Remove a previously saved custom tool by name.
+
+        Sandbox helper. Returns ``{"deleted": True, "name": name}`` on
+        success, ``{"error": "..."}`` on validation failure or if the
+        named tool does not exist. Persists the change immediately when
+        the saved-tools file path is configured.
+        """
+        if not isinstance(name, str):
+            return {"error": "delete_saved_tool(name) requires a string name"}
+        if not _SAVE_NAME_PATTERN.match(name):
+            return {
+                "error": (
+                    f"Invalid saved-tool name {name!r}. "
+                    "Use alphanumeric characters and underscores, 1-64 chars."
+                )
+            }
+        if name not in _saved_tools:
+            return {"error": f"No saved tool named {name!r}"}
+        del _saved_tools[name]
+        logger.info("Deleted saved custom tool '%s'", name)
+        _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools)
+        return {"deleted": True, "name": name}
+
     m = Monty(code, script_name="ha_manage_custom_tool.py")
     run_kwargs: dict[str, Any] = {
         "external_functions": {
@@ -283,6 +444,7 @@ async def _run_sandboxed_code(
             "api_post": _api_post,
             "ws_send": _ws_send,
             "call_tool": _call_tool,
+            "delete_saved_tool": _delete_saved_tool,
         },
         "limits": ResourceLimits(
             max_duration_secs=settings.code_mode_max_duration,
@@ -342,6 +504,16 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         settings.code_mode_max_memory,
     )
 
+    # Hydrate the saved-tools cache from disk if persistence is enabled.
+    # _saved_tools is a module-level dict; clear-and-update keeps the
+    # same identity so other module-level references (e.g. the run_saved
+    # / list_saved branches below) see the loaded data without lookup
+    # changes.
+    if settings.code_mode_saved_tools_path:
+        loaded = _load_saved_tools(settings.code_mode_saved_tools_path)
+        _saved_tools.clear()
+        _saved_tools.update(loaded)
+
     @mcp.tool(
         tags={"System", "beta"},
         annotations={
@@ -376,12 +548,20 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           lookups, ``render_template``, dashboard ops). ``message`` must include
           a ``"type"`` field; the MCP server adds ``id`` and handles auth.
         - ``call_tool(name, args)`` — call a registered MCP tool
+        - ``delete_saved_tool(name)`` — remove a previously saved custom
+          tool by name. Returns ``{"deleted": True, "name": name}`` or
+          ``{"error": ...}``.
 
         Use ``api_get``/``api_post`` for REST operations not covered by existing
         tools.  Use ``ws_send`` when the operation is only available over the
         Home Assistant WebSocket API (most registry CRUD, template rendering,
         and Lovelace operations).  Use ``call_tool`` when an existing tool
-        already does what you need.
+        already does what you need. Use ``delete_saved_tool`` to clean up
+        saved tools you no longer need.
+
+        Saved tools persist across server restarts when
+        ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the addon sets this by
+        default to ``/data/saved_tools.json``).
 
         Example — check repairs (no built-in tool for this):
         ```python
@@ -405,6 +585,11 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "domain": "light", "service": "turn_off",
                 "entity_id": e["entity_id"]})
         {"turned_off": len(lights)}
+        ```
+
+        Example — delete an obsolete saved tool:
+        ```python
+        delete_saved_tool("old_movie_mode")
         ```
 
         Args:
@@ -561,11 +746,28 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
 
         if save_as:
+            if (
+                save_as not in _saved_tools
+                and len(_saved_tools) >= _MAX_SAVED_TOOLS
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        f"Saved-tools cache is full ({_MAX_SAVED_TOOLS} entries). "
+                        "Delete a tool with delete_saved_tool(name) before "
+                        "saving a new one.",
+                        suggestions=[
+                            "Use list_saved=True to see existing saved tools",
+                            "Use code='delete_saved_tool(\"<name>\")' to remove one",
+                        ],
+                    )
+                )
             _saved_tools[save_as] = {
                 "code": code,
                 "justification": justification,
             }
             response["data"]["saved_as"] = save_as
             logger.info("Saved custom tool as '%s'", save_as)
+            _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools)
 
         return response

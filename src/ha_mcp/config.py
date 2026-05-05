@@ -133,6 +133,15 @@ class Settings(BaseSettings):
     code_mode_max_invocations: int = Field(
         100, ge=1, le=10_000, alias="CODE_MODE_MAX_INVOCATIONS"
     )
+    # Path to a JSON file for persisting saved custom tools across restarts.
+    # Empty string disables persistence (saved tools live in process memory
+    # and are lost on restart). The addon sets this to /data/saved_tools.json
+    # by default so saved tools survive addon restarts (the /data directory
+    # is mapped per-addon by Supervisor and is preserved across addon
+    # updates).
+    code_mode_saved_tools_path: str = Field(
+        "", alias="CODE_MODE_SAVED_TOOLS_PATH"
+    )
 
 
     @property

@@ -278,6 +278,17 @@ def main() -> int:
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
+    # Persist saved custom tools across addon restarts. /data is the
+    # per-addon writable directory mapped by Supervisor and survives
+    # add-on updates (but not uninstall/reinstall — users should copy
+    # this file out before reinstalling if they want to migrate).
+    # Setting this unconditionally is safe: on the stable add-on the
+    # tool isn't registered anyway, so the file is never read or
+    # written. Operators can override by setting CODE_MODE_SAVED_TOOLS_PATH
+    # in the add-on's environment if they want a different location.
+    os.environ.setdefault(
+        "CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json"
+    )
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
     os.environ["PINNED_TOOLS"] = pinned_tools_raw

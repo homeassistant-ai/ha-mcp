@@ -1025,3 +1025,95 @@ class TestSavedTools:
             f"Nonexistent tool should fail: {data}"
         )
         logger.info("Correctly rejected nonexistent saved tool")
+
+    async def test_delete_saved_tool_via_sandbox(self, mcp_client_with_code_mode):
+        """Sandbox code can delete a saved tool with delete_saved_tool(name)."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Delete saved tool from sandbox")
+
+        # Step 1: save a tool we'll then delete.
+        save = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "1 + 1",
+                "justification": "E2E test: setup for delete",
+                "save_as": "e2e_tool_to_delete",
+            },
+        )
+        assert save.get("success") is True, f"Save should succeed: {save}"
+
+        # Step 2: delete it from inside the sandbox.
+        delete = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": 'delete_saved_tool("e2e_tool_to_delete")',
+                "justification": "E2E test: delete saved tool",
+            },
+        )
+        assert delete.get("success") is True, f"Delete sandbox call should succeed: {delete}"
+        result = delete["data"]["result"]
+        assert isinstance(result, dict), f"Expected dict result: {result}"
+        assert result.get("deleted") is True, (
+            f"delete_saved_tool should report deleted=True: {result}"
+        )
+        assert result.get("name") == "e2e_tool_to_delete", (
+            f"delete_saved_tool should echo the name: {result}"
+        )
+
+        # Step 3: confirm running it now fails (entry is gone).
+        run_again = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"run_saved": "e2e_tool_to_delete"},
+        )
+        assert run_again.get("success") is False, (
+            f"Running deleted tool should fail: {run_again}"
+        )
+        logger.info("Sandbox-driven delete_saved_tool round-trip verified")
+
+    async def test_delete_saved_tool_nonexistent(self, mcp_client_with_code_mode):
+        """delete_saved_tool returns an error dict for unknown names."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Delete nonexistent saved tool")
+
+        code = (
+            'result = delete_saved_tool("e2e_no_such_tool_xyz")\n'
+            '{"has_error": "error" in result, "error": result.get("error", "")}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: delete nonexistent"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"delete_saved_tool should error on missing name: {data}"
+        )
+        logger.info("delete_saved_tool correctly errored on missing name")
+
+    async def test_delete_saved_tool_invalid_name(self, mcp_client_with_code_mode):
+        """delete_saved_tool rejects names that don't match the validation regex."""
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Delete saved tool with invalid name")
+
+        code = (
+            'result = delete_saved_tool("../bad-name!")\n'
+            '{"has_error": "error" in result, "error": result.get("error", "")}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: invalid name in delete"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"delete_saved_tool should reject invalid names: {data}"
+        )
+        assert "invalid" in result["error"].lower(), (
+            f"Error should mention invalidity: {result}"
+        )
+        logger.info("delete_saved_tool correctly rejected invalid name")
