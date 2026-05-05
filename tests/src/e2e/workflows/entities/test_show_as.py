@@ -194,3 +194,84 @@ class TestShowAs:
             assert opts.get("conversation", {}).get("should_expose") is False
         finally:
             await _delete_template_helper(mcp_client, entity_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.registry
+class TestShowAsOnIntegrationEntity:
+    """Round-trip on an INTEGRATION-PROVIDED entity (the demo platform's
+    sensor.demo_temperature), not a helper.
+
+    Helpers can already be (re)configured with a device_class via
+    ha_config_set_helper for the template binary_sensor / template sensor
+    subtypes — so the helper-based tests above don't *literally* prove the
+    new ha_set_entity capability for the original-issue case (an integration
+    entity like envisalink's binary_sensor.alarm_zone_10). This test does:
+    sensor.demo_temperature comes from configuration.yaml's `demo:` line and
+    has no helper-creation alternative. The Z-Wave / Zigbee / envisalink
+    user path goes through the same `config/entity_registry/update` WS call
+    we're exercising here, so this is a legitimate stand-in.
+    """
+
+    TARGET = "sensor.demo_temperature"
+
+    async def test_set_show_as_on_integration_provided_sensor(self, mcp_client):
+        pre = await mcp_client.call_tool("ha_get_entity", {"entity_id": self.TARGET})
+        pre_data = assert_mcp_success(pre, "Read pre-state")
+        original_override = pre_data["entity_entry"]["device_class"]
+        original_device_class = pre_data["entity_entry"]["original_device_class"]
+        # Demo integration ships this as a temperature sensor — guarantee that
+        # the override slot and the integration's own slot are distinct so we
+        # know the test is exercising what we think it is.
+        assert original_device_class == "temperature"
+
+        try:
+            # Override Show As to a different device class
+            set_result = await mcp_client.call_tool(
+                "ha_set_entity",
+                {"entity_id": self.TARGET, "device_class": "humidity"},
+            )
+            set_data = assert_mcp_success(set_result, "Set Show As=humidity")
+            assert set_data["entity_entry"]["device_class"] == "humidity"
+            # original_device_class must NOT be touched by the override
+            assert set_data["entity_entry"]["original_device_class"] == "temperature"
+
+            get_result = await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": self.TARGET}
+            )
+            get_data = assert_mcp_success(get_result, "Read overridden device_class")
+            assert get_data["entity_entry"]["device_class"] == "humidity"
+
+            # Set per-domain options on the same integration entity (proves
+            # ha_config_set_helper isn't even a possible alternative path here)
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {
+                    "entity_id": self.TARGET,
+                    "options": {"sensor": {"display_precision": 3}},
+                },
+            )
+            opts_result = await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": self.TARGET}
+            )
+            opts_data = assert_mcp_success(opts_result, "Read options")
+            assert (
+                opts_data["entity_entry"]["options"]
+                .get("sensor", {})
+                .get("display_precision")
+                == 3
+            )
+        finally:
+            # Restore the override slot to its pre-test value (None or whatever
+            # it was) so we don't leak state to other tests sharing the demo
+            # entity inside this test container.
+            restore_dc = "" if original_override is None else original_override
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {"entity_id": self.TARGET, "device_class": restore_dc},
+            )
+            # Clear the sensor sub-options we added.
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {"entity_id": self.TARGET, "options": {"sensor": {}}},
+            )
