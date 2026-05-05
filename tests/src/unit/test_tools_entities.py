@@ -1644,6 +1644,93 @@ class TestHaSetEntityShowAs:
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "options" in body["error"]["message"]
 
+    @pytest.mark.asyncio
+    async def test_options_first_call_failure_is_not_partial(
+        self, mock_mcp, mock_client
+    ):
+        """When the very first per-domain call fails (no prior registry update,
+        no prior succeeded domains), partial must be False and the message must
+        say 'Failed to update' — not 'Partially updated'. A regression that
+        flips this would silently turn clean failures into partial-success lies.
+        """
+        fail = {"success": False, "error": {"message": "unsupported_domain"}}
+        mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="sensor.temp",
+                options={"sensor": {"display_precision": 2}},
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["partial"] is False
+        assert body["options_succeeded"] == {}
+        assert body["error"]["message"].startswith("Failed to update options for")
+        assert "Partially" not in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_options_failure_with_empty_error_envelope_uses_fallback(
+        self, mock_mcp, mock_client
+    ):
+        """If HA returns success=False with no usable error key, the error
+        message must NOT degrade to literal "{}" — _extract_ws_error's fallback
+        string surfaces instead.
+        """
+        fail = {"success": False}  # no error key at all
+        mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="sensor.temp",
+                options={"sensor": {"display_precision": 2}},
+            )
+
+        body = json.loads(str(exc_info.value))
+        msg = body["error"]["message"]
+        assert "no error detail returned by Home Assistant" in msg
+        # Critical: must NOT have rendered the empty dict literal.
+        assert ": {}" not in msg
+        assert "{}" not in msg.split(":", 1)[1]
+
+    @pytest.mark.asyncio
+    async def test_device_class_and_options_in_one_call(self, mock_mcp, mock_client):
+        """device_class and options together: one main registry update carries
+        device_class, then a separate per-domain WS call carries options. A
+        future refactor could short-circuit the options loop when the main
+        update already succeeded — this test catches that.
+        """
+        main_response = self._registry_response(device_class="window")
+        opts_response = self._registry_response(
+            device_class="window",
+            options={"binary_sensor": {}, "sensor": {"display_precision": 2}},
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[main_response, opts_response]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        await tool(
+            entity_id="binary_sensor.test",
+            device_class="window",
+            options={"sensor": {"display_precision": 2}},
+        )
+
+        calls = [c.args[0] for c in mock_client.send_websocket_message.call_args_list]
+        assert len(calls) == 2
+        # Main update carries device_class but NOT options_domain
+        assert calls[0]["device_class"] == "window"
+        assert "options_domain" not in calls[0]
+        # Per-domain update carries options_domain and the right sub-dict
+        assert calls[1]["options_domain"] == "sensor"
+        assert calls[1]["options"] == {"display_precision": 2}
+        assert "device_class" not in calls[1]
+
 
 class TestHaGetEntityRegistryOptions:
     """ha_get_entity must surface device_class + options so agents can read state."""

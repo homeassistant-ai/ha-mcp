@@ -5,6 +5,7 @@ E2E tests for ha_set_entity device_class (Show As) and per-domain options round-
 import logging
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from tests.src.e2e.utilities.assertions import assert_mcp_success
 
@@ -48,9 +49,10 @@ async def template_orphan_sweep(mcp_client):
                     parsed = res if isinstance(res, dict) else {}
                     if parsed.get("success"):
                         await _delete_template_helper(mcp_client, eid)
-                except Exception:
+                except ToolError:
                     # ha_get_entity raises ToolError when the entity is missing —
-                    # that's the expected state, swallow and move on.
+                    # that's the expected state for a clean run. Anything else
+                    # (network, auth) we want to bubble.
                     pass
 
     await sweep()
@@ -220,6 +222,9 @@ class TestShowAsOnIntegrationEntity:
         pre_data = assert_mcp_success(pre, "Read pre-state")
         original_override = pre_data["entity_entry"]["device_class"]
         original_device_class = pre_data["entity_entry"]["original_device_class"]
+        # Capture the entity's pre-test sensor sub-options so the restore can
+        # put them back exactly, rather than blindly clearing the dict.
+        original_sensor_options = pre_data["entity_entry"]["options"].get("sensor", {})
         # Demo integration ships this as a temperature sensor — guarantee that
         # the override slot and the integration's own slot are distinct so we
         # know the test is exercising what we think it is.
@@ -270,8 +275,12 @@ class TestShowAsOnIntegrationEntity:
                 "ha_set_entity",
                 {"entity_id": self.TARGET, "device_class": restore_dc},
             )
-            # Clear the sensor sub-options we added.
+            # Restore the sensor sub-options to their pre-test value so any
+            # demo-platform default we overwrote is put back intact.
             await mcp_client.call_tool(
                 "ha_set_entity",
-                {"entity_id": self.TARGET, "options": {"sensor": {}}},
+                {
+                    "entity_id": self.TARGET,
+                    "options": {"sensor": dict(original_sensor_options)},
+                },
             )
