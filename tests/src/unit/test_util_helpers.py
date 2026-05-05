@@ -1,10 +1,14 @@
 """Unit tests for util_helpers module."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from ha_mcp.tools.util_helpers import (
     build_pagination_metadata,
     coerce_int_param,
+    get_logger_levels,
+    normalize_log_level,
     parse_json_param,
     parse_string_list_param,
 )
@@ -239,3 +243,152 @@ class TestCoerceIntParam:
 
     def test_exact_max_value_allowed(self):
         assert coerce_int_param(200, "limit", default=50, max_value=200) == 200
+
+
+class TestNormalizeLogLevel:
+    """Test normalize_log_level function (shared by ha_get_logs and enrichment helpers)."""
+
+    @pytest.mark.parametrize(
+        "numeric,expected",
+        [
+            (0, "NOTSET"),
+            (10, "DEBUG"),
+            (20, "INFO"),
+            (30, "WARNING"),
+            (40, "ERROR"),
+            (50, "CRITICAL"),
+        ],
+    )
+    def test_known_numeric_levels(self, numeric, expected):
+        assert normalize_log_level(numeric) == expected
+
+    def test_unknown_numeric_level_is_labelled(self):
+        """Non-standard integers should be preserved verbatim (not discarded)."""
+        assert normalize_log_level(25) == "LEVEL_25"
+
+    def test_string_is_uppercased(self):
+        assert normalize_log_level("debug") == "DEBUG"
+
+    def test_string_is_trimmed(self):
+        assert normalize_log_level("  warning  ") == "WARNING"
+
+    def test_empty_string_returns_none(self):
+        assert normalize_log_level("") is None
+        assert normalize_log_level("   ") is None
+
+    def test_bool_rejected(self):
+        """bool is an int subclass — must not round-trip as a log level."""
+        assert normalize_log_level(True) is None
+        assert normalize_log_level(False) is None
+
+    def test_none_returns_none(self):
+        assert normalize_log_level(None) is None
+
+    def test_other_types_return_none(self):
+        assert normalize_log_level(3.14) is None
+        assert normalize_log_level([]) is None
+
+
+class TestGetLoggerLevels:
+    """Test get_logger_levels helper — wraps logger/log_info WS call."""
+
+    @pytest.mark.asyncio
+    async def test_parses_numeric_levels_to_names_and_raws(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"domain": "mqtt", "level": 10},
+                    {"domain": "automation", "level": 20},
+                    {"domain": "ollama", "level": 40},
+                ],
+            }
+        )
+        levels = await get_logger_levels(client)
+        assert levels == {
+            "mqtt": {"name": "DEBUG", "raw": 10},
+            "automation": {"name": "INFO", "raw": 20},
+            "ollama": {"name": "ERROR", "raw": 40},
+        }
+
+    @pytest.mark.asyncio
+    async def test_string_levels_have_none_raw(self):
+        """When HA returns the level as a string already, raw is None."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"domain": "mqtt", "level": "warning"}],
+            }
+        )
+        assert await get_logger_levels(client) == {
+            "mqtt": {"name": "WARNING", "raw": None},
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_standard_int_level_preserved_raw(self):
+        """Non-standard ints (e.g. 25) keep the raw int alongside a LEVEL_<n> name."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"domain": "weird", "level": 25}],
+            }
+        )
+        assert await get_logger_levels(client) == {
+            "weird": {"name": "LEVEL_25", "raw": 25},
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_ws_failure_response(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "logger not loaded"}
+        )
+        assert await get_logger_levels(client) == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_io_exception(self):
+        """Connection/IO errors should degrade to an empty map, not propagate."""
+        client = MagicMock()
+        # ConnectionError is a subclass of OSError — the narrowed catch handles it.
+        client.send_websocket_message = AsyncMock(
+            side_effect=ConnectionError("websocket gone")
+        )
+        assert await get_logger_levels(client) == {}
+
+    @pytest.mark.asyncio
+    async def test_programming_errors_propagate(self):
+        """TypeError/KeyError (bugs in this helper) should surface, not be swallowed."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(side_effect=TypeError("bad call"))
+        with pytest.raises(TypeError):
+            await get_logger_levels(client)
+
+    @pytest.mark.asyncio
+    async def test_skips_malformed_entries(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"domain": "ok", "level": 10},
+                    {"domain": "", "level": 20},  # empty domain
+                    {"level": 30},  # missing domain
+                    "not a dict",
+                    {"domain": "bad_level", "level": None},
+                ],
+            }
+        )
+        assert await get_logger_levels(client) == {
+            "ok": {"name": "DEBUG", "raw": 10},
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_list_result_returns_empty(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"unexpected": "shape"}}
+        )
+        assert await get_logger_levels(client) == {}

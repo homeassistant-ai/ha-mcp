@@ -6,9 +6,11 @@ import os
 import re
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
@@ -95,6 +97,86 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         log_error(f"Failed to save secret path: {e}")
         # Return the path anyway - it will work for this session
         return new_path
+
+
+def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> None:
+    """POST the full addon options dict to the Supervisor.
+
+    The endpoint is a full-replace validated against the addon schema, so
+    callers must pass the complete options dict (not a partial patch).
+
+    Used after auto-generating the secret path so other addons (the
+    webhook proxy) can read it from `GET /addons/{slug}/info → options`
+    instead of scraping it from addon logs (#941).
+
+    Raises the underlying `urllib.error.HTTPError` / `URLError` / `OSError`
+    on failure — callers decide how loudly to surface the problem.
+    """
+    payload = json.dumps({"options": options}).encode()
+    req = urllib.request.Request(
+        "http://supervisor/addons/self/options",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {supervisor_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def maybe_persist_secret_path(
+    config: dict[str, Any], secret_path: str, supervisor_token: str
+) -> None:
+    """Persist `secret_path` into the addon's stored options when needed.
+
+    Only calls `persist_addon_options` when all of these hold:
+    - `config` is non-empty. If `/data/options.json` was missing or failed
+      to parse, `config` is `{}` and the addon is running off hardcoded
+      defaults. Sending a bare `{"secret_path": ...}` in that state would
+      be rejected by Supervisor's schema validation (missing required
+      `backup_hint`), producing a second misleading error line on top of
+      the "Failed to read config" we already logged.
+    - The resolved `secret_path` differs from the stored one. Otherwise
+      the write is a pure no-op and we'd just add noise on every restart.
+
+    Errors from the POST are caught and logged with an actionable recovery
+    message — the addon keeps running, but the user is told exactly which
+    value to paste into the Configuration tab if they hit it.
+    """
+    if not config:
+        return
+    if secret_path == config.get("secret_path", ""):
+        return
+    try:
+        persist_addon_options({**config, "secret_path": secret_path}, supervisor_token)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        detail = (
+            f"HTTP {e.code}: {e.reason}"
+            if isinstance(e, urllib.error.HTTPError)
+            else str(e)
+        )
+        log_error(
+            f"Failed to persist secret_path to addon options ({detail}). "
+            f"This addon will still run with secret_path={secret_path!r}, "
+            "but other addons (e.g. the webhook proxy) cannot auto-discover "
+            "it via Supervisor. Workaround: open this addon's Configuration "
+            "tab and paste the secret_path above into the 'Secret path override' "
+            "field, then save."
+        )
+
+
+def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool:
+    """Read ``key`` from ``config`` as a bool, falling back to ``default``.
+
+    Mirrors the ``raw = config.get(key, default); raw if isinstance(raw, bool) else default``
+    pattern used inline in ``main()`` for other options. Extracted so the
+    verify_ssl plumbing can be unit-tested without standing up the full
+    addon container.
+    """
+    raw = config.get(key, default)
+    return raw if isinstance(raw, bool) else default
 
 
 SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
@@ -184,12 +266,20 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_skills = True  # default
     enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    enable_filesystem_tools = False  # default
+    enable_custom_component_integration = False  # default
+    tool_search_max_results = 5  # default
+    disabled_tools_raw = ""  # default
+    pinned_tools_raw = ""  # default
+    verify_ssl = True  # default
+    advanced_debug_logging = False  # default
     config_read_ok = True
 
     if config_file.exists():
@@ -206,6 +296,18 @@ def main() -> int:
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            raw_filesystem_tools = config.get("enable_filesystem_tools", False)
+            enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
+            raw_custom_component = config.get("enable_custom_component_integration", False)
+            enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
+            raw_max_results = config.get("tool_search_max_results", 5)
+            tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
+            raw_disabled = config.get("disabled_tools", "")
+            disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
+            raw_pinned = config.get("pinned_tools", "")
+            pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
+            verify_ssl = resolve_bool_option(config, "verify_ssl", True)
+            advanced_debug_logging = resolve_bool_option(config, "advanced_debug_logging", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -219,10 +321,25 @@ def main() -> int:
         config_read_ok=config_read_ok,
     )
 
+    # Validate Supervisor token (needed for both ha-mcp auth below and the
+    # options-persist call right after secret path resolution)
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
+    if not supervisor_token:
+        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
+        return 1
+
     # Generate or retrieve secret path
     secret_path = get_or_create_secret_path(data_dir, custom_secret_path)
 
+    # Persist secret path back to addon options so other addons (e.g. the
+    # webhook proxy) can read it via `GET /addons/{slug}/info → options`
+    # instead of scraping it from this addon's logs (#941). Details and
+    # the skip/retry rules live in maybe_persist_secret_path().
+    maybe_persist_secret_path(config, secret_path, supervisor_token)
+
     log_info(f"Backup hint mode: {backup_hint}")
+    log_info(f"Verify SSL: {verify_ssl}")
+    log_info(f"Advanced debug logging: {advanced_debug_logging}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -231,12 +348,12 @@ def main() -> int:
     os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
-
-    # Validate Supervisor token
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
-        log_error("SUPERVISOR_TOKEN not found! Cannot authenticate.")
-        return 1
+    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
+    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
+    os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
+    os.environ["DISABLED_TOOLS"] = disabled_tools_raw
+    os.environ["PINNED_TOOLS"] = pinned_tools_raw
+    os.environ["HA_VERIFY_SSL"] = str(verify_ssl).lower()
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 
@@ -265,12 +382,34 @@ def main() -> int:
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
         StatelessSessionLogFilter,
+        _get_server,
         _get_timestamped_uvicorn_log_config,
         mcp,
         register_browser_landing,
     )
+    from ha_mcp.settings_ui import register_settings_routes
+
+    if advanced_debug_logging:
+        # Defers SA_SIGINFO install until uvicorn's capture_signals has
+        # run. Otherwise uvicorn's signal.signal() call would overwrite
+        # our handler before any signal arrived.
+        # Wrapped because diagnostics must never block addon startup.
+        try:
+            from ha_mcp.utils.kill_signal_diagnostics import (
+                schedule_install_after_uvicorn,
+            )
+            schedule_install_after_uvicorn()
+        except Exception as e:
+            log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
 
     register_browser_landing(mcp, secret_path)
+    # Mount settings UI routes both at root (for HA ingress proxy) and
+    # under the secret path (for direct port access). See
+    # register_settings_routes docstring for the auth model. Use the
+    # server's actual FastMCP instance (not the _DeferredMCP wrapper)
+    # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
+    server_instance = _get_server()
+    register_settings_routes(server_instance.mcp, server_instance, secret_path=secret_path)
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )

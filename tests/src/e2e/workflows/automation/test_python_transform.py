@@ -390,6 +390,7 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
         "ha_config_get_automation", {"identifier": entity_id}
     )
 
+    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
 
 
@@ -421,6 +422,7 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
         "ha_config_get_automation", {"identifier": entity_id}
     )
 
+    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
 
     # Transform using the hash should succeed

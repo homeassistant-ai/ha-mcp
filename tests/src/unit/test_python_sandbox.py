@@ -5,6 +5,7 @@ import pytest
 from ha_mcp.utils.python_sandbox import (
     PythonSandboxError,
     safe_execute,
+    safe_execute_expression,
     validate_expression,
 )
 
@@ -47,6 +48,43 @@ for view in config['views']:
         expr = "config['entities'] = [e for e in config.get('entities', []) if 'light' in e]"
         valid, error = validate_expression(expr)
         assert valid is True
+
+
+class TestUnaryOperators:
+    """Regression tests for issue #1115 — negative numbers in expressions."""
+
+    def test_negative_number_literal(self):
+        valid, error = validate_expression("x = -1")
+        assert valid is True, error
+
+    def test_unary_plus_literal(self):
+        valid, error = validate_expression("x = +1")
+        assert valid is True, error
+
+    def test_bitwise_invert(self):
+        valid, error = validate_expression("x = ~1")
+        assert valid is True, error
+
+    def test_negative_in_dict_value(self):
+        expr = 'config["views"][0]["min"] = -10'
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_dashboard_view_with_negative_axis_range(self):
+        """Reproduces issue #1115: appending a card with a negative gauge min."""
+        config = {"views": [{"cards": []}]}
+        expr = (
+            'config["views"][0]["cards"].append('
+            '{"type": "gauge", "entity": "sensor.power", "min": -5000, "max": 5000})'
+        )
+        result = safe_execute(expr, config)
+        assert result["views"][0]["cards"][0]["min"] == -5000
+
+    def test_negation_in_arithmetic(self):
+        config = {"value": 5}
+        expr = 'config["value"] = -config["value"]'
+        result = safe_execute(expr, config)
+        assert result["value"] == -5
 
 
 class TestBlockedOperations:
@@ -205,3 +243,107 @@ for card in config['views'][0]['cards']:
         expr = "config['nonexistent']['key'] = 'value'"
         with pytest.raises(PythonSandboxError, match="Execution error"):
             safe_execute(expr, config)
+
+
+class TestSafeExecuteExpression:
+    """Tests for the generalized safe_execute_expression."""
+
+    def test_custom_variable_name(self):
+        """Supports arbitrary variable names, not just 'config'."""
+        expr = "response = [x for x in response if x > 1]"
+        result = safe_execute_expression(expr, {"response": [1, 2, 3]}, "response")
+        assert result == [2, 3]
+
+    def test_reassignment_returns_new_object(self):
+        """Reassignment inside the expression is reflected in the return value.
+
+        The old safe_execute semantics returned the original reference, which
+        silently dropped reassigned values. safe_execute_expression returns
+        the post-execution binding, so `response = [...]` works.
+        """
+        expr = "response = {'filtered': True}"
+        result = safe_execute_expression(expr, {"response": {}}, "response")
+        assert result == {"filtered": True}
+
+    def test_in_place_mutation(self):
+        """In-place mutations on mutable values are returned as expected."""
+        original = [1, 2, 3]
+        expr = "response.append(4)"
+        result = safe_execute_expression(expr, {"response": original}, "response")
+        assert result == [1, 2, 3, 4]
+        assert original == [1, 2, 3, 4]  # same reference, mutated
+
+    def test_missing_result_key_raises(self):
+        """If result_key is not in variables, raise PythonSandboxError up front."""
+        with pytest.raises(PythonSandboxError, match="result_key"):
+            safe_execute_expression(
+                "response = 1", {"other": 1}, "response"
+            )
+
+    def test_validation_failure_raises(self):
+        """Invalid expressions raise with 'validation failed' prefix."""
+        with pytest.raises(PythonSandboxError, match="validation failed"):
+            safe_execute_expression("import os", {"response": None}, "response")
+
+    def test_execution_error_raises(self):
+        """Runtime errors in the expression raise with 'Execution error' prefix."""
+        with pytest.raises(PythonSandboxError, match="Execution error"):
+            safe_execute_expression(
+                "response['missing']['key'] = 1",
+                {"response": {}},
+                "response",
+            )
+
+    def test_mixed_shape_list_with_isinstance(self):
+        """Transforms handle heterogeneous list[dict | str] using isinstance.
+
+        The WebSocket message list is intentionally heterogeneous (parsed JSON
+        dicts interleaved with raw ANSI-stripped strings). Agents need
+        isinstance/str to reason about the shape — both are in the minimal
+        safe-builtins set.
+        """
+        messages = [
+            {"level": "INFO", "text": "Starting"},
+            "raw text line",
+            {"level": "ERROR", "text": "Boom"},
+            "another raw line",
+        ]
+        expr = (
+            "response = [m for m in response "
+            "if isinstance(m, dict) and m.get('level') == 'ERROR']"
+        )
+        result = safe_execute_expression(
+            expr, {"response": messages}, "response"
+        )
+        assert result == [{"level": "ERROR", "text": "Boom"}]
+
+    def test_str_coercion_available(self):
+        """str() is in the safe builtins for text-content matching."""
+        messages = [{"level": "ERROR"}, "plain string", 42]
+        expr = "response = [m for m in response if 'ERROR' in str(m)]"
+        result = safe_execute_expression(
+            expr, {"response": messages}, "response"
+        )
+        assert result == [{"level": "ERROR"}]
+
+    def test_builtins_do_not_include_open(self):
+        """Dangerous builtins like open remain blocked at AST validation."""
+        with pytest.raises(PythonSandboxError, match="validation failed"):
+            safe_execute_expression(
+                "open('/etc/passwd')", {"response": None}, "response"
+            )
+
+    def test_builtins_do_not_include_getattr(self):
+        """getattr remains blocked at AST validation."""
+        with pytest.raises(PythonSandboxError, match="validation failed"):
+            safe_execute_expression(
+                "getattr(response, '__class__')",
+                {"response": []},
+                "response",
+            )
+
+    def test_safe_execute_wrapper_still_works(self):
+        """safe_execute should remain backward-compatible with existing callers."""
+        config = {"views": [{"icon": "old"}]}
+        result = safe_execute("config['views'][0]['icon'] = 'new'", config)
+        assert result["views"][0]["icon"] == "new"

@@ -468,7 +468,7 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     # Cleanup
     for entity_id in entity_ids:
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
-            {"helper_type": "input_boolean", "helper_id": entity_id},
+            "ha_delete_helpers_integrations",
+            {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
         )
     logger.info("Test input_booleans cleaned up")

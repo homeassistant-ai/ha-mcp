@@ -191,7 +191,7 @@ async def test_deep_search_dashboard_type(mcp_client):
     finally:
         await mcp_client.call_tool(
             "ha_config_delete_dashboard",
-            {"dashboard_id": "deep-search-test-dash"},
+            {"url_path": "deep-search-test-dash"},
         )
         logger.info("Cleaned up test dashboard")
 

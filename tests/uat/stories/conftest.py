@@ -30,10 +30,8 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from fastmcp import Client  # noqa: E402
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat._inprocess import inprocess_mcp_client  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
-
-from ha_mcp.client import HomeAssistantClient  # noqa: E402
-from ha_mcp.server import HomeAssistantSmartMCPServer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -128,18 +126,10 @@ def event_loop():
 @pytest.fixture
 async def mcp_client(ha_container) -> AsyncGenerator[Client]:
     """FastMCP in-memory client for programmatic setup/teardown."""
-    import ha_mcp.config
-
-    ha_mcp.config._settings = None
-
-    client = HomeAssistantClient(
-        base_url=ha_container["url"], token=ha_container["token"]
-    )
-    server = HomeAssistantSmartMCPServer(client=client)
-    fastmcp_client = Client(server.mcp)
-
-    async with fastmcp_client:
-        yield fastmcp_client
+    async with inprocess_mcp_client(
+        ha_container["url"], ha_container["token"]
+    ) as client:
+        yield client
 
 
 # ---------------------------------------------------------------------------

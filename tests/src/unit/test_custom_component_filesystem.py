@@ -23,9 +23,13 @@ sys.modules['homeassistant.helpers.config_validation'] = MagicMock()
 
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
+    _delete_file_sync,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
+    _list_files_sync,
     _mask_secrets_content,
+    _read_file_sync,
+    _write_file_sync,
 )
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ALLOWED_READ_DIRS,
@@ -76,6 +80,13 @@ class TestIsPathAllowedForDir:
     def test_blocks_custom_components_directory(self, tmp_path):
         """Should block custom_components directory for writes."""
         assert _is_path_allowed_for_dir(tmp_path, "custom_components/", ALLOWED_WRITE_DIRS) is False
+
+    def test_allows_dashboards_directory(self, tmp_path):
+        """Should allow paths in dashboards/ directory (YAML-mode dashboards)."""
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_READ_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_READ_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_WRITE_DIRS) is True
+        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_WRITE_DIRS) is True
 
 
 class TestIsPathAllowedForRead:
@@ -143,6 +154,11 @@ class TestIsPathAllowedForRead:
         """Should block arbitrary files not in allowed list."""
         assert _is_path_allowed_for_read(tmp_path, "random_file.txt") is False
         assert _is_path_allowed_for_read(tmp_path, "deps/some_file") is False
+
+    def test_allows_dashboards_yaml_files(self, tmp_path):
+        """Should allow reading files under dashboards/ directory."""
+        assert _is_path_allowed_for_read(tmp_path, "dashboards/main.yaml") is True
+        assert _is_path_allowed_for_read(tmp_path, "dashboards/sub/nested.yaml") is True
 
 
 class TestMaskSecretsContent:
@@ -294,3 +310,142 @@ class TestFileOperationsIntegration:
         """Should block writing to config root."""
         assert not _is_path_allowed_for_dir(config_dir, "configuration.yaml", ALLOWED_WRITE_DIRS)
         assert not _is_path_allowed_for_dir(config_dir, "new_file.yaml", ALLOWED_WRITE_DIRS)
+
+
+# ---------------------------------------------------------------------------
+# Sync helpers — bundle blocking I/O for hass.async_add_executor_job offload.
+# These run in the executor thread; the async handler formats the structured
+# response from the returned dict (success keys or {"_error": <kind>}).
+# ---------------------------------------------------------------------------
+
+
+class TestListFilesSync:
+    """Test _list_files_sync helper."""
+
+    def test_returns_files_for_existing_directory(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello")
+        (tmp_path / "b.txt").write_text("world")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+
+        result = _list_files_sync(tmp_path, tmp_path, None)
+
+        assert "_error" not in result
+        names = [f["name"] for f in result["files"]]
+        assert names == ["sub", "a.txt", "b.txt"]  # dirs first, then alpha
+        a_entry = next(f for f in result["files"] if f["name"] == "a.txt")
+        assert a_entry["size"] == 5
+        assert a_entry["is_dir"] is False
+        sub_entry = next(f for f in result["files"] if f["name"] == "sub")
+        assert sub_entry["is_dir"] is True
+        assert sub_entry["size"] == 0
+
+    def test_returns_not_found_for_missing_directory(self, tmp_path):
+        result = _list_files_sync(tmp_path / "missing", tmp_path, None)
+        assert result == {"_error": "not_found"}
+
+    def test_returns_not_a_dir_for_file_path(self, tmp_path):
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = _list_files_sync(f, tmp_path, None)
+        assert result == {"_error": "not_a_dir"}
+
+    def test_pattern_filters_files(self, tmp_path):
+        (tmp_path / "a.yaml").write_text("a")
+        (tmp_path / "b.yaml").write_text("b")
+        (tmp_path / "c.txt").write_text("c")
+
+        result = _list_files_sync(tmp_path, tmp_path, "*.yaml")
+
+        names = sorted(f["name"] for f in result["files"])
+        assert names == ["a.yaml", "b.yaml"]
+
+
+class TestReadFileSync:
+    """Test _read_file_sync helper."""
+
+    def test_returns_content_for_existing_file(self, tmp_path):
+        f = tmp_path / "x.txt"
+        f.write_text("hello world")
+
+        result = _read_file_sync(f)
+
+        assert result["content"] == "hello world"
+        assert result["size"] == 11
+        assert "mtime" in result
+
+    def test_returns_not_found_for_missing_file(self, tmp_path):
+        result = _read_file_sync(tmp_path / "missing.txt")
+        assert result == {"_error": "not_found"}
+
+    def test_returns_not_a_file_for_directory(self, tmp_path):
+        result = _read_file_sync(tmp_path)
+        assert result == {"_error": "not_a_file"}
+
+    def test_propagates_unicode_decode_error(self, tmp_path):
+        f = tmp_path / "binary.bin"
+        f.write_bytes(b"\xff\xfe\xfd")
+        with pytest.raises(UnicodeDecodeError):
+            _read_file_sync(f)
+
+
+class TestWriteFileSync:
+    """Test _write_file_sync helper."""
+
+    def test_creates_new_file(self, tmp_path):
+        target = tmp_path / "sub" / "x.txt"
+
+        result = _write_file_sync(target, "hello", overwrite=False, create_dirs=True, config_dir=tmp_path)
+
+        assert "_error" not in result
+        assert result["is_new"] is True
+        assert result["size"] == 5
+        assert target.read_text() == "hello"
+
+    def test_blocks_overwrite_when_disabled(self, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("original")
+
+        result = _write_file_sync(target, "new", overwrite=False, create_dirs=False, config_dir=tmp_path)
+
+        assert result == {"_error": "exists_no_overwrite"}
+        assert target.read_text() == "original"
+
+    def test_overwrites_when_allowed(self, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("original")
+
+        result = _write_file_sync(target, "new", overwrite=True, create_dirs=False, config_dir=tmp_path)
+
+        assert result["is_new"] is False
+        assert target.read_text() == "new"
+
+    def test_returns_no_parent_when_create_dirs_false(self, tmp_path):
+        target = tmp_path / "missing_dir" / "x.txt"
+
+        result = _write_file_sync(target, "hi", overwrite=False, create_dirs=False, config_dir=tmp_path)
+
+        assert result["_error"] == "no_parent"
+        assert result["parent"] == "missing_dir"
+
+
+class TestDeleteFileSync:
+    """Test _delete_file_sync helper."""
+
+    def test_deletes_existing_file(self, tmp_path):
+        f = tmp_path / "x.txt"
+        f.write_text("hello")
+
+        result = _delete_file_sync(f)
+
+        assert result == {"size": 5}
+        assert not f.exists()
+
+    def test_returns_not_found_for_missing_file(self, tmp_path):
+        result = _delete_file_sync(tmp_path / "missing.txt")
+        assert result == {"_error": "not_found"}
+
+    def test_returns_not_a_file_for_directory(self, tmp_path):
+        result = _delete_file_sync(tmp_path)
+        assert result == {"_error": "not_a_file"}
+        assert tmp_path.exists()

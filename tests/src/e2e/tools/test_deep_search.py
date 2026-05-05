@@ -253,10 +253,11 @@ async def test_deep_search_helper(mcp_client):
     finally:
         # Cleanup: Delete the test helper
         await mcp_client.call_tool(
-            "ha_config_remove_helper",
+            "ha_delete_helpers_integrations",
             {
                 "helper_type": "input_select",
-                "helper_id": "deep_search_test_select",
+                "target": "deep_search_test_select",
+                "confirm": True,
             },
         )
         logger.info("🧹 Cleaned up test helper")

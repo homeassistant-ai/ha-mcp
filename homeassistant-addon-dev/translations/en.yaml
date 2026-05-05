@@ -38,3 +38,57 @@ configuration:
       require a full HA restart to take effect. See docs/beta.md for known
       limitations. Dedicated tools (automations, scripts, scenes, helpers,
       template sensors) should be preferred when available.
+  enable_filesystem_tools:
+    name: Enable filesystem tools (beta)
+    description: >-
+      Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
+      access to your Home Assistant filesystem. WARNING: This gives the MCP
+      server sensitive direct file access to your system. Only enable if you
+      trust the AI assistant with file operations. Requires restart to take
+      effect.
+  enable_custom_component_integration:
+    name: Enable custom component integration (beta)
+    description: >-
+      Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the
+      ha_install_mcp_tools installer tool, which can help install the
+      ha_mcp_tools custom component. This setting does not control whether the
+      MCP server loads or interacts with the custom component, and it is not
+      required for filesystem tools to function. Only enable if you want to
+      allow the AI assistant to use the installer tool. Requires restart to
+      take effect.
+  tool_search_max_results:
+    name: Tool search max results
+    description: >-
+      Maximum number of tools returned by ha_search_tools when tool
+      search is enabled. Lower values (2-3) save context tokens but
+      may miss relevant tools. Range: 2-10. Requires restart.
+  disabled_tools:
+    name: Disabled tools (text fallback)
+    description: >-
+      Comma-separated tool names to disable. For a visual interface,
+      click "Open Web UI" on the addon info page. This field seeds the initial config
+      when the web UI hasn't been used yet. Requires restart.
+  pinned_tools:
+    name: Pinned tools (text fallback)
+    description: >-
+      Comma-separated tool names to pin (always visible in tool search).
+      For a visual interface, click "Open Web UI" on the addon info page. This field
+      seeds the initial config when the web UI hasn't been used yet.
+      Requires restart.
+  verify_ssl:
+    name: Verify TLS certificate
+    description: >-
+      Verify the Home Assistant server's TLS certificate. The add-on
+      connects via the Supervisor proxy, so this normally has no effect
+      and should stay enabled. Disable only if you've reconfigured the
+      add-on to talk to HA over a public HTTPS hostname with a self-signed
+      certificate or hostname mismatch. Disabling weakens transport
+      security — leave on unless you know you need it. Requires restart
+      to take effect.
+  advanced_debug_logging:
+    name: Advanced debug logging
+    description: >-
+      Captures extra diagnostic info on kill/shutdown — sender PID
+      and memory state. Useful when reporting unexplained add-on
+      stops or crash loops. Off by default to keep logs concise.
+      Requires restart to take effect.

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from fastmcp import Client
 
 
 async def _retry(fn, attempts: int = 3, delay: float = 2.0) -> Any | None:
@@ -240,48 +242,6 @@ RESPONSE_CHECKS = {
 
 
 # ---------------------------------------------------------------------------
-# Shared MCP context — one server instance per verify_ha_checks call
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def _mcp_context(ha_url: str, ha_token: str):
-    """Create a single shared MCP client for all async checks in one verify run."""
-    import os
-
-    from fastmcp import Client
-
-    import ha_mcp.config
-    from ha_mcp.client import HomeAssistantClient
-    from ha_mcp.client.websocket_client import websocket_manager
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    prev_url = os.environ.get("HOMEASSISTANT_URL")
-    prev_token = os.environ.get("HOMEASSISTANT_TOKEN")
-    prev_settings = ha_mcp.config._settings
-    try:
-        os.environ["HOMEASSISTANT_URL"] = ha_url
-        os.environ["HOMEASSISTANT_TOKEN"] = ha_token
-        ha_mcp.config._settings = None
-        await websocket_manager.disconnect()
-
-        ha_client = HomeAssistantClient(base_url=ha_url, token=ha_token)
-        server = HomeAssistantSmartMCPServer(client=ha_client)
-        async with Client(server.mcp) as mcp_client:
-            yield mcp_client
-    finally:
-        if prev_url is None:
-            os.environ.pop("HOMEASSISTANT_URL", None)
-        else:
-            os.environ["HOMEASSISTANT_URL"] = prev_url
-        if prev_token is None:
-            os.environ.pop("HOMEASSISTANT_TOKEN", None)
-        else:
-            os.environ["HOMEASSISTANT_TOKEN"] = prev_token
-        ha_mcp.config._settings = prev_settings
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -291,25 +251,24 @@ async def verify_ha_checks(
     ha_token: str,
     checks: list[dict],
     agent_output: str,
+    mcp_client: Client,
 ) -> list[dict]:
-    """Run all checks concurrently and return results list [{type, passed, detail, ...}]."""
+    """Run all checks concurrently and return results list [{type, passed, detail, ...}].
+
+    Caller owns the ``mcp_client`` lifecycle so one in-process server can be
+    shared across many verify_ha_checks calls.
+    """
     headers = {"Authorization": f"Bearer {ha_token}"}
 
-    async def run_all(mcp_client=None) -> list[dict]:
-        async def run_check(check: dict) -> dict:
-            check_type = check["type"]
-            if check_type in SYNC_CHECKS:
-                return await SYNC_CHECKS[check_type](http, check)
-            if check_type in ASYNC_CHECKS:
-                return await ASYNC_CHECKS[check_type](mcp_client, check)
-            if check_type in RESPONSE_CHECKS:
-                return RESPONSE_CHECKS[check_type](check, agent_output)
-            return {**check, "passed": False, "detail": f"Unknown check type: {check_type}"}
-
-        return list(await asyncio.gather(*[run_check(c) for c in checks]))
+    async def run_check(check: dict, http) -> dict:
+        check_type = check["type"]
+        if check_type in SYNC_CHECKS:
+            return await SYNC_CHECKS[check_type](http, check)
+        if check_type in ASYNC_CHECKS:
+            return await ASYNC_CHECKS[check_type](mcp_client, check)
+        if check_type in RESPONSE_CHECKS:
+            return RESPONSE_CHECKS[check_type](check, agent_output)
+        return {**check, "passed": False, "detail": f"Unknown check type: {check_type}"}
 
     async with httpx.AsyncClient(base_url=ha_url, headers=headers, timeout=10) as http:
-        if any(c["type"] in ASYNC_CHECKS for c in checks):
-            async with _mcp_context(ha_url, ha_token) as mcp_client:
-                return await run_all(mcp_client)
-        return await run_all()
+        return list(await asyncio.gather(*[run_check(c, http) for c in checks]))

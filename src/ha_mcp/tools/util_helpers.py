@@ -7,6 +7,7 @@ This module provides common helper functions used across multiple tool registrat
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, overload
 
@@ -17,6 +18,9 @@ from ..client.rest_client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Strips ANSI terminal escape codes from container/log output.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
 def coerce_bool_param(
@@ -262,6 +266,87 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     """
     sr = result.get("service_response")
     return sr if isinstance(sr, dict) else result
+
+
+# Python logging numeric-level → canonical level name.
+# Mirrors the values in HA's LOGSEVERITY constant (components/logger/const.py).
+_LOG_LEVEL_NAMES: dict[int, str] = {
+    0: "NOTSET",
+    10: "DEBUG",
+    20: "INFO",
+    30: "WARNING",
+    40: "ERROR",
+    50: "CRITICAL",
+}
+
+
+def normalize_log_level(level: Any) -> str | None:
+    """Normalize a numeric or string log level to its canonical uppercase name.
+
+    Returns None if the value can't be recognized as a log level.
+    """
+    if isinstance(level, bool):  # bool is an int subclass — reject explicitly
+        return None
+    if isinstance(level, int):
+        return _LOG_LEVEL_NAMES.get(level, f"LEVEL_{level}")
+    if isinstance(level, str):
+        stripped = level.strip().upper()
+        if not stripped:
+            return None
+        return stripped
+    return None
+
+
+async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
+    """Fetch current HA integration log levels via the ``logger/log_info`` WS command.
+
+    Returns a mapping of integration domain (e.g. ``"mqtt"``) to a dict with:
+
+    - ``name``: canonical level name (``"DEBUG"``, ``"INFO"``, ``"WARNING"``,
+      ``"ERROR"``, ``"CRITICAL"``, ``"NOTSET"``, or ``"LEVEL_<n>"`` for
+      non-standard ints).
+    - ``raw``: the original numeric level (``int``) when HA returned an int,
+      otherwise ``None`` (e.g. when the level was already provided as a string).
+
+    Best-effort enrichment: returns an empty dict on connection/IO failures so
+    callers can treat it as "no custom levels". Programming errors are not
+    suppressed — they surface as bugs during development/CI.
+    """
+    try:
+        result = await client.send_websocket_message({"type": "logger/log_info"})
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as exc:
+        logger.debug("logger/log_info fetch failed: %s", exc)
+        return {}
+
+    if not isinstance(result, dict) or not result.get("success"):
+        return {}
+
+    entries = result.get("result", [])
+    if not isinstance(entries, list):
+        return {}
+
+    levels: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        domain = entry.get("domain")
+        if not isinstance(domain, str) or not domain:
+            continue
+        raw_level = entry.get("level")
+        name = normalize_log_level(raw_level)
+        if name is None:
+            continue
+        levels[domain] = {
+            "name": name,
+            "raw": raw_level if isinstance(raw_level, int) and not isinstance(raw_level, bool) else None,
+        }
+    return levels
 
 
 async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
@@ -530,3 +615,41 @@ async def apply_entity_category(
         result_dict["category_warning"] = (
             f"{entity_type.capitalize()} saved but failed to set category: {e}"
         )
+
+
+def coerce_to_list(value: Any) -> list[Any]:
+    """Return value as a list: list → as-is, dict/other → [value], None/falsy → []."""
+    if isinstance(value, list):
+        return value
+    return [value] if value else []
+
+
+def merge_validation_meta(
+    result: dict[str, Any], validation_meta: dict[str, Any]
+) -> None:
+    """Attach reference-validator output to a set-tool success ``result``.
+
+    Produces a single nested ``validation`` field when there's anything
+    worth reporting - warnings, skipped templates, or a blueprint
+    short-circuit. Keeps the happy-path response unchanged.
+
+    Shared between ``ha_config_set_automation`` and
+    ``ha_config_set_script``; see
+    :mod:`ha_mcp.tools.reference_validator` for the validator itself
+    and #940 for background.
+    """
+    warnings = validation_meta.get("warnings") or []
+    unvalidated_templates = validation_meta.get("unvalidated_templates") or 0
+    blueprint_skipped = bool(validation_meta.get("blueprint_skipped"))
+
+    if not warnings and not unvalidated_templates and not blueprint_skipped:
+        return
+
+    entry: dict[str, Any] = {}
+    if warnings:
+        entry["warnings"] = warnings
+    if unvalidated_templates:
+        entry["unvalidated_templates"] = unvalidated_templates
+    if blueprint_skipped:
+        entry["blueprint_skipped"] = True
+    result["validation"] = entry

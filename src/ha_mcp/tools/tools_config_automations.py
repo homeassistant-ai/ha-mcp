@@ -37,10 +37,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     coerce_bool_param,
+    coerce_to_list,
     fetch_entity_category,
+    merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -245,6 +248,8 @@ class AutomationConfigTools:
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
 
+        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
@@ -411,7 +416,7 @@ class AutomationConfigTools:
         BASIC EXAMPLES:
 
         Simple time-based automation:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Morning Lights",
             "description": "Turn on bedroom lights at 7 AM to help wake up",
             "trigger": [{"platform": "time", "at": "07:00:00"}],
@@ -419,7 +424,7 @@ class AutomationConfigTools:
         })
 
         Motion-activated lighting with condition:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light",
             "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
             "condition": [{"condition": "sun", "after": "sunset"}],
@@ -447,7 +452,7 @@ class AutomationConfigTools:
         BLUEPRINT AUTOMATION EXAMPLES:
 
         Create automation from blueprint:
-        ha_config_set_automation({
+        ha_config_set_automation(config={
             "alias": "Motion Light Kitchen",
             "use_blueprint": {
                 "path": "homeassistant/motion_light.yaml",
@@ -641,6 +646,13 @@ class AutomationConfigTools:
                 config_dict, skill_prefix=_get_skill_prefix()
             )
 
+            # Cross-check literal service and entity references against
+            # the live registries. Soft warnings only — the write still
+            # happens, even when references don't resolve (#940).
+            validation_meta = await validate_config_references(
+                self._client, config_dict
+            )
+
             result = await self._client.upsert_automation_config(config_dict, identifier)
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
@@ -676,6 +688,8 @@ class AutomationConfigTools:
 
             if bp_warnings:
                 result["best_practice_warnings"] = bp_warnings
+
+            merge_validation_meta(result, validation_meta)
 
             return {
                 "success": True,
@@ -746,10 +760,14 @@ class AutomationConfigTools:
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_validation_error(
-                f"Invalid config parameter: {e}",
-                parameter="config",
-                invalid_json=True,
+            raise_tool_error(create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_JSON,
+                message=f"Invalid config parameter: {e}",
+                suggestions=[
+                    "Pass 'config' as a dict, not a JSON string, to avoid escaping issues.",
+                    "Check for JSON syntax errors: unquoted keys, trailing commas, or invalid escape sequences.",
+                ],
+                context={"parameter": "config"},
             ))
 
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -777,11 +795,53 @@ class AutomationConfigTools:
 
         missing_fields = [f for f in required_fields if f not in config_dict]
         if missing_fields:
+            # If the caller supplied a 'sequence' key, the config looks like a
+            # script — point them at ha_config_set_script instead of the generic
+            # missing-fields error.
+            if "sequence" in config_dict and (
+                "trigger" in missing_fields or "action" in missing_fields
+            ):
+                context: dict[str, Any] = {"missing_fields": missing_fields}
+                if identifier:
+                    context["identifier"] = identifier
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    message=f"Missing required fields: {', '.join(missing_fields)}",
+                    details=(
+                        "Config contains 'sequence', which belongs to scripts. "
+                        "Automations use 'trigger' and 'action'; scripts use 'sequence'."
+                    ),
+                    suggestions=[
+                        "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
+                        "For an automation, replace 'sequence' with 'action' and add a 'trigger'.",
+                    ],
+                    context=context,
+                ))
             raise_tool_error(create_config_error(
                 f"Missing required fields: {', '.join(missing_fields)}",
                 identifier=identifier,
                 missing_fields=missing_fields,
             ))
+
+        # HA accepts conditions with 'platform' (trigger syntax) but then crashes
+        # with an unhelpful 500 rather than a 400 validation error.
+        for idx, cond in enumerate(coerce_to_list(config_dict.get("condition"))):
+            if not isinstance(cond, dict):
+                continue
+            if "platform" in cond and "condition" not in cond:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        f"Condition at index {idx} uses 'platform' (trigger syntax). "
+                        "Conditions use 'condition', not 'platform'."
+                    ),
+                    suggestions=[
+                        f"Replace 'platform' with 'condition': "
+                        f"{{'condition': '{cond['platform']}', ...}}",
+                        "Triggers use 'platform'; conditions use 'condition'.",
+                    ],
+                    context={"condition_index": idx, "found_key": "platform"},
+                ))
 
         # Prevent duplicate creation when config contains an existing automation id
         if identifier is None and "id" in config_dict:

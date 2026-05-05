@@ -167,7 +167,9 @@ class TraceTools:
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
-                self._client.base_url, self._client.token
+                self._client.base_url,
+                self._client.token,
+                verify_ssl=self._client.verify_ssl,
             )
             if error or ws_client is None:
                 raise_tool_error(error or create_error_response(

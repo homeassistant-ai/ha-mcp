@@ -17,13 +17,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
+import re
 import sys
-import traceback
 from pathlib import Path
 
 import openai
 from fastmcp import Client as MCPClient
 from mcp.types import Tool as MCPTool
+
+# Allow `python tests/uat/openai_agent.py` (subprocess path from run_uat.py)
+# to resolve the `uat` namespace package.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from uat._logging import configure_cli_logging
 
 DEFAULT_API_KEY = "no-key"
 DEFAULT_TIMEOUT = 120
@@ -31,8 +37,17 @@ DEFAULT_MAX_TOKENS = 8192
 MAX_TOOL_LOOP_ITERATIONS = 20
 
 
-def log(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+_PYDANTIC_URL_LINE = re.compile(
+    r"\s*For further information visit https://errors\.pydantic\.dev/\S+"
+)
+
+
+def _strip_pydantic_url(text: str) -> str:
+    """Drop Pydantic's documentation URL footer from a stringified exception."""
+    return _PYDANTIC_URL_LINE.sub("", text)
+
+
+logger = logging.getLogger("uat.openai_agent")
 
 
 def mcp_tool_to_openai(tool: MCPTool) -> dict:
@@ -54,7 +69,7 @@ async def detect_model(client: openai.AsyncOpenAI) -> str:
     if not models.data:
         raise RuntimeError("No models available at the API endpoint")
     model_id = models.data[0].id
-    log(f"Auto-detected model: {model_id}")
+    logger.info(f"Auto-detected model: {model_id}")
     return model_id
 
 
@@ -201,7 +216,7 @@ async def tool_call_loop(
                     f"  [tool] {tool_name}: malformed arguments: "
                     f"{tc.function.arguments!r}"
                 )
-                log(malformed_line)
+                logger.info(malformed_line)
                 if tool_trace_sink is not None:
                     tool_trace_sink.append(malformed_line.strip())
                 total_fail += 1
@@ -215,7 +230,7 @@ async def tool_call_loop(
                 continue
 
             call_line = f"  [tool] {tool_name}({tool_args})"
-            log(call_line)
+            logger.info(call_line)
             if tool_trace_sink is not None:
                 tool_trace_sink.append(call_line.strip())
 
@@ -224,12 +239,15 @@ async def tool_call_loop(
                 result_text = extract_tool_result_text(result)
                 total_success += 1
             except Exception as e:
-                result_text = f"Error: {str(e)}"
+                err_text = _strip_pydantic_url(str(e))
+                result_text = f"Error: {err_text}"
                 total_fail += 1
-                fail_line = f"  [tool] {tool_name} failed: {e}"
-                log(fail_line)
+                # Server-side WARNING log already shows the failure details;
+                # only record to the trace sink for test artifacts.
                 if tool_trace_sink is not None:
-                    tool_trace_sink.append(fail_line.strip())
+                    tool_trace_sink.append(
+                        f"[tool] {tool_name} failed: {err_text}"
+                    )
 
             messages.append(
                 {
@@ -265,7 +283,7 @@ async def run_agent(
     # Read MCP config — same format as Claude's --mcp-config
     config = json.loads(Path(args.mcp_config).read_text())  # noqa: ASYNC240
 
-    log("Starting MCP server...")
+    logger.info("Starting MCP server...")
 
     # fastmcp.Client accepts a config dict (same format as Claude's --mcp-config)
     async with MCPClient(config) as mcp_client:
@@ -314,7 +332,7 @@ async def run_scenario_inline(
     """
     if openai_tools is None:
         openai_tools = await fetch_openai_tools(mcp_client, max_tools=max_tools)
-        log(f"Loaded {len(openai_tools)} MCP tools")
+        logger.info(f"Loaded {len(openai_tools)} MCP tools")
 
     agent_prompt = ("/no_think\n\n" + prompt) if no_think else prompt
     messages = [{"role": "user", "content": agent_prompt}]
@@ -346,14 +364,14 @@ async def create_and_warm_openai_client(
     """
     client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
     resolved_model = model or await detect_model(client)
-    log(f"Using model: {resolved_model}")
-    log("Warming up model (may take a minute if not loaded)...")
+    logger.info(f"Using model: {resolved_model}")
+    logger.info("Warming up model (may take a minute if not loaded)...")
     await client.chat.completions.create(
         model=resolved_model,
         messages=[{"role": "user", "content": "hi"}],
         max_tokens=1,
     )
-    log("Model ready")
+    logger.info("Model ready")
     return client, resolved_model
 
 
@@ -366,31 +384,32 @@ async def _main_async(args: argparse.Namespace) -> None:
             model=args.model,
         )
     except openai.BadRequestError as e:
-        log(f"ERROR: Model warmup failed (BadRequestError): {e}")
+        logger.error(f"Model warmup failed (BadRequestError): {e}")
         sys.exit(1)
-    except Exception as e:
-        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
+    except Exception:
+        logger.exception("Model warmup failed")
         sys.exit(1)
 
-    log(f"MCP config: {args.mcp_config}")
+    logger.info(f"MCP config: {args.mcp_config}")
 
     try:
         try:
             result = await run_agent(client, model, args)
         finally:
             await client.close()
-    except Exception as e:
-        log(f"ERROR ({type(e).__name__}): {e}\n{traceback.format_exc()}")
+    except Exception:
+        logger.exception("Agent run failed")
         sys.exit(1)
 
     json.dump(result, sys.stdout, indent=2)
     print()
     if result.get("hit_iteration_limit"):
-        log("ERROR: hit max tool-call iterations without a final response")
+        logger.error("hit max tool-call iterations without a final response")
         sys.exit(1)
 
 
 def main() -> None:
+    configure_cli_logging()
     args = parse_args()
     asyncio.run(_main_async(args))
 

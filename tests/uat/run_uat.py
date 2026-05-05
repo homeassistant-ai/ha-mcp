@@ -10,17 +10,20 @@ Full results are written to a temp file. Stdout gets a concise summary with
 the file path — the calling agent only reads the full file when needed.
 
 Usage:
-    echo '{"test_prompt":"Search for light entities."}' | python tests/uat/run_uat.py --agents gemini
-    python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
-    python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+    echo '{"test_prompt":"Search for light entities."}' | uv run python tests/uat/run_uat.py --agents gemini
+    uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
+    uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +31,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 import requests
 from testcontainers.core.container import DockerContainer
@@ -39,6 +43,7 @@ REPO_ROOT = TESTS_DIR.parent
 
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
+from uat._logging import configure_cli_logging  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
@@ -47,11 +52,20 @@ DEFAULT_TIMEOUT = 300
 DEFAULT_AGENTS = "claude,gemini"
 
 
-# ---------------------------------------------------------------------------
-# Logging (stderr only - stdout is reserved for JSON output)
-# ---------------------------------------------------------------------------
-def log(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+logger = logging.getLogger("uat.run_uat")
+
+
+class SuggestingArgumentParser(argparse.ArgumentParser):
+    """argparse parser that suggests close matches for unknown flags."""
+
+    def error(self, message: str) -> NoReturn:
+        match = re.search(r"unrecognized arguments?: (--\S+)", message)
+        if match:
+            known = [opt for opt in self._option_string_actions if opt.startswith("--")]
+            suggestions = difflib.get_close_matches(match.group(1), known, n=1, cutoff=0.6)
+            if suggestions:
+                message = f"{message} (did you mean {suggestions[0]}?)"
+        super().error(message)
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +117,8 @@ class HAContainer:
         try:
             port = self.container.get_exposed_port(8123)
             self.url = f"http://localhost:{port}"
-            log(f"HA container started on {self.url}")
-            wait_for_ha_ready(self.url, self.token, log=log)
+            logger.info(f"HA container started on {self.url}")
+            wait_for_ha_ready(self.url, self.token)
         except Exception:
             self.__exit__(None, None, None)
             raise
@@ -112,7 +126,7 @@ class HAContainer:
 
     def __exit__(self, *exc: object) -> None:
         if self.container:
-            log("Stopping HA container...")
+            logger.info("Stopping HA container...")
             self.container.stop()
         if self.config_dir and self.config_dir.exists():
             shutil.rmtree(self.config_dir, ignore_errors=True)
@@ -174,7 +188,12 @@ def preflight_check_base_url(base_url: str, timeout: float = 5.0) -> str | None:
 def _build_mcp_env(
     ha_url: str, ha_token: str, extra_env: dict[str, str] | None
 ) -> dict[str, str]:
-    env = {"HOMEASSISTANT_URL": ha_url, "HOMEASSISTANT_TOKEN": ha_token}
+    # Override with --mcp-env LOG_LEVEL=INFO when debugging the server.
+    env = {
+        "HOMEASSISTANT_URL": ha_url,
+        "HOMEASSISTANT_TOKEN": ha_token,
+        "LOG_LEVEL": "WARNING",
+    }
     if extra_env:
         env.update(extra_env)
     return env
@@ -482,7 +501,7 @@ async def run_agent_scenario(
                 continue
 
             phase_key = phase.replace("_prompt", "")
-            log(f"  [{agent_name}] Running {phase_key}...")
+            logger.info(f"  [{agent_name}] Running {phase_key}...")
 
             if agent_name == "claude":
                 assert stdio_config_path is not None
@@ -517,7 +536,7 @@ async def run_agent_scenario(
                 }
 
             results[phase_key] = result
-            log(
+            logger.info(
                 f"  [{agent_name}] {phase_key} completed (exit={result['exit_code']}, {result['duration_ms']}ms)"
             )
             # Forward agent stderr on failure so the error is visible to the user
@@ -525,9 +544,9 @@ async def run_agent_scenario(
                 _BOX_CHARS = frozenset("│╭╰╮─▄█▀ \t")
                 for line in result["stderr"].splitlines():
                     if "error" in line.lower():
-                        log(f"  [{agent_name}] !! {line.strip()}")
+                        logger.info(f"  [{agent_name}] !! {line.strip()}")
                     elif not all(c in _BOX_CHARS for c in line):
-                        log(f"  [{agent_name}] stderr: {line}")
+                        logger.info(f"  [{agent_name}] stderr: {line}")
     finally:
         # Cleanup temp files
         if stdio_config_path and stdio_config_path.exists():
@@ -661,6 +680,13 @@ async def run(args: argparse.Namespace) -> dict:
     if args.scenario_file:
         scenario = json.loads(Path(args.scenario_file).read_text())  # noqa: ASYNC240
     else:
+        if sys.stdin.isatty():
+            raise ValueError(
+                "No scenario provided. Pipe scenario JSON via stdin, or pass --scenario-file.\n"
+                "  echo '{\"test_prompt\":\"...\"}' | uv run python tests/uat/run_uat.py --agents gemini\n"
+                "  uv run python tests/uat/run_uat.py --scenario-file scenario.json --agents gemini\n"
+                "For the pre-built story catalog, use tests/uat/stories/run_story.py --all."
+            )
         scenario = json.loads(sys.stdin.read())
 
     if "test_prompt" not in scenario:
@@ -673,7 +699,7 @@ async def run(args: argparse.Namespace) -> dict:
         available = check_agent_available(name)
         agents[name] = available
         if not available:
-            log(f"WARNING: {name} CLI not found, skipping")
+            logger.warning(f"{name} CLI not found, skipping")
 
     active_agents = [name for name, avail in agents.items() if avail]
     if not active_agents:
@@ -709,14 +735,14 @@ async def run(args: argparse.Namespace) -> dict:
         ha_token = container.token
 
     try:
-        log(f"HA: {ha_url}")
-        log(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
-        log(f"Agents: {', '.join(active_agents)}")
+        logger.info(f"HA: {ha_url}")
+        logger.info(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
+        logger.info(f"Agents: {', '.join(active_agents)}")
 
         extra_env = parse_mcp_env(
             getattr(args, "mcp_env", None),
             base_url=getattr(args, "base_url", None),
-            on_default_applied=log,
+            on_default_applied=logger.info,
         )
 
         # Run agents sequentially to avoid resource contention
@@ -756,15 +782,17 @@ async def run(args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    configure_cli_logging()
+
+    parser = SuggestingArgumentParser(
         description="BAT Runner - Execute MCP test scenarios on AI agent CLIs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  echo '{"test_prompt":"Search for light entities."}' | python tests/uat/run_uat.py --agents gemini
-  python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
-  python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
-  python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
+  echo '{"test_prompt":"Search for light entities."}' | uv run python tests/uat/run_uat.py --agents gemini
+  uv run python tests/uat/run_uat.py --scenario-file /tmp/scenario.json --agents claude,gemini
+  uv run python tests/uat/run_uat.py --ha-url http://localhost:8123 --ha-token TOKEN --agents gemini
+  uv run python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
         """,
     )
     parser.add_argument(
@@ -835,7 +863,7 @@ Examples:
     try:
         full_results = asyncio.run(run(args))
     except ValueError as e:
-        log(f"ERROR: {e}")
+        logger.error(str(e))
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(130)
