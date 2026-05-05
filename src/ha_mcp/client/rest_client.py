@@ -5,11 +5,13 @@ Home Assistant HTTP client with authentication and error handling.
 import asyncio
 import json
 import logging
+import os
 import ssl
 from typing import Any
 
 import httpx
 
+from .._version import is_running_in_addon
 from ..config import get_global_settings
 
 
@@ -434,26 +436,84 @@ class HomeAssistantClient:
         return response if isinstance(response, str) else str(response)
 
     async def get_addon_logs(self, slug: str) -> str:
-        """Fetch an add-on's container logs via HA Core's Supervisor REST proxy.
+        """Fetch an add-on's container logs.
 
-        Uses `/api/hassio/addons/{slug}/logs`, which HA Core proxies to
-        Supervisor and returns as `text/plain`. This avoids the
-        `supervisor/api` websocket path that tries to JSON-decode the text
-        body and always fails (see #950).
+        On add-on installs (``SUPERVISOR_TOKEN`` env present), goes directly to
+        the Supervisor REST API at ``http://supervisor/addons/{slug}/logs``
+        with the Supervisor token. The HA Core proxy at
+        ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
+        on current HA Core releases (see #1116) — the direct path bypasses
+        HA Core entirely and is the documented Supervisor contract.
+
+        On non-addon installs (Docker, pyinstaller, pip pointing at a normal
+        HA URL), falls back to the HA Core proxy path. That path requires an
+        admin LLA but works fine when not invoked from the add-on container.
+
+        Both branches return ``text/plain`` log content.
 
         Raises:
-            HomeAssistantAuthError: 401 from HA Core.
+            HomeAssistantAuthError: 401 response.
             HomeAssistantAPIError: Non-2xx response (e.g. 404 unknown slug,
-                400 addon not installed). `status_code` is set so callers
+                400 addon not installed). ``status_code`` is set so callers
                 can map to specific suggestions.
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
-        logger.debug(f"Fetching addon logs for slug={slug}")
+        if is_running_in_addon():
+            return await self._get_addon_logs_via_supervisor(slug)
+
+        logger.debug(f"Fetching addon logs for slug={slug} via HA Core proxy")
         response = await self._raw_request(
             "GET",
             f"/hassio/addons/{slug}/logs",
             headers={"Accept": "text/plain"},
         )
+        return response.text
+
+    async def _get_addon_logs_via_supervisor(self, slug: str) -> str:
+        """Direct Supervisor REST API fetch for add-on installs.
+
+        Mirrors the access pattern used by ``tools_bug_report._fetch_addon_logs``:
+        a fresh ``httpx.AsyncClient`` against ``http://supervisor`` authed with
+        the Supervisor token. Bypasses ``HomeAssistantClient.httpx_client``
+        because the Supervisor endpoint takes a different base URL and a
+        different token than the HA Core REST API.
+        """
+        token = os.environ.get("SUPERVISOR_TOKEN", "")
+        url = f"http://supervisor/addons/{slug}/logs"
+        logger.debug(f"Fetching addon logs for slug={slug} via Supervisor direct")
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout)
+            ) as client:
+                response = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "text/plain",
+                    },
+                )
+        except httpx.TimeoutException as e:
+            raise HomeAssistantConnectionError(
+                f"Request timeout fetching addon logs: {e}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise HomeAssistantConnectionError(
+                f"HTTP error fetching addon logs: {e}"
+            ) from e
+
+        if response.status_code == 401:
+            raise HomeAssistantAuthError(
+                "Invalid Supervisor token for /addons/<slug>/logs"
+            )
+        if response.status_code >= 400:
+            text_body = response.text
+            message = text_body.strip() or response.reason_phrase or "<empty body>"
+            raise HomeAssistantAPIError(
+                f"API error: {response.status_code} - {message}",
+                status_code=response.status_code,
+                response_data={"message": text_body},
+            )
         return response.text
 
     async def test_connection(self) -> tuple[bool, str | None]:

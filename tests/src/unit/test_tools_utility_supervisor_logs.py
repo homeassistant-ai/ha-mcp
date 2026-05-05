@@ -43,6 +43,32 @@ def mock_client():
         return client
 
 
+@pytest.fixture
+def non_addon_install():
+    """Force `is_running_in_addon()` False so `get_addon_logs` takes the
+    HA-Core-proxy fallback path. Required for tests that mock
+    `httpx_client.request` — the Supervisor-direct branch uses a fresh
+    `httpx.AsyncClient` and would bypass that mock entirely.
+    """
+    with patch(
+        "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
+    ):
+        yield
+
+
+@pytest.fixture
+def addon_install():
+    """Force `is_running_in_addon()` True and stub `SUPERVISOR_TOKEN` so
+    `get_addon_logs` takes the direct Supervisor REST API path."""
+    with (
+        patch(
+            "ha_mcp.client.rest_client.is_running_in_addon", return_value=True
+        ),
+        patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-test"}),
+    ):
+        yield
+
+
 def _register_and_collect(client: Any) -> dict[str, Any]:
     """Register utility tools on a collector mcp and return the registered tools.
 
@@ -69,7 +95,19 @@ def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, An
 
 
 class TestGetAddonLogs:
-    """Tests for the REST-client `get_addon_logs` method (the core fix)."""
+    """Tests for the REST-client `get_addon_logs` method on non-addon installs.
+
+    These exercise the HA-Core-proxy fallback branch (`/hassio/addons/{slug}/logs`)
+    via `httpx_client.request`. The `non_addon_install` fixture forces
+    `is_running_in_addon()` False so `get_addon_logs` doesn't take the
+    Supervisor-direct branch — that path opens a fresh `httpx.AsyncClient`
+    and would bypass the `mock_client.httpx_client` mock entirely.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_non_addon(self, non_addon_install):
+        """Apply `non_addon_install` to every test in this class."""
+        yield
 
     @pytest.mark.asyncio
     async def test_returns_text_on_200(self, mock_client):
@@ -165,6 +203,202 @@ class TestGetAddonLogs:
 
         assert "plain log line 1" in result
         mock_response.json.assert_not_called()
+
+
+class TestGetAddonLogsViaSupervisor:
+    """Tests for the Supervisor-direct branch of `get_addon_logs`.
+
+    Regression coverage for #1116: on add-on installs, the HA-Core-proxy path
+    `/api/hassio/addons/{slug}/logs` returns 403 for every slug because HA Core
+    rejects the Supervisor-token+route combination. The fix routes around HA
+    Core entirely on add-on installs by hitting the documented Supervisor REST
+    API at `http://supervisor/addons/{slug}/logs` with the Supervisor token.
+    """
+
+    @pytest.fixture
+    def mock_async_client_class(self):
+        """Patch `httpx.AsyncClient` (the class) inside `rest_client` so the
+        ``async with httpx.AsyncClient(...) as client:`` block returns a
+        controllable mock client. Yields the inner client mock so each test
+        can configure ``.get`` directly.
+        """
+        inner_client = MagicMock()
+        inner_client.get = AsyncMock()
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        client_class = MagicMock(return_value=cm)
+        with patch(
+            "ha_mcp.client.rest_client.httpx.AsyncClient", client_class
+        ):
+            yield inner_client, client_class
+
+    @pytest.mark.asyncio
+    async def test_uses_direct_supervisor_url_and_supervisor_token(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """The fix's primary contract: on add-on installs, the request must go
+        to `http://supervisor/addons/{slug}/logs` with `Authorization: Bearer
+        ${SUPERVISOR_TOKEN}` — NOT through HA Core's `/api/hassio/...` proxy
+        with the user's HA token.
+        """
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "addon log line 1\nready\n"
+        inner_client.get.return_value = mock_response
+
+        result = await mock_client.get_addon_logs("81f33d0f_ha_mcp")
+
+        assert "addon log line 1" in result
+        inner_client.get.assert_awaited_once()
+        args, kwargs = inner_client.get.call_args
+        assert args[0] == "http://supervisor/addons/81f33d0f_ha_mcp/logs"
+        assert (
+            kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
+        )
+        assert kwargs["headers"]["Accept"] == "text/plain"
+        # Critically: the HA-Core-proxy path must NOT have been touched.
+        mock_client.httpx_client.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_auth_error_on_401(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """401 from Supervisor (bad/expired token) maps to HomeAssistantAuthError
+        the same way the HA-Core-proxy path does — so error mapping in the
+        wrapper layer stays uniform regardless of which branch ran.
+        """
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "unauthorized"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAuthError):
+            await mock_client.get_addon_logs("core_mosquitto")
+
+    @pytest.mark.asyncio
+    async def test_raises_api_error_on_404(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """404 (unknown slug) propagates as HomeAssistantAPIError with the
+        Supervisor's plain-text body in the message — preserves the same
+        error shape callers expect from the HA-Core-proxy branch."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "Addon is not installed"
+        mock_response.reason_phrase = "Not Found"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_logs("nonexistent_slug")
+
+        assert exc_info.value.status_code == 404
+        assert "Addon is not installed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_empty_body_falls_back_to_reason_phrase(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """If Supervisor returns a non-2xx with empty body, the error tail
+        falls back to the HTTP reason phrase rather than landing as
+        ``"API error: 5xx - "`` with a blank tail."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 502
+        mock_response.text = ""
+        mock_response.reason_phrase = "Bad Gateway"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert exc_info.value.status_code == 502
+        assert "Bad Gateway" in str(exc_info.value)
+        assert not str(exc_info.value).endswith(" - ")
+
+    @pytest.mark.asyncio
+    async def test_raises_connection_error_on_timeout(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, _ = mock_async_client_class
+        inner_client.get.side_effect = httpx.TimeoutException("supervisor timeout")
+
+        with pytest.raises(HomeAssistantConnectionError):
+            await mock_client.get_addon_logs("core_mosquitto")
+
+    @pytest.mark.asyncio
+    async def test_raises_connection_error_on_network_failure(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, _ = mock_async_client_class
+        inner_client.get.side_effect = httpx.ConnectError("supervisor unreachable")
+
+        with pytest.raises(HomeAssistantConnectionError):
+            await mock_client.get_addon_logs("core_mosquitto")
+
+
+class TestGetAddonLogsBranchSelection:
+    """The branch decision is made via `is_running_in_addon()`. Pin both
+    directions so a future refactor of the gate (e.g. inlining the env-var
+    check) doesn't silently regress one branch.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_addon_install_uses_ha_core_proxy(self, mock_client):
+        """`is_running_in_addon()` False → HA-Core-proxy path, no Supervisor URL."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "via proxy\n"
+        mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
+        ):
+            result = await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "via proxy" in result
+        mock_client.httpx_client.request.assert_called_once()
+        args, _ = mock_client.httpx_client.request.call_args
+        assert args[1] == "/hassio/addons/core_mosquitto/logs"
+
+    @pytest.mark.asyncio
+    async def test_addon_install_uses_supervisor_direct(self, mock_client):
+        """`is_running_in_addon()` True → Supervisor-direct path, no HA-Core call."""
+        inner_client = MagicMock()
+        inner_client.get = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "via supervisor\n"
+        inner_client.get.return_value = mock_response
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "ha_mcp.client.rest_client.is_running_in_addon",
+                return_value=True,
+            ),
+            patch.dict(
+                "os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-branch"}
+            ),
+            patch(
+                "ha_mcp.client.rest_client.httpx.AsyncClient",
+                return_value=cm,
+            ),
+        ):
+            result = await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "via supervisor" in result
+        # HA-Core-proxy must NOT have been called.
+        mock_client.httpx_client.request.assert_not_called()
+        inner_client.get.assert_awaited_once()
 
 
 class TestRawRequestEmptyBodyFallback:
