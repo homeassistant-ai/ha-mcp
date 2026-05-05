@@ -40,7 +40,7 @@ If a non-obvious choice has significant consequences, create two mutually exclus
 ## Phase 3: Create PR
 
 ```bash
-git push -u origin feature/issue-$ARGUMENTS
+git push -u origin "feature/issue-$ARGUMENTS"
 PR_NUMBER=$(gh pr create --draft \
   --repo homeassistant-ai/ha-mcp \
   --title "<descriptive title>" \
@@ -67,16 +67,16 @@ Repeat until all checks green and no unresolved threads:
 
 **Check for issues:**
 ```bash
-gh pr checks $PR_NUMBER --repo homeassistant-ai/ha-mcp
-gh api repos/homeassistant-ai/ha-mcp/pulls/$PR_NUMBER/comments \
+gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp
+gh api repos/homeassistant-ai/ha-mcp/pulls/"$PR_NUMBER"/comments \
   --jq '.[] | {id, path, line, author: .user.login, body}'
-gh api graphql -f query="query { repository(owner:\"homeassistant-ai\", name:\"ha-mcp\") { pullRequest(number:$PR_NUMBER) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }"
+gh api graphql -F pr="$PR_NUMBER" -f query='query($pr: Int!) { repository(owner:"homeassistant-ai", name:"ha-mcp") { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { id isResolved comments(first:1) { nodes { databaseId body } } } } } } }'
 ```
 
 **Resolve each comment (both steps required):**
 ```bash
 # 1. Reply on the inline thread
-gh api repos/homeassistant-ai/ha-mcp/pulls/$PR_NUMBER/comments/<COMMENT_ID>/replies \
+gh api repos/homeassistant-ai/ha-mcp/pulls/"$PR_NUMBER"/comments/<COMMENT_ID>/replies \
   -f body="✅ Fixed in [commit]. [explanation]"
 # or: -f body="📝 Not addressing because [reason]."
 
@@ -95,7 +95,7 @@ gh pr checks "$PR_NUMBER" --repo homeassistant-ai/ha-mcp --watch
 Once all checks pass and all threads resolved:
 
 ```bash
-gh pr comment $PR_NUMBER --repo homeassistant-ai/ha-mcp --body "## Implementation Summary
+gh pr comment "$PR_NUMBER" --repo homeassistant-ai/ha-mcp --body "## Implementation Summary
 
 **Choices Made:**
 - [key technical decisions with rationale]

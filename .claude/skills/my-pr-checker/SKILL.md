@@ -115,6 +115,7 @@ gh pr comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "## PR Assessme
 
 When needed:
 - **Rebase**: `gh pr checkout "$ARGUMENTS" && git rebase master && git push --force-with-lease`
+- **Re-create PR**: `gh pr close "$ARGUMENTS" --repo homeassistant-ai/ha-mcp` then `gh pr create --draft …` with the same branch
 - **Delete comment**: `gh api -X DELETE repos/homeassistant-ai/ha-mcp/issues/comments/<id>`
 - **Update title**: `gh pr edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --title "new title"`
 
