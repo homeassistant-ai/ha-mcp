@@ -22,10 +22,14 @@ configuration:
     name: Enable tool search
     description: >-
       Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~5K tokens. Use this if using an LLM without
-      deferred tools or with smaller context windows. Tools are found via
-      ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.
+      idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you
+      use Claude in Sonnet or Opus modes — those models have their own
+      built-in tool search / deferred tools, which conflicts with ours
+      and breaks tool discovery (see issue #1088). Use this only with
+      LLMs that lack native deferred tools (e.g. Claude Haiku, local
+      OpenAI-compatible models) or with smaller context windows. Tools
+      are found via ha_search_tools and executed via categorized proxies
+      (read/write/delete). Requires restart to take effect.
   enable_yaml_config_editing:
     name: Enable YAML config editing (beta)
     description: >-
