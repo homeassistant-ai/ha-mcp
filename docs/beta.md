@@ -55,7 +55,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **Recommended prerequisites:**
 - Comfort with editing `configuration.yaml` via SSH or File Editor when things go wrong
-- Understanding that dedicated tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_set_script`, `ha_config_set_scene`, etc.) should be preferred for anything they support
+- Understanding that dedicated tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_set_script`, etc.) should be preferred for anything they support
 
 ### `ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`
 
@@ -85,13 +85,25 @@ This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as
 
 **Safer-path enforcement on REST and WebSocket.** Several endpoints have wrapping MCP tools that perform validation, lint, hash-locking, or invariant checks; raw `api_post` / `ws_send` would skip those. The sandbox blocks a small denylist on each surface:
 
-- `api_post`: writes to `/api/states/<entity_id>` (which can conjure ghost entities), `/api/events/<HA-internal-event-name>` (Core internal events that can fan out into user automations), and `/api/config/{automation,script,scene}/config/*` (forced through `ha_config_set_automation` / `ha_config_set_script` / `ha_config_set_scene`).
+- `api_post`: writes to `/api/states/<entity_id>` (which can conjure ghost entities), `/api/events/<HA-internal-event-name>` (Core internal events that can fan out into user automations), and `/api/config/{automation,script}/config/*` (forced through `ha_config_set_automation` / `ha_config_set_script`). `config/scene/config/*` is intentionally not blocked because no `ha_config_set_scene` wrapping tool exists yet — the block would just remove capability with no validated alternative path.
 - `ws_send`: `config/core/update` (rewrites HA's location/timezone/currency in `.storage/core.config`), `lovelace/config/save` and `lovelace/dashboards/{create,delete,update}` (forced through `ha_config_set_dashboard`), and `config/{area,device,entity}_registry/{delete,disable,update}` (forced through `ha_config_set_area` / `ha_update_device` / `ha_set_entity` etc.).
 - Service calls (`POST /api/services/<domain>/<service>`), webhook firing (`POST /api/webhook/<id>`), custom event types (`POST /api/events/my_event_name`), and registry **read** queries (e.g. `config/area_registry/list`) all stay allowed.
 
 **Sandbox failures are classified.** When sandboxed code raises, the error response now uses one of three codes — `SANDBOX_LIMIT_EXCEEDED` (memory / time / recursion / invocation cap), `SANDBOX_SYNTAX_UNSUPPORTED` (imports, classes, `with`, `match`, hard syntax errors) or `SANDBOX_RUNTIME_ERROR` (everything else) — with suggestions tailored to the category. Previously every Monty failure surfaced as `INTERNAL_ERROR` with "check the Python code for syntax errors" advice, which actively misled callers when the real cause was a memory cap or a missing module import.
 
-**Sandbox actions are auditable.** Every state-changing sandbox call (`POST /api/...`, every `ws_send`) logs a structured `sandbox.api_post`/`sandbox.ws_send` line at DEBUG level. Blocked attempts log at INFO level. To get a forensic trail, set `logger ha_mcp.tools.tools_code: debug` (or equivalent) in your add-on configuration.
+**Sandbox actions are auditable.** Every state-changing sandbox call (`POST /api/...`, every `ws_send`) logs a structured `sandbox.api_post` / `sandbox.ws_send` line at DEBUG level. Blocked attempts (e.g. a refused `POST /api/states/...` or a refused `config/core/update`) log a `sandbox.api_post.blocked` / `sandbox.ws_send.blocked` line at INFO level so they're visible in default operator logs.
+
+To get a full forensic trail of allowed calls, escalate the `ha_mcp.tools.tools_code` logger to DEBUG. This is HA's [`logger:` integration](https://www.home-assistant.io/integrations/logger/) and goes in **`configuration.yaml`** (not the add-on options):
+
+```yaml
+# configuration.yaml
+logger:
+  default: warning
+  logs:
+    ha_mcp.tools.tools_code: debug
+```
+
+Reload the `Logger` integration (or restart HA) to apply.
 
 **ARM platforms require the async sandbox path.** On systems where `Monty.run_async` is unavailable, the tool fails fast with a clear error rather than falling back silently.
 

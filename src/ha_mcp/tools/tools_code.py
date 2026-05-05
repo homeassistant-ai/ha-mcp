@@ -52,11 +52,21 @@ _BLOCKED_TOOLS = frozenset({"ha_manage_custom_tool"})
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
-# Path-prefix denylist for ``_api_post``. These endpoints either have no
-# legitimate sandbox use case or have a wrapping MCP tool that performs
-# validation/lint/hash-locking that raw ``api_post`` would skip. The
-# prefixes are matched after ``_normalize_endpoint`` strips the leading
-# ``api/`` so they are written as plain HA-relative paths.
+# Path-prefix denylist for ``_api_post``. Two flavours of entry, kept in
+# one list because the matching logic is identical:
+#   1. Endpoints with no legitimate sandbox use case at all — currently
+#      just ``states/`` (raw state writes can conjure ghost entities and
+#      override real ones in the in-memory state machine).
+#   2. Endpoints whose corresponding wrapping MCP tool performs
+#      validation / lint / hash-locking that raw ``api_post`` would skip
+#      — currently ``config/{automation,script}/config/``.
+# Scene config writes (``config/scene/config/*``) are intentionally NOT
+# in this list: there is no ``ha_config_set_scene`` tool to redirect to,
+# and blocking the path without offering a substitute would just remove
+# capability with no validated alternative. Add the block back when a
+# wrapping tool lands.
+# The prefixes are matched after ``_normalize_endpoint`` strips the
+# leading ``api/`` so they are written as plain HA-relative paths.
 _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
     (
         "states/",
@@ -74,11 +84,6 @@ _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
         "config/script/config/",
         "Direct writes to /api/config/script/config/*",
         "use call_tool('ha_config_set_script', ...)",
-    ),
-    (
-        "config/scene/config/",
-        "Direct writes to /api/config/scene/config/*",
-        "use call_tool('ha_config_set_scene', ...)",
     ),
 )
 
@@ -266,23 +271,46 @@ def _check_api_post_blocked(normalized: str) -> str | None:
             )
     return None
 
-# Cap on the number of saved tools to prevent runaway growth (a buggy LLM
-# loop could otherwise fill disk with unique save_as names).
+# Cap on the number of saved tools to prevent runaway growth. A buggy
+# LLM loop could otherwise fill the on-disk file with unique save_as
+# names. Enforced both at load (truncate-with-warning) and at save
+# (reject the call before mutating the in-memory cache).
 _MAX_SAVED_TOOLS = 256
 
-# Schema version for the on-disk saved-tools file. Bump when the shape
-# changes so _load_saved_tools can migrate or refuse old files cleanly.
+# Schema version for the on-disk saved-tools file. Bumped when the shape
+# changes so _load_saved_tools can refuse old/new files cleanly. The
+# load path checks data["version"] explicitly and refuses anything that
+# isn't this number rather than silently re-interpreting it as v1.
 _SAVED_TOOLS_SCHEMA_VERSION = 1
+
+# Module-level flag set when _load_saved_tools fails for a reason other
+# than "the file doesn't exist yet" (e.g. PermissionError reading an
+# existing file). Persistence is suppressed while this is set so we
+# don't atomically replace a temporarily-unreadable file with empty
+# content and destroy whatever was on disk. Cleared by a successful
+# load at register_code_tools time. The variable is module-level
+# (not closure-captured) so save sites in ha_manage_custom_tool /
+# _delete_saved_tool can read it without parameter plumbing.
+_saved_tools_load_failed = False
 
 
 def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     """Load saved tools from a JSON file, filtering malformed entries.
 
-    Returns an empty dict if the path is unset, the file doesn't exist
-    yet, or the contents are unreadable / unparseable. A corrupt file is
-    logged at WARNING but does not raise — the user can still save new
-    tools and the bad file will be overwritten on the next persist.
+    Returns an empty dict if the path is unset or the file doesn't exist
+    yet (legitimate "starting empty" cases). A corrupt JSON body or an
+    unexpected schema version is logged at WARNING and returns empty —
+    the file will be overwritten on the next persist.
+
+    A genuine I/O error reading an existing file (OSError that isn't
+    FileNotFoundError) is logged at ERROR and ALSO sets the module-level
+    ``_saved_tools_load_failed`` flag so callers know not to overwrite
+    whatever is on disk while the load condition persists. This prevents
+    a PermissionError at startup from cascading into "next save wipes
+    out the unreadable file" data loss.
     """
+    global _saved_tools_load_failed
+    _saved_tools_load_failed = False
     if not path_str:
         return {}
     path = Path(path_str)
@@ -291,10 +319,31 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
         return {}
     try:
         raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Race: file disappeared between exists() and read_text().
+        # Treat as legitimate "not yet" rather than an I/O failure.
+        return {}
+    except OSError as exc:
+        # PermissionError / IsADirectoryError / etc. The file exists but
+        # we can't read it. Block subsequent persistence so we don't
+        # overwrite the unreadable original with empty content.
+        logger.error(
+            "Cannot read saved-tools file %s (%s); persistence will be "
+            "suppressed until the load condition clears. Saves and "
+            "deletes will still update the in-memory cache for the "
+            "current session.",
+            path,
+            exc,
+            exc_info=True,
+        )
+        _saved_tools_load_failed = True
+        return {}
+    try:
         data = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
+    except json.JSONDecodeError as exc:
         logger.warning(
-            "Failed to load saved tools from %s (%s); starting empty",
+            "Saved-tools file %s is not valid JSON (%s); starting empty. "
+            "The corrupt file will be overwritten on the next persist.",
             path,
             exc,
         )
@@ -306,6 +355,25 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
             path,
             type(data).__name__,
         )
+        return {}
+
+    file_version = data.get("version")
+    if file_version != _SAVED_TOOLS_SCHEMA_VERSION:
+        # Refuse to interpret the file. We don't know whether this is a
+        # newer file produced by a future ha-mcp version (which might
+        # have shape changes we'd silently mangle) or an older file we
+        # don't have a migration for. Setting the failed flag means the
+        # current session won't overwrite it on next save.
+        logger.error(
+            "Saved-tools file %s has schema version %r; this build expects %d. "
+            "Refusing to load. Persistence is suppressed for this session "
+            "to avoid overwriting an unfamiliar file. Move or delete the "
+            "file to recover.",
+            path,
+            file_version,
+            _SAVED_TOOLS_SCHEMA_VERSION,
+        )
+        _saved_tools_load_failed = True
         return {}
 
     tools_raw = data.get("saved_tools", {})
@@ -353,17 +421,32 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     return valid
 
 
-def _save_saved_tools(path_str: str, tools: dict[str, dict[str, str]]) -> None:
+def _save_saved_tools(
+    path_str: str, tools: dict[str, dict[str, str]]
+) -> bool:
     """Persist the saved-tools cache to a JSON file atomically.
 
-    Writes to ``path.tmp`` first and uses ``os.replace`` to swap it in,
-    so a crash mid-write cannot corrupt the existing file. Failures are
-    logged at WARNING — a write failure does not raise into the sandbox
-    or the MCP client because the in-memory cache still holds the new
-    entry; persistence is best-effort.
+    Returns ``True`` if persistence succeeded (or was disabled because
+    ``path_str`` is empty — that's the configured-out case, not a
+    failure). Returns ``False`` only when persistence was attempted and
+    the underlying I/O raised. Callers that promised the user durability
+    should surface a ``False`` return as a warning in the response.
+
+    Writes to ``<dir>/.<name>.<rand>.tmp`` first and uses ``os.replace``
+    to swap it in, so a crash mid-write cannot corrupt the existing
+    file. Refuses to write at all when ``_saved_tools_load_failed`` is
+    set — see _load_saved_tools for why we'd rather skip persistence
+    than overwrite an unreadable file with empty content.
     """
     if not path_str:
-        return
+        return True
+    if _saved_tools_load_failed:
+        logger.warning(
+            "Skipping persist to %s because the prior load failed; "
+            "saves and deletes are in-memory only for this session.",
+            path_str,
+        )
+        return False
     path = Path(path_str)
     payload = {
         "version": _SAVED_TOOLS_SCHEMA_VERSION,
@@ -387,11 +470,16 @@ def _save_saved_tools(path_str: str, tools: dict[str, dict[str, str]]) -> None:
             tmp_path = Path(tmp.name)
         tmp_path.replace(path)
     except OSError as exc:
-        logger.warning(
-            "Failed to persist saved tools to %s (%s); cache remains in memory",
+        logger.error(
+            "Failed to persist saved tools to %s (%s); the in-memory "
+            "cache holds the latest change but it will be lost on restart "
+            "unless this resolves before the next save",
             path,
             exc,
+            exc_info=True,
         )
+        return False
+    return True
 
 
 def _extract_tool_result(result: Any) -> Any:
@@ -560,10 +648,15 @@ async def _run_sandboxed_code(
         # State-changing call: DEBUG-level audit trail. Operators can
         # bump the ha_mcp.tools.tools_code logger to DEBUG to see what
         # the sandbox is actually doing on their HA instance.
+        # ``map(str, ...)`` on the keys because Monty allows mixed-type
+        # dict keys (e.g. ``{1: "x", "a": "y"}``); a plain ``sorted``
+        # would raise TypeError on the first invocation and the user
+        # would see a confusing "api_post failed" with no hint that
+        # the audit-log step was the real culprit.
         logger.debug(
             "sandbox.api_post endpoint=%r data_keys=%s",
             endpoint,
-            sorted(data.keys()) if isinstance(data, dict) else None,
+            sorted(map(str, data.keys())) if isinstance(data, dict) else None,
         )
         try:
             post_kwargs: dict[str, Any] = {}
@@ -670,9 +763,11 @@ async def _run_sandboxed_code(
         """Remove a previously saved custom tool by name.
 
         Sandbox helper. Returns ``{"deleted": True, "name": name}`` on
-        success, ``{"error": "..."}`` on validation failure or if the
-        named tool does not exist. Persists the change immediately when
-        the saved-tools file path is configured.
+        success, ``{"error": "..."}`` on validation failure, missing
+        name, or persistence failure. When persistence is configured
+        and the on-disk write fails, the in-memory deletion is rolled
+        back so the next save_as / list_saved doesn't show a different
+        view than the next process restart.
         """
         if not isinstance(name, str):
             return {"error": "delete_saved_tool(name) requires a string name"}
@@ -685,9 +780,24 @@ async def _run_sandboxed_code(
             }
         if name not in _saved_tools:
             return {"error": f"No saved tool named {name!r}"}
+        # Snapshot the entry before deleting so we can restore it on
+        # persist failure (otherwise the in-memory cache and disk would
+        # disagree, and the on-restart hydration would resurrect the
+        # entry the LLM already saw "deleted").
+        previous = _saved_tools[name]
         del _saved_tools[name]
+        if not _save_saved_tools(
+            settings.code_mode_saved_tools_path, _saved_tools
+        ):
+            _saved_tools[name] = previous
+            return {
+                "error": (
+                    f"Deleted {name!r} from in-memory cache but the "
+                    "persistence write failed; rolled back. Check "
+                    "operator logs for the underlying I/O error."
+                )
+            }
         logger.info("Deleted saved custom tool '%s'", name)
-        _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools)
         return {"deleted": True, "name": name}
 
     m = Monty(code, script_name="ha_manage_custom_tool.py")
@@ -1021,12 +1131,32 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ],
                     )
                 )
+            previous = _saved_tools.get(save_as)
             _saved_tools[save_as] = {
                 "code": code,
                 "justification": justification,
             }
             response["data"]["saved_as"] = save_as
             logger.info("Saved custom tool as '%s'", save_as)
-            _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools)
+            persisted = _save_saved_tools(
+                settings.code_mode_saved_tools_path, _saved_tools
+            )
+            if not persisted:
+                # Roll back the in-memory write so the cache matches
+                # what's on disk (or, on next restart, what's loaded).
+                # Surface a warning in the response so the LLM knows
+                # the save_as didn't actually durable, while still
+                # returning success=True for the code execution itself.
+                if previous is None:
+                    _saved_tools.pop(save_as, None)
+                else:
+                    _saved_tools[save_as] = previous
+                response["data"]["saved_as"] = None
+                response["data"]["save_warning"] = (
+                    f"save_as={save_as!r} was attempted but the persistence "
+                    "write failed; the entry was rolled back from the "
+                    "in-memory cache. Check operator logs for the "
+                    "underlying I/O error."
+                )
 
         return response
