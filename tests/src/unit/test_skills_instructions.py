@@ -16,8 +16,6 @@ def server():
         settings = mock_settings.return_value
         settings.mcp_server_name = "test"
         settings.mcp_server_version = "0.0.1"
-        settings.enable_skills = True
-        settings.enable_skills_as_tools = False
         settings.enabled_tool_modules = "all"
         settings.enable_dashboard_partial_tools = True
 
@@ -134,21 +132,15 @@ class TestBuildSkillBlock:
 class TestBuildSkillsInstructions:
     """Tests for _build_skills_instructions() assembly logic."""
 
-    def test_skills_disabled(self, server):
-        """Returns None when enable_skills is False."""
-        server.settings.enable_skills = False
-        result = server._build_skills_instructions()
-        assert result is None
-
     def test_skills_dir_missing(self, server):
         """Returns None when skills directory does not exist."""
-        server.settings.enable_skills = True
         with patch.object(server, "_get_skills_dir", return_value=None):
             result = server._build_skills_instructions()
         assert result is None
 
     def test_valid_skill_produces_instructions(self, server, tmp_path):
-        """Valid skill directory produces instruction text."""
+        """Valid skill directory produces instruction text with the
+        ha_*_resource fallback referenced in the access method."""
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
@@ -158,8 +150,6 @@ class TestBuildSkillsInstructions:
             "---\n# Body\n"
         )
 
-        server.settings.enable_skills = True
-        server.settings.enable_skills_as_tools = False
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
             result = server._build_skills_instructions()
 
@@ -167,29 +157,11 @@ class TestBuildSkillsInstructions:
         assert "IMPORTANT" in result
         assert "resources/read" in result
         assert "### Skill: my-skill" in result
-
-    def test_skills_as_tools_access_method(self, server, tmp_path):
-        """enable_skills_as_tools changes the access method text."""
-        skill_dir = tmp_path / "my-skill"
-        skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\n"
-            "description: |\n"
-            "  Best practices for my-skill tasks.\n"
-            "---\n# Body\n"
-        )
-
-        server.settings.enable_skills = True
-        server.settings.enable_skills_as_tools = True
-        with patch.object(server, "_get_skills_dir", return_value=tmp_path):
-            result = server._build_skills_instructions()
-
-        assert result is not None
-        assert "read_resource tool" in result
+        assert "ha_list_resources" in result
+        assert "ha_read_resource" in result
 
     def test_empty_skills_dir(self, server, tmp_path):
         """Empty skills directory returns None."""
-        server.settings.enable_skills = True
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
             result = server._build_skills_instructions()
         assert result is None
@@ -197,7 +169,6 @@ class TestBuildSkillsInstructions:
     def test_non_dir_entries_skipped(self, server, tmp_path):
         """Files (not directories) in skills dir are skipped."""
         (tmp_path / "not-a-dir.txt").write_text("just a file")
-        server.settings.enable_skills = True
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
             result = server._build_skills_instructions()
         assert result is None
@@ -205,7 +176,6 @@ class TestBuildSkillsInstructions:
     def test_dir_without_skill_md_skipped(self, server, tmp_path):
         """Directories without SKILL.md are skipped."""
         (tmp_path / "no-skill-md").mkdir()
-        server.settings.enable_skills = True
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
             result = server._build_skills_instructions()
         assert result is None

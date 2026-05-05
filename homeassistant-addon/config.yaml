@@ -27,15 +27,11 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # from homeassistant-addon-dev/config.yaml without reading that doc first.
 options:
   backup_hint: "normal"
-  enable_skills: true
-  enable_skills_as_tools: true
   enable_tool_search: false
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
-  enable_skills: bool?
-  enable_skills_as_tools: bool?
   enable_tool_search: bool?
   verify_ssl: bool?
   advanced_debug_logging: bool?

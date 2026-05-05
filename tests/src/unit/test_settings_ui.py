@@ -15,7 +15,9 @@ from starlette.responses import JSONResponse
 from ha_mcp.settings_ui import (
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
+    TRANSFORM_GENERATED_TOOLS,
     _get_config_path,
+    _get_tool_metadata,
     apply_tool_visibility,
     load_tool_config,
     register_settings_routes,
@@ -150,6 +152,35 @@ class TestConfigPath:
         result = _get_config_path()
         assert result == tmp_path / ".ha-mcp" / "tool_config.json"
         assert (tmp_path / ".ha-mcp").is_dir()
+
+
+class TestTransformGeneratedTools:
+    """The ResourcesAsTools pair must be advertised to the settings UI even
+    though they're appended at runtime by the FastMCP transform."""
+
+    def test_ha_list_resources_is_advertised(self):
+        assert "ha_list_resources" in TRANSFORM_GENERATED_TOOLS
+
+    def test_ha_read_resource_is_advertised(self):
+        assert "ha_read_resource" in TRANSFORM_GENERATED_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_metadata_includes_ha_resource_tools_when_local_provider_omits_them(self):
+        """Closes the gap from #1133: transform tools never reach
+        local_provider, so _get_tool_metadata must inject stubs."""
+        server = MagicMock()
+        server.mcp.local_provider._list_tools = AsyncMock(return_value=[])
+
+        tools = await _get_tool_metadata(server)
+        names = {t["name"] for t in tools}
+
+        assert "ha_list_resources" in names
+        assert "ha_read_resource" in names
+        # Stubs are not feature-gated; no `disabled_by` should be set.
+        for entry in tools:
+            if entry["name"] in {"ha_list_resources", "ha_read_resource"}:
+                assert "disabled_by" not in entry
+                assert entry["annotations"].get("readOnlyHint") is True
 
 
 class TestFeatureGatedTools:

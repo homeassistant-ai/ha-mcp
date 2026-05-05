@@ -7,17 +7,6 @@ configuration:
     name: Secret path override
     description: |
       Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
-  enable_skills:
-    name: Enable skills
-    description: >-
-      Serve bundled Home Assistant best-practice skills as MCP resources.
-      Skills provide automation patterns, helper selection guides, and device
-      control best practices. Clients must explicitly request them.
-  enable_skills_as_tools:
-    name: Enable skills as tools
-    description: >-
-      Expose skills via list_resources/read_resource tools for MCP clients
-      that don't support resources natively. Adds 3 extra tools.
   enable_tool_search:
     name: Enable tool search
     description: >-

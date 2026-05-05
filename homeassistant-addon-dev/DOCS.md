@@ -14,8 +14,6 @@ The dev add-on uses the same configuration as the stable version. See the main a
 |--------|-------------|---------|
 | `backup_hint` | Backup strength preference | `normal` |
 | `secret_path` | Custom secret path (optional) | auto-generated |
-| `enable_skills` | Serve bundled HA best-practice skills as MCP resources | `true` |
-| `enable_skills_as_tools` | Expose skills via list_resources/read_resource tools | `true` |
 | `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — their built-in tool search conflicts with ha-mcp's. Disable one or the other. | `false` |
 | `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. | `false` |
 | `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. | `false` |
@@ -24,6 +22,8 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary) | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
 | `verify_ssl` | Verify the HA server's TLS certificate. Disable for self-signed certs or hostname mismatches. Weakens security — leave on unless needed. | `true` |
+
+*Removed in 7.4.x:* `enable_skills` *and* `enable_skills_as_tools`*. Bundled skills are now always served; to hide* `ha_list_resources` *or* `ha_read_resource` *from the catalog, disable them from the Tool Settings Web UI (see below).*
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
 
