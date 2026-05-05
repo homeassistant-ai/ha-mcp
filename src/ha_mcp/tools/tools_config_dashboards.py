@@ -7,7 +7,7 @@ This module provides tools for managing dashboard metadata and content.
 import json
 import logging
 import re
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, cast, overload
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -23,7 +23,6 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
-
 
 
 async def _verify_config_unchanged(
@@ -247,6 +246,160 @@ def _card_matches(
     return True
 
 
+# Substring in WS error message that signals the dashboard identifier was not
+# accepted by lovelace/config (e.g., caller passed an internal id where url_path
+# is expected). Used to gate the lazy resolver fallback in get/set tools.
+#
+# Source: homeassistant/components/lovelace/websocket.py, _handle_errors —
+# emits f"Unknown config specified: {url_path}" paired with structured
+# error.code "config_not_found". The websocket client currently surfaces only
+# the message string, so substring matching is the only signal available at
+# the tool layer. If HA reformats this string, the lazy fallback regresses
+# silently to never firing — re-verify with major HA upgrades.
+_LAZY_RESOLVE_TRIGGER = "Unknown config specified"
+
+
+def _should_lazy_resolve(error_msg: str) -> bool:
+    """Return True if a WS error message indicates the identifier needs resolving."""
+    return _LAZY_RESOLVE_TRIGGER in error_msg
+
+
+async def _resolve_dashboard(client: Any, identifier: str) -> dict[str, str] | None:
+    """Resolve a dashboard identifier (url_path or internal id) to both forms.
+
+    Calls ``lovelace/dashboards/list`` and returns
+    ``{"url_path": ..., "id": ...}`` when the identifier matches either field
+    on a registry entry that has both fields populated; otherwise returns
+    ``None``. Always pays the round-trip when called.
+
+    Two call sites:
+    - **Lazy fallback** (``_lazy_resolve_and_retry``): only invoked after
+      ``lovelace/config`` rejected the identifier with
+      ``_LAZY_RESOLVE_TRIGGER`` — the round-trip is gated by the caller.
+    - **Eager pre-resolve** (``ha_config_set_dashboard``): invoked before
+      hyphen validation so callers may pass either form; gated on a
+      cheap heuristic ("no hyphen, not 'lovelace'") rather than an error
+      from HA.
+    """
+    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+    if isinstance(result, dict) and "result" in result:
+        dashboards = result["result"]
+    elif isinstance(result, list):
+        dashboards = result
+    else:
+        # Neither dict-with-result nor list — either HA returned an error
+        # envelope (unknown shape) or the response format changed.
+        # Surface a warning so the next response-shape change isn't a
+        # silent "always no match" regression.
+        logger.warning(
+            "lovelace/dashboards/list returned an unexpected shape (type=%s); "
+            "treating as no-match",
+            type(result).__name__,
+        )
+        return None
+
+    for d in dashboards:
+        if d.get("id") == identifier or d.get("url_path") == identifier:
+            url_path = d.get("url_path") or ""
+            entry_id = d.get("id") or ""
+            if not url_path or not entry_id:
+                # Malformed registry entry — neither form is safe to
+                # forward. Skip rather than return empty strings that
+                # would be silently used by callers (e.g.
+                # ``delete_dashboard`` would forward ``resolved_id=""``).
+                continue
+            return {"url_path": url_path, "id": entry_id}
+    return None
+
+
+@overload
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: str,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[str, Any]: ...
+
+
+@overload
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: None,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[None, Any]: ...
+
+
+async def _lazy_resolve_and_retry(
+    client: Any,
+    url_path: str | None,
+    ws_data: dict[str, Any],
+    response: Any,
+) -> tuple[str | None, Any]:
+    """Trigger-gated lazy resolve + single retry of a lovelace/config call.
+
+    If `response` indicates HA rejected the identifier with the
+    _LAZY_RESOLVE_TRIGGER substring, resolves `url_path` via
+    lovelace/dashboards/list and retries the WS call with the canonical
+    url_path. Returns the (possibly updated) url_path and the
+    (possibly retried) response so the caller can chain naturally:
+
+        url_path, response = await _lazy_resolve_and_retry(
+            client, url_path, ws_data, response
+        )
+
+    No-op when:
+    - the response is not a failure (success=True or non-dict),
+    - ``url_path`` is empty,
+    - the error message does not contain ``_LAZY_RESOLVE_TRIGGER``
+      (the substring miss),
+    - the resolver finds no match,
+    - or the resolver itself raises (logged at WARNING).
+
+    In every no-op case the original ``response`` is returned unchanged
+    so the caller's existing error-handling path runs against the real
+    HA error rather than a synthetic "resolver failed" one.
+
+    The caller's `ws_data` dict is never mutated: when a retry is needed,
+    a shallow copy is made and the canonical `url_path` written into the
+    copy before the retry call.
+    """
+    if not (isinstance(response, dict) and not response.get("success", True)):
+        return url_path, response
+    if not url_path:
+        return url_path, response
+
+    err = response.get("error", {})
+    err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+    if not _should_lazy_resolve(err_msg):
+        return url_path, response
+
+    try:
+        resolved = await _resolve_dashboard(client, url_path)
+    except Exception as resolver_exc:
+        # Resolver itself raised (timeout, network blip, etc.). Don't let
+        # this exception escape and replace the original HA error with
+        # one about the resolver — fall through with the original
+        # response so the caller surfaces the actual "Unknown config
+        # specified" error.
+        logger.warning(
+            "Lazy resolver failed for url_path=%r: %s; "
+            "falling through to original error",
+            url_path,
+            resolver_exc,
+        )
+        return url_path, response
+
+    if resolved is None or not resolved["url_path"]:
+        return url_path, response
+
+    url_path = resolved["url_path"]
+    retry_data = dict(ws_data)
+    retry_data["url_path"] = url_path
+    response = await client.send_websocket_message(retry_data)
+    return url_path, response
+
+
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
@@ -255,8 +408,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Dashboard"
-        }
+            "title": "Get Dashboard",
+        },
     )
     @log_tool_usage
     async def ha_config_get_dashboard(
@@ -276,7 +429,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = False,
         force_reload: Annotated[
-            bool, Field(description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results).")
+            bool,
+            Field(
+                description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results)."
+            ),
         ] = False,
         entity_id: Annotated[
             str | None,
@@ -347,7 +503,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
-        search_mode = entity_id is not None or card_type is not None or heading is not None
+        search_mode = (
+            entity_id is not None or card_type is not None or heading is not None
+        )
         try:
             # List mode
             if list_only:
@@ -371,10 +529,30 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Search mode — find cards, badges, or header cards
             if search_mode:
                 get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-                if url_path and url_path != "default":
-                    get_data["url_path"] = url_path
+                effective_url_path: str | None = (
+                    url_path if url_path and url_path != "default" else None
+                )
+                if effective_url_path is not None:
+                    get_data["url_path"] = effective_url_path
 
                 response = await client.send_websocket_message(get_data)
+
+                # Lazy resolver fallback: same gate as get-mode. If the
+                # caller passed an internal id where url_path is expected,
+                # HA rejects with the trigger substring; resolve and retry
+                # once. (set_dashboard handles this via an eager pre-resolver
+                # before the hyphen check, so it has no equivalent fallback
+                # here.)
+                search_resolved_from: str | None = None
+                if effective_url_path is not None:
+                    new_url_path, response = await _lazy_resolve_and_retry(
+                        client, effective_url_path, get_data, response
+                    )
+                    if new_url_path != effective_url_path:
+                        # Surface the original caller-passed identifier so
+                        # the caller can see their input was canonicalized.
+                        search_resolved_from = url_path
+                        url_path = new_url_path
 
                 if isinstance(response, dict) and not response.get("success", True):
                     error_msg = response.get("error", {})
@@ -428,7 +606,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 config_hash: str | None = compute_config_hash(config)
 
-                return {
+                search_result: dict[str, Any] = {
                     "success": True,
                     "action": "find_card",
                     "url_path": url_path,
@@ -447,6 +625,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         else "No matches found. Try broader search criteria."
                     ),
                 }
+                if search_resolved_from is not None:
+                    search_result["resolved_from"] = search_resolved_from
+                return search_result
 
             # Get mode - build WebSocket message
             data: dict[str, Any] = {"type": "lovelace/config", "force": force_reload}
@@ -456,7 +637,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             response = await client.send_websocket_message(data)
 
-            # Check if request failed
+            # Lazy resolver fallback: if HA rejects the identifier as unknown,
+            # resolve it via lovelace/dashboards/list and retry once. The
+            # round-trip is only paid when the caller passed an internal
+            # dashboard id (or another non-url_path form) HA does not accept.
+            original_url_path = url_path
+            url_path, response = await _lazy_resolve_and_retry(
+                client, url_path, data, response
+            )
+
+            # Check if request failed (after potential retry)
             if isinstance(response, dict) and not response.get("success", True):
                 error_msg = response.get("error", {})
                 if isinstance(error_msg, dict):
@@ -485,7 +675,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # Calculate config size for progressive disclosure hint
             config_size = len(json.dumps(config)) if isinstance(config, dict) else 0
 
-            result = {
+            get_result: dict[str, Any] = {
                 "success": True,
                 "action": "get",
                 "url_path": url_path,
@@ -493,17 +683,23 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "config_hash": config_hash,
                 "config_size_bytes": config_size,
             }
+            # Surface the original caller-passed identifier when the lazy
+            # resolver canonicalised it (parity with delete_dashboard's
+            # resolved_id field). Caller can use this to detect that their
+            # input was an internal id rather than a url_path.
+            if original_url_path is not None and original_url_path != url_path:
+                get_result["resolved_from"] = original_url_path
 
             # Add hint for large configs (progressive disclosure) - 10KB ≈ 2-3k tokens
             if config_size >= 10000:
-                result["hint"] = (
+                get_result["hint"] = (
                     f"Large config ({config_size:,} bytes). For edits, use "
                     "ha_config_get_dashboard(entity_id=...) to find card positions, "
                     "then ha_config_set_dashboard(python_transform=...) "
                     "instead of full config replacement."
                 )
 
-            return result
+            return get_result
         except ToolError:
             raise
         except Exception as e:
@@ -544,10 +740,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(
         tags={"Dashboards"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Create or Update Dashboard"
-        }
+        annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
     )
     @log_tool_usage
     async def ha_config_set_dashboard(
@@ -729,6 +922,34 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if url_path == "default":
                 url_path = "lovelace"
 
+            # Pre-resolve internal dashboard ID to url_path form before the
+            # hyphen check below, so callers may pass either form. Only fires
+            # when the identifier looks like an internal id (no hyphen, not
+            # the built-in "lovelace") and matches a known dashboard.
+            #
+            # Caveat: if a caller passes a hyphenless identifier intending
+            # to *create* a new dashboard, but it happens to match an
+            # existing dashboard's id, the rewrite silently re-targets the
+            # operation onto that existing dashboard. Pre-PR they'd have
+            # hit the hyphen-validation error and known their input was
+            # invalid; now the create-vs-update distinction depends on
+            # whether the registry happens to contain a matching id.
+            # We log the rewrite and surface the original identifier as
+            # ``resolved_from`` on the success response so callers can
+            # detect this redirect.
+            pre_resolved_from: str | None = None
+            if "-" not in url_path and url_path != "lovelace":
+                resolved = await _resolve_dashboard(client, url_path)
+                if resolved is not None and resolved["url_path"]:
+                    original_url_path = url_path
+                    url_path = resolved["url_path"]
+                    pre_resolved_from = original_url_path
+                    logger.info(
+                        "ha_config_set_dashboard pre-resolver mapped %r -> %r",
+                        original_url_path,
+                        url_path,
+                    )
+
             # Validate url_path contains hyphen for new dashboards
             # The built-in "lovelace" dashboard is exempt since it already exists
             if "-" not in url_path and url_path != "lovelace":
@@ -897,7 +1118,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # Compute new hash for potential chaining
                 new_config_hash = compute_config_hash(transformed_config)
 
-                return {
+                transform_result: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
                     "url_path": url_path,
@@ -905,6 +1126,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "python_expression": python_transform,
                     "message": f"Dashboard {url_path} updated via Python transform",
                 }
+                if pre_resolved_from is not None:
+                    transform_result["resolved_from"] = pre_resolved_from
+                return transform_result
 
             # Check if dashboard exists
             result = await client.send_websocket_message(
@@ -1130,6 +1354,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             if hint:
                 result_dict["hint"] = hint
+            if pre_resolved_from is not None:
+                # Caller passed an internal id; pre-resolver mapped it to
+                # the canonical url_path. Surface the original so a caller
+                # who *intended* to create a new dashboard can detect that
+                # an existing dashboard was updated instead.
+                result_dict["resolved_from"] = pre_resolved_from
 
             return result_dict
 
@@ -1150,17 +1380,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
     @mcp.tool(
         tags={"Dashboards"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Delete Dashboard"
-        }
+        annotations={"destructiveHint": True, "title": "Delete Dashboard"},
     )
     @log_tool_usage
     async def ha_config_delete_dashboard(
-        dashboard_id: Annotated[
+        url_path: Annotated[
             str,
             Field(
-                description="Dashboard ID or URL path to delete (e.g., 'my-dashboard' or 'my_dashboard')"
+                description="Dashboard URL path or internal ID to delete "
+                "(e.g., 'my-dashboard' or 'my_dashboard'). Both forms are accepted."
             ),
         ],
     ) -> dict[str, Any]:
@@ -1170,8 +1398,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         WARNING: This permanently deletes the dashboard and all its configuration.
         Cannot be undone. Does not work on YAML-mode dashboards.
 
-        Accepts either the internal dashboard ID or the URL path.
-        The tool resolves url_path to internal ID automatically.
+        Accepts either the URL path or the internal dashboard ID. HA internal IDs
+        may differ from url_path (e.g. hyphens → underscores); the tool resolves
+        either form to the actual registry ID before deletion.
 
         EXAMPLES:
         - Delete dashboard: ha_config_delete_dashboard("mobile-dashboard")
@@ -1179,37 +1408,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            # Fetch dashboard list to resolve the provided identifier.
-            # HA internal IDs may differ from url_path (e.g. hyphens → underscores),
-            # so we accept either and resolve to the actual registry ID.
-            list_result = await client.send_websocket_message(
-                {"type": "lovelace/dashboards/list"}
-            )
-            if isinstance(list_result, dict) and "result" in list_result:
-                dashboards = list_result["result"]
-            elif isinstance(list_result, list):
-                dashboards = list_result
-            else:
-                dashboards = []
-
-            resolved_id = None
-            for d in dashboards:
-                if d.get("id") == dashboard_id:
-                    resolved_id = d["id"]
-                    break
-                if d.get("url_path") == dashboard_id:
-                    resolved_id = d["id"]
-                    break
-
-            if resolved_id is None:
-                raise_tool_error(create_resource_not_found_error(
-                    "Dashboard",
-                    dashboard_id,
-                    details=(
-                        f"No dashboard found with ID or URL path '{dashboard_id}'. "
-                        "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
-                    ),
-                ))
+            resolved = await _resolve_dashboard(client, url_path)
+            if resolved is None:
+                raise_tool_error(
+                    create_resource_not_found_error(
+                        "Dashboard",
+                        url_path,
+                        details=(
+                            f"No dashboard found with URL path or internal ID '{url_path}'. "
+                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
+                        ),
+                    )
+                )
+            resolved_id = resolved["id"]
 
             response = await client.send_websocket_message(
                 {"type": "lovelace/dashboards/delete", "dashboard_id": resolved_id}
@@ -1233,7 +1444,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     return {
                         "success": True,
                         "action": "delete",
-                        "dashboard_id": dashboard_id,
+                        "url_path": url_path,
                         "message": "Dashboard already deleted or does not exist",
                     }
 
@@ -1248,7 +1459,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                             "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                             "Cannot delete YAML-mode or default dashboard",
                         ],
-                        context={"action": "delete", "dashboard_id": dashboard_id},
+                        context={"action": "delete", "url_path": url_path},
                     )
                 )
 
@@ -1256,10 +1467,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             result: dict[str, Any] = {
                 "success": True,
                 "action": "delete",
-                "dashboard_id": dashboard_id,
+                "url_path": url_path,
                 "message": "Dashboard deleted successfully",
             }
-            if resolved_id != dashboard_id:
+            if resolved_id != url_path:
                 result["resolved_id"] = resolved_id
             return result
         except ToolError:
@@ -1268,7 +1479,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             logger.error(f"Error deleting dashboard: {e}")
             exception_to_structured_error(
                 e,
-                context={"action": "delete", "dashboard_id": dashboard_id},
+                context={"action": "delete", "url_path": url_path},
                 suggestions=[
                     "Verify dashboard exists and is storage-mode",
                     "Check that you have admin permissions",
@@ -1286,4 +1497,3 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     # - ha_config_set_dashboard_resource: Create/update resources (inline code or URL)
     # - ha_config_delete_dashboard_resource: Delete resources
     # =========================================================================
-

@@ -2,10 +2,17 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from ha_mcp import __version__
-from ha_mcp.tools.tools_bug_report import register_bug_report_tools
+from ha_mcp.tools.tools_bug_report import (
+    _fetch_addon_logs,
+    _format_logs_for_report,
+    _format_startup_logs,
+    _sanitize_log_text,
+    register_bug_report_tools,
+)
 
 
 class TestBugReportTool:
@@ -441,3 +448,356 @@ class TestBugReportTool:
         assert "markdown code block" in instructions.lower()
         assert "```markdown" in instructions
         assert "PROMINENTLY display the submission URL" in instructions
+
+    @pytest.mark.asyncio
+    async def test_bug_report_addon_logs_included_for_addon(
+        self, registered_tools, mock_client
+    ):
+        """Test that addon logs are fetched and included when running as addon."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        ha_report_issue = registered_tools._tools["ha_report_issue"]
+        actual_func = ha_report_issue
+        while hasattr(actual_func, "__wrapped__"):
+            actual_func = actual_func.__wrapped__
+
+        fake_logs = "2024-12-01 10:00:00 ERROR ha_mcp.server: Something broke\n"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_bug_report._detect_installation_method",
+                return_value="addon",
+            ),
+            patch(
+                "ha_mcp.tools.tools_bug_report._fetch_addon_logs",
+                return_value=fake_logs,
+            ),
+        ):
+            result = await actual_func()
+
+        assert result["addon_logs"] == fake_logs
+        assert "Add-on Container Logs" in result["formatted_report"]
+        assert "Add-on Container Logs" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
+    async def test_bug_report_no_addon_logs_for_non_addon(
+        self, registered_tools, mock_client
+    ):
+        """Test that addon logs are NOT fetched for non-addon installs."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        ha_report_issue = registered_tools._tools["ha_report_issue"]
+        actual_func = ha_report_issue
+        while hasattr(actual_func, "__wrapped__"):
+            actual_func = actual_func.__wrapped__
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report._detect_installation_method",
+            return_value="docker",
+        ):
+            result = await actual_func()
+
+        assert result["addon_logs"] == ""
+        assert "Add-on Container Logs" not in result["formatted_report"]
+        assert "Add-on Container Logs" not in result["runtime_bug_template"]
+
+
+class TestSanitizeLogText:
+    """Tests for _sanitize_log_text."""
+
+    def test_redacts_jwt_tokens(self):
+        text = "auth: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        result = _sanitize_log_text(text)
+        assert "eyJ" not in result
+        assert "[REDACTED_JWT]" in result
+
+    def test_redacts_bearer_tokens(self):
+        text = "Authorization: Bearer abc123secrettoken"
+        result = _sanitize_log_text(text)
+        assert "abc123" not in result
+        assert "Bearer [REDACTED]" in result
+
+    def test_redacts_long_hex_strings(self):
+        # Bare hex (no leading "token:" — that path is exercised by the
+        # key=value rule below) gets the dedicated hex marker.
+        text = f"raw: {'a1b2c3d4' * 5}"  # 40-char hex string
+        result = _sanitize_log_text(text)
+        assert "a1b2c3d4" not in result
+        assert "[REDACTED_HEX]" in result
+
+    def test_redacts_ipv4_with_port(self):
+        text = "Connected to 192.168.1.100:8123"
+        result = _sanitize_log_text(text)
+        assert "192.168.1.100" not in result
+        assert "[IP]" in result
+
+    def test_redacts_ipv4_in_url(self):
+        text = "fetched https://192.168.1.1/api/states"
+        result = _sanitize_log_text(text)
+        assert "192.168.1.1" not in result
+        assert "[IP]" in result
+
+    def test_redacts_ipv4_after_keyword(self):
+        text = "host=10.0.0.5 connecting"
+        result = _sanitize_log_text(text)
+        assert "10.0.0.5" not in result
+        assert "[IP]" in result
+
+    def test_preserves_four_segment_version_strings(self):
+        # Regression: bare four-segment values without network context (e.g.
+        # version banners) were being mangled by the IPv4 rule.
+        text = "ha-mcp version 1.2.3.4 starting"
+        result = _sanitize_log_text(text)
+        assert result == text
+
+    def test_redacts_key_value_credentials(self):
+        cases = [
+            ("OPENAI_API_KEY=sk-proj-AbCdEf1234567890qwerty", "sk-proj-AbCdEf"),
+            ("token=ghp_AbCdEf1234567890qwerty1234567890qwer", "ghp_AbCdEf"),
+            ("password=hunter2-S3cret!", "hunter2"),
+            ("api_key: somekey1234", "somekey1234"),
+        ]
+        for text, secret in cases:
+            result = _sanitize_log_text(text)
+            assert secret not in result, f"{secret!r} leaked in {result!r}"
+            assert "[REDACTED]" in result
+
+    def test_redacts_url_userinfo(self):
+        cases = [
+            ("https://admin:supersecret@homeassistant.local/api", "supersecret"),
+            ("mqtt://user:pass@broker.local:1883", "user:pass"),
+        ]
+        for text, secret in cases:
+            result = _sanitize_log_text(text)
+            assert secret not in result, f"{secret!r} leaked in {result!r}"
+            assert "[REDACTED]" in result
+
+    def test_bearer_preserves_casing(self):
+        # All casings get redacted via re.IGNORECASE; the lambda echoes
+        # m.group(1) so the original casing is preserved in the output.
+        cases = [
+            ("Authorization: Bearer abc123token", "Bearer [REDACTED]"),
+            ("auth: bearer abc123token", "bearer [REDACTED]"),
+            ("HDR: BEARER abc123token", "BEARER [REDACTED]"),
+            ("hdr: BeArEr abc123token", "BeArEr [REDACTED]"),
+        ]
+        for text, expected in cases:
+            result = _sanitize_log_text(text)
+            assert "abc123" not in result, f"abc123 leaked in {result!r}"
+            assert expected in result, f"missing {expected!r} in {result!r}"
+
+    def test_handles_multiple_secrets_in_one_line(self):
+        text = "token=abc123 connected to 192.168.1.5 with bearer xyz789"
+        result = _sanitize_log_text(text)
+        assert "abc123" not in result
+        assert "xyz789" not in result
+        assert "192.168.1.5" not in result
+        assert "[REDACTED]" in result
+        assert "[IP]" in result
+
+    def test_preserves_normal_text(self):
+        text = "2024-12-01 10:00:00 ERROR ha_mcp.server: Entity not found"
+        result = _sanitize_log_text(text)
+        assert result == text
+
+
+class TestFetchAddonLogs:
+    """Tests for _fetch_addon_logs."""
+
+    @pytest.fixture
+    def _no_supervisor_token(self, monkeypatch):
+        """Remove SUPERVISOR_TOKEN without clobbering the rest of os.environ."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_without_supervisor_token(self, _no_supervisor_token):
+        result = await _fetch_addon_logs()
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_supervisor_token_is_empty(self, monkeypatch):
+        # Empty-string token is treated the same as missing.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "")
+        result = await _fetch_addon_logs()
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_fetches_and_sanitizes_logs(self, monkeypatch):
+        fake_response = httpx.Response(
+            200,
+            text="INFO ha_mcp: connected to 192.168.1.50\n\x1b[31mERROR\x1b[0m: fail",
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        # ANSI codes stripped
+        assert "\x1b[" not in result
+        # IPs sanitized
+        assert "192.168.1.50" not in result
+        assert "[IP]" in result
+        # Content preserved
+        assert "ha_mcp" in result
+
+    @pytest.mark.asyncio
+    async def test_truncates_long_logs_with_marker(self, monkeypatch):
+        # Use a long, sanitizer-clean payload so character math is exact.
+        long_log = "x" * 5000
+        fake_response = httpx.Response(200, text=long_log)
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        # Marker prepended, then last 3000 chars of the sanitized payload.
+        assert result.startswith("[...truncated, showing last 3000 of 5000 chars...]\n")
+        assert result.endswith("x" * 3000)
+        assert "x" * 3001 not in result  # exactly 3000 chars after marker
+
+    @pytest.mark.asyncio
+    async def test_short_logs_not_marked_or_truncated(self, monkeypatch):
+        # Logs shorter than the cap should be returned verbatim, no marker.
+        short_log = "INFO ha_mcp: started cleanly\n"
+        fake_response = httpx.Response(200, text=short_log)
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        assert result == short_log
+        assert "truncated" not in result
+
+    @pytest.mark.asyncio
+    async def test_jwt_split_at_truncation_boundary_is_redacted(self, monkeypatch):
+        # G1 regression: position the JWT so the truncation cut slices THROUGH
+        # it — the eyJ prefix falls in the dropped region, the signature falls
+        # in the kept region. Under the old truncate-then-sanitize order, the
+        # surviving JWT tail (no eyJ prefix) would not match the JWT regex and
+        # the signature characters would leak. Under the fixed sanitize-then-
+        # truncate order, the entire JWT is replaced with [REDACTED_JWT]
+        # before the cut, so nothing from the JWT survives.
+        from ha_mcp.tools.tools_bug_report import _ADDON_LOG_MAX_CHARS
+
+        jwt = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        )
+        # Place the JWT so cut_point lands 50 chars inside it (well past `eyJ`,
+        # well before `SflKx`).
+        prefix_len = 100
+        jwt_chars_to_drop = 50
+        total_len = prefix_len + jwt_chars_to_drop + _ADDON_LOG_MAX_CHARS
+        suffix_len = total_len - prefix_len - len(jwt)
+        assert suffix_len > 0, "suffix_len math is off"
+        # Sanity-check the placement: the buggy order really would leak SflKx.
+        assert "SflKx" in jwt[jwt_chars_to_drop:]
+        text = "x" * prefix_len + jwt + "x" * suffix_len
+        fake_response = httpx.Response(200, text=text)
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch("httpx.AsyncClient.get", return_value=fake_response):
+            result = await _fetch_addon_logs()
+
+        # Pre-fix code (truncate-then-sanitize) would leave SflKx in the tail.
+        assert "SflKx" not in result
+        # Confirm the marker survived the cut (positive proof sanitization
+        # actually ran before truncation, not just that SflKx happened to be
+        # truncated away).
+        assert "[REDACTED_JWT]" in result
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error_with_log(self, monkeypatch, caplog):
+        fake_response = httpx.Response(403, text="Forbidden")
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with (
+            patch("httpx.AsyncClient.get", return_value=fake_response),
+            caplog.at_level("INFO", logger="ha_mcp.tools.tools_bug_report"),
+        ):
+            result = await _fetch_addon_logs()
+
+        assert result == ""
+        # G6: status code is logged so users can distinguish 4xx/5xx from
+        # "Supervisor unreachable" / "not running as add-on".
+        assert any("403" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_network_error(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
+        with patch(
+            "httpx.AsyncClient.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ):
+            result = await _fetch_addon_logs()
+
+        assert result == ""
+
+
+# Shared JWT fixture for the format-helper boundary tests below. 108 chars.
+_JWT_SAMPLE = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+)
+
+
+class TestFormatLogsForReportSanitization:
+    """Boy-scout-2 regression: sanitize-before-truncate for error_message."""
+
+    def test_jwt_split_at_100char_error_truncation_is_redacted(self):
+        # _format_logs_for_report truncates each error_message to the first
+        # 100 chars after sanitization. Position the JWT so the cut would
+        # land mid-JWT under the buggy truncate-then-sanitize order; the
+        # surviving JWT prefix wouldn't match the JWT regex (no signature)
+        # and would leak `eyJhbG…` into the report.
+        prefix_len = 50
+        # Cut at offset 100 = prefix_len (50) + jwt_chars_to_drop (50).
+        # JWT (108 chars) extends past the cut into the truncated region.
+        error = "x" * prefix_len + _JWT_SAMPLE + "x" * 200
+        logs = [
+            {
+                "timestamp": "2024-12-01T10:00:00",
+                "tool_name": "ha_test",
+                "success": False,
+                "execution_time_ms": 50,
+                "error_message": error,
+            }
+        ]
+
+        formatted = _format_logs_for_report(logs)
+
+        # No JWT fragment leaks (the buggy order would leave eyJhbG... in the
+        # truncated tail because the regex requires the full 3-part JWT shape).
+        assert "eyJhbG" not in formatted
+        # Positive proof: sanitization ran first, so the marker survives the
+        # 100-char cut.
+        assert "[REDACTED_JWT]" in formatted
+
+
+class TestFormatStartupLogsSanitization:
+    """Boy-scout-2 regression: sanitize-before-truncate for startup messages."""
+
+    def test_jwt_split_at_200char_message_truncation_is_redacted(self):
+        # _format_startup_logs truncates message to 200 chars after sanitize.
+        # Same shape as the _format_logs_for_report test, but with the JWT
+        # placed across the 200-char boundary.
+        prefix_len = 150
+        # Cut at offset 200 = prefix_len (150) + jwt_chars_to_drop (50).
+        message = "x" * prefix_len + _JWT_SAMPLE + "x" * 200
+        logs = [
+            {
+                "elapsed_seconds": 1.23,
+                "level": "INFO",
+                "logger": "ha_mcp.startup",
+                "message": message,
+            }
+        ]
+
+        formatted = _format_startup_logs(logs)
+
+        assert "eyJhbG" not in formatted
+        assert "[REDACTED_JWT]" in formatted

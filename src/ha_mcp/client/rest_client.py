@@ -5,11 +5,26 @@ Home Assistant HTTP client with authentication and error handling.
 import asyncio
 import json
 import logging
+import ssl
 from typing import Any
 
 import httpx
 
 from ..config import get_global_settings
+
+
+def _is_ssl_error(exc: BaseException) -> bool:
+    """True if ``exc`` (or anything in its cause chain) is an SSL error.
+
+    httpx wraps ``ssl.SSLError`` inside ``httpx.ConnectError``; the only
+    reliable check is to walk ``__cause__`` / ``__context__``.
+    """
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, ssl.SSLError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +77,7 @@ class HomeAssistantClient:
         base_url: str | None = None,
         token: str | None = None,
         timeout: int | None = None,
+        verify_ssl: bool | None = None,
     ):
         """
         Initialize Home Assistant client.
@@ -70,18 +86,31 @@ class HomeAssistantClient:
             base_url: Home Assistant URL (defaults to config)
             token: Long-lived access token (defaults to config)
             timeout: Request timeout in seconds (defaults to config)
+            verify_ssl: Whether to verify the HA server's TLS certificate
+                (defaults to ``settings.verify_ssl``). Pass False to allow
+                self-signed certs or hostname mismatches.
         """
-        # Only load settings if we need to use fallback values
-        if base_url is None or token is None:
+        if base_url is None or token is None or verify_ssl is None:
             settings = get_global_settings()
             self.base_url = (base_url or settings.homeassistant_url).rstrip("/")
             self.token = token or settings.homeassistant_token
             self.timeout = timeout if timeout is not None else settings.timeout
+            self.verify_ssl = (
+                verify_ssl if verify_ssl is not None else settings.verify_ssl
+            )
         else:
-            # All required parameters provided, use them directly without loading settings
             self.base_url = base_url.rstrip("/")
             self.token = token
             self.timeout = timeout if timeout is not None else 30  # Default timeout
+            self.verify_ssl = verify_ssl
+
+        if not self.verify_ssl:
+            logger.warning(
+                "TLS verification disabled for Home Assistant REST client "
+                "(HA_VERIFY_SSL=false). Connections to %s will accept "
+                "self-signed and mismatched certificates.",
+                self.base_url,
+            )
 
         # Create HTTP client with authentication headers
         self.httpx_client = httpx.AsyncClient(
@@ -91,6 +120,7 @@ class HomeAssistantClient:
                 "Content-Type": "application/json",
             },
             timeout=httpx.Timeout(self.timeout),
+            verify=self.verify_ssl,
         )
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
@@ -148,6 +178,12 @@ class HomeAssistantClient:
             return response
 
         except httpx.ConnectError as e:
+            if _is_ssl_error(e) and self.verify_ssl:
+                raise HomeAssistantConnectionError(
+                    f"TLS verification failed for {self.base_url}: {e}. "
+                    "If this is a self-signed certificate or hostname "
+                    "mismatch, set HA_VERIFY_SSL=false to skip verification."
+                ) from e
             raise HomeAssistantConnectionError(
                 f"Failed to connect to Home Assistant: {e}"
             ) from e

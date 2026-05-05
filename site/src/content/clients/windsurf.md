@@ -6,7 +6,7 @@ transports: ['stdio', 'sse', 'streamable-http']
 configFormat: json
 configLocation: ~/.codeium/windsurf/mcp_config.json
 accuracy: 4
-order: 5
+order: 6
 ---
 
 ## Configuration

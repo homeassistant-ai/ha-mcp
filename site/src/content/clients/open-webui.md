@@ -5,7 +5,7 @@ logo: /logos/open-webui.svg
 transports: ['streamable-http']
 configFormat: ui
 accuracy: 4
-order: 14
+order: 17
 httpNote: Requires Streamable HTTP - local or remote server
 ---
 

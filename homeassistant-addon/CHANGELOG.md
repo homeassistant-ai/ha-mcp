@@ -3,6 +3,19 @@
 <!-- version list -->
 
 
+## v7.4.1 (2026-05-02)
+
+### Fixed
+
+- **addon**: Propagate `BUILD_VERSION` to runtime so the production add-on
+  reports the correct version in startup logs instead of the stale value
+  from `pyproject.toml` at build time
+  ([#1090](https://github.com/homeassistant-ai/ha-mcp/pull/1090)).
+- **ci**: Unbreak `hotfix-release.yml` semantic-release run; the previous
+  detached-HEAD checkout silently no-op'd every hotfix merge
+  ([#1091](https://github.com/homeassistant-ai/ha-mcp/pull/1091)).
+
+
 ## v7.4.0 (2026-04-29)
 
 ### Added

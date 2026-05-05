@@ -167,6 +167,18 @@ def maybe_persist_secret_path(
         )
 
 
+def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool:
+    """Read ``key`` from ``config`` as a bool, falling back to ``default``.
+
+    Mirrors the ``raw = config.get(key, default); raw if isinstance(raw, bool) else default``
+    pattern used inline in ``main()`` for other options. Extracted so the
+    verify_ssl plumbing can be unit-tested without standing up the full
+    addon container.
+    """
+    raw = config.get(key, default)
+    return raw if isinstance(raw, bool) else default
+
+
 SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
 
 
@@ -263,6 +275,11 @@ def main() -> int:
     enable_yaml_config_editing = False  # default
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
+    tool_search_max_results = 5  # default
+    disabled_tools_raw = ""  # default
+    pinned_tools_raw = ""  # default
+    verify_ssl = True  # default
+    advanced_debug_logging = False  # default
     config_read_ok = True
 
     if config_file.exists():
@@ -283,6 +300,14 @@ def main() -> int:
             enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
             raw_custom_component = config.get("enable_custom_component_integration", False)
             enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
+            raw_max_results = config.get("tool_search_max_results", 5)
+            tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
+            raw_disabled = config.get("disabled_tools", "")
+            disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
+            raw_pinned = config.get("pinned_tools", "")
+            pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
+            verify_ssl = resolve_bool_option(config, "verify_ssl", True)
+            advanced_debug_logging = resolve_bool_option(config, "advanced_debug_logging", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             config_read_ok = False
@@ -313,6 +338,8 @@ def main() -> int:
     maybe_persist_secret_path(config, secret_path, supervisor_token)
 
     log_info(f"Backup hint mode: {backup_hint}")
+    log_info(f"Verify SSL: {verify_ssl}")
+    log_info(f"Advanced debug logging: {advanced_debug_logging}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -323,6 +350,10 @@ def main() -> int:
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
+    os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
+    os.environ["DISABLED_TOOLS"] = disabled_tools_raw
+    os.environ["PINNED_TOOLS"] = pinned_tools_raw
+    os.environ["HA_VERIFY_SSL"] = str(verify_ssl).lower()
 
     os.environ["HOMEASSISTANT_TOKEN"] = supervisor_token
 
@@ -351,12 +382,34 @@ def main() -> int:
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
         StatelessSessionLogFilter,
+        _get_server,
         _get_timestamped_uvicorn_log_config,
         mcp,
         register_browser_landing,
     )
+    from ha_mcp.settings_ui import register_settings_routes
+
+    if advanced_debug_logging:
+        # Defers SA_SIGINFO install until uvicorn's capture_signals has
+        # run. Otherwise uvicorn's signal.signal() call would overwrite
+        # our handler before any signal arrived.
+        # Wrapped because diagnostics must never block addon startup.
+        try:
+            from ha_mcp.utils.kill_signal_diagnostics import (
+                schedule_install_after_uvicorn,
+            )
+            schedule_install_after_uvicorn()
+        except Exception as e:
+            log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
 
     register_browser_landing(mcp, secret_path)
+    # Mount settings UI routes both at root (for HA ingress proxy) and
+    # under the secret path (for direct port access). See
+    # register_settings_routes docstring for the auth model. Use the
+    # server's actual FastMCP instance (not the _DeferredMCP wrapper)
+    # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
+    server_instance = _get_server()
+    register_settings_routes(server_instance.mcp, server_instance, secret_path=secret_path)
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )

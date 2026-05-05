@@ -28,6 +28,68 @@ from .util_helpers import coerce_bool_param, unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
+_LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
+
+
+async def _check_storage_mode_dashboard_collision(
+    client: Any, yaml_path: str
+) -> None:
+    """Raise a ToolError if a storage-mode dashboard already owns the requested
+    url_path; otherwise return without doing anything.
+
+    Only runs for yaml_path values starting with 'lovelace.dashboards.'.
+    A WebSocket failure or unexpected response shape warns and skips the check
+    (fail-open) so that a transient HA outage doesn't block dashboard creation.
+    """
+    if not yaml_path.startswith(_LOVELACE_DASHBOARD_PREFIX):
+        return
+    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
+    try:
+        result = await client.send_websocket_message(
+            {"type": "lovelace/dashboards/list"}
+        )
+    except Exception as exc:
+        logger.warning(
+            "lovelace/dashboards/list WS query failed (%s); skipping collision check",
+            exc,
+        )
+        return
+
+    if isinstance(result, dict) and "result" in result:
+        dashboards = result["result"]
+    elif isinstance(result, list):
+        dashboards = result
+    else:
+        logger.warning(
+            "lovelace/dashboards/list returned unexpected shape (%s); "
+            "skipping collision check",
+            type(result).__name__,
+        )
+        return
+
+    for entry in dashboards or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("url_path") == url_path
+            and entry.get("mode") == "storage"
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        f"A storage-mode dashboard already owns url_path "
+                        f"'{url_path}'. Delete it via ha_config_delete_dashboard "
+                        "or pick a different url_path before registering a "
+                        "YAML-mode dashboard."
+                    ),
+                    context={"url_path": url_path, "existing_id": entry.get("id")},
+                    suggestions=[
+                        f"ha_config_delete_dashboard(url_path='{url_path}')",
+                        "Pick a different url_path for your YAML-mode dashboard.",
+                    ],
+                )
+            )
+
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register YAML config editing tools with the MCP server.
@@ -59,8 +121,11 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
                     "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify'). Not for template sensors "
-                    "(use ha_config_set_helper), automations, scripts, "
+                    "'rest', 'shell_command', 'notify'). For YAML-mode dashboards, "
+                    "use the dotted form 'lovelace.dashboards.<url_path>' where "
+                    "<url_path> is lowercase, hyphenated, and not a reserved HA "
+                    "route. No other dotted paths are supported. Not for template "
+                    "sensors (use ha_config_set_helper), automations, scripts, "
                     "scenes, or input_* helpers — those have dedicated tools."
                 ),
             ),
@@ -121,7 +186,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
 
         Intended for YAML-only integrations with no config-flow or API
-        equivalent (command_line, rest, shell_command, notify platforms).
+        equivalent (command_line, rest, shell_command, notify platforms),
+        and for registering YAML-mode dashboards via
+        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
         Check ``post_action`` in the response: most keys need a full HA
         restart; template, mqtt, and group support reload. Preserves YAML
         comments and HA tags (``!include``, ``!secret``) on round-trip;
@@ -159,6 +226,12 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)
+
+            # Storage-mode dashboard collision check (only for lovelace.dashboards.*).
+            # Skip on `remove` so users can clean up YAML entries that conflict
+            # with a storage-mode dashboard (e.g., during a migration).
+            if action in ("add", "replace"):
+                await _check_storage_mode_dashboard_collision(client, yaml_path)
 
             # Check if custom component is available
             await _assert_mcp_tools_available(client)

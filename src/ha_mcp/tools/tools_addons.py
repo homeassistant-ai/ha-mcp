@@ -13,38 +13,184 @@ import logging
 import re
 import time
 from typing import Annotated, Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import httpx
 import websockets
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from .._version import is_running_in_addon
 from ..client.rest_client import HomeAssistantClient
 from ..errors import (
     ErrorCode,
     create_connection_error,
     create_error_response,
-    create_timeout_error,
     create_validation_error,
 )
+from ..utils.python_sandbox import PythonSandboxError, safe_execute_expression
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
 )
+from .util_helpers import ANSI_ESCAPE_RE
 
 logger = logging.getLogger(__name__)
 
 # Maximum response size to return from add-on API calls (50 KB)
 _MAX_RESPONSE_SIZE = 50 * 1024
 
-# Maximum number of WebSocket messages to collect
+# Hard safety cap on WebSocket messages collected per call. `message_limit`
+# can lower this but never raise it.
 _MAX_WS_MESSAGES = 1000
 
-# ANSI escape code pattern for stripping terminal colors from addon output
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+# Substrings that flag a WebSocket message as "signal" for the summarize pass.
+# Keep conservative: false negatives get elided, false positives just mean
+# no elision. Case-insensitive match on the JSON-stringified message.
+_SIGNAL_PATTERNS = re.compile(
+    r"(?:^|[^A-Za-z])(INFO|WARN(?:ING)?|ERROR|FATAL|FAIL(?:ED|URE)?|EXCEPTION|"
+    r"TRACEBACK|Configuration is valid|Successfully|unsuccessful|exit|"
+    r"returncode|Compiling|Linking)",
+    re.IGNORECASE,
+)
+
+# Consecutive non-signal messages needed to trigger elision. Below this,
+# the run passes through untouched.
+_SUMMARIZE_RUN_THRESHOLD = 10
+
+# Messages preserved verbatim at each end of an elided run for context.
+_SUMMARIZE_CONTEXT_KEEP = 2
+
+
+def _slice_ws_messages(
+    messages: list[Any],
+    offset: int,
+    limit: int | None,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Apply offset/limit to a collected WebSocket message list.
+
+    Returns ``(sliced_messages, pagination_metadata)``. Pagination metadata
+    is always returned so the response shape is stable regardless of whether
+    offset/limit were applied.
+    """
+    total_collected = len(messages)
+    if offset < 0:
+        offset = 0
+    if offset > total_collected:
+        sliced: list[Any] = []
+    elif limit is None:
+        sliced = messages[offset:]
+    else:
+        if limit < 0:
+            limit = 0
+        sliced = messages[offset : offset + limit]
+
+    pagination: dict[str, Any] = {
+        "total_collected": total_collected,
+        "offset": offset,
+        "returned": len(sliced),
+    }
+    if limit is not None:
+        pagination["limit"] = limit
+    return sliced, pagination
+
+
+def _is_signal_message(msg: Any) -> bool:
+    """Return True if ``msg`` looks like a log line or terminal event worth keeping.
+
+    The heuristic errs toward keeping messages — false positives just mean
+    a run doesn't get elided.
+    """
+    if isinstance(msg, (dict, list)):
+        serialized = json.dumps(msg, default=str)
+    else:
+        serialized = str(msg)
+    return bool(_SIGNAL_PATTERNS.search(serialized[:2000]))
+
+
+def _summarize_ws_messages(
+    messages: list[Any],
+    *,
+    run_threshold: int = _SUMMARIZE_RUN_THRESHOLD,
+    context_keep: int = _SUMMARIZE_CONTEXT_KEEP,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Collapse runs of non-signal WebSocket messages into elision markers.
+
+    Each run of ≥ ``run_threshold`` consecutive non-signal entries becomes:
+    ``context_keep`` originals, one elision dict
+    ``{"elided": N, "note": "..."}``, then ``context_keep`` originals.
+    Signal messages always pass through unchanged.
+    """
+    result: list[Any] = []
+    run_start: int | None = None
+    elided_total = 0
+
+    def flush(run_end: int) -> None:
+        nonlocal elided_total
+        assert run_start is not None
+        run_len = run_end - run_start
+        if run_len >= run_threshold:
+            result.extend(messages[run_start : run_start + context_keep])
+            elided_count = run_len - 2 * context_keep
+            result.append(
+                {
+                    "elided": elided_count,
+                    "note": (
+                        f"{elided_count} non-signal messages elided; "
+                        "pass summarize=False for full output"
+                    ),
+                }
+            )
+            result.extend(messages[run_end - context_keep : run_end])
+            elided_total += elided_count
+        else:
+            result.extend(messages[run_start:run_end])
+
+    for i, msg in enumerate(messages):
+        if _is_signal_message(msg):
+            if run_start is not None:
+                flush(i)
+                run_start = None
+            result.append(msg)
+        else:
+            if run_start is None:
+                run_start = i
+
+    if run_start is not None:
+        flush(len(messages))
+
+    return result, {
+        "original_count": len(messages),
+        "summarized_count": len(result),
+        "elided_count": elided_total,
+    }
+
+
+def _apply_response_transform(response: Any, expr: str) -> Any:
+    """Run a sandboxed ``python_transform`` expression against ``response``.
+
+    Exposes the value to the expression as ``response``. Supports both
+    in-place mutation and reassignment (``response = [...]``). Raises
+    ToolError with VALIDATION_FAILED on sandbox errors so the agent gets
+    a structured code it can react to.
+    """
+    try:
+        return safe_execute_expression(expr, {"response": response}, "response")
+    except PythonSandboxError as e:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"python_transform failed: {e!s}",
+                context={"expression_preview": expr[:200]},
+                suggestions=[
+                    "Operate on the `response` variable (in-place or reassign)",
+                    "Allowed: dict/list access, assignment, loops, "
+                    "comprehensions, whitelisted str/list/dict methods",
+                ],
+            )
+        )
 
 
 def _merge_options(base: dict, override: dict) -> dict:
@@ -86,7 +232,9 @@ async def _supervisor_api_call(
     """
     ws_client = None
     try:
-        ws_client, error = await get_connected_ws_client(client.base_url, client.token)
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
         if error or ws_client is None:
             return error or create_connection_error(
                 "Failed to establish WebSocket connection",
@@ -140,6 +288,217 @@ async def _supervisor_api_call(
                 pass
 
 
+def _addon_connection_failure_suggestions(
+    client: HomeAssistantClient, port: int | None
+) -> list[str]:
+    """Suggestions for connect/timeout failures against an add-on.
+
+    Three modes — direct-port hits a container IP, the addon-variant ingress
+    route hits a sibling container's ingress port, the off-host ingress route
+    hits HA Core. Each mode fails for different reasons, so suggest different
+    next steps.
+    """
+    if port:
+        return [
+            "Check that the add-on is running",
+            "Direct-port access requires the MCP host to share Home "
+            "Assistant's container network. On PyPI/uvx installs, drop "
+            "the 'port' parameter to route through Ingress instead.",
+        ]
+    if is_running_in_addon():
+        return [
+            "The target add-on container may not be reachable from this "
+            "MCP add-on. Check that the target add-on is running.",
+            "If the failure persists, the addon Docker network may be "
+            "unhealthy — try restarting the target add-on, then this "
+            "MCP add-on.",
+        ]
+    return [
+        f"Verify Home Assistant is reachable at {client.base_url}",
+        "Check network connectivity from the MCP host to HA Core",
+    ]
+
+
+async def _create_ingress_session(client: HomeAssistantClient) -> str:
+    """Create a Supervisor ingress session and return its token.
+
+    Sessions are minted via the WS `supervisor/api` proxy (which HA Core
+    authenticates on our behalf), so this works the same on HAOS, Supervised,
+    and PyPI/uvx hosts. The returned token is set as the `ingress_session`
+    cookie on requests to HA Core's `/api/hassio_ingress/<addon_token>/...`
+    endpoint, which Supervisor validates before proxying to the add-on
+    container. Sessions are valid for ~15 minutes; we mint a fresh one per
+    call to avoid managing lifetime.
+    """
+    response = await _supervisor_api_call(
+        client, "/ingress/session", method="POST", data={}
+    )
+    if not response.get("success"):
+        raise_tool_error(response)
+
+    session = response.get("result", {}).get("session")
+    if not isinstance(session, str) or not session:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Supervisor returned no ingress session token",
+                details=str(response),
+            )
+        )
+    return session
+
+
+async def _resolve_http_route(
+    client: HomeAssistantClient,
+    addon: dict[str, Any],
+    normalized_path: str,
+    port: int | None,
+) -> tuple[str, dict[str, str]]:
+    """Pick the HTTP route shape based on `port` and install variant.
+
+    Three branches:
+    - `port` set → direct container port (`http://<ip>:<port>/...`), no
+      auth headers. Only reachable when the MCP host shares HA's container
+      network.
+    - Running as the HA add-on (`is_running_in_addon()` true) → direct
+      `<addon_ip>:<addon_ingress_port>` with `X-Ingress-Path` and
+      `X-Hass-Source: core.ingress` headers. This is the path the addon
+      variant always took on master; routing through HA Core's
+      `/api/hassio_ingress/...` proxy regresses here because
+      `client.base_url` is `http://supervisor/core` (a Supervisor proxy
+      mount that demands `Authorization: Bearer $SUPERVISOR_TOKEN`).
+    - Off-host → HA Core ingress proxy at
+      `<base_url>/api/hassio_ingress/<token>/<path>` with `Cookie:
+      ingress_session=<token>`. Mints a fresh session per call.
+    """
+    addon_name = addon.get("name", "")
+    headers: dict[str, str] = {}
+
+    if port:
+        addon_ip = addon.get("ip_address", "")
+        if not addon_ip:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Add-on '{addon_name}' is missing ip_address",
+                    context={"slug": addon.get("slug"), "ip_address": addon_ip},
+                )
+            )
+        return f"http://{addon_ip}:{port}/{normalized_path}", headers
+
+    ingress_entry = addon.get("ingress_entry")
+    if not ingress_entry:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing ingress_entry",
+                context={"slug": addon.get("slug")},
+            )
+        )
+
+    if is_running_in_addon():
+        addon_ip = addon.get("ip_address", "")
+        ingress_port = addon.get("ingress_port")
+        if not addon_ip or not ingress_port:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Add-on '{addon_name}' is missing network info "
+                    "(ip_address or ingress_port)",
+                    context={
+                        "slug": addon.get("slug"),
+                        "ip_address": addon_ip,
+                        "ingress_port": ingress_port,
+                    },
+                )
+            )
+        # Sibling addon containers share the hassio bridge, so we hit the
+        # ingress port directly. The X-Ingress-Path / X-Hass-Source headers
+        # are what the addon's nginx trusts as authenticated ingress source.
+        headers["X-Ingress-Path"] = ingress_entry
+        headers["X-Hass-Source"] = "core.ingress"
+        return (
+            f"http://{addon_ip}:{ingress_port}/{normalized_path}",
+            headers,
+        )
+
+    session = await _create_ingress_session(client)
+    base = client.base_url.rstrip("/")
+    headers["Cookie"] = f"ingress_session={session}"
+    return f"{base}{ingress_entry}/{normalized_path}", headers
+
+
+async def _resolve_ws_route(
+    client: HomeAssistantClient,
+    addon: dict[str, Any],
+    normalized_path: str,
+    port: int | None,
+) -> tuple[str, dict[str, str]]:
+    """Pick the WebSocket route shape. Mirrors `_resolve_http_route`.
+
+    The addon-variant and direct-port branches always speak `ws://` because
+    they hit the container directly. The off-host branch echoes
+    `client.base_url`'s scheme (so HTTPS-fronted HA gets `wss://`).
+    """
+    addon_name = addon.get("name", "")
+    headers: dict[str, str] = {}
+
+    if port:
+        addon_ip = addon.get("ip_address", "")
+        if not addon_ip:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Add-on '{addon_name}' is missing ip_address",
+                    context={"slug": addon.get("slug")},
+                )
+            )
+        return f"ws://{addon_ip}:{port}/{normalized_path}", headers
+
+    ingress_entry = addon.get("ingress_entry")
+    if not ingress_entry:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                f"Add-on '{addon_name}' is missing ingress_entry",
+                context={"slug": addon.get("slug")},
+            )
+        )
+
+    if is_running_in_addon():
+        addon_ip = addon.get("ip_address", "")
+        ingress_port = addon.get("ingress_port")
+        if not addon_ip or not ingress_port:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Add-on '{addon_name}' is missing network info "
+                    "(ip_address or ingress_port)",
+                    context={
+                        "slug": addon.get("slug"),
+                        "ip_address": addon_ip,
+                        "ingress_port": ingress_port,
+                    },
+                )
+            )
+        headers["X-Ingress-Path"] = ingress_entry
+        headers["X-Hass-Source"] = "core.ingress"
+        return (
+            f"ws://{addon_ip}:{ingress_port}/{normalized_path}",
+            headers,
+        )
+
+    session = await _create_ingress_session(client)
+    parsed = urlsplit(client.base_url)
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+    ws_path_prefix = parsed.path.rstrip("/")
+    headers["Cookie"] = f"ingress_session={session}"
+    return (
+        f"{ws_scheme}://{parsed.netloc}{ws_path_prefix}{ingress_entry}/{normalized_path}",
+        headers,
+    )
+
+
 async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, Any]:
     """Get detailed info for a specific add-on.
 
@@ -149,11 +508,50 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
 
     Returns:
         Dictionary with add-on details including ingress info, state, options, etc.
+        Top-level ``log_level`` is surfaced when the add-on exposes one via its
+        Supervisor options or schema (e.g., ``"debug"``, ``"info"``, etc.).
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
         return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
-    return {"success": True, "addon": response["result"]}
+
+    addon = response["result"] if isinstance(response["result"], dict) else {}
+    result: dict[str, Any] = {"success": True, "addon": addon}
+
+    log_level = _extract_addon_log_level(addon)
+    if log_level is not None:
+        result["log_level"] = log_level
+
+    return result
+
+
+def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
+    """Return the add-on's configured log level, if any.
+
+    Checks the add-on's current options first (``options.log_level`` — what the
+    user set), then falls back to the schema (Supervisor serializes ``schema``
+    as a list of ``{name, type, ...}`` field descriptors) so add-ons that ship a
+    log_level option without a value still surface ``"default"``. Returns
+    ``None`` when the add-on exposes no log_level option at all.
+
+    The lower-case ``"default"`` is the literal Supervisor sentinel; the
+    integration path uses ``"DEFAULT"`` (uppercase) — these are distinct values
+    by design and should not be cross-compared.
+    """
+    options = addon.get("options")
+    if isinstance(options, dict):
+        level = options.get("log_level")
+        if isinstance(level, str) and level.strip():
+            return level
+
+    schema = addon.get("schema")
+    if isinstance(schema, list) and any(
+        isinstance(item, dict) and item.get("name") == "log_level"
+        for item in schema
+    ):
+        return "default"
+
+    return None
 
 
 async def list_addons(
@@ -325,8 +723,17 @@ async def _call_addon_ws(
     debug: bool = False,
     port: int | None = None,
     wait_for_close: bool = True,
+    message_limit: int | None = None,
+    message_offset: int = 0,
+    summarize: bool = True,
+    python_transform: str | None = None,
 ) -> dict[str, Any]:
     """Connect to an add-on's WebSocket API and collect messages.
+
+    Routing mirrors the HTTP variant (see `_resolve_ws_route`): off-host
+    ingress tunnels through HA Core's `/api/hassio_ingress` proxy; the
+    HA-add-on variant hits the container's ingress port directly;
+    direct-port mode (`port` set) connects to the container's mapped port.
 
     Args:
         client: Home Assistant REST client
@@ -338,6 +745,20 @@ async def _call_addon_ws(
         port: Override port (same as HTTP tool)
         wait_for_close: If True, collect messages until server closes or timeout.
             If False, return after first batch of messages (up to 2s of silence).
+        message_limit: Cap on messages collected from the wire. Bounded by the
+            hard ceiling ``_MAX_WS_MESSAGES``. None means "collect up to the
+            ceiling" (legacy behavior).
+        message_offset: Drop this many messages from the start of the collected
+            list before returning. Useful for paginating past a known-noisy
+            header when re-running the same call.
+        summarize: When True (default), collapse runs of non-signal messages
+            (typically YAML config dumps) into short elision markers. Set to
+            False to return the raw stream.
+        python_transform: Optional sandboxed Python expression that post-
+            processes the response. The variable ``response`` is bound to
+            the list of parsed messages (``list[dict | str]``); the value
+            of ``response`` after execution replaces ``messages`` in the
+            output. See ``ha_manage_addon`` docstring for details.
 
     Returns:
         Dictionary with collected messages, metadata, and status.
@@ -388,44 +809,24 @@ async def _call_addon_ws(
             )
         )
 
-    # 5. Build WebSocket URL
-    addon_ip = addon.get("ip_address", "")
-    if port:
-        if not addon_ip:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing ip_address",
-                    context={"slug": slug},
-                )
-            )
-        target_port = port
-    else:
-        ingress_port = addon.get("ingress_port")
-        if not addon_ip or not ingress_port:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing network info",
-                    context={"slug": slug},
-                )
-            )
-        target_port = ingress_port
-
-    ws_url = f"ws://{addon_ip}:{target_port}/{normalized}"
-
-    # 6. Build connection headers
-    headers: dict[str, str] = {}
-    if not port:
-        ingress_entry = addon.get("ingress_entry", "")
-        headers["X-Ingress-Path"] = ingress_entry
-        headers["X-Hass-Source"] = "core.ingress"
+    # 5. Resolve route (direct-port / addon-variant / off-host).
+    ws_url, headers = await _resolve_ws_route(client, addon, normalized, port)
 
     # 7. Connect and exchange messages
     collected: list[str] = []
     total_size = 0
     close_reason = "unknown"
     start_time = time.monotonic()
+
+    # Effective collection cap: callers may lower _MAX_WS_MESSAGES via
+    # message_limit but cannot raise it. A caller's message_limit interacts
+    # with message_offset — we collect enough to satisfy `offset + limit`
+    # so requesting a later window actually returns the window.
+    if message_limit is None:
+        collection_cap = _MAX_WS_MESSAGES
+    else:
+        requested = max(0, message_offset) + max(0, message_limit)
+        collection_cap = min(_MAX_WS_MESSAGES, requested)
 
     try:
         async with websockets.connect(
@@ -451,8 +852,15 @@ async def _call_addon_ws(
                     close_reason = "timeout"
                     break
 
-                if len(collected) >= _MAX_WS_MESSAGES:
-                    close_reason = "message_limit"
+                if len(collected) >= collection_cap:
+                    # Distinguish caller-set cap from the global safety ceiling
+                    # so an agent reading the response can tell "I capped this"
+                    # from "ha-mcp's hard ceiling kicked in".
+                    close_reason = (
+                        "message_limit"
+                        if message_limit is not None
+                        else "safety_ceiling"
+                    )
                     break
 
                 if total_size >= _MAX_RESPONSE_SIZE:
@@ -478,19 +886,30 @@ async def _call_addon_ws(
                     continue
 
                 # Strip ANSI escape codes
-                clean = _ANSI_ESCAPE_RE.sub("", message)
+                clean = ANSI_ESCAPE_RE.sub("", message)
                 collected.append(clean)
                 total_size += len(clean)
 
     except websockets.exceptions.InvalidHandshake as e:
+        suggestions = [
+            "Check that the add-on supports WebSocket on this path",
+            f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+        ]
+        # 401/403 means auth was rejected, not a path-shape problem.
+        if isinstance(e, websockets.exceptions.InvalidStatus):
+            status = e.response.status_code
+            if status in (401, 403):
+                suggestions = [
+                    "The ingress session may have expired or your HA token "
+                    "may lack the required scope. Verify the token has admin "
+                    "rights and try again.",
+                    f"Status {status} from the WebSocket handshake.",
+                ]
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"WebSocket handshake failed with '{addon_name}': {e!s}",
-                suggestions=[
-                    "Check that the add-on supports WebSocket on this path",
-                    f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
-                ],
+                suggestions=suggestions,
                 context={"slug": slug, "path": path},
             )
         )
@@ -508,26 +927,37 @@ async def _call_addon_ws(
         )
     except TimeoutError:
         raise_tool_error(
-            create_timeout_error(
-                f"WebSocket connection to '{addon_name}'",
-                timeout,
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                f"Operation 'WebSocket connection to {addon_name!r}' timed out after {timeout}s",
                 details=f"path={path}",
-                context={"slug": slug, "path": path},
+                context={
+                    "slug": slug,
+                    "path": path,
+                    "operation": f"WebSocket connection to '{addon_name}'",
+                    "timeout_seconds": timeout,
+                    "direct_port": bool(port),
+                },
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
     except OSError as e:
         raise_tool_error(
-            create_connection_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
-                details="Check that the add-on is running and the port is correct",
-                context={"slug": slug},
+                details=f"url={ws_url}",
+                context={"slug": slug, "direct_port": bool(port)},
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
 
     elapsed = round(time.monotonic() - start_time, 2)
 
     # 8. Build result
-    # Try to parse each message as JSON; keep as string if not JSON
+    # Try to parse each message as JSON; keep as string if not JSON.
+    # Result shape is list[dict | str] — the heterogeneity is part of the
+    # python_transform contract (see ha_manage_addon docstring).
     parsed_messages: list[Any] = []
     for msg in collected:
         try:
@@ -535,15 +965,53 @@ async def _call_addon_ws(
         except (json.JSONDecodeError, ValueError):
             parsed_messages.append(msg)
 
+    # 8a. Apply offset/limit slicing before summarize/transform so users
+    # paginate the raw collected list, not the post-summarize output.
+    sliced_messages, pagination = _slice_ws_messages(
+        parsed_messages,
+        offset=message_offset,
+        limit=message_limit,
+    )
+
+    # 8b. Summarize (default on) — collapse bulk non-signal runs.
+    summary_meta: dict[str, Any] | None = None
+    processed_messages: list[Any] = sliced_messages
+    if summarize:
+        processed_messages, summary_meta = _summarize_ws_messages(sliced_messages)
+
+    # 8c. python_transform (optional) — user-controlled post-processing.
+    transformed = False
+    pre_transform_count = len(processed_messages)
+    if python_transform is not None:
+        processed_messages = _apply_response_transform(
+            processed_messages,
+            python_transform,
+        )
+        transformed = True
+
     result: dict[str, Any] = {
         "success": True,
-        "messages": parsed_messages,
-        "message_count": len(parsed_messages),
+        "messages": processed_messages,
+        "message_count": (
+            len(processed_messages) if isinstance(processed_messages, list) else None
+        ),
         "closed_by": close_reason,
         "duration_seconds": elapsed,
         "addon_name": addon_name,
         "slug": slug,
     }
+
+    # Pagination metadata is always present when offset/limit were used so
+    # callers have a stable shape to reason about.
+    if message_offset > 0 or message_limit is not None:
+        result["pagination"] = pagination
+
+    if summary_meta is not None and summary_meta["elided_count"] > 0:
+        result["summary"] = summary_meta
+
+    if transformed:
+        result["transformed"] = True
+        result["pre_transform_message_count"] = pre_transform_count
 
     if debug:
         result["_debug"] = {
@@ -551,6 +1019,7 @@ async def _call_addon_ws(
             "request_headers": dict(headers),
             "initial_message": body,
             "total_bytes_collected": total_size,
+            "collection_cap": collection_cap,
         }
 
     # Cap the serialized result size (raw bytes undercount due to JSON + MCP overhead)
@@ -559,17 +1028,20 @@ async def _call_addon_ws(
         result = {
             "success": True,
             "error": "RESPONSE_TOO_LARGE",
-            "message": f"WebSocket collected {len(parsed_messages)} messages "
-            f"({len(result_serialized)} bytes serialized) exceeding "
-            f"{_MAX_RESPONSE_SIZE // 1024}KB limit.",
-            "message_count": len(parsed_messages),
+            "message": f"WebSocket response ({len(result_serialized)} bytes "
+            f"serialized) exceeds {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+            "message_count": (
+                len(processed_messages)
+                if isinstance(processed_messages, list)
+                else None
+            ),
             "closed_by": close_reason,
             "duration_seconds": elapsed,
             "addon_name": addon_name,
             "slug": slug,
             "truncated": True,
-            "hint": "Use wait_for_close=false for shorter collection, "
-            "or use the HTTP endpoint with offset/limit for paginated access.",
+            "hint": "Lower message_limit, raise message_offset, keep summarize=True, "
+            "or narrow the response with python_transform.",
         }
 
     return result
@@ -586,8 +1058,23 @@ async def _call_addon_api(
     port: int | None = None,
     offset: int = 0,
     limit: int | None = None,
+    python_transform: str | None = None,
 ) -> dict[str, Any]:
-    """Call an add-on's web API through Home Assistant's Ingress proxy.
+    """Call an add-on's web API.
+
+    Routing is picked per install variant (see `_resolve_http_route`):
+
+    - **Ingress (default), off-host**: tunnels through HA Core's
+      `/api/hassio_ingress/<token>/...` proxy with a per-call Supervisor
+      session cookie. The path that makes off-host (PyPI/uvx) installs work.
+    - **Ingress (default), HA add-on**: hits the addon container's
+      ingress port directly with the `core.ingress` source headers. Avoids
+      the Supervisor `/core` proxy hop that would otherwise demand
+      `Authorization: Bearer $SUPERVISOR_TOKEN` on top of the cookie.
+    - **Direct port** (when `port` is set): connects to
+      `http://<addon_ip>:<port>/...` for add-ons that expose mapped ports
+      (e.g. Node-RED on 1880). Only works when the MCP host shares HA's
+      Docker network.
 
     Args:
         client: Home Assistant REST client
@@ -599,9 +1086,10 @@ async def _call_addon_api(
         port: Override port to connect to (e.g., direct access port instead of ingress port)
         offset: Skip this many items in array responses (default 0)
         limit: Return at most this many items from array responses
-
-    Returns:
-        Dictionary with response data, status code, and content type.
+        python_transform: Optional sandboxed Python expression applied to the
+            parsed response body. The variable ``response`` is bound to
+            ``dict | list | str`` depending on content-type. Transform runs
+            after offset/limit slicing.
     """
     # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
     normalized = unquote(path).lstrip("/")
@@ -650,52 +1138,10 @@ async def _call_addon_api(
             )
         )
 
-    # 5. Build URL to the add-on container
-    addon_ip = addon.get("ip_address", "")
+    # 5. Resolve route (direct-port / addon-variant / off-host).
+    url, headers = await _resolve_http_route(client, addon, normalized, port)
 
-    if port:
-        # Direct port access: connect to the add-on's mapped network port
-        # (e.g., 1880 for Node-RED, 6052 for ESPHome) instead of the ingress port.
-        # Requires 'leave_front_door_open' or equivalent setting on the add-on.
-        if not addon_ip:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing ip_address",
-                    context={"slug": slug, "ip_address": addon_ip},
-                )
-            )
-        target_port = port
-    else:
-        # Default: use the ingress port for direct container communication
-        ingress_port = addon.get("ingress_port")
-        if not addon_ip or not ingress_port:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Add-on '{addon_name}' is missing network info (ip_address or ingress_port)",
-                    context={
-                        "slug": slug,
-                        "ip_address": addon_ip,
-                        "ingress_port": ingress_port,
-                    },
-                )
-            )
-        target_port = ingress_port
-
-    url = f"http://{addon_ip}:{target_port}/{normalized}"
-
-    # 6. Make HTTP request directly to the add-on container
-    # Include Ingress headers so the add-on's web server (e.g., Nginx) recognizes
-    # this as an authenticated Ingress request and bypasses its own auth layer.
-    # When using a direct port, skip Ingress headers (not needed/recognized).
-    ingress_entry = addon.get("ingress_entry", "")
-    headers: dict[str, str] = {}
-    if not port:
-        headers["X-Ingress-Path"] = ingress_entry
-        headers["X-Hass-Source"] = "core.ingress"
-
-    # Set content type based on body type
+    # 6. Set content type based on body type
     if isinstance(body, dict):
         headers["Content-Type"] = "application/json"
         request_content = json.dumps(body).encode()
@@ -715,19 +1161,28 @@ async def _call_addon_api(
             )
     except httpx.TimeoutException:
         raise_tool_error(
-            create_timeout_error(
-                f"add-on API call to '{addon_name}'",
-                timeout,
+            create_error_response(
+                ErrorCode.TIMEOUT_OPERATION,
+                f"Operation 'add-on API call to {addon_name!r}' timed out after {timeout}s",
                 details=f"path={path}, method={method}",
-                context={"slug": slug, "path": path},
+                context={
+                    "slug": slug,
+                    "path": path,
+                    "operation": f"add-on API call to '{addon_name}'",
+                    "timeout_seconds": timeout,
+                    "direct_port": bool(port),
+                },
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
     except httpx.ConnectError as e:
         raise_tool_error(
-            create_connection_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
                 f"Failed to connect to add-on '{addon_name}': {e!s}",
-                details="Check that the add-on is running and Home Assistant Ingress is working",
-                context={"slug": slug},
+                details=f"url={url}",
+                context={"slug": slug, "direct_port": bool(port)},
+                suggestions=_addon_connection_failure_suggestions(client, port),
             )
         )
 
@@ -755,6 +1210,13 @@ async def _call_addon_api(
             "limit": limit,
             "returned": len(response_data),
         }
+
+    # 8a. python_transform (optional) — runs after slicing, before size cap,
+    # so an agent can narrow a large response down under the limit.
+    transformed = False
+    if python_transform is not None:
+        response_data = _apply_response_transform(response_data, python_transform)
+        transformed = True
 
     # 9. Truncate large responses
     truncated = False
@@ -814,6 +1276,9 @@ async def _call_addon_api(
     if pagination_meta:
         result["pagination"] = pagination_meta
 
+    if transformed:
+        result["transformed"] = True
+
     if truncated:
         result["truncated"] = True
         result["note"] = (
@@ -822,16 +1287,21 @@ async def _call_addon_api(
 
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
-        # On 403/401, include addon config so the LLM can spot relevant settings
-        # (e.g., "leave_front_door_open", auth toggles, port mappings)
-        if response.status_code in (401, 403):
-            addon_options = addon.get("options")
-            addon_ports = addon.get("network") or addon.get("ports")
-            addon_host_network = addon.get("host_network")
+        # 401 = auth credential problem (token/scope/session); IP-restriction
+        # hint and addon_config attachment would misdirect.
+        # 403 = forbidden (likely Nginx ACL); addon_config helps the LLM spot
+        # relevant toggles like leave_front_door_open and port mappings.
+        if response.status_code == 401:
+            result["suggestion"] = (
+                "Authentication failed. The ingress session may have expired, "
+                "or your HA token may lack the required scope. Verify the "
+                "token has admin rights and try again."
+            )
+        elif response.status_code == 403:
             result["addon_config"] = {
-                "options": addon_options,
-                "ports": addon_ports,
-                "host_network": addon_host_network,
+                "options": addon.get("options"),
+                "ports": addon.get("network") or addon.get("ports"),
+                "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
             result["suggestion"] = (
@@ -913,7 +1383,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **Note:** This tool only works with Home Assistant OS or Supervised installations.
 
         **SINGLE ADD-ON (slug provided):**
-        Returns comprehensive details including ingress entry, ports, options, and state.
+        Returns comprehensive details including ingress entry, ports, options, state,
+        and (when the add-on exposes one) a top-level ``log_level`` reflecting the
+        current Supervisor option — useful for confirming ha_manage_addon log_level changes.
         Useful for discovering what APIs an add-on exposes before calling ha_manage_addon.
 
         **INSTALLED ADD-ONS (source='installed'):**
@@ -1046,6 +1518,44 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=True,
             ),
         ] = True,
+        message_limit: Annotated[
+            int | None,
+            Field(
+                description="Proxy mode only. WebSocket: cap on messages collected from the wire, "
+                "bounded by an internal safety ceiling. None = collect up to the ceiling. "
+                "Lower to save tokens on noisy streams (e.g., message_limit=50 for a quick health check).",
+                default=None,
+            ),
+        ] = None,
+        message_offset: Annotated[
+            int,
+            Field(
+                description="Proxy mode only. WebSocket: drop this many messages from the start of the "
+                "collected list before returning. Useful for paginating past known-noisy headers. Default: 0.",
+                default=0,
+            ),
+        ] = 0,
+        summarize: Annotated[
+            bool,
+            Field(
+                description="Proxy mode only. WebSocket: when True (default), collapse runs of "
+                "non-signal messages (typically YAML config dumps) into short elision markers. "
+                "Set to False to return the raw stream.",
+                default=True,
+            ),
+        ] = True,
+        python_transform: Annotated[
+            str | None,
+            Field(
+                description="Proxy mode only. Sandboxed Python expression that post-processes the response. "
+                "Variable `response` is exposed — a list[dict | str] for WebSocket (parsed JSON or raw text), "
+                "or dict/list/str for HTTP (parsed body). Supports in-place mutation "
+                "(response.append(...)) or reassignment (response = [...]). "
+                "Example: response = [m for m in response if 'ERROR' in str(m)]. "
+                "Post-processing only — does not provide optimistic-locking write semantics.",
+                default=None,
+            ),
+        ] = None,
         options: Annotated[
             dict[str, Any] | None,
             Field(
@@ -1092,8 +1602,29 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         are fetched and merged automatically (including one level of nested dicts).
 
         **Proxy mode** (when path is provided):
-        Sends requests directly to the add-on container's own web API via HTTP or WebSocket.
+        Routes HTTP or WebSocket requests through Home Assistant's Ingress
+        proxy by default (works on HAOS, Supervised, and off-host PyPI/uvx
+        installs). Pass `port=...` to bypass Ingress and connect directly to
+        an add-on's container port — that mode requires the MCP host to
+        share Home Assistant's container network (i.e. only the HAOS addon).
         Use ha_get_addon(slug="...") to discover available ports and endpoints.
+
+        **Response shaping (proxy mode):**
+        - WebSocket streams can be noisy (ESPHome /validate often emits hundreds of
+          config-dump lines). By default, `summarize=True` collapses long runs of
+          non-signal messages into short elision markers; INFO/WARNING/ERROR/exit
+          lines always pass through. Pagination via `message_offset` / `message_limit`
+          works on the raw collected list before summarize runs.
+        - `python_transform` applies a sandboxed Python expression as a final
+          post-processing step in both HTTP and WebSocket modes. The variable
+          `response` is bound to:
+            * WebSocket: `list[dict | str]` — parsed JSON messages are dicts,
+              undecodable frames stay as ANSI-stripped strings. Elision markers
+              appear as `{"elided": N, "note": "..."}` dicts when summarize ran.
+            * HTTP: `dict | list | str` — whichever the content-type produced.
+          Transforms may mutate in place (response.append(...), del response[k])
+          or reassign (response = [...]). This is post-processing only — it does
+          NOT provide optimistic-locking or write-back semantics.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
@@ -1110,6 +1641,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
         - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
         - WebSocket: ha_manage_addon(slug="...", path="/validate", port=6052, websocket=True, body={"type": "spawn", "configuration": "device.yaml"})
+        - Quick WS health check (50 msgs, raw): ha_manage_addon(slug="...", path="/logs", websocket=True, message_limit=50, summarize=False)
+        - Filter WS errors only: ha_manage_addon(slug="...", path="/validate", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
+        - HTTP subset: ha_manage_addon(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
         """
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
@@ -1169,6 +1703,18 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 proxy_overrides.append(("websocket", "websocket=True"))
             if not wait_for_close:
                 proxy_overrides.append(("wait_for_close", "wait_for_close=False"))
+            if message_limit is not None:
+                proxy_overrides.append(
+                    ("message_limit", f"message_limit={message_limit}")
+                )
+            if message_offset != 0:
+                proxy_overrides.append(
+                    ("message_offset", f"message_offset={message_offset}")
+                )
+            if not summarize:
+                proxy_overrides.append(("summarize", "summarize=False"))
+            if python_transform is not None:
+                proxy_overrides.append(("python_transform", "python_transform"))
             if proxy_overrides:
                 raise_tool_error(
                     create_validation_error(
@@ -1278,6 +1824,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 debug=debug,
                 port=port,
                 wait_for_close=wait_for_close,
+                message_limit=message_limit,
+                message_offset=message_offset,
+                summarize=summarize,
+                python_transform=python_transform,
             )
             if not result.get("success"):
                 raise_tool_error(result)
@@ -1293,6 +1843,17 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 )
             )
 
+        # HTTP mode does not use WebSocket-specific params. Reject explicit
+        # use so misroutes surface immediately rather than silently ignoring.
+        if message_limit is not None or message_offset != 0 or not summarize:
+            raise_tool_error(
+                create_validation_error(
+                    "message_limit / message_offset / summarize apply only to "
+                    "WebSocket mode. Set websocket=True or remove them.",
+                    parameter="message_limit",
+                )
+            )
+
         result = await _call_addon_api(
             client=client,
             slug=slug,
@@ -1303,6 +1864,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             port=port,
             offset=offset,
             limit=limit,
+            python_transform=python_transform,
         )
         if not result.get("success"):
             raise_tool_error(result)

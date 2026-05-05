@@ -70,6 +70,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._device_tools: Any = None
         self._tools_registry: ToolsRegistry | None = None
         self._skill_tool_names: list[str] = []
+        # Populated by _apply_settings_visibility from tool_config.json on startup
+        self._user_pinned_tools: list[str] = []
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -142,6 +144,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Register bundled skills as MCP resources
         self._register_skills()
+
+        # Apply user-configured tool visibility (must come before keyword
+        # enrichment / tool search so disabled tools are excluded from
+        # search indexing too).
+        self._apply_settings_visibility()
 
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
@@ -312,6 +319,25 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         uri = f"skill://{skill_name}/SKILL.md"
 
         return f"\n### Skill: {skill_name} ({uri})\n{description.strip()}"
+
+    def _apply_settings_visibility(self) -> None:
+        """Apply persisted tool visibility from ``tool_config.json``.
+
+        Reads the saved enable/disable/pin state and applies it to the
+        FastMCP instance via ``apply_tool_visibility``. HTTP routes for
+        the settings UI are registered separately by entry-point callers
+        (start.py / main_web) so they can be mounted under the secret
+        path; that keeps the routes inert in stdio mode and behind the
+        same auth posture as the MCP endpoint in HTTP mode.
+        """
+        from .settings_ui import apply_tool_visibility, load_tool_config
+
+        config = load_tool_config(self.settings)
+        if config:
+            pinned = apply_tool_visibility(self.mcp, config, self.settings)
+            if pinned:
+                self._user_pinned_tools = list(pinned)
+            logger.info("Applied persisted tool config (%d entries)", len(config.get("tools", {})))
 
     # Tools pinned outside the search transform for individual permission gating.
     # These are always visible in list_tools() regardless of search transform.
@@ -487,8 +513,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list
+        # Build the always_visible list: defaults + user-configured pins
         pinned = list(self._PINNED_TOOLS)
+        pinned.extend(self._user_pinned_tools)
 
         # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
         if self.settings.enable_skills_as_tools:
@@ -513,12 +540,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         try:
             self.mcp.add_transform(
                 CategorizedSearchTransform(
-                    max_results=5,
+                    max_results=self.settings.tool_search_max_results,
                     always_visible=pinned,
                     search_tool_description=description,
                 )
             )
-            logger.info("Tool search transform applied (%d pinned tools)", len(pinned))
+            logger.info(
+                "Tool search transform applied (%d pinned tools, max_results=%d)",
+                len(pinned),
+                self.settings.tool_search_max_results,
+            )
         except Exception:
             logger.exception("Failed to apply tool search transform")
 

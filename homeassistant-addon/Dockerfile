@@ -34,9 +34,13 @@ COPY homeassistant-addon/start.py /
 # Activate virtual environment via PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Labels
+# Propagate the build version into the runtime so startup logs report the
+# correct version. The addon workflow always passes BUILD_VERSION; standalone
+# Docker pulls that don't pass it fall through to package metadata.
 ARG BUILD_VERSION
 ARG BUILD_ARCH
+ENV HA_MCP_BUILD_VERSION=${BUILD_VERSION}
+
 LABEL \
     io.hass.name="Home Assistant MCP Server" \
     io.hass.description="AI assistant integration via Model Context Protocol" \

@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     timeout: int = Field(30, alias="HA_TIMEOUT")
     max_retries: int = Field(3, alias="HA_MAX_RETRIES")
 
+    # False = skip TLS verification (self-signed / hostname mismatch). Trusted networks only.
+    verify_ssl: bool = Field(True, alias="HA_VERIFY_SSL")
+
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
@@ -109,6 +112,17 @@ class Settings(BaseSettings):
     # replace, or remove top-level keys in configuration.yaml and package
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
+
+    # Seed values for tool visibility (comma-separated tool names).
+    # Used as initial config when no tool_config.json exists.
+    # The web settings UI (/settings) is the primary interface for managing these.
+    disabled_tools: str = Field("", alias="DISABLED_TOOLS")
+    pinned_tools: str = Field("", alias="PINNED_TOOLS")
+
+    # Max results returned by ha_search_tools. Pydantic enforces the
+    # 2-10 range; the addon-dev schema also uses ``int(2,10)?`` so the
+    # supervisor UI rejects out-of-range values before they reach env vars.
+    tool_search_max_results: int = Field(5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS")
 
     @model_validator(mode="after")
     def _skills_dependency(self) -> "Settings":
@@ -220,3 +234,13 @@ def get_global_settings() -> Settings:
     if _settings is None:
         _settings = get_settings()
     return _settings
+
+
+def _reset_global_settings() -> None:
+    """Drop the cached settings singleton.
+
+    Test-only seam so suites that mutate ``HA_*`` env vars can force a
+    re-read without reaching into module-private state.
+    """
+    global _settings
+    _settings = None

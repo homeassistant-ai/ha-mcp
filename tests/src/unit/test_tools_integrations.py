@@ -11,6 +11,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -249,6 +250,55 @@ class TestDeleteHelpersIntegrations:
         delete_call = mock_client.send_websocket_message.call_args_list[1]
         assert delete_call[0][0]["input_button_id"] == "uid-123"
 
+    @pytest.mark.parametrize(
+        "helper_type",
+        [
+            "input_button",
+            "input_boolean",
+            "input_number",
+            "input_select",
+            "input_text",
+            "input_datetime",
+        ],
+    )
+    async def test_simple_path_disabled_entity_resolves_via_registry(
+        self, tools, mock_client, helper_type
+    ):
+        """Issue #1057 regression: a disabled entity (registered but absent
+        from the state machine) must be resolved via the entity registry
+        and deleted via the standard websocket_delete path — not via the
+        direct_id fallback (which also reports method=websocket_delete) and
+        not via the already_deleted short-circuit.
+        """
+        mock_client.get_entity_state.return_value = None
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-disabled-456"}},
+            {"success": True},
+        ]
+        target = f"my_disabled_{helper_type}_target"
+
+        result = await tools.ha_delete_helpers_integrations(
+            target=target,
+            helper_type=helper_type,
+            confirm=True,
+            wait=False,
+        )
+        assert result["success"] is True
+        assert result["method"] == "websocket_delete"
+        # Distinguishes from direct_id (no unique_id key) and already_deleted
+        # (no unique_id, fallback_used set) — together these pin the standard
+        # registry-driven path specifically.
+        assert "unique_id" in result, (
+            f"Standard path not taken (no unique_id in response): {result}"
+        )
+        assert result["unique_id"] == "uid-disabled-456"
+        assert result.get("fallback_used") is None, (
+            f"Expected standard websocket_delete path; got fallback: {result}"
+        )
+        registry_call = mock_client.send_websocket_message.call_args_list[0]
+        assert registry_call[0][0]["type"] == "config/entity_registry/get"
+        assert registry_call[0][0]["entity_id"] == f"{helper_type}.{target}"
+
     async def test_simple_path_fallback_direct_id(self, tools, mock_client):
         """Registry has no unique_id → direct_id fallback succeeds."""
         # 3 retries all return "no unique_id", then direct delete succeeds
@@ -271,13 +321,16 @@ class TestDeleteHelpersIntegrations:
     async def test_simple_path_fallback_already_deleted(
         self, tools, mock_client
     ):
-        """Registry empty + direct delete fails + state=None → already_deleted."""
-        # 3x registry no unique_id, 1x direct delete fails, then state=None
+        """Registry empty + direct delete fails + state=None + registry-verify
+        confirms gone → already_deleted."""
+        # 3x registry no unique_id, 1x direct delete fails, 1x verify-registry
+        # confirms entity is truly gone (success=False)
         mock_client.send_websocket_message.side_effect = (
             [{"success": True, "result": {}}] * 3
             + [{"success": False, "error": "not found"}]
+            + [{"success": False, "error": "not_found"}]
         )
-        # State check at the end returns None → entity already gone
+        # State check at the end returns None → entity gone from state machine
         mock_client.get_entity_state.side_effect = (
             [{"state": "off"}] * 3  # during retries
             + [None]  # final check after direct-delete fail
@@ -291,6 +344,68 @@ class TestDeleteHelpersIntegrations:
         )
         assert result["success"] is True
         assert result["fallback_used"] == "already_deleted"
+
+    async def test_simple_path_disabled_no_unique_id_surfaces_error(
+        self, tools, mock_client
+    ):
+        """Issue #1057 residual hazard: a disabled entity that is registry-
+        resident but missing unique_id (and direct-id delete fails) must NOT
+        be silently classified as already_deleted. The previous fallback
+        relied on state-absence alone, which is exactly the symptom of a
+        disabled entity — masking the bug. Post-fix: registry-verify confirms
+        the entry is still there and we surface SERVICE_CALL_FAILED instead.
+        """
+        # 3x registry returns entry but no unique_id, 1x direct delete fails,
+        # 1x verify-registry shows entity STILL registered
+        mock_client.send_websocket_message.side_effect = (
+            [{"success": True, "result": {"entity_id": "input_button.my_button"}}] * 3
+            + [{"success": False, "error": "not found"}]
+            + [{
+                "success": True,
+                "result": {"entity_id": "input_button.my_button"},
+            }]
+        )
+        # Disabled entity: state-absent throughout
+        mock_client.get_entity_state.return_value = None
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_delete_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "registry entry exists" in err["error"]["message"]
+
+    async def test_simple_path_disabled_state_check_apierror_resolves_via_registry(
+        self, tools, mock_client
+    ):
+        """The HomeAssistantAPIError branch in the state-check try/except
+        must not derail registry resolution. A disabled entity often responds
+        404 to the state-check; that's informational, the registry path
+        still has to run.
+        """
+        mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
+            "404 simulated"
+        )
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"unique_id": "uid-disabled-apierror"}},
+            {"success": True},
+        ]
+
+        result = await tools.ha_delete_helpers_integrations(
+            target="my_disabled_button",
+            helper_type="input_button",
+            confirm=True,
+            wait=False,
+        )
+        assert result["success"] is True
+        assert result["method"] == "websocket_delete"
+        assert result.get("fallback_used") is None
+        assert result["unique_id"] == "uid-disabled-apierror"
 
     async def test_simple_path_all_fallbacks_exhausted(
         self, tools, mock_client

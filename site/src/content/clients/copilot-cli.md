@@ -6,7 +6,7 @@ transports: ['stdio', 'sse', 'streamable-http']
 configFormat: ui
 configLocation: ~/.copilot/mcp-config.json
 accuracy: 5
-order: 6
+order: 8
 ---
 
 ## Configuration

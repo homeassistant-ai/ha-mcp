@@ -491,6 +491,51 @@ def _build_addon_image():
         pytest.fail(f"Failed to build {IMAGE_TAG}:\n{result.stderr}")
 
 
+class TestResolveBoolOption:
+    """Unit tests for the resolve_bool_option helper used for verify_ssl."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_missing_key_returns_default(self):
+        assert self.addon.resolve_bool_option({}, "verify_ssl", True) is True
+        assert self.addon.resolve_bool_option({}, "verify_ssl", False) is False
+
+    def test_explicit_false_returns_false(self):
+        assert (
+            self.addon.resolve_bool_option({"verify_ssl": False}, "verify_ssl", True)
+            is False
+        )
+
+    def test_explicit_true_returns_true(self):
+        assert (
+            self.addon.resolve_bool_option({"verify_ssl": True}, "verify_ssl", False)
+            is True
+        )
+
+    def test_string_value_falls_back_to_default(self):
+        # HA Supervisor coerces YAML scalars to the schema type, so a string
+        # here means user-edited options.json with a bad type. The secure
+        # default must win — never accept "false" as a string.
+        assert (
+            self.addon.resolve_bool_option({"verify_ssl": "false"}, "verify_ssl", True)
+            is True
+        )
+
+    def test_int_value_falls_back_to_default(self):
+        assert (
+            self.addon.resolve_bool_option({"verify_ssl": 0}, "verify_ssl", True)
+            is True
+        )
+
+    def test_none_value_falls_back_to_default(self):
+        assert (
+            self.addon.resolve_bool_option({"verify_ssl": None}, "verify_ssl", True)
+            is True
+        )
+
+
 @pytest.mark.slow
 class TestAddonStartup:
     """Test add-on container startup behavior."""

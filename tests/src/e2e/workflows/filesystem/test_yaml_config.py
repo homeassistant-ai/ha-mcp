@@ -655,3 +655,132 @@ class TestYamlConfigCommentPreservation:
             f"Secret key name lost after editing different key: {content!r}"
         )
         logger.info("HA !secret tags preserved after editing a different key")
+
+
+# ---------------------------------------------------------------------------
+# YAML-mode dashboard registration (issue #1034)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filesystem
+class TestYamlModeDashboardRegistration:
+    """E2E: register and remove a YAML-mode dashboard via lovelace.dashboards.<url_path>."""
+
+    URL_PATH = "ha-mcp-test-dash"
+    DASHBOARD_FILE = "dashboards/ha_mcp_test.yaml"
+
+    async def test_register_dashboard_entry(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": f"lovelace.dashboards.{self.URL_PATH}",
+                "action": "add",
+                "content": (
+                    "mode: yaml\n"
+                    "title: HA MCP Test\n"
+                    f"filename: {self.DASHBOARD_FILE}\n"
+                    "show_in_sidebar: false\n"
+                ),
+                "file": "configuration.yaml",
+                "backup": True,
+            },
+        )
+        assert data.get("success") is True, data
+        assert data.get("post_action") == "restart_required"
+
+        read = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            READ_TOOL,
+            {"path": "configuration.yaml"},
+        )
+        assert read.get("success") is True
+        assert "ha-mcp-test-dash:" in read["content"]
+        # lovelace.mode must NOT be introduced as a sibling of dashboards
+        assert "lovelace:\n  mode:" not in read["content"]
+
+    async def test_remove_dashboard_entry(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": f"lovelace.dashboards.{self.URL_PATH}",
+                "action": "remove",
+                "file": "configuration.yaml",
+                "backup": False,
+            },
+        )
+        assert data.get("success") is True, data
+
+    async def test_rejects_reserved_url_path(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "lovelace.dashboards.lovelace",
+                "action": "add",
+                "content": "mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
+            },
+        )
+        assert data.get("success") is False
+        assert "reserved" in (data.get("error") or "").lower()
+
+    async def test_rejects_filename_traversal(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "lovelace.dashboards.bad-dash",
+                "action": "add",
+                "content": "mode: yaml\ntitle: x\nfilename: ../secrets.yaml\n",
+            },
+        )
+        assert data.get("success") is False
+        assert "filename" in (data.get("error") or "").lower()
+
+    async def test_rejects_lovelace_mode_dotted_path(self, mcp_client_with_yaml_config):
+        """Confirm we did not unlock other lovelace.* keys."""
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "lovelace.mode",
+                "action": "replace",
+                "content": "yaml\n",
+            },
+        )
+        assert data.get("success") is False
+
+
+@pytest.mark.filesystem
+class TestDashboardsDirectoryAllowlist:
+    """E2E: the dashboards/ directory is in the read/write allowlist."""
+
+    async def test_write_dashboard_yaml_file(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            "ha_write_file",
+            {
+                "path": "dashboards/ha_mcp_test_view.yaml",
+                "content": "title: HA MCP Test\nviews:\n  - title: Home\n    cards: []\n",
+                "overwrite": True,
+            },
+        )
+        assert data.get("success") is True, data
+
+    async def test_read_dashboard_yaml_file(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            READ_TOOL,
+            {"path": "dashboards/ha_mcp_test_view.yaml"},
+        )
+        assert data.get("success") is True
+        assert "HA MCP Test" in data["content"]
+
+    async def test_delete_dashboard_yaml_file(self, mcp_client_with_yaml_config):
+        data = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            "ha_delete_file",
+            {"path": "dashboards/ha_mcp_test_view.yaml", "confirm": True},
+        )
+        assert data.get("success") is True
