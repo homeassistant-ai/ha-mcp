@@ -286,3 +286,84 @@ class TestSaveToolsValidation:
         assert resp.status_code == 200
         saved = json.loads(config_path.read_text())
         assert saved["tools"] == {"ha_good_tool": "disabled"}
+
+
+class TestRestartAddon:
+    """Tests for the `/api/settings/restart` handler — pins the two
+    untested branches in `_restart_addon` (`settings_ui.py:780-789` no-token,
+    `:798-801` connection-drop-as-success). Boy-Scout pin landed alongside
+    the `verify_ssl` propagation in this PR; closes the test-coverage gap
+    flagged in #960's approve-body."""
+
+    def _capture_handler(self, monkeypatch, *, with_token: bool = True) -> SaveHandler:
+        """Capture the `_restart_addon` closure from `register_settings_routes`.
+
+        Mirrors `TestSaveToolsValidation._capture_handler`. `with_token`
+        toggles the env so the no-token branch and the happy-path branches
+        can both be exercised from the same fixture.
+        """
+        if with_token:
+            monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        else:
+            monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+        captured: dict[str, Any] = {}
+
+        def custom_route_factory(path: str, methods: list[str]):
+            def decorator(fn: Any) -> Any:
+                if path.endswith("/api/settings/restart") and "POST" in methods:
+                    captured["restart"] = fn
+                return fn
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        # `_restart_addon` reads `server.settings.verify_ssl` in this PR's
+        # post-G1 state — must resolve to a real bool, not a MagicMock,
+        # because httpx accepts only bool/SSLContext for `verify=`.
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["restart"]
+
+    @pytest.mark.asyncio
+    async def test_returns_400_without_supervisor_token(self, monkeypatch):
+        """`settings_ui.py:780-789` no-token branch: when SUPERVISOR_TOKEN is
+        unset (non-addon install), the endpoint must surface a structured 400
+        rather than ever reaching the Supervisor URL.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=False)
+        request = MagicMock()
+
+        resp = await restart(request)
+
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_treats_connection_drop_as_success(self, monkeypatch):
+        """`settings_ui.py:798-801` drop-as-success branch: the Supervisor
+        kills our process mid-request during a restart, so a `ReadError` /
+        `RemoteProtocolError` / `ConnectError` from the POST is the
+        documented success signal — not a failure to surface.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        # Patch the AsyncClient at the module level so the restart's
+        # `httpx.AsyncClient(...)` block resolves to a controllable mock.
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=__import__("httpx").ReadError("kill"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert "Restart initiated" in body["message"]
