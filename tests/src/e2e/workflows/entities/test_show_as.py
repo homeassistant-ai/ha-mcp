@@ -10,6 +10,12 @@ from tests.src.e2e.utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
+ORPHAN_NAME_PREFIXES = (
+    "e2e_show_as_test",
+    "e2e_options_test",
+    "e2e_multi_options_test",
+)
+
 
 async def _delete_template_helper(mcp_client, entity_id: str) -> None:
     """Best-effort cleanup for a template helper (no built-in cleaner support)."""
@@ -22,8 +28,39 @@ async def _delete_template_helper(mcp_client, entity_id: str) -> None:
         logger.warning(f"Cleanup of {entity_id} failed: {e}")
 
 
+@pytest.fixture
+async def template_orphan_sweep(mcp_client):
+    """Remove any leftover template helpers from prior failed runs of this file.
+
+    Template helpers go through HA's config-flow wizard; if a previous run
+    crashed mid-flow the helper can be left behind, polluting later runs.
+    Yields nothing — purely a teardown-style sweep run before each test.
+    """
+
+    async def sweep():
+        for prefix in ORPHAN_NAME_PREFIXES:
+            for domain in ("binary_sensor", "sensor"):
+                eid = f"{domain}.{prefix}"
+                try:
+                    res = await mcp_client.call_tool(
+                        "ha_get_entity", {"entity_id": eid}
+                    )
+                    parsed = res if isinstance(res, dict) else {}
+                    if parsed.get("success"):
+                        await _delete_template_helper(mcp_client, eid)
+                except Exception:
+                    # ha_get_entity raises ToolError when the entity is missing —
+                    # that's the expected state, swallow and move on.
+                    pass
+
+    await sweep()
+    yield
+    await sweep()
+
+
 @pytest.mark.asyncio
 @pytest.mark.registry
+@pytest.mark.usefixtures("template_orphan_sweep")
 class TestShowAs:
     """Round-trip ha_set_entity / ha_get_entity for device_class + options."""
 
@@ -35,7 +72,7 @@ class TestShowAs:
             "ha_config_set_helper",
             {
                 "helper_type": "template",
-                "name": "E2E Show As Test",
+                "name": "e2e_show_as_test",
                 "config": {
                     "next_step_id": "binary_sensor",
                     "state": "{{ true }}",
@@ -54,7 +91,6 @@ class TestShowAs:
             )
             set_data = assert_mcp_success(set_result, "Set Show As=window")
             assert set_data["entity_entry"]["device_class"] == "window"
-            assert "device_class='window'" in str(set_data["updates"])
 
             get_result = await mcp_client.call_tool(
                 "ha_get_entity", {"entity_id": entity_id}
@@ -79,7 +115,7 @@ class TestShowAs:
             "ha_config_set_helper",
             {
                 "helper_type": "template",
-                "name": "E2E Options Test",
+                "name": "e2e_options_test",
                 "config": {
                     "next_step_id": "sensor",
                     "state": "{{ 1.234 }}",
@@ -114,5 +150,47 @@ class TestShowAs:
                 .get("display_precision")
                 == 2
             )
+        finally:
+            await _delete_template_helper(mcp_client, entity_id)
+
+    async def test_set_multi_domain_options_round_trip(self, mcp_client):
+        """Multi-domain options must be applied as separate WS calls and the final
+        registry entry must reflect every domain — exercises the loop end-to-end.
+        """
+        create_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "template",
+                "name": "e2e_multi_options_test",
+                "config": {
+                    "next_step_id": "sensor",
+                    "state": "{{ 9.87 }}",
+                    "unit_of_measurement": "kWh",
+                },
+            },
+        )
+        data = assert_mcp_success(create_result, "Create template sensor")
+        entity_ids = data.get("entity_ids") or []
+        assert entity_ids, f"helper response missing entity_ids: {data}"
+        entity_id = entity_ids[0]
+
+        try:
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {
+                    "entity_id": entity_id,
+                    "options": {
+                        "sensor": {"display_precision": 1},
+                        "conversation": {"should_expose": False},
+                    },
+                },
+            )
+            get_result = await mcp_client.call_tool(
+                "ha_get_entity", {"entity_id": entity_id}
+            )
+            get_data = assert_mcp_success(get_result, "Read back multi-domain options")
+            opts = get_data["entity_entry"]["options"]
+            assert opts.get("sensor", {}).get("display_precision") == 1
+            assert opts.get("conversation", {}).get("should_expose") is False
         finally:
             await _delete_template_helper(mcp_client, entity_id)

@@ -1430,17 +1430,18 @@ class TestHaSetEntityShowAs:
 
     @pytest.mark.asyncio
     async def test_device_class_empty_string_clears(self, mock_mcp, mock_client):
-        """device_class='' clears the override (sends None)."""
+        """device_class='' clears the override (sends None) and surfaces 'cleared' in updates."""
         mock_client.send_websocket_message = AsyncMock(
             return_value=self._registry_response(device_class=None)
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        await tool(entity_id="binary_sensor.test", device_class="")
+        result = await tool(entity_id="binary_sensor.test", device_class="")
 
         ws_msg = mock_client.send_websocket_message.call_args[0][0]
         assert ws_msg["device_class"] is None
+        assert "device_class cleared" in str(result["updates"])
 
     @pytest.mark.asyncio
     async def test_options_single_domain_pairs_options_domain(
@@ -1462,6 +1463,15 @@ class TestHaSetEntityShowAs:
 
         assert mock_client.send_websocket_message.call_count == 1
         ws_msg = mock_client.send_websocket_message.call_args[0][0]
+        # When options is the only param, the main registry update is skipped
+        # and the per-domain update carries exactly these keys — no spurious
+        # device_class=None or other accidental fields.
+        assert set(ws_msg.keys()) == {
+            "type",
+            "entity_id",
+            "options_domain",
+            "options",
+        }
         assert ws_msg["options_domain"] == "sensor"
         assert ws_msg["options"] == {"display_precision": 2}
 
@@ -1469,14 +1479,27 @@ class TestHaSetEntityShowAs:
     async def test_options_multi_domain_splits_into_separate_calls(
         self, mock_mcp, mock_client
     ):
-        """A multi-domain options dict must be split — HA schema requires one domain per call."""
+        """A multi-domain options dict must be split — HA schema requires one domain per call.
+
+        Uses side_effect so each call gets its own response, exercising the loop's
+        entity_entry reassignment from each per-domain response.
+        """
+        sensor_response = self._registry_response(
+            options={"sensor": {"display_precision": 1}}
+        )
+        weather_response = self._registry_response(
+            options={
+                "sensor": {"display_precision": 1},
+                "weather": {"forecast_type": "hourly"},
+            }
+        )
         mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response()
+            side_effect=[sensor_response, weather_response]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        await tool(
+        result = await tool(
             entity_id="sensor.temp",
             options={
                 "sensor": {"display_precision": 1},
@@ -1485,10 +1508,47 @@ class TestHaSetEntityShowAs:
         )
 
         calls = [c.args[0] for c in mock_client.send_websocket_message.call_args_list]
-        domains = sorted(c["options_domain"] for c in calls)
-        assert domains == ["sensor", "weather"]
+        domains = [c["options_domain"] for c in calls]
+        assert domains == ["sensor", "weather"]  # insertion order preserved
         for c in calls:
             assert "options_domain" in c and "options" in c
+        # Final entity_entry reflects the LAST per-domain response (loop reassigns).
+        assert result["entity_entry"]["options"]["weather"] == {
+            "forecast_type": "hourly"
+        }
+        assert result["entity_entry"]["options"]["sensor"] == {"display_precision": 1}
+
+    @pytest.mark.asyncio
+    async def test_options_partial_failure_surfaces_partial_state(
+        self, mock_mcp, mock_client
+    ):
+        """If domain N+1 fails after 1..N succeeded, the error must report partial=True
+        and list which domains were already written. Otherwise callers retry blindly
+        and risk applying earlier changes twice or missing them entirely.
+        """
+        ok = self._registry_response(options={"sensor": {"display_precision": 1}})
+        fail = {"success": False, "error": {"message": "unsupported_domain"}}
+        mock_client.send_websocket_message = AsyncMock(side_effect=[ok, fail])
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id="sensor.temp",
+                options={
+                    "sensor": {"display_precision": 1},
+                    "weather": {"forecast_type": "hourly"},
+                },
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "weather" in body["error"]["message"]
+        assert "unsupported_domain" in body["error"]["message"]
+        # create_error_response merges `context` into the top-level response.
+        assert body["options_domain"] == "weather"
+        assert body["partial"] is True
+        assert body["options_succeeded"] == {"sensor": {"display_precision": 1}}
 
     @pytest.mark.asyncio
     async def test_options_json_string_is_parsed(self, mock_mcp, mock_client):
@@ -1512,7 +1572,8 @@ class TestHaSetEntityShowAs:
     async def test_options_invalid_shape_raises_validation_error(
         self, mock_mcp, mock_client
     ):
-        """options must be a dict mapping domain to sub-dict — list rejected."""
+        """options must be a dict mapping domain to sub-dict — list rejected,
+        and the error message names the actual type the caller passed."""
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
@@ -1521,6 +1582,67 @@ class TestHaSetEntityShowAs:
 
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "got list" in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_options_inner_value_must_be_dict(self, mock_mcp, mock_client):
+        """options={'sensor': 'not-a-dict'} must be rejected with a targeted message."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="sensor.temp", options={"sensor": "not-a-dict"})
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "sensor" in body["error"]["message"]
+        assert "str" in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_options_empty_dict_rejected(self, mock_mcp, mock_client):
+        """options={} must be rejected at validation rather than falling through to
+        the generic 'No updates specified' error."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="sensor.temp", options={})
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "empty" in body["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_bulk_rejects_device_class(self, mock_mcp, mock_client):
+        """device_class is single-entity-only — passing it with a list raises."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id=["binary_sensor.a", "binary_sensor.b"],
+                device_class="window",
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "device_class" in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_rejects_options(self, mock_mcp, mock_client):
+        """options is single-entity-only — passing it with a list raises."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(
+                entity_id=["sensor.a", "sensor.b"],
+                options={"sensor": {"display_precision": 2}},
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "options" in body["error"]["message"]
 
 
 class TestHaGetEntityRegistryOptions:
