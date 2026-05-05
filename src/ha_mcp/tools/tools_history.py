@@ -14,6 +14,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -205,6 +206,7 @@ class HistoryTools:
                 default=None,
             ),
         ] = None,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Retrieve historical data from Home Assistant's recorder.
@@ -288,6 +290,18 @@ class HistoryTools:
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
 
+            if ctx is not None:
+                await ctx.info(
+                    f"ha_get_history starting: source={source} "
+                    f"entities={len(entity_id_list)} "
+                    f"window={start_dt.isoformat()}..{end_dt.isoformat()}"
+                )
+                await ctx.report_progress(
+                    progress=0,
+                    total=3,
+                    message="connecting to Home Assistant WebSocket",
+                )
+
             # Connect to WebSocket (shared by both sources)
             ws_client, error = await get_connected_ws_client(
                 self._client.base_url,
@@ -300,20 +314,34 @@ class HistoryTools:
                     "Failed to connect to Home Assistant WebSocket",
                 ))
 
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=1,
+                    total=3,
+                    message=f"querying recorder ({source})",
+                )
+
             try:
                 if source == "statistics":
-                    return await _fetch_statistics(
+                    result = await _fetch_statistics(
                         ws_client, self._client, entity_id_list,
                         start_dt, end_dt, period, statistic_types,
                         limit, offset,
                     )
                 else:
-                    return await _fetch_history(
+                    result = await _fetch_history(
                         ws_client, self._client, entity_id_list,
                         start_dt, end_dt, minimal_response,
                         significant_changes_only, limit, offset,
                         _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
                     )
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=3,
+                        total=3,
+                        message="recorder query complete",
+                    )
+                return result
             finally:
                 if ws_client:
                     await ws_client.disconnect()

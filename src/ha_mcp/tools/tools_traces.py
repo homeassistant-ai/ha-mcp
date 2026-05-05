@@ -9,6 +9,7 @@ import json
 import logging
 from typing import Annotated, Any
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -91,6 +92,7 @@ class TraceTools:
                 default=None,
             ),
         ] = None,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Retrieve execution traces for automations and scripts to debug issues.
@@ -165,6 +167,17 @@ class TraceTools:
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
 
+            if ctx is not None:
+                await ctx.info(
+                    f"ha_get_automation_traces starting: id={automation_id} "
+                    f"run_id={run_id or '<list>'}"
+                )
+                await ctx.report_progress(
+                    progress=0,
+                    total=3,
+                    message="connecting to Home Assistant WebSocket",
+                )
+
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
                 self._client.base_url,
@@ -185,6 +198,13 @@ class TraceTools:
                     ws_client, automation_id, object_id
                 )
 
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=1,
+                        total=3,
+                        message=f"fetching trace {'detail' if run_id else 'list'}",
+                    )
+
                 if run_id:
                     # Get specific trace details
                     result = await ws_client.send_command(
@@ -195,16 +215,20 @@ class TraceTools:
                     )
 
                     if not result.get("success"):
-                        ctx = {"automation_id": automation_id}
+                        err_ctx: dict[str, str] = {"automation_id": automation_id}
                         if run_id:
-                            ctx["run_id"] = run_id
+                            err_ctx["run_id"] = run_id
                         raise_tool_error(create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
                             result.get("error", "Failed to retrieve trace"),
-                            context=ctx,
+                            context=err_ctx,
                         ))
 
                     trace_data = result.get("result", {})
+                    if ctx is not None:
+                        await ctx.report_progress(
+                            progress=3, total=3, message="formatting trace"
+                        )
                     return _format_detailed_trace(
                         automation_id, run_id, trace_data,
                         deduplicate=deduplicate, detailed=detailed,
@@ -229,13 +253,29 @@ class TraceTools:
 
                     # If traces are empty, gather diagnostic information
                     if not traces_data:
+                        if ctx is not None:
+                            await ctx.report_progress(
+                                progress=2,
+                                total=3,
+                                message="no traces; gathering diagnostics",
+                            )
                         diagnostics = await _gather_diagnostics(
                             ws_client, self._client, automation_id, domain
                         )
+                        if ctx is not None:
+                            await ctx.report_progress(
+                                progress=3, total=3, message="diagnostics complete"
+                            )
                         return _format_trace_list(
                             automation_id, traces_data, limit, diagnostics
                         )
 
+                    if ctx is not None:
+                        await ctx.report_progress(
+                            progress=3,
+                            total=3,
+                            message=f"listed {len(traces_data)} traces",
+                        )
                     return _format_trace_list(automation_id, traces_data, limit)
 
             finally:
