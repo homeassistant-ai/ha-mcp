@@ -470,7 +470,7 @@ class HomeAssistantClient:
         return response.text
 
     async def _get_addon_logs_via_supervisor(self, slug: str) -> str:
-        """Direct Supervisor REST API fetch for add-on installs.
+        """Fetch add-on logs directly from the Supervisor REST API.
 
         Mirrors the access pattern used by ``tools_bug_report._fetch_addon_logs``:
         a fresh ``httpx.AsyncClient`` against ``http://supervisor`` authed with
