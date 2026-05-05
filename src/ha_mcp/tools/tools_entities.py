@@ -73,13 +73,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
         result = await client.send_websocket_message(get_msg)
         if not result.get("success"):
-            error = result.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
-            return None, error_msg
+            return None, _extract_ws_error(result)
         return result.get("result", {}).get("labels", []), None
 
     async def _update_single_entity(
@@ -320,6 +314,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if partial
                         else "Failed to update options for"
                     )
+                    # `options_succeeded` is the structured retriable form
+                    # (agent can re-feed it minus the failing domain).
+                    # `updates_applied` is the human-readable prose list
+                    # including non-options updates (name=, icon=, etc.).
+                    # Both are surfaced — they serve different consumers.
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
@@ -357,7 +356,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     entity_entry = get_result.get("result", {})
                 else:
                     logger.warning(
-                        f"Entity registry lookup failed for {entity_id}: {get_result.get('error')}"
+                        "Entity registry lookup failed for %s: %s",
+                        entity_id,
+                        _extract_ws_error(get_result),
                     )
                     device_rename_result = {
                         "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
@@ -381,7 +382,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_rename_result = {"success": True, "device_id": device_id}
                 else:
                     device_rename_result = {
-                        "warning": f"Entity updated but device rename failed: {device_result.get('error', 'Unknown error')}",
+                        "warning": f"Entity updated but device rename failed: {_extract_ws_error(device_result)}",
                         "device_id": device_id,
                     }
 
@@ -417,14 +418,31 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if not expose_result.get("success"):
                     error_msg = _extract_ws_error(expose_result)
                     failed = dict.fromkeys(assistants, should_expose)
+                    # `partial` must reflect every prior mutation in the function:
+                    # main registry update, per-domain options, device rename, and
+                    # any expose_to batch (e.g. expose_true) that ran before this
+                    # one (expose_false) failed. Anything truthy in those means
+                    # the registry already moved.
+                    prior_mutation = (
+                        has_registry_updates
+                        or bool(options_succeeded)
+                        or bool(succeeded)
+                        or bool(
+                            device_rename_result and device_rename_result.get("success")
+                        )
+                    )
                     context: dict[str, Any] = {
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
                     }
-                    if has_registry_updates:
+                    if prior_mutation:
                         context["partial"] = True
                         context["entity_entry"] = _format_entity_entry(entity_entry)
+                        if options_succeeded:
+                            context["options_succeeded"] = options_succeeded
+                        if device_rename_result and device_rename_result.get("success"):
+                            context["device_rename_succeeded"] = True
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
@@ -510,7 +528,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         entity_id: Annotated[
             str | list[str],
             Field(
-                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels and expose_to parameters."
+                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters."
             ),
         ],
         area_id: Annotated[
@@ -1031,19 +1049,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "error": str(result),
                         }
                     )
-                elif result.get("success"):
+                else:
+                    # _update_single_entity always returns success-shape or
+                    # raises ToolError (caught above as BaseException), so the
+                    # `result.get("success") is False` branch is unreachable.
                     succeeded.append(
                         {
                             "entity_id": eid,
                             "entity_entry": result.get("entity_entry"),
                             "updates": result.get("updates"),
-                        }
-                    )
-                else:
-                    failed.append(
-                        {
-                            "entity_id": eid,
-                            "error": result.get("error", "Unknown error"),
                         }
                     )
 
@@ -1163,13 +1177,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result = await client.send_websocket_message(message)
 
                 if not result.get("success"):
-                    error = result.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
-                    )
-                    raise ValueError(error_msg)
+                    raise ValueError(_extract_ws_error(result))
 
                 entry = result.get("result", {})
                 return {
@@ -1314,12 +1322,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not result.get("success"):
-                error = result.get("error", {})
-                error_msg = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
+                error_msg = _extract_ws_error(result)
                 if "not found" in error_msg.lower():
                     raise_tool_error(
                         create_error_response(
