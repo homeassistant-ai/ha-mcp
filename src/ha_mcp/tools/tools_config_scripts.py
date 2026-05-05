@@ -95,6 +95,8 @@ class ConfigScriptTools:
 
         Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 
+        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+
         EXAMPLES:
         - Get script: ha_config_get_script("morning_routine")
         - Get script: ha_config_get_script("backup_script")
