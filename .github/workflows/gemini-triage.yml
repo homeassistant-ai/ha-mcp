@@ -74,6 +74,22 @@ jobs:
               return;
             }
 
+            // Circuit breaker: if a previous triage attempt posted the
+            // generic "temporarily unavailable" notice, the failure path
+            // applied `triage-failed`. Stop auto-retriggering on every
+            // subsequent comment — without this gate, large issues that
+            // exceed maxSessionTurns or otherwise consistently fail end
+            // up with a stack of identical "temporarily unavailable"
+            // notices, one per author comment. Maintainers can use
+            // workflow_dispatch to retry manually once the underlying
+            // cause is fixed; the success path also removes this label.
+            const hasTriageFailedLabel = issue.labels.some(l => l.name === 'triage-failed');
+            if (hasTriageFailedLabel && context.eventName !== 'workflow_dispatch') {
+              core.info('Skipping: Previous triage failed (has triage-failed label). Use workflow_dispatch to retry.');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
             // Don't run if bot commented. Broad `type === 'Bot'` (not just
             // `github-actions[bot]`) is intentional here — we want to ignore
             // retriggers from any bot, including Dependabot/Renovate update
@@ -427,7 +443,7 @@ jobs:
           settings: |
             {
               "model": {
-                "maxSessionTurns": 20
+                "maxSessionTurns": 50
               },
               "tools": {
                 "core": [
@@ -660,6 +676,10 @@ jobs:
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
+            // Set on every path that posts GENERIC_FAILURE_BODY. Drives the
+            // `triage-failed` circuit-breaker label so the next comment from
+            // the issue author doesn't auto-retrigger another doomed run.
+            let shouldAddFailedLabel = false;
             let extraLabels = [];
 
             // CLI step failures must NEVER expose raw stderr to issue authors.
@@ -669,6 +689,7 @@ jobs:
             if (evaluateOutcome === 'failure' || geminiOutcome === 'failure') {
               core.error(`Gemini triage step failed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
               analysisBody = GENERIC_FAILURE_BODY;
+              shouldAddFailedLabel = true;
             } else if (geminiSummary) {
               const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
               if (labelMatch) {
@@ -743,6 +764,7 @@ jobs:
               if (looksLikeRefusal || tooLong) {
                 core.error(`evaluate output diverted to generic notice (looksLikeRefusal=${looksLikeRefusal}, length=${trimmed.length}); raw output: ${trimmed.slice(0, 200)}`);
                 analysisBody = GENERIC_FAILURE_BODY;
+                shouldAddFailedLabel = true;
               } else {
                 if (!matchesMissingInfoShape) {
                   core.warning(`evaluate output didn't match expected bullet/numbered/bold list shape (length=${trimmed.length}); posting LLM prose verbatim.`);
@@ -756,6 +778,7 @@ jobs:
             } else {
               core.error(`Triage produced no usable output (evaluateOutcome=${evaluateOutcome}, geminiOutcome=${geminiOutcome}); posting generic notice.`);
               analysisBody = GENERIC_FAILURE_BODY;
+              shouldAddFailedLabel = true;
             }
 
             try {
@@ -773,8 +796,9 @@ jobs:
               return;
             }
 
+            const issueNumber = ${{ steps.issue_number.outputs.number }};
+
             if (shouldAddTriagedLabel) {
-              const issueNumber = ${{ steps.issue_number.outputs.number }};
               const labelsToAdd = ['triaged', ...extraLabels];
               core.info(`Adding labels: ${labelsToAdd.join(', ')}`);
               try {
@@ -790,6 +814,49 @@ jobs:
                 // future comment, piling up placeholders. Fail loudly so a
                 // maintainer adds the label by hand.
                 core.setFailed(`addLabels failed for issue #${issueNumber} (${labelsToAdd.join(',')}): ${err.message}. Issue will re-trigger triage on next comment until 'triaged' is applied manually.`);
+              }
+
+              // Successful triage clears any prior `triage-failed` circuit-breaker
+              // so the issue's label state reflects the final outcome (this matters
+              // when a maintainer recovers a stuck issue via workflow_dispatch).
+              // 404 = label wasn't there to begin with; that's fine and not an error.
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: 'triage-failed'
+                });
+                core.info(`Removed stale 'triage-failed' label from issue #${issueNumber}`);
+              } catch (err) {
+                if (err.status !== 404) {
+                  core.warning(`Failed to remove 'triage-failed' label from issue #${issueNumber}: ${err.message}`);
+                }
+              }
+            }
+
+            if (shouldAddFailedLabel) {
+              // Circuit breaker: applying `triage-failed` blocks the
+              // should_run gate from auto-retriggering on every subsequent
+              // author comment. Without it, a consistently-failing issue
+              // (e.g. one that exceeds maxSessionTurns) accumulates one
+              // "temporarily unavailable" notice per comment. Maintainers
+              // can clear the label or use workflow_dispatch to retry.
+              core.info(`Adding 'triage-failed' label to issue #${issueNumber} to break retrigger loop`);
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  labels: ['triage-failed']
+                });
+              } catch (err) {
+                // Don't `setFailed` here — the failure-path job is already
+                // going to exit 1 in the trailing "Fail job if Gemini
+                // steps failed" step, and this label is a circuit breaker
+                // not a correctness gate. Warn so a maintainer notices if
+                // the label wasn't applied (without it, the loop persists).
+                core.warning(`addLabels failed for 'triage-failed' on issue #${issueNumber}: ${err.message}. Triage may retrigger on next comment until label is applied manually.`);
               }
             }
 
