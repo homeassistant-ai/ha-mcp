@@ -16,7 +16,7 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `secret_path` | Custom secret path (optional) | auto-generated |
 | `enable_skills` | Serve bundled HA best-practice skills as MCP resources | `true` |
 | `enable_skills_as_tools` | Expose skills via list_resources/read_resource tools | `true` |
-| `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — conflicts with their built-in deferred tools and breaks tool discovery (issue #1088). | `false` |
+| `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — their built-in tool search conflicts with ha-mcp's. Disable one or the other. | `false` |
 | `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. | `false` |
 | `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. | `false` |
 | `enable_custom_component_integration` *(beta)* | Enables `ha_install_mcp_tools` installer tool for the `ha_mcp_tools` custom component. | `false` |

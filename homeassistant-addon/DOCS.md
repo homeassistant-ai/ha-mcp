@@ -248,7 +248,7 @@ Requires add-on restart to take effect.
 
 Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
-> ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Sonnet and Opus run Claude's own built-in deferred tool search, and stacking ha-mcp's search transform on top of it actively breaks tool discovery — read-only tools (e.g. `ha_call_read_tool`) can fail to surface, leaving every read tool unreachable. See [issue #1088](https://github.com/homeassistant-ai/ha-mcp/issues/1088). If you want ha-mcp's search with Claude anyway, you must first turn off Claude's own internal tool search / deferred tools in your client settings — running both at once does not work.
+> ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -256,7 +256,7 @@ Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discov
 - MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
 
 **When to leave disabled (default):**
-- **Claude in Sonnet or Opus modes** — leave this off. Their built-in deferred tool loader collides with ha-mcp's search transform and breaks tool discovery (issue #1088).
+- **Claude in Sonnet or Opus modes** — their built-in tool search conflicts with ha-mcp's. Disable one or the other.
 - Other clients with native deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost.
 - When you need direct tool access without the search step.
 
