@@ -388,14 +388,14 @@ class AreaTools:
         floor_id: Annotated[
             str | None,
             Field(
-                description="Floor assignment when kind='area' (use empty string to clear). Ignored when kind='floor'.",
+                description="Floor assignment when kind='area' (use empty string to clear). Only valid when kind='area'.",
                 default=None,
             ),
         ] = None,
         level: Annotated[
             int | None,
             Field(
-                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement). Ignored when kind='area'.",
+                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement). Only valid when kind='floor'.",
                 default=None,
             ),
         ] = None,
@@ -416,7 +416,7 @@ class AreaTools:
         picture: Annotated[
             str | None,
             Field(
-                description="Picture URL when kind='area' (empty string to remove). Ignored when kind='floor'.",
+                description="Picture URL when kind='area' (empty string to remove). Only valid when kind='area'.",
                 default=None,
             ),
         ] = None,
@@ -425,11 +425,13 @@ class AreaTools:
 
         Pass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
+        Cross-kind parameters (e.g., picture under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
         ha_set_area_or_floor(kind="area", id="kitchen", floor_id="ground_floor")
         ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
+        ha_set_area_or_floor(kind="floor", id="ground_floor", level=0)
         """
         operation = "create"
         try:
@@ -439,6 +441,42 @@ class AreaTools:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Invalid aliases parameter: {e}",
+                ))
+
+            # Reject cross-kind params loudly so silent intent loss can't happen
+            # (e.g., kind='floor' with picture='...' previously dropped the picture
+            # without a diagnostic).
+            cross_kind_params: list[str] = []
+            if kind == "area" and level is not None:
+                cross_kind_params.append("level")
+            elif kind == "floor":
+                if floor_id is not None:
+                    cross_kind_params.append("floor_id")
+                if picture is not None:
+                    cross_kind_params.append("picture")
+            if cross_kind_params:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
+                    context={"kind": kind, "invalid_parameters": cross_kind_params},
+                    suggestions=[
+                        "For kind='area' use: name, id, floor_id, icon, aliases, picture",
+                        "For kind='floor' use: name, id, level, icon, aliases",
+                    ],
+                ))
+
+            # Reject empty-string id explicitly. `if id:` below treats it as
+            # falsy and would silently route to the create branch — destructive
+            # if the caller intended an update.
+            if id == "":
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "id must be a non-empty string when provided (omit to create)",
+                    context={"kind": kind},
+                    suggestions=[
+                        "Omit id entirely to create a new entry",
+                        "Pass a real area_id/floor_id to update an existing entry",
+                    ],
                 ))
 
             if kind == "area":
@@ -545,8 +583,9 @@ class AreaTools:
     ) -> dict[str, Any]:
         """Delete a Home Assistant area or floor.
 
-        Entities, devices, or areas attached to the deleted entry are not deleted —
-        just unassigned. May break automations referencing the removed area/floor.
+        Deleting an area unassigns its entities and devices (the entities and
+        devices themselves are not deleted). Deleting a floor unassigns its
+        areas. May break automations referencing the removed area/floor.
         """
         registry = "area_registry" if kind == "area" else "floor_registry"
         id_key = "area_id" if kind == "area" else "floor_id"

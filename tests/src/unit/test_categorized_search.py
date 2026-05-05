@@ -383,7 +383,7 @@ class TestCategorizedCallDispatch:
         """Correct delete tool via delete proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
         fn = self._get_proxy_fn(transform, "delete")
-        result = await fn("ha_remove_area_or_floor", {"area_id": "garage"}, ctx)
+        result = await fn("ha_remove_area_or_floor", {"kind": "area", "id": "garage"}, ctx)
         assert result == {"success": True}
 
     @pytest.mark.anyio

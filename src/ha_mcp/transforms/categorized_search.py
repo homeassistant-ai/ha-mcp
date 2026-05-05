@@ -119,7 +119,7 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"name": "Kitchen"}})'
+            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})'
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
