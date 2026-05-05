@@ -150,21 +150,32 @@ jobs:
             const PLACEHOLDER_PREFIX = '🤖 **Issue Triage Bot is analyzing this issue...**';
             const PLACEHOLDER_BODY = `${PLACEHOLDER_PREFIX}\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.`;
 
+            // Match strictly on `github-actions[bot]` (not just user.type === 'Bot')
+            // so a Dependabot/Renovate/etc. comment that happens to share the
+            // prefix can never be hijacked.
+            const isOurOrphan = (c) =>
+              c.user && c.user.login === 'github-actions[bot]' &&
+              c.body && c.body.startsWith(PLACEHOLDER_PREFIX);
+
             // Reuse / clean up orphan placeholders from prior cancelled runs.
             // The `Update comment` step is gated on `!cancelled()`, so a run
             // that gets cancelled (concurrency cancel-in-progress, job
             // timeout) never touches its own placeholder again — without
             // this cleanup, the placeholder stays as orphan text on the
             // issue forever and every retriggering comment piles up a new one.
-            const existing = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            });
-            const orphans = existing.data.filter(c =>
-              c.user && c.user.type === 'Bot' && c.body && c.body.startsWith(PLACEHOLDER_PREFIX)
-            );
+            let existing;
+            try {
+              existing = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+            } catch (err) {
+              core.warning(`listComments failed during orphan check (${err.message}); proceeding to create a fresh placeholder.`);
+              existing = { data: [] };
+            }
+            const orphans = existing.data.filter(isOurOrphan);
 
             let commentId;
             if (orphans.length > 0) {
@@ -191,6 +202,36 @@ jobs:
               });
               commentId = created.data.id;
             }
+
+            // Defensive re-list AFTER our action: if a concurrent run lost
+            // the cancel race and was mid-createComment when we listed
+            // earlier, its orphan landed after our snapshot. Find and delete
+            // any other matching placeholders so the issue is left with
+            // exactly one (ours).
+            try {
+              const recheck = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              const stragglers = recheck.data.filter(c => isOurOrphan(c) && c.id !== commentId);
+              for (const stale of stragglers) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: stale.id,
+                  });
+                  core.info(`Cleaned up straggler placeholder ${stale.id} from a concurrent run.`);
+                } catch (err) {
+                  core.warning(`Failed to delete straggler placeholder ${stale.id}: ${err.message}`);
+                }
+              }
+            } catch (err) {
+              core.warning(`Defensive re-list for straggler cleanup failed: ${err.message}`);
+            }
+
             core.setOutput('comment_id', commentId);
             return commentId;
 
@@ -338,6 +379,8 @@ jobs:
           GEMINI_CLI_TRUST_WORKSPACE: 'true'
         with:
           gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          # Preview alias — review when gemini-3-flash GAs (or when a
+          # gemini-3.1-flash-preview lands, mirroring the 3-pro → 3.1-pro move).
           gemini_model: 'gemini-3-flash-preview'
           settings: |
             {
@@ -577,8 +620,15 @@ jobs:
       # superseded run (user posts a follow-up comment that retriggers triage)
       # would otherwise land here and overwrite the in-flight placeholder with
       # a "bot unavailable" notice — that's noise, not a failure. The
-      # replacement run will post the real analysis. Job timeout also surfaces
-      # as cancellation and we accept losing the placeholder in that rare case.
+      # replacement run will post the real analysis.
+      #
+      # Trade-off: GitHub Actions also surfaces job timeout (timeout-minutes:
+      # 12 above) as `cancelled()`, so a real timeout exits the run green
+      # with the placeholder still on the issue. The next user comment will
+      # retrigger triage and the orphan-cleanup in `Post initial` will pick
+      # up the stale placeholder. Acceptable: the user-visible artifact
+      # eventually gets repaired and timeouts are rare relative to
+      # superseded runs (which are common per issue).
       - name: Update comment and labels
         if: ${{ !cancelled() && steps.initial_comment.outputs.comment_id }}
         uses: actions/github-script@v9
@@ -625,30 +675,34 @@ jobs:
               analysisBody = geminiSummary.replace(/\n?<!--\s*TRIAGE_LABELS:.*?-->\n?/g, '').trimEnd();
               shouldAddTriagedLabel = true;
             } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
-              // Missing-info path: validate the LLM's output before posting it
-              // verbatim. A safety-filter refusal or off-format prose no longer
-              // gets dressed up as a polite info request to the user. Accept
-              // bulleted (`* `/`- `/`• `), numbered (`1. `), or bold-led
-              // (`**Item**`) lines — Gemini emits all three flavors despite
-              // the prompt asking for `*`. Checking line-by-line so a leading
-              // sentence before the list doesn't fail the shape check; the
-              // trailing space on bullet/numbered prefixes avoids false
-              // positives like `*foo*` (italics) or `1.5` (decimal). The
-              // 4000-char cap is a "this looks like an LLM monologue, not a
-              // missing-info checklist" heuristic; it has nothing to do with
-              // GitHub's 65536-char comment limit.
+              // Missing-info path. The evaluate step said the issue isn't
+              // ready for full analysis, so its output is a question for the
+              // user. Trust the prose — only the genuinely-broken cases
+              // (empty/garbage refusals, runaway monologues) get diverted to
+              // the generic notice. A coherent prose paragraph asking for
+              // version + install method is just as useful to the user as a
+              // bullet list and shouldn't be dressed up as "infra failure".
+              //
+              // The 4000-char cap is a "this looks like an LLM monologue, not
+              // a missing-info checklist" heuristic; it has nothing to do
+              // with GitHub's 65536-char comment limit. The 8-char floor
+              // catches truly empty or one-token refusals like "No." while
+              // letting through tight one-liners ("- HA version").
               const trimmed = evaluateResult.trim();
               const looksLikeMissingInfo = trimmed.split('\n').some(line => {
                 const l = line.trimStart();
                 return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
                        l.startsWith('**') || /^\d+\.\s/.test(l);
               });
-              const tooShort = trimmed.length < 20;
+              const tooShort = trimmed.length < 8;
               const tooLong = trimmed.length > 4000;
-              if (!looksLikeMissingInfo || tooShort || tooLong) {
-                core.error(`evaluate output failed shape check (length=${trimmed.length}, looksLikeMissingInfo=${looksLikeMissingInfo}); posting generic notice instead.`);
+              if (tooShort || tooLong) {
+                core.error(`evaluate output failed length check (length=${trimmed.length}); posting generic notice instead.`);
                 analysisBody = GENERIC_FAILURE_BODY;
               } else {
+                if (!looksLikeMissingInfo) {
+                  core.warning(`evaluate output didn't match expected bullet/numbered/bold list shape (length=${trimmed.length}); posting LLM prose verbatim under Information Needed header.`);
+                }
                 analysisBody = `## ℹ️ Information Needed\n\n`;
                 analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
                 analysisBody += trimmed + '\n\n';
