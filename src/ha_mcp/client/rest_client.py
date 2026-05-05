@@ -484,7 +484,8 @@ class HomeAssistantClient:
 
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout)
+                timeout=httpx.Timeout(self.timeout),
+                verify=self.verify_ssl,
             ) as client:
                 response = await client.get(
                     url,

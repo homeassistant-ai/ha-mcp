@@ -39,6 +39,7 @@ def mock_client():
         client.base_url = "http://test.local:8123"
         client.token = "test-token"
         client.timeout = 30
+        client.verify_ssl = True
         client.httpx_client = MagicMock()
         return client
 
