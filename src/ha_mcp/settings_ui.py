@@ -791,7 +791,7 @@ def register_settings_routes(
         # the connection will drop. A connection drop is actually success.
         try:
             async with httpx.AsyncClient(
-                timeout=5.0, verify=server.client.verify_ssl
+                timeout=5.0, verify=server.settings.verify_ssl
             ) as client:
                 resp = await client.post(
                     "http://supervisor/addons/self/restart",
