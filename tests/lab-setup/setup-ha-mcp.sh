@@ -104,6 +104,7 @@ Environment=HA_TEST_PORT=${HA_PORT}
 ExecStart=${UV_PATH} run hamcp-test-env --no-interactive
 Restart=on-failure
 RestartSec=30s
+KillSignal=SIGINT
 TimeoutStopSec=60
 
 [Install]
