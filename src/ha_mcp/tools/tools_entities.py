@@ -44,6 +44,24 @@ def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_ws_error(result: dict[str, Any]) -> str:
+    """Pull a user-readable message out of a failed WebSocket response.
+
+    Falls back to a static placeholder + warning log when HA returns an
+    empty or malformed error envelope, so the user-facing message never
+    degrades to literal "{}".
+    """
+    error = result.get("error")
+    if isinstance(error, dict):
+        msg = error.get("message")
+        if isinstance(msg, str) and msg:
+            return msg
+    elif isinstance(error, str) and error:
+        return error
+    logger.warning("HA WS response had no usable error detail: %r", result)
+    return "no error detail returned by Home Assistant"
+
+
 def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register entity management tools with the MCP server."""
 
@@ -216,11 +234,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if new_device_name is not None:
             updates_made.append(f"device_name -> {new_device_name}")
 
-        if parsed_options:
-            for _domain, _sub in parsed_options.items():
-                updates_made.append(f"options[{_domain}]={_sub}")
-
-        if not updates_made:
+        # parsed_options entries are appended to updates_made AFTER each per-domain
+        # WS call succeeds, so the response never falsely claims an unwritten domain
+        # was updated. Empty-input check below treats them as "pending" updates.
+        if not updates_made and not parsed_options:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -248,12 +265,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if not result.get("success"):
-                error = result.get("error", {})
-                error_msg = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
+                error_msg = _extract_ws_error(result)
                 suggestions = [
                     "Verify the entity_id exists using ha_search_entities()",
                 ]
@@ -286,11 +298,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if new_entity_id:
                 entity_id = new_entity_id
 
-        # Per-domain options updates: HA's `config/entity_registry/update` WS schema
-        # treats `options_domain` + `options` as a `vol.Inclusive("entity_option")`
-        # group — they MUST be sent paired, and `options` carries only ONE domain's
-        # sub-dict per call. So an agent-supplied {domain: {...}, ...} is split into
-        # one WS call per domain.
+        # Per-domain options updates: HA's WS schema requires `options_domain`
+        # and `options` to be sent paired one domain per call (the API takes a
+        # single domain's sub-dict). An agent-supplied {domain: {...}, ...} is
+        # therefore split into one registry update per domain.
+        options_succeeded: dict[str, dict[str, Any]] = {}
         if parsed_options:
             for opts_domain, opts_sub in parsed_options.items():
                 opts_msg: dict[str, Any] = {
@@ -301,25 +313,32 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
                 opts_result = await client.send_websocket_message(opts_msg)
                 if not opts_result.get("success"):
-                    error = opts_result.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
+                    err_msg = _extract_ws_error(opts_result)
+                    partial = bool(options_succeeded) or has_registry_updates
+                    msg_prefix = (
+                        "Partially updated entity; failed updating options for"
+                        if partial
+                        else "Failed to update options for"
                     )
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Failed to update options for domain '{opts_domain}': {error_msg}",
+                            f"{msg_prefix} domain '{opts_domain}': {err_msg}",
                             context={
                                 "entity_id": entity_id,
                                 "options_domain": opts_domain,
+                                "partial": partial,
+                                "options_succeeded": options_succeeded,
+                                "updates_applied": list(updates_made),
+                                "entity_entry": _format_entity_entry(entity_entry),
                             },
                         )
                     )
                 entity_entry = opts_result.get("result", {}).get(
                     "entity_entry", entity_entry
                 )
+                options_succeeded[opts_domain] = opts_sub
+                updates_made.append(f"options[{opts_domain}]={opts_sub}")
 
         # Handle new_device_name — rename the associated device
         # Normalize empty string to None (no-op, don't clear device name)
@@ -396,12 +415,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 expose_result = await client.send_websocket_message(expose_msg)
 
                 if not expose_result.get("success"):
-                    error = expose_result.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
-                    )
+                    error_msg = _extract_ws_error(expose_result)
                     failed = dict.fromkeys(assistants, should_expose)
                     context: dict[str, Any] = {
                         "entity_id": entity_id,
@@ -526,9 +540,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Override the entity's display device class — what the HA UI's "
                     "'Show As' dropdown writes. Use empty string '' to clear the "
-                    "override and fall back to the integration default. Single entity only. "
-                    "Examples: 'window', 'door', 'motion' for binary_sensor; "
-                    "'temperature', 'humidity' for sensor."
+                    "override and fall back to the integration default. None (the "
+                    "default) means 'no change' — pass an explicit '' to clear. "
+                    "Single entity only. Examples: 'window', 'door', 'motion' for "
+                    "binary_sensor; 'temperature', 'humidity' for sensor."
                 ),
                 default=None,
             ),
@@ -872,14 +887,35 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     )
 
-                if not isinstance(parsed_opts, dict) or not all(
-                    isinstance(v, dict) for v in parsed_opts.values()
-                ):
+                if not isinstance(parsed_opts, dict):
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "options must be a dict mapping domain to a sub-dict, "
+                            f"options must be a dict mapping domain to a sub-dict "
+                            f"(got {type(parsed_opts).__name__}), "
                             'e.g. {"sensor": {"display_precision": 2}}',
+                        )
+                    )
+                if not parsed_opts:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options cannot be an empty dict — pass at least one "
+                            'domain entry, e.g. {"sensor": {"display_precision": 2}}, '
+                            "or omit the parameter entirely.",
+                        )
+                    )
+                bad_subs = [
+                    f"{k!r}: {type(v).__name__}"
+                    for k, v in parsed_opts.items()
+                    if not isinstance(v, dict)
+                ]
+                if bad_subs:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options sub-values must be dicts, got non-dict for: "
+                            f"{', '.join(bad_subs)}",
                         )
                     )
                 parsed_options = parsed_opts
@@ -1078,7 +1114,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - categories: Category assignments (dict mapping scope to category_id)
         - device_class: User "Show As" override (null = use original_device_class)
         - original_device_class: Default device class from the integration
-        - options: Per-domain registry options (e.g. sensor display_precision, voice exposure)
+        - options: Per-domain registry options (e.g. sensor display_precision).
+          Voice-assistant exposure is also stored here but should be set/cleared
+          via the ha_set_entity(expose_to=...) parameter, not the options dict.
         - platform: Integration platform (e.g., "hue", "zwave_js")
         - device_id: Associated device ID (null if standalone)
         - unique_id: Integration's unique identifier
