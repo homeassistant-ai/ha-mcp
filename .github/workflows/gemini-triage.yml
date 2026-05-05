@@ -147,14 +147,52 @@ jobs:
         with:
           script: |
             const issueNumber = ${{ steps.issue_number.outputs.number }};
-            const comment = await github.rest.issues.createComment({
+            const PLACEHOLDER_PREFIX = '🤖 **Issue Triage Bot is analyzing this issue...**';
+            const PLACEHOLDER_BODY = `${PLACEHOLDER_PREFIX}\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.`;
+
+            // Reuse / clean up orphan placeholders from prior cancelled runs.
+            // The `Update comment` step is gated on `!cancelled()`, so a run
+            // that gets cancelled (concurrency cancel-in-progress, job
+            // timeout) never touches its own placeholder again — without
+            // this cleanup, the placeholder stays as orphan text on the
+            // issue forever and every retriggering comment piles up a new one.
+            const existing = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              body: '🤖 **Issue Triage Bot is analyzing this issue...**\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.'
+              per_page: 100,
             });
-            core.setOutput('comment_id', comment.data.id);
-            return comment.data.id;
+            const orphans = existing.data.filter(c =>
+              c.user && c.user.type === 'Bot' && c.body && c.body.startsWith(PLACEHOLDER_PREFIX)
+            );
+
+            let commentId;
+            if (orphans.length > 0) {
+              const mostRecent = orphans[orphans.length - 1];
+              commentId = mostRecent.id;
+              core.info(`Reusing orphaned placeholder ${commentId} from a prior cancelled run; cleaning up ${orphans.length - 1} older orphan(s).`);
+              for (const old of orphans.slice(0, -1)) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: old.id,
+                  });
+                } catch (err) {
+                  core.warning(`Failed to delete older orphan placeholder ${old.id}: ${err.message}`);
+                }
+              }
+            } else {
+              const created = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: PLACEHOLDER_BODY,
+              });
+              commentId = created.data.id;
+            }
+            core.setOutput('comment_id', commentId);
+            return commentId;
 
       - name: Fetch full issue thread
         id: issue_data
@@ -590,13 +628,21 @@ jobs:
               // Missing-info path: validate the LLM's output before posting it
               // verbatim. A safety-filter refusal or off-format prose no longer
               // gets dressed up as a polite info request to the user. Accept
-              // bulleted (`*`/`-`/`•`), numbered (`1.`), or bold-led
+              // bulleted (`* `/`- `/`• `), numbered (`1. `), or bold-led
               // (`**Item**`) lines — Gemini emits all three flavors despite
-              // the prompt asking for `*`. The 4000-char cap is a "this looks
-              // like an LLM monologue, not a missing-info checklist" heuristic;
-              // it has nothing to do with GitHub's 65536-char comment limit.
+              // the prompt asking for `*`. Checking line-by-line so a leading
+              // sentence before the list doesn't fail the shape check; the
+              // trailing space on bullet/numbered prefixes avoids false
+              // positives like `*foo*` (italics) or `1.5` (decimal). The
+              // 4000-char cap is a "this looks like an LLM monologue, not a
+              // missing-info checklist" heuristic; it has nothing to do with
+              // GitHub's 65536-char comment limit.
               const trimmed = evaluateResult.trim();
-              const looksLikeMissingInfo = /(^|\n)\s*([*\-•]|\d+\.|\*\*)/.test(trimmed);
+              const looksLikeMissingInfo = trimmed.split('\n').some(line => {
+                const l = line.trimStart();
+                return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
+                       l.startsWith('**') || /^\d+\.\s/.test(l);
+              });
               const tooShort = trimmed.length < 20;
               const tooLong = trimmed.length > 4000;
               if (!looksLikeMissingInfo || tooShort || tooLong) {
