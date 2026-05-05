@@ -4,9 +4,9 @@ Stateless payload inspection — returns warnings pointing to skill reference
 files. Zero overhead on clean calls (returns empty list).
 
 Warnings include skill:// URIs so the LLM can read the relevant reference
-file via the bundled SkillsDirectoryProvider. Callers can pass a different
-prefix when the skill resources are unreachable, or None to omit
-references entirely.
+file via the bundled SkillsDirectoryProvider. The ``skill_prefix`` kwarg
+lets callers pass any URL prefix (e.g., a GitHub mirror) when skill://
+isn't reachable, or ``None`` to omit references entirely.
 
 Anti-patterns sourced from:
   https://github.com/homeassistant-ai/skills

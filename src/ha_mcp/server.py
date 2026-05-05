@@ -43,23 +43,47 @@ class HaResourcesAsTools(ResourcesAsTools):
     ``read_resource``. This subclass renames them to ``ha_list_resources``
     and ``ha_read_resource`` so they behave like every other tool in the
     catalog (consistent prefix, discoverable in the web settings UI).
+
+    Upgrade fragility: depends on FastMCP's ``_make_list_resources_tool`` /
+    ``_make_read_resource_tool`` private factories and on the names
+    ``list_resources`` / ``read_resource`` produced by them. A FastMCP
+    upgrade that renames either factory or either tool name will require
+    a matching update here. ``list_tools`` logs a warning if the rename
+    fails to match exactly two tools so the regression is loud at boot.
     """
 
     LIST_TOOL_NAME = "ha_list_resources"
     READ_TOOL_NAME = "ha_read_resource"
+    _RENAMES: ClassVar[dict[str, str]] = {
+        "list_resources": LIST_TOOL_NAME,
+        "read_resource": READ_TOOL_NAME,
+    }
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        # Base class appends [list_resources, read_resource]; rename the pair.
+        # Scan the entire result rather than slicing the tail so a future
+        # FastMCP change that reorders or expands the appended tool set
+        # surfaces as a logged warning instead of silently leaking the
+        # unprefixed names into the catalog.
         result = list(await super().list_tools(tools))
         renamed: list[Tool] = []
-        for tool in result[-2:]:
-            if tool.name == "list_resources":
-                renamed.append(tool.model_copy(update={"name": self.LIST_TOOL_NAME}))
-            elif tool.name == "read_resource":
-                renamed.append(tool.model_copy(update={"name": self.READ_TOOL_NAME}))
-            else:
+        matches = 0
+        for tool in result:
+            new_name = self._RENAMES.get(tool.name)
+            if new_name is None:
                 renamed.append(tool)
-        return [*result[:-2], *renamed]
+                continue
+            renamed.append(tool.model_copy(update={"name": new_name}))
+            matches += 1
+        if matches != len(self._RENAMES):
+            logger.warning(
+                "HaResourcesAsTools: expected to rename %d tools (%s) but "
+                "matched %d in the upstream tool list — fastmcp's "
+                "ResourcesAsTools contract may have changed",
+                len(self._RENAMES),
+                ", ".join(self._RENAMES),
+                matches,
+            )
+        return renamed
 
     async def get_tool(
         self,
@@ -559,9 +583,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Pin the skills-as-tools transform pair and the per-skill guidance
         # tools so they remain visible when search-based discovery is on.
-        # Disabling either ha_*_resource tool from the settings UI removes
-        # it from the catalog before this list is consulted.
-        pinned.extend(["ha_list_resources", "ha_read_resource"])
+        # The settings UI's mcp.disable() flow runs after these transforms
+        # are appended, so a per-tool disable still wins over this pin.
+        pinned.extend(
+            [HaResourcesAsTools.LIST_TOOL_NAME, HaResourcesAsTools.READ_TOOL_NAME]
+        )
         pinned.extend(getattr(self, "_skill_tool_names", []))
 
         # The client may not support resources or server instructions — add
@@ -570,8 +596,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         description = self._SEARCH_TOOL_DESCRIPTION + (
             "\n\nThis server also provides best-practice skills via "
             "skill:// resources. If your client supports MCP resources, "
-            "prefer reading them directly. Otherwise, call "
-            "ha_list_resources and ha_read_resource (directly, no proxy "
+            f"prefer reading them directly. Otherwise, call "
+            f"{HaResourcesAsTools.LIST_TOOL_NAME} and "
+            f"{HaResourcesAsTools.READ_TOOL_NAME} (directly, no proxy "
             "needed) to access the relevant SKILL.md before creating "
             "automations or configuring devices."
         )
@@ -655,7 +682,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         so the bootstrap prompt (trigger conditions, symptoms) is invisible.
         This registers a tool per skill whose description contains the trigger
         conditions. The tool itself just lists available reference files —
-        actual content is loaded on demand via read_resource.
+        actual content is loaded on demand via the resources/read MCP method
+        (or the ha_read_resource fallback tool when the client lacks resource
+        support).
         """
         try:
             entries = sorted(skills_dir.iterdir())
@@ -680,7 +709,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_description = (
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
-                f"Returns available reference files. Use read_resource with "
+                f"Returns available reference files. Read each file via "
+                f"resources/read (or ha_read_resource as a fallback) using "
                 f"the file URI to load specific guides as needed."
             )
 
@@ -697,9 +727,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                         "skill": s_name,
                         "skill_uri": s_uri,
                         "how_to_use": (
-                            "Use read_resource with a file URI below to load "
-                            "the specific reference you need. Start with "
-                            "SKILL.md for the decision workflow."
+                            "Read each file via resources/read (or "
+                            "ha_read_resource as a fallback) with a file "
+                            "URI below to load the specific reference you "
+                            "need. Start with SKILL.md for the decision "
+                            "workflow."
                         ),
                         "available_files": files,
                     }

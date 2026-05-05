@@ -52,6 +52,11 @@ MANDATORY_TOOLS: set[str] = {
 # ``ha_read_resource`` at runtime, so they never show up in
 # ``local_provider._list_tools()``. Inject stub metadata so the UI can
 # render them and ``mcp.disable()`` can hide them from the catalog.
+#
+# Keys MUST match ``HaResourcesAsTools.LIST_TOOL_NAME`` / ``READ_TOOL_NAME``;
+# server.py is not imported here to avoid a top-level cycle, but the
+# ``test_transform_generated_tool_names_match_class_constants`` unit test
+# fails fast if either side drifts.
 TRANSFORM_GENERATED_TOOLS: dict[str, dict[str, str]] = {
     "ha_list_resources": {
         "title": "List Resources",
