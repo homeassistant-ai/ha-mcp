@@ -137,19 +137,80 @@ class TestApplyToolVisibility:
         mcp.disable.assert_not_called()
 
 
+@pytest.fixture(autouse=True)
+def _reset_data_dir_cache():
+    """Clear the shared resolved-dir cache between tests."""
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    get_data_dir.cache_clear()
+    yield
+    get_data_dir.cache_clear()
+
+
 class TestConfigPath:
-    """Test _get_config_path uses SUPERVISOR_TOKEN, not /data heuristic."""
+    """Thin wrapper around utils.data_paths.get_data_dir; full priority
+    order is tested in tests/src/unit/test_data_paths.py.
+    """
 
-    def test_addon_path_when_supervisor_token_set(self, monkeypatch):
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        assert _get_config_path() == Path("/data/tool_config.json")
-
-    def test_home_path_when_no_supervisor_token(self, monkeypatch, tmp_path):
+    def test_returns_data_dir_plus_filename(self, monkeypatch, tmp_path):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _get_config_path()
-        assert result == tmp_path / ".ha-mcp" / "tool_config.json"
-        assert (tmp_path / ".ha-mcp").is_dir()
+        assert _get_config_path() == tmp_path / ".ha-mcp" / "tool_config.json"
+
+    def test_load_tool_config_does_not_crash_on_unreadable_config_dir(
+        self, monkeypatch, tmp_path
+    ):
+        """Regression for #1125 + the same-class follow-up bug.
+
+        When the resolved path's parent isn't traversable by the runtime
+        UID (e.g. ``HA_MCP_CONFIG_DIR`` pointing at an existing 0700 dir
+        owned by another user), ``Path.exists()`` would raise
+        ``PermissionError`` because ``EACCES`` is not in
+        ``pathlib._IGNORED_ERRNOS``. ``load_tool_config()`` must treat it
+        as "no config yet" instead of crashing.
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        unreadable_dir = tmp_path / "unreadable"
+        unreadable_dir.mkdir()
+        cfg_path = unreadable_dir / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+
+        original_read = Path.read_text
+
+        def fake_read_text(self: Path, *args, **kwargs):
+            if self == cfg_path:
+                raise PermissionError(13, "Permission denied")
+            return original_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+        # Must not raise.
+        assert load_tool_config() == {}
+
+
+class TestSaveToolConfig:
+    """Tests for the bool return contract added so the HTTP route can
+    surface failures to the UI instead of lying that the save succeeded."""
+
+    def test_returns_true_on_success(self, tmp_path):
+        cfg_path = tmp_path / "tool_config.json"
+        with patch("ha_mcp.settings_ui._get_config_path", return_value=cfg_path):
+            assert save_tool_config({"tools": {"x": "disabled"}}) is True
+        assert cfg_path.exists()
+
+    def test_returns_false_on_oserror(self, monkeypatch, tmp_path):
+        cfg_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+
+        def fake_write_text(self: Path, *args, **kwargs):
+            if self == cfg_path:
+                raise OSError(30, "Read-only file system")
+            return Path.write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fake_write_text)
+        assert save_tool_config({"tools": {"x": "disabled"}}) is False
 
 
 class TestFeatureGatedTools:
@@ -168,7 +229,12 @@ class TestFeatureGatedTools:
         # disabled_by should reference the dev addon option name (matches
         # how the JS renders "set <code>{disabled_by}</code> in the dev
         # add-on config or the matching env var (see docs/beta.md)").
-        for name in ("ha_list_files", "ha_read_file", "ha_write_file", "ha_delete_file"):
+        for name in (
+            "ha_list_files",
+            "ha_read_file",
+            "ha_write_file",
+            "ha_delete_file",
+        ):
             assert FEATURE_GATED_TOOLS[name]["disabled_by"] == "enable_filesystem_tools"
 
 
@@ -230,6 +296,7 @@ class TestSaveToolsValidation:
                 if path == "/api/settings/tools" and "POST" in methods:
                     captured["save"] = fn
                 return fn
+
             return decorator
 
         mcp = MagicMock()
@@ -276,13 +343,32 @@ class TestSaveToolsValidation:
         config_path = tmp_path / "tool_config.json"
         monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
         save = self._capture_handler(monkeypatch)
-        resp = await save(self._make_request({
-            "states": {
-                "ha_good_tool": "disabled",
-                "ha_bad_value": "not_a_real_state",
-                42: "disabled",  # non-string key
-            },
-        }))
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        "ha_good_tool": "disabled",
+                        "ha_bad_value": "not_a_real_state",
+                        42: "disabled",  # non-string key
+                    },
+                }
+            )
+        )
         assert resp.status_code == 200
         saved = json.loads(config_path.read_text())
         assert saved["tools"] == {"ha_good_tool": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_returns_500_when_save_fails(self, monkeypatch, tmp_path):
+        """``save_tool_config`` returning False (read-only fs, etc.) must
+        surface as a 500 to the UI — otherwise the JS shows "Saved" while
+        the change was lost."""
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setattr("ha_mcp.settings_ui.save_tool_config", lambda _: False)
+        save = self._capture_handler(monkeypatch)
+        resp = await save(self._make_request({"states": {"ha_good_tool": "disabled"}}))
+        assert resp.status_code == 500
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "HA_MCP_CONFIG_DIR" in str(body)

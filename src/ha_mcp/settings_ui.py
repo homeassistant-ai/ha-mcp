@@ -21,6 +21,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
+from .utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -112,23 +113,37 @@ def _is_addon() -> bool:
 
 
 def _get_config_path() -> Path:
-    """Return the path to the tool config JSON file."""
-    if _is_addon():
-        return Path("/data") / "tool_config.json"
-    home_dir = Path.home() / ".ha-mcp"
-    home_dir.mkdir(parents=True, exist_ok=True)
-    return home_dir / "tool_config.json"
+    """Return the path to the tool config JSON file.
+
+    Delegates directory resolution to :func:`utils.data_paths.get_data_dir`,
+    which handles ``HA_MCP_CONFIG_DIR`` override, add-on ``/data``,
+    home-dir, and tmpdir fallback (memoized).
+    """
+    return get_data_dir() / "tool_config.json"
 
 
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
-    if path.exists():
+    # ``Path.exists()`` only swallows ``ENOENT/ENOTDIR/EBADF/ELOOP``; an
+    # ``EACCES`` (e.g. ``HA_MCP_CONFIG_DIR`` pointing at a dir that exists
+    # but isn't readable by the runtime UID) propagates. Read directly and
+    # treat ``FileNotFoundError`` as "no config yet"; log other ``OSError``s.
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        raw = None
+    except OSError:
+        logger.warning("Cannot read tool config at %s", path)
+        raw = None
+
+    if raw is not None:
         try:
-            result: dict[str, Any] = json.loads(path.read_text())
+            result: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Tool config at %s is not valid JSON; ignoring.", path)
+        else:
             return result
-        except (OSError, json.JSONDecodeError):
-            logger.warning("Failed to read tool config from %s", path)
 
     if settings is None:
         return {}
@@ -156,14 +171,23 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {}
 
 
-def save_tool_config(config: dict[str, Any]) -> None:
-    """Persist tool config to disk."""
+def save_tool_config(config: dict[str, Any]) -> bool:
+    """Persist tool config to disk.
+
+    Returns True on success, False on failure (read-only filesystem,
+    permission denied, etc.). Caller is responsible for surfacing the
+    failure to the user — the HTTP route at ``_save_tools`` returns 500
+    so the UI's ``saveConfig`` shows "Save failed!" instead of the
+    misleading "Saved — restart required".
+    """
     path = _get_config_path()
     try:
         path.write_text(json.dumps(config, indent=2))
-        logger.info("Saved tool config to %s", path)
     except OSError:
         logger.exception("Failed to save tool config to %s", path)
+        return False
+    logger.info("Saved tool config to %s", path)
+    return True
 
 
 async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
@@ -760,7 +784,18 @@ def register_settings_routes(
 
         config = load_tool_config()
         config["tools"] = states
-        save_tool_config(config)
+        if not save_tool_config(config):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Failed to persist tool config to disk",
+                    suggestions=[
+                        "Set HA_MCP_CONFIG_DIR to a writable path (read-only filesystem?)",
+                        "Check the server logs for the underlying OSError",
+                    ],
+                ),
+                status_code=500,
+            )
 
         disabled_count = sum(1 for s in states.values() if s == "disabled")
         pinned_count = sum(1 for s in states.values() if s == "pinned")

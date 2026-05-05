@@ -13,6 +13,8 @@ from pathlib import Path
 from queue import Queue
 from typing import Any
 
+from .data_paths import get_data_dir
+
 # Default ring buffer size - keeps last N entries in memory
 DEFAULT_RING_BUFFER_SIZE = 200
 
@@ -46,13 +48,15 @@ class StartupLogCollector(logging.Handler):
             return
 
         with self._lock:
-            self._logs.append({
-                "timestamp": datetime.now(UTC).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "elapsed_seconds": round(elapsed, 2),
-            })
+            self._logs.append(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                    "elapsed_seconds": round(elapsed, 2),
+                }
+            )
 
     def get_logs(self) -> list[dict[str, Any]]:
         """Get collected startup logs."""
@@ -115,9 +119,12 @@ class UsageLogger:
         if log_file_path:
             self.log_file_path = Path(log_file_path)
         else:
-            # Use user's home directory by default to avoid read-only filesystem errors
-            # when running via uvx/npx which might have read-only CWD
-            self.log_file_path = Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+            # Defer to the shared resolver so logs follow the same precedence
+            # as the settings-UI tool config (HA_MCP_CONFIG_DIR > /data >
+            # ~/.ha-mcp > tempdir). Avoids polluting the filesystem root when
+            # HOME is unset and avoids surprising users who bind-mount a
+            # writable volume via HA_MCP_CONFIG_DIR but find logs missing.
+            self.log_file_path = get_data_dir() / "logs" / "mcp_usage.jsonl"
 
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)

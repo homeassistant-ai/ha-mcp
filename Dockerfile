@@ -31,8 +31,14 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.homeassistant-ai/ha-mcp"
 
-# Create non-root user for security
-RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser
+# Create non-root user. The base image's HOME_MODE is 0700 — fine when running
+# as mcpuser, but it makes /home/mcpuser un-traversable when users override
+# `--user UID:GID` (the issue #1125 reporter does so). Any code that stats a
+# path under HOME (set below) then raises PermissionError. chmod 0755 makes
+# the dir traversable for any uid; write access stays restricted to mcpuser.
+RUN groupadd -r mcpuser \
+    && useradd -r -g mcpuser -m mcpuser \
+    && chmod 0755 /home/mcpuser
 
 WORKDIR /app
 
@@ -42,6 +48,12 @@ COPY --chown=mcpuser:mcpuser --from=builder /app/src /app/src
 COPY --chown=mcpuser:mcpuser fastmcp.json fastmcp-http.json ./
 
 USER mcpuser
+
+# Set HOME explicitly. Docker doesn't auto-derive HOME from /etc/passwd when
+# a USER directive is set (moby/moby#2968), leaving HOME=/ at runtime. That
+# made Path.home() resolve to "/" and ha-mcp tried to mkdir "/.ha-mcp" on
+# every start — fatal under `read_only: true` (issue #1125).
+ENV HOME=/home/mcpuser
 
 # Activate virtual environment via PATH
 ENV PATH="/app/.venv/bin:$PATH"
