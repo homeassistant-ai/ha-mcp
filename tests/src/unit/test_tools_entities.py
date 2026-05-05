@@ -22,6 +22,7 @@ class TestHaSetEntityLabels:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -129,9 +130,7 @@ class TestHaSetEntityLabels:
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
-        result = await tool(
-            entity_id="light.test", labels='["label1", "label2"]'
-        )
+        result = await tool(entity_id="light.test", labels='["label1", "label2"]')
 
         assert result["success"] is True
         call_args = mock_client.send_websocket_message.call_args[0][0]
@@ -146,7 +145,9 @@ class TestHaSetEntityLabels:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         error = error_data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "labels" in error_msg.lower() or "invalid" in error_msg.lower()
 
     @pytest.mark.asyncio
@@ -192,6 +193,7 @@ class TestHaSetEntityExposeTo:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -302,8 +304,12 @@ class TestHaSetEntityExposeTo:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         error = error_data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        assert "invalid_assistant" in error_msg.lower() or "invalid" in error_msg.lower()
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        assert (
+            "invalid_assistant" in error_msg.lower() or "invalid" in error_msg.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_expose_to_json_string(self, mock_mcp, mock_client):
@@ -395,6 +401,7 @@ class TestHaSetEntityCombined:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -470,7 +477,9 @@ class TestHaSetEntityCombined:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         error = error_data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "No updates specified" in error_msg
 
     @pytest.mark.asyncio
@@ -557,7 +566,10 @@ class TestHaSetEntityCombined:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose_true succeeds
-                {"success": False, "error": {"message": "Failed"}},  # expose_false fails
+                {
+                    "success": False,
+                    "error": {"message": "Failed"},
+                },  # expose_false fails
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
@@ -582,7 +594,10 @@ class TestHaSetEntityCombined:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"success": True},  # expose call succeeds
-                {"success": False, "error": {"message": "Entity not found"}},  # get entity fails
+                {
+                    "success": False,
+                    "error": {"message": "Entity not found"},
+                },  # get entity fails
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
@@ -611,7 +626,9 @@ class TestHaSetEntityCombined:
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
         error = result.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "enabled" in error_msg.lower() or "boolean" in error_msg.lower()
 
     @pytest.mark.asyncio
@@ -626,7 +643,9 @@ class TestHaSetEntityCombined:
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
         error = result.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "hidden" in error_msg.lower() or "boolean" in error_msg.lower()
 
     @pytest.mark.asyncio
@@ -723,6 +742,7 @@ class TestHaSetEntityLabelOperations:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -889,6 +909,7 @@ class TestHaSetEntityBulkOperations:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -984,7 +1005,9 @@ class TestHaSetEntityBulkOperations:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         error = error_data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "Single-entity parameters" in error_msg or "name" in error_msg
 
     @pytest.mark.asyncio
@@ -1039,7 +1062,9 @@ class TestHaSetEntityBulkOperations:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         error = error_data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "empty" in error_msg.lower()
 
     @pytest.mark.asyncio
@@ -1113,6 +1138,7 @@ class TestHaSetEntityRegistryDisableGuardrail:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -1155,7 +1181,9 @@ class TestHaSetEntityRegistryDisableGuardrail:
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_disable_automation_string_false_blocked(self, set_entity_tool, mock_client):
+    async def test_disable_automation_string_false_blocked(
+        self, set_entity_tool, mock_client
+    ):
         """enabled='false' (string) on automation entity should also be blocked."""
         with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(entity_id="automation.morning", enabled="false")
@@ -1166,7 +1194,9 @@ class TestHaSetEntityRegistryDisableGuardrail:
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_disable_automation_string_capital_false_blocked(self, set_entity_tool, mock_client):
+    async def test_disable_automation_string_capital_false_blocked(
+        self, set_entity_tool, mock_client
+    ):
         """enabled='False' (capital F, common from Python agents) should also be blocked."""
         with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(entity_id="automation.evening", enabled="False")
@@ -1177,7 +1207,9 @@ class TestHaSetEntityRegistryDisableGuardrail:
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_disable_automation_single_element_list_blocked(self, set_entity_tool, mock_client):
+    async def test_disable_automation_single_element_list_blocked(
+        self, set_entity_tool, mock_client
+    ):
         """enabled=False on single-element list ['automation.test'] should also be blocked."""
         with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(entity_id=["automation.test"], enabled=False)
@@ -1251,6 +1283,7 @@ class TestHaRemoveEntity:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -1329,3 +1362,224 @@ class TestHaRemoveEntity:
 
         error_msg = str(exc_info.value).lower()
         assert "permission denied" in error_msg
+
+
+class TestHaSetEntityShowAs:
+    """ha_set_entity device_class (Show As) and options parameter."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    def _registry_response(self, **overrides):
+        entry = {
+            "entity_id": "binary_sensor.test",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": [],
+            "categories": {},
+            "device_class": None,
+            "original_device_class": None,
+            "options": {},
+        }
+        entry.update(overrides)
+        return {"success": True, "result": {"entity_entry": entry}}
+
+    @pytest.mark.asyncio
+    async def test_device_class_sets_top_level_field(self, mock_mcp, mock_client):
+        """device_class='window' must send top-level device_class on the WS update."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value=self._registry_response(device_class="window")
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(entity_id="binary_sensor.test", device_class="window")
+
+        assert result["success"] is True
+        ws_msg = mock_client.send_websocket_message.call_args[0][0]
+        assert ws_msg["type"] == "config/entity_registry/update"
+        assert ws_msg["device_class"] == "window"
+        # Show As must NOT be routed through options — that's a separate slot
+        # the UI does not read.
+        assert "options" not in ws_msg
+        assert "options_domain" not in ws_msg
+        assert "device_class='window'" in str(result["updates"])
+
+    @pytest.mark.asyncio
+    async def test_device_class_empty_string_clears(self, mock_mcp, mock_client):
+        """device_class='' clears the override (sends None)."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value=self._registry_response(device_class=None)
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        await tool(entity_id="binary_sensor.test", device_class="")
+
+        ws_msg = mock_client.send_websocket_message.call_args[0][0]
+        assert ws_msg["device_class"] is None
+
+    @pytest.mark.asyncio
+    async def test_options_single_domain_pairs_options_domain(
+        self, mock_mcp, mock_client
+    ):
+        """options={'sensor': {'display_precision': 2}} -> one WS call w/ options_domain=sensor."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value=self._registry_response(
+                options={"sensor": {"display_precision": 2}}
+            )
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        await tool(
+            entity_id="sensor.temp",
+            options={"sensor": {"display_precision": 2}},
+        )
+
+        assert mock_client.send_websocket_message.call_count == 1
+        ws_msg = mock_client.send_websocket_message.call_args[0][0]
+        assert ws_msg["options_domain"] == "sensor"
+        assert ws_msg["options"] == {"display_precision": 2}
+
+    @pytest.mark.asyncio
+    async def test_options_multi_domain_splits_into_separate_calls(
+        self, mock_mcp, mock_client
+    ):
+        """A multi-domain options dict must be split — HA schema requires one domain per call."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value=self._registry_response()
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        await tool(
+            entity_id="sensor.temp",
+            options={
+                "sensor": {"display_precision": 1},
+                "weather": {"forecast_type": "hourly"},
+            },
+        )
+
+        calls = [c.args[0] for c in mock_client.send_websocket_message.call_args_list]
+        domains = sorted(c["options_domain"] for c in calls)
+        assert domains == ["sensor", "weather"]
+        for c in calls:
+            assert "options_domain" in c and "options" in c
+
+    @pytest.mark.asyncio
+    async def test_options_json_string_is_parsed(self, mock_mcp, mock_client):
+        """options as a JSON string should be parsed transparently."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value=self._registry_response()
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        await tool(
+            entity_id="sensor.temp",
+            options='{"sensor": {"display_precision": 0}}',
+        )
+
+        ws_msg = mock_client.send_websocket_message.call_args[0][0]
+        assert ws_msg["options_domain"] == "sensor"
+        assert ws_msg["options"] == {"display_precision": 0}
+
+    @pytest.mark.asyncio
+    async def test_options_invalid_shape_raises_validation_error(
+        self, mock_mcp, mock_client
+    ):
+        """options must be a dict mapping domain to sub-dict — list rejected."""
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool(entity_id="sensor.temp", options=["not", "a", "dict"])
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+class TestHaGetEntityRegistryOptions:
+    """ha_get_entity must surface device_class + options so agents can read state."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_get_entity_includes_device_class_and_options(
+        self, mock_mcp, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_id": "binary_sensor.test",
+                    "name": None,
+                    "original_name": "Test",
+                    "icon": None,
+                    "area_id": None,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "aliases": [],
+                    "labels": [],
+                    "categories": {},
+                    "device_class": "window",
+                    "original_device_class": None,
+                    "options": {"sensor": {"display_precision": 2}},
+                    "platform": "template",
+                    "device_id": None,
+                    "unique_id": "abc",
+                },
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_get_entity"]
+
+        result = await tool(entity_id="binary_sensor.test")
+
+        entry = result["entity_entry"]
+        assert entry["device_class"] == "window"
+        assert entry["original_device_class"] is None
+        assert entry["options"] == {"sensor": {"display_precision": 2}}
