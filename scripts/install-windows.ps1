@@ -4,12 +4,10 @@
 
 $ErrorActionPreference = "Stop"
 
-# Configuration
-# Claude Desktop installed from the Microsoft Store uses a virtualized/sandboxed
-# path under %LOCALAPPDATA%\Packages; the traditional installer uses %APPDATA%.
-# Get-AppxPackage queries the package registry, so a previously-installed Store
-# build that has been uninstalled (which can leave a stale package folder behind
-# for days) won't be detected here.
+# Configuration: detect which Claude Desktop variant is installed so the
+# config lands where Claude will actually read it. Get-AppxPackage queries
+# the package registry, which is authoritative — it won't match a stale
+# %LOCALAPPDATA%\Packages\Claude_* folder left behind after an MSIX uninstall.
 try {
     $ClaudeAppx = Get-AppxPackage -Name Claude -ErrorAction Stop | Select-Object -First 1
 } catch {
@@ -20,10 +18,10 @@ if ($ClaudeAppx) {
     $ConfigDir = "$env:LOCALAPPDATA\Packages\$($ClaudeAppx.PackageFamilyName)\LocalCache\Roaming\Claude"
     $DetectedVariant = "Microsoft Store install"
 } else {
-    # Fallback: filesystem probe in case Get-AppxPackage isn't available
-    # (e.g., constrained PowerShell, Windows Sandbox). Pin to the known
-    # Anthropic publisher hash so we don't pick up unrelated packages,
-    # and require LocalCache\Roaming\Claude to exist so we don't write
+    # Fallback for environments where Get-AppxPackage isn't usable (e.g.,
+    # Constrained Language Mode under WDAC/AppLocker, Server Core/Nano).
+    # Pin to the Anthropic publisher hash so we don't pick up an unrelated
+    # SKU, and require LocalCache\Roaming\Claude to exist so we don't write
     # into a "zombie" folder left behind after an MSIX uninstall.
     $MsixPackage = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter "Claude_pzs8sxrjxfjjc" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($MsixPackage -and (Test-Path "$($MsixPackage.FullName)\LocalCache\Roaming\Claude")) {
@@ -46,10 +44,7 @@ Write-Host ""
 
 # Step 1: Check/install uv
 Write-Host "Step 1: Checking for uv..." -ForegroundColor Yellow
-$uvInstalled = $null
-try {
-    $uvInstalled = Get-Command uvx -ErrorAction SilentlyContinue
-} catch {}
+$uvInstalled = Get-Command uvx -ErrorAction SilentlyContinue
 
 if ($uvInstalled) {
     Write-Host "  uv is already installed" -ForegroundColor Green
@@ -72,7 +67,8 @@ Write-Host ""
 
 # Step 2: Configure Claude Desktop
 Write-Host "Step 2: Configuring Claude Desktop..." -ForegroundColor Yellow
-Write-Host "  Detected: $DetectedVariant" -ForegroundColor White
+Write-Host "  Detected: $DetectedVariant" -ForegroundColor Cyan
+Write-Host "  Config path: $ConfigDir" -ForegroundColor Cyan
 $ClaudeNotInstalled = $false
 if (-not (Test-Path $ConfigDir)) {
     $ClaudeNotInstalled = $true
