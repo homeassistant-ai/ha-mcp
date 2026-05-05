@@ -4,10 +4,12 @@ Sandboxed custom tool for Home Assistant MCP Server.
 Provides an "escape hatch" (ha_manage_custom_tool) that lets LLMs write and run
 custom Python code when no existing tool covers the request, with optional
 save/reuse and listing of saved tools.  Code runs in pydantic-monty — a
-Rust-based sandboxed Python interpreter with no filesystem or network access.
-Sandbox code can talk to Home Assistant through three external functions:
-``api_get``/``api_post`` for the REST API, ``ws_send`` for WebSocket commands,
-and ``call_tool`` for delegating to other registered MCP tools.
+Rust-based sandboxed Python interpreter with no filesystem or arbitrary
+network access. Sandbox code can talk to Home Assistant through four external
+functions: ``api_get`` and ``api_post`` for the REST API,
+``ws_send`` for WebSocket commands, and ``call_tool`` for delegating to other
+registered MCP tools. ``api_get``/``api_post`` reject absolute URLs so the HA
+bearer token cannot be redirected off-instance.
 
 **Requires** ``ENABLE_CODE_MODE=true`` (disabled by default).
 
@@ -47,6 +49,10 @@ def _extract_tool_result(result: Any) -> Any:
     FastMCP call_tool may return a ToolResult, a list of content objects,
     or a basic type.  Monty can only handle basic Python types (str, int,
     float, bool, list, dict, None), so we must serialize.
+
+    If the ToolResult flags ``isError``/``is_error``, returns a structured
+    error dict so sandbox code sees ``{"success": False, "error": ...}``
+    rather than treating the raw repr as a successful payload.
     """
     # Already a basic type — pass through
     if isinstance(result, (str, int, float, bool, type(None), dict)):
@@ -59,6 +65,10 @@ def _extract_tool_result(result: Any) -> Any:
     elif isinstance(result, list):
         content = result
 
+    is_error = bool(
+        getattr(result, "isError", False) or getattr(result, "is_error", False)
+    )
+
     if content:
         texts = []
         for item in content:
@@ -69,12 +79,37 @@ def _extract_tool_result(result: Any) -> Any:
         if texts:
             combined = "\n".join(texts)
             try:
-                return json.loads(combined)
+                payload: Any = json.loads(combined)
             except (json.JSONDecodeError, TypeError):
-                return combined
+                payload = combined
+            if is_error:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": str(ErrorCode.INTERNAL_ERROR),
+                        "message": payload if isinstance(payload, str)
+                        else json.dumps(payload),
+                    },
+                }
+            return payload
 
-    # Fallback: string representation
-    return str(result)
+    # Fallback: opaque object with no recognized content. Log so the
+    # str(result) repr doesn't silently masquerade as a successful return.
+    logger.warning(
+        "_extract_tool_result fell through to str() for type=%s isError=%s",
+        type(result).__name__,
+        is_error,
+    )
+    repr_str = str(result)
+    if is_error:
+        return {
+            "success": False,
+            "error": {
+                "code": str(ErrorCode.INTERNAL_ERROR),
+                "message": repr_str,
+            },
+        }
+    return repr_str
 
 
 async def _run_sandboxed_code(
@@ -105,14 +140,33 @@ async def _run_sandboxed_code(
         err["success"] = False
         return err
 
-    def _normalize_endpoint(endpoint: str) -> str:
-        """Normalize endpoint to be relative to the httpx base URL (/api).
+    def _normalize_endpoint(endpoint: Any) -> str:
+        """Normalize a path-only endpoint to be relative to the httpx base URL.
 
-        Leading slashes cause httpx to treat the path as absolute from the
-        host root, bypassing the /api base path.  Strip them (and any
-        accidental /api/ prefix) so all three forms work identically:
-        "events", "/events", "/api/events" → "events".
+        Strips leading slashes and any accidental ``api/`` prefix so the same
+        path works whether the caller wrote ``"events"``, ``"/events"``, or
+        ``"/api/events"``.
+
+        Rejects anything that looks like an absolute URL or a userinfo
+        injection: an ``://`` substring, a leading ``//`` (protocol-relative),
+        or an ``@`` before the first ``/``. Without this the httpx client
+        will dispatch the request to the absolute host *with the HA bearer
+        token still attached*, leaking credentials to whoever the LLM was
+        prompted to point at. The sandbox is supposed to be on-instance
+        only.
         """
+        if not isinstance(endpoint, str):
+            raise ValueError("endpoint must be a string path (e.g. '/states')")
+        if "://" in endpoint or endpoint.startswith("//"):
+            raise ValueError(
+                "endpoint must be a HA-relative path; absolute URLs are blocked"
+            )
+        first_slash = endpoint.find("/")
+        userinfo_marker = endpoint.find("@")
+        if userinfo_marker >= 0 and (
+            first_slash < 0 or userinfo_marker < first_slash
+        ):
+            raise ValueError("endpoint must not contain userinfo")
         ep = endpoint.lstrip("/")
         if ep.startswith("api/"):
             ep = ep[4:]
@@ -125,12 +179,18 @@ async def _run_sandboxed_code(
         if call_count > settings.code_mode_max_invocations:
             return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
         try:
-            response = await client.httpx_client.request("GET", _normalize_endpoint(endpoint))
+            normalized = _normalize_endpoint(endpoint)
+        except ValueError as exc:
+            logger.warning("api_get rejected endpoint %r: %s", endpoint, exc)
+            return {"error": str(exc)}
+        try:
+            response = await client.httpx_client.request("GET", normalized)
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
         except Exception as exc:
+            logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
 
     async def _api_post(endpoint: str, data: dict[str, Any] | None = None) -> Any:
@@ -140,15 +200,21 @@ async def _run_sandboxed_code(
         if call_count > settings.code_mode_max_invocations:
             return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
         try:
+            normalized = _normalize_endpoint(endpoint)
+        except ValueError as exc:
+            logger.warning("api_post rejected endpoint %r: %s", endpoint, exc)
+            return {"error": str(exc)}
+        try:
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await client.httpx_client.request("POST", _normalize_endpoint(endpoint), **post_kwargs)
+            response = await client.httpx_client.request("POST", normalized, **post_kwargs)
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
         except Exception as exc:
+            logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
 
     async def _ws_send(message: Any) -> Any:
@@ -172,24 +238,30 @@ async def _run_sandboxed_code(
         try:
             return await client.send_websocket_message(message)
         except Exception as exc:
+            logger.warning(
+                "ws_send(type=%r) failed", message.get("type"), exc_info=True
+            )
             return {"error": str(exc)[:200]}
 
     async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         """Bridge: sandbox code → MCP tool execution."""
         nonlocal call_count
 
-        if tool_name in _BLOCKED_TOOLS:
-            return _sandbox_error(
-                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                f"Tool '{tool_name}' cannot be called from sandbox code",
-            )
-
+        # Counter increments first so blocked-tool calls also count toward
+        # the per-execution cap; otherwise a tight loop on a blocked name
+        # would never trip the limit.
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
             return _sandbox_error(
                 ErrorCode.VALIDATION_FAILED,
                 f"call_tool limit exceeded ({settings.code_mode_max_invocations} "
                 f"calls per execution)",
+            )
+
+        if tool_name in _BLOCKED_TOOLS:
+            return _sandbox_error(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                f"Tool '{tool_name}' cannot be called from sandbox code",
             )
 
         try:
@@ -200,6 +272,9 @@ async def _run_sandboxed_code(
             except (json.JSONDecodeError, TypeError):
                 return _sandbox_error(ErrorCode.INTERNAL_ERROR, str(te))
         except Exception as exc:
+            logger.warning(
+                "call_tool(%r) failed", tool_name, exc_info=True
+            )
             return _sandbox_error(
                 ErrorCode.INTERNAL_ERROR,
                 f"Tool call failed: {str(exc)[:200]}",
@@ -230,12 +305,15 @@ async def _run_sandboxed_code(
     if hasattr(m, "run_async"):
         return await m.run_async(**run_kwargs)
 
+    # Import in its own try so an ImportError raised by the body of
+    # run_monty_async (e.g. a missing native shim) propagates instead of
+    # being misattributed to "module-level run_monty_async not found".
     try:
         from pydantic_monty import run_monty_async
-
-        return await run_monty_async(m, **run_kwargs)
     except ImportError:
-        pass
+        run_monty_async = None  # type: ignore[assignment]
+    if run_monty_async is not None:
+        return await run_monty_async(m, **run_kwargs)
 
     # No async execution path available — fail explicitly rather than
     # silently breaking call_tool with a sync fallback.
@@ -344,6 +422,34 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             run_saved: Name of a previously saved tool to re-run.
             list_saved: Set True to list all saved tools.
         """
+        # --- Validate that exactly one mode is specified ---
+        # ``code`` and ``run_saved`` are mutually exclusive (either run new
+        # code or re-run a saved tool, not both). ``list_saved`` is also
+        # exclusive — it inspects state and must not coexist with execution.
+        # ``save_as`` and ``justification`` are modifiers for the ``code``
+        # mode and don't count as a "mode" on their own.
+        modes_active = sum(
+            1 for v in (
+                bool(code and code.strip()),
+                bool(run_saved is not None),
+                bool(list_saved),
+            )
+            if v
+        )
+        if modes_active > 1:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "code, run_saved, and list_saved are mutually exclusive — "
+                    "specify exactly one.",
+                    suggestions=[
+                        "ha_manage_custom_tool(code='...', justification='...')",
+                        "ha_manage_custom_tool(run_saved='tool_name')",
+                        "ha_manage_custom_tool(list_saved=True)",
+                    ],
+                )
+            )
+
         # --- Mode: list saved tools ---
         if list_saved:
             return {

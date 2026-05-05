@@ -117,13 +117,22 @@ class Settings(BaseSettings):
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
     # Disabled by default due to the inherent risk of LLM-generated code.
+    # Range bounds reject zero/negative values that would silently break the
+    # tool and clamp upper bounds at sane safety margins (5 min wall-clock,
+    # 256 MB memory, 10k recursion, 10k API/tool calls per execution).
     enable_code_mode: bool = Field(False, alias="ENABLE_CODE_MODE")
-    code_mode_max_duration: float = Field(30.0, alias="CODE_MODE_MAX_DURATION")
+    code_mode_max_duration: float = Field(
+        30.0, ge=1.0, le=300.0, alias="CODE_MODE_MAX_DURATION"
+    )
     code_mode_max_memory: int = Field(
-        10_485_760, alias="CODE_MODE_MAX_MEMORY"
-    )  # 10 MB
-    code_mode_max_recursion: int = Field(100, alias="CODE_MODE_MAX_RECURSION")
-    code_mode_max_invocations: int = Field(100, alias="CODE_MODE_MAX_INVOCATIONS")
+        10_485_760, ge=1_048_576, le=268_435_456, alias="CODE_MODE_MAX_MEMORY"
+    )  # 10 MB default; 1 MB floor, 256 MB ceiling
+    code_mode_max_recursion: int = Field(
+        100, ge=1, le=10_000, alias="CODE_MODE_MAX_RECURSION"
+    )
+    code_mode_max_invocations: int = Field(
+        100, ge=1, le=10_000, alias="CODE_MODE_MAX_INVOCATIONS"
+    )
 
 
     @property
