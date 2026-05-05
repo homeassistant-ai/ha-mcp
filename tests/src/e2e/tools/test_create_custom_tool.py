@@ -1249,36 +1249,77 @@ class TestCodeModeApiPostBlocklist:
         )
         logger.info("api_post correctly blocked automation config write")
 
-    async def test_api_post_blocks_script_and_scene_config_writes(
+    async def test_api_post_blocks_script_config_write(
         self, mcp_client_with_code_mode
     ):
-        """POST /api/config/{script,scene}/config/* are blocked for the same
-        reason as automation: bypasses wrapping-tool validation.
+        """POST /api/config/script/config/* is blocked for the same reason
+        as automation: bypasses ``ha_config_set_script`` validation.
+
+        ``config/scene/config/*`` is intentionally NOT blocked: there is
+        no ``ha_config_set_scene`` wrapping tool to redirect to, and a
+        block without a validated alternative just removes capability.
+        See ``_API_POST_BLOCKED_PREFIXES`` in tools_code.py.
         """
         check = await _check_tool_available(mcp_client_with_code_mode)
-        _skip_if_unavailable(check, "api_post script/scene blocklist")
+        _skip_if_unavailable(check, "api_post script blocklist")
 
-        for kind in ("script", "scene"):
-            code = (
-                f'result = await api_post("/config/{kind}/config/abcd1234",'
-                f' {{"name": "X"}})\n'
-                '{"has_error": "error" in result if isinstance(result, dict) else False,'
-                ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        code = (
+            'result = await api_post("/config/script/config/abcd1234",'
+            ' {"name": "X"})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked script config"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_post must block script/config/*: {data}"
+        )
+        assert "ha_config_set_script" in result["error"], (
+            f"Error should point at the wrapping tool: {result}"
+        )
+        logger.info("api_post correctly blocked script config write")
+
+    async def test_api_post_allows_scene_config_write(
+        self, mcp_client_with_code_mode
+    ):
+        """POST /api/config/scene/config/* must NOT be sandbox-blocked.
+
+        No ``ha_config_set_scene`` wrapping tool exists yet; blocking the
+        path without a validated alternative would just remove capability.
+        Verifies the block was deliberately omitted, not accidentally
+        forgotten — this test should fail loudly if a future maintainer
+        adds the block back without a wrapping tool.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post scene allowed")
+
+        code = (
+            'result = await api_post("/config/scene/config/abcd1234",'
+            ' {"name": "X"})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: scene config allowed"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        # The HA endpoint may return an error for legitimate reasons
+        # (missing fields, schema rejection, etc.), but the sandbox-side
+        # blocklist must not be the cause.
+        if result["has_error"]:
+            err = str(result["error"]).lower()
+            assert "blocked" not in err and "ha_config_set_scene" not in err, (
+                f"Scene config write must not be sandbox-blocked: {result}"
             )
-            data = await safe_call_tool(
-                mcp_client_with_code_mode,
-                TOOL_NAME,
-                {"code": code, "justification": f"E2E test: blocked {kind} config"},
-            )
-            assert data.get("success") is True, f"Sandbox should succeed: {data}"
-            result = data["data"]["result"]
-            assert result["has_error"] is True, (
-                f"api_post must block {kind}/config/*: {data}"
-            )
-            assert f"ha_config_set_{kind}" in result["error"], (
-                f"Error should point at the wrapping tool: {result}"
-            )
-            logger.info("api_post correctly blocked %s config write", kind)
+        logger.info("api_post correctly allowed scene config write")
 
 
 # ---------------------------------------------------------------------------
