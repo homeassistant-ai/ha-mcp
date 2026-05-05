@@ -201,18 +201,23 @@ class TestShowAs:
 @pytest.mark.asyncio
 @pytest.mark.registry
 class TestShowAsOnIntegrationEntity:
-    """Round-trip on an INTEGRATION-PROVIDED entity (the demo platform's
-    sensor.demo_temperature), not a helper.
+    """Round-trip on an INTEGRATION-PROVIDED entity (a YAML-configured
+    template sensor), not a helper.
 
     Helpers can already be (re)configured with a device_class via
     ha_config_set_helper for the template binary_sensor / template sensor
     subtypes — so the helper-based tests above don't *literally* prove the
     new ha_set_entity capability for the original-issue case (an integration
     entity like envisalink's binary_sensor.alarm_zone_10). This test does:
-    sensor.demo_temperature comes from configuration.yaml's `demo:` line and
-    has no helper-creation alternative. The Z-Wave / Zigbee / envisalink
-    user path goes through the same `config/entity_registry/update` WS call
-    we're exercising here, so this is a legitimate stand-in.
+    sensor.demo_temperature is declared in
+    tests/initial_test_state/configuration.yaml under a `template:` block
+    (the bare `demo:` line above it is a no-op in modern HA — the demo
+    integration is config-flow-only). YAML-template entities are owned by
+    the template integration and have NO config entry, so
+    ha_config_set_helper (which routes through config_entries / the
+    config-flow API) cannot manage them. Z-Wave / Zigbee / envisalink user
+    paths go through the same `config/entity_registry/update` WS call we're
+    exercising here, so this is a legitimate stand-in.
     """
 
     TARGET = "sensor.demo_temperature"
@@ -225,9 +230,9 @@ class TestShowAsOnIntegrationEntity:
         # Capture the entity's pre-test sensor sub-options so the restore can
         # put them back exactly, rather than blindly clearing the dict.
         original_sensor_options = pre_data["entity_entry"]["options"].get("sensor", {})
-        # Demo integration ships this as a temperature sensor — guarantee that
-        # the override slot and the integration's own slot are distinct so we
-        # know the test is exercising what we think it is.
+        # The YAML fixture declares device_class: temperature — guarantee
+        # the override slot and the integration's own slot are distinct so
+        # we know the test is exercising what we think it is.
         assert original_device_class == "temperature"
 
         try:
