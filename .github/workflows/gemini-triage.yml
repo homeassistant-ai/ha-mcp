@@ -752,11 +752,21 @@ jobs:
                 /^(unfortunately|sorry|i'?m sorry|i apologize|my apologies|error:)/i,
                 /^as an? (ai|language model|assistant|llm)\b/i,
                 // First-person refusal verb + help-action pairing
-                /^i (cannot|can'?t|won'?t)\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|provide that|provide this|continue|process this)/i,
+                /^i (cannot|can'?t|won'?t)\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|provide that|provide this|provide assistance|continue|process this)/i,
                 /^i am (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
                 /^i'?m (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
                 /^we (cannot|can'?t|are unable)\s+(help|assist|comply|fulfill)/i,
                 /^i refuse to\b/i,
+                // Additional Gemini refusal lead-ins flagged in PR #1122 review.
+                // "I am afraid..." / "I'm afraid..." paired with a refusal verb
+                // (cannot/can't/won't) covers the polite-decline phrasing without
+                // false-positiving on standalone "I'm afraid the version isn't
+                // mentioned" info-request prose.
+                /^i('?m| am) afraid (i )?(cannot|can'?t|won'?t)/i,
+                // Bare "Unable to help..." (no leading "I'm") — Gemini sometimes
+                // drops the pronoun entirely. Narrow help-action set so prose
+                // like "Unable to determine the version" doesn't false-positive.
+                /^unable to (help|assist|comply)/i,
                 // Policy / guideline refusals — narrow noun-phrases that don't
                 // realistically appear in non-refusal prose. Earlier revisions
                 // included bare `\bcannot assist\b` and `\bi refuse\b` here;
