@@ -581,10 +581,10 @@ class AreaTools:
             Field(description="Area ID or floor ID to delete (use ha_list_floors_areas to find IDs)"),
         ],
     ) -> dict[str, Any]:
-        """Delete a Home Assistant area or floor.
+        """Remove a Home Assistant area or floor.
 
-        Deleting an area unassigns its entities and devices (the entities and
-        devices themselves are not deleted). Deleting a floor unassigns its
+        Removing an area unassigns its entities and devices (the entities and
+        devices themselves are not removed). Removing a floor unassigns its
         areas. May break automations referencing the removed area/floor.
         """
         registry = "area_registry" if kind == "area" else "floor_registry"
