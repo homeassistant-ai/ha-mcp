@@ -50,9 +50,11 @@ def _extract_tool_result(result: Any) -> Any:
     or a basic type.  Monty can only handle basic Python types (str, int,
     float, bool, list, dict, None), so we must serialize.
 
-    If the ToolResult flags ``isError``/``is_error``, returns a structured
-    error dict so sandbox code sees ``{"success": False, "error": ...}``
-    rather than treating the raw repr as a successful payload.
+    If the ToolResult flags ``isError``/``is_error``, returns ``{"error": ...}``
+    so sandbox code sees the failure instead of treating the raw repr as a
+    successful payload. The shape matches the ``api_get``/``api_post``/
+    ``ws_send`` failure path so user code can do ``result.get("error")``
+    uniformly.
     """
     # Already a basic type — pass through
     if isinstance(result, (str, int, float, bool, type(None), dict)):
@@ -83,14 +85,10 @@ def _extract_tool_result(result: Any) -> Any:
             except (json.JSONDecodeError, TypeError):
                 payload = combined
             if is_error:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": str(ErrorCode.INTERNAL_ERROR),
-                        "message": payload if isinstance(payload, str)
-                        else json.dumps(payload),
-                    },
-                }
+                message = (
+                    payload if isinstance(payload, str) else json.dumps(payload)
+                )
+                return {"error": message}
             return payload
 
     # Fallback: opaque object with no recognized content. Log so the
@@ -102,13 +100,7 @@ def _extract_tool_result(result: Any) -> Any:
     )
     repr_str = str(result)
     if is_error:
-        return {
-            "success": False,
-            "error": {
-                "code": str(ErrorCode.INTERNAL_ERROR),
-                "message": repr_str,
-            },
-        }
+        return {"error": repr_str}
     return repr_str
 
 
