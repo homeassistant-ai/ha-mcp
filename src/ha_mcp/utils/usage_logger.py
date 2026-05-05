@@ -15,6 +15,8 @@ from typing import Any
 
 from .data_paths import get_data_dir
 
+logger = logging.getLogger(__name__)
+
 # Default ring buffer size - keeps last N entries in memory
 DEFAULT_RING_BUFFER_SIZE = 200
 
@@ -128,9 +130,17 @@ class UsageLogger:
 
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            # Directory creation failed (e.g., read-only filesystem)
-            # Disable logging silently to avoid disrupting the MCP server
+        except OSError as e:
+            # Directory creation failed (e.g., read-only filesystem). Surface
+            # the reason instead of silently dropping every log — operators
+            # otherwise see an empty mcp_usage.jsonl with no clue why.
+            logger.warning(
+                "Usage logging disabled — could not create %s (%s: %s). "
+                "Set HA_MCP_CONFIG_DIR to a writable path to enable persistence.",
+                self.log_file_path.parent,
+                type(e).__name__,
+                e,
+            )
             self._enabled = False
 
         # In-memory ring buffer for fast access to recent logs

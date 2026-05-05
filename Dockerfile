@@ -31,11 +31,10 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.homeassistant-ai/ha-mcp"
 
-# Create non-root user. The base image's HOME_MODE is 0700 — fine when running
-# as mcpuser, but it makes /home/mcpuser un-traversable when users override
-# `--user UID:GID` (the issue #1125 reporter does so). Any code that stats a
-# path under HOME (set below) then raises PermissionError. chmod 0755 makes
-# the dir traversable for any uid; write access stays restricted to mcpuser.
+# Create non-root user. /home/mcpuser is mode 0755 (not the default 0700) so
+# that callers running with `--user UID:GID` overrides — common in hardened
+# Docker setups, see issue #1125 — can stat HOME-relative paths. Write
+# access stays restricted to mcpuser via ownership.
 RUN groupadd -r mcpuser \
     && useradd -r -g mcpuser -m mcpuser \
     && chmod 0755 /home/mcpuser

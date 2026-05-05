@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -188,6 +190,34 @@ class TestConfigPath:
 
         # Must not raise.
         assert load_tool_config() == {}
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod 0o000 doesn't model POSIX EACCES on Windows",
+    )
+    def test_load_tool_config_handles_real_eacces_on_posix(
+        self, monkeypatch, tmp_path
+    ):
+        """End-to-end variant of the EACCES regression: a real 0o000 dir.
+
+        The mocked-``read_text`` test above pins the going-forward contract,
+        but a future maintainer who reintroduces an upstream ``Path.exists()``
+        check would not be caught by it. This test exercises the actual
+        permission boundary: ``read_text`` on a file under a 0o000 dir
+        raises ``PermissionError`` (errno EACCES) from the kernel.
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        locked_dir = tmp_path / "locked"
+        locked_dir.mkdir()
+        cfg_path = locked_dir / "tool_config.json"
+        cfg_path.write_text("{}")
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+        os.chmod(locked_dir, 0o000)
+        try:
+            assert load_tool_config() == {}
+        finally:
+            os.chmod(locked_dir, 0o755)  # let pytest clean up tmp_path
 
 
 class TestSaveToolConfig:

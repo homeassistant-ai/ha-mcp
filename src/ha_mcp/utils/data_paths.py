@@ -13,35 +13,32 @@ import os
 import tempfile
 from pathlib import Path
 
+from .._version import is_running_in_addon
+
 logger = logging.getLogger(__name__)
-
-
-def _is_addon() -> bool:
-    """Return True when running inside the Home Assistant add-on container.
-
-    Mirrors the convention in ``settings_ui.py`` of treating
-    ``SUPERVISOR_TOKEN`` as the add-on detector — more reliable than
-    checking for ``/data`` because some Docker setups have a ``/data``
-    directory that isn't the supervisor data dir.
-    """
-    return bool(os.environ.get("SUPERVISOR_TOKEN"))
 
 
 @functools.lru_cache(maxsize=1)
 def get_data_dir() -> Path:
     """Return a writable directory for ha-mcp persistent data (memoized).
 
-    Priority:
+    Resolution order:
 
     1. ``HA_MCP_CONFIG_DIR`` env var — explicit override, e.g. for hardened
        Docker setups bind-mounting a writable volume into a
        ``read_only: true`` container.
-    2. ``/data`` — Home Assistant add-on (writable supervisor data dir).
-    3. ``~/.ha-mcp`` — standard.
-    4. ``<tempdir>/ha-mcp`` — last-resort fallback when (1) and (3) fail
-       (read-only filesystem, or ``HOME`` unset so ``Path.home()`` resolves
-       to ``/``). Loses persistence across restarts but lets the server
-       start; users wanting persistence should set ``HA_MCP_CONFIG_DIR``.
+    2. ``/data`` — Home Assistant add-on (``SUPERVISOR_TOKEN`` set; writable
+       supervisor data dir).
+    3. ``~/.ha-mcp`` — standard install. Skipped when ``HA_MCP_CONFIG_DIR``
+       was set but failed: an explicit override means "use this exact
+       location", and silently writing to ``$HOME`` instead would surprise
+       users who chose the override deliberately.
+    4. ``<tempdir>/ha-mcp`` — last-resort fallback when the previously
+       chosen step fails (read-only filesystem; ``HOME`` unset so
+       ``Path.home()`` resolves to ``/``; or ``HA_MCP_CONFIG_DIR`` set but
+       its mkdir raises). Loses persistence across restarts but lets the
+       server start; users wanting persistence should set
+       ``HA_MCP_CONFIG_DIR`` to a writable path.
 
     Memoized so the fallback warning emits once at startup rather than on
     every save/load HTTP request. Tests reset via
@@ -70,7 +67,7 @@ def _resolve_data_dir() -> Path:
         else:
             return custom_dir
 
-    if _is_addon():
+    if is_running_in_addon():
         return Path("/data")
 
     if preferred is None:
@@ -86,10 +83,9 @@ def _resolve_data_dir() -> Path:
     try:
         fallback.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        # Even the tmpdir is unwritable. Return the path anyway so the
-        # caller's own try/except (save_tool_config wraps writes in
-        # try/except OSError; usage_logger disables itself) can degrade
-        # gracefully.
+        # Even the tmpdir is unwritable. Return the path anyway: callers
+        # that wrap writes in try/except OSError can degrade gracefully
+        # (no persistence, but the server still starts).
         logger.warning(
             "Cannot write ha-mcp data to %s or fallback %s (%s: %s); "
             "persistence is disabled. "

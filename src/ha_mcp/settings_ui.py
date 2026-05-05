@@ -19,6 +19,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from ._version import is_running_in_addon
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -100,18 +101,6 @@ FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
 }
 
 
-def _is_addon() -> bool:
-    """Return True when running inside the Home Assistant add-on container.
-
-    Mirrors the existing convention in this module (and ``__main__.py``)
-    of treating ``SUPERVISOR_TOKEN`` as the add-on detector. Using the env
-    var is more reliable than checking for ``/data`` because some Docker
-    setups (and macOS dev environments) have a ``/data`` directory that
-    isn't the add-on data dir.
-    """
-    return bool(os.environ.get("SUPERVISOR_TOKEN"))
-
-
 def _get_config_path() -> Path:
     """Return the path to the tool config JSON file.
 
@@ -134,7 +123,7 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     except FileNotFoundError:
         raw = None
     except OSError:
-        logger.warning("Cannot read tool config at %s", path)
+        logger.warning("Cannot read tool config at %s", path, exc_info=True)
         raw = None
 
     if raw is not None:
@@ -858,11 +847,11 @@ def register_settings_routes(
 
     async def _settings_info(_: Request) -> JSONResponse:
         return JSONResponse({
-            "is_addon": _is_addon(),
+            "is_addon": is_running_in_addon(),
         })
 
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
-    is_addon = _is_addon()
+    is_addon = is_running_in_addon()
 
     if not is_addon and not secret_prefix:
         logger.warning(

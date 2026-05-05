@@ -184,9 +184,7 @@ class TestUsageLoggerDefaults:
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
         logger = UsageLogger()
-        assert str(logger.log_file_path).startswith(str(Path.home()))
-        assert ".ha-mcp" in str(logger.log_file_path)
-        assert str(logger.log_file_path).endswith("/logs/mcp_usage.jsonl")
+        assert logger.log_file_path == Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
         logger.shutdown()
 
     def test_honors_ha_mcp_config_dir(self, monkeypatch, tmp_path):

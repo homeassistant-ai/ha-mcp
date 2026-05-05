@@ -115,6 +115,41 @@ class TestFallbacks:
         assert result.is_dir()
         assert not broken_target.exists()
 
+    def test_returns_unwritable_tmpdir_when_everything_fails(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """Last-resort branch: env mkdir fails, home mkdir fails, tmpdir mkdir
+        fails. The resolver returns the tmpdir path anyway so callers (which
+        wrap their own writes in ``try/except OSError``) can degrade
+        gracefully rather than crashing the server. Warning fires.
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        readonly_home = tmp_path / "ro-home"
+        readonly_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: readonly_home)
+        fake_tmp = tmp_path / "ro-tmp"
+        fake_tmp.mkdir()
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.tempfile.gettempdir", lambda: str(fake_tmp)
+        )
+        original_mkdir = Path.mkdir
+
+        def fake_mkdir(self: Path, *args, **kwargs):
+            if self in (readonly_home / ".ha-mcp", fake_tmp / "ha-mcp"):
+                raise OSError(30, "Read-only file system")
+            return original_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.utils.data_paths"):
+            result = get_data_dir()
+
+        assert result == fake_tmp / "ha-mcp"
+        assert any(
+            "persistence is disabled" in r.getMessage() for r in caplog.records
+        )
+
 
 class TestMemoization:
     """The resolver must memoize so warnings emit once at startup."""
