@@ -356,4 +356,5 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
         "ha_config_get_dashboard", {"url_path": "test-hash-stability"}
     )
 
+    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]

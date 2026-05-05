@@ -17,9 +17,10 @@ def compute_config_hash(config: dict[str, Any]) -> str:
     Stability across reads is the caller's contract, not this function's.
     Automations canonicalize via ``_normalize_config_for_roundtrip`` before
     hashing; scripts and dashboards hash raw HA responses, so their
-    stability depends on HA returning byte-identical responses on
-    consecutive reads. The ``test_config_hash_stable_across_reads`` E2E
-    tests pin this for each tool family. See issue #980 for the
+    stability depends on HA returning structurally identical responses on
+    consecutive reads (``sort_keys=True`` canonicalizes dict-key order but
+    not list-element order). The ``test_config_hash_stable_across_reads``
+    E2E tests pin this for each tool family. See issue #980 for the
     contract analysis.
     """
     config_str = json.dumps(config, sort_keys=True, separators=(",", ":"))
