@@ -74,7 +74,12 @@ jobs:
               return;
             }
 
-            // Don't run if bot commented
+            // Don't run if bot commented. Broad `type === 'Bot'` (not just
+            // `github-actions[bot]`) is intentional here — we want to ignore
+            // retriggers from any bot, including Dependabot/Renovate update
+            // comments. The orphan-cleanup logic uses the narrower
+            // `login === 'github-actions[bot]'` check because *that* code
+            // deletes comments and must avoid hijacking other bots' work.
             if (comment && comment.user.type === 'Bot') {
               core.info('Skipping: Comment is from a bot');
               core.setOutput('should_run', 'false');
@@ -172,8 +177,15 @@ jobs:
                 per_page: 100,
               });
             } catch (err) {
-              core.warning(`listComments failed during orphan check (${err.message}); proceeding to create a fresh placeholder.`);
-              existing = { data: [] };
+              // Bail rather than create a duplicate. If we can't see existing
+              // comments we can't tell whether an orphan is already there;
+              // creating a new placeholder anyway would leave the issue with
+              // two visible "🤖 analyzing..." comments and no way to clean
+              // them up. Failing the step is the lesser evil — Update comment
+              // skips (no comment_id), no user-facing artifact, red Actions
+              // run for the maintainer.
+              core.setFailed(`listComments failed during orphan check (${err.message}); refusing to create a duplicate placeholder.`);
+              return;
             }
             const orphans = existing.data.filter(isOurOrphan);
 
@@ -190,7 +202,7 @@ jobs:
                     comment_id: old.id,
                   });
                 } catch (err) {
-                  core.warning(`Failed to delete older orphan placeholder ${old.id}: ${err.message}`);
+                  core.error(`Failed to delete older orphan placeholder ${old.id}: ${err.message}`);
                 }
               }
             } else {
@@ -225,11 +237,11 @@ jobs:
                   });
                   core.info(`Cleaned up straggler placeholder ${stale.id} from a concurrent run.`);
                 } catch (err) {
-                  core.warning(`Failed to delete straggler placeholder ${stale.id}: ${err.message}`);
+                  core.error(`Failed to delete straggler placeholder ${stale.id}: ${err.message}`);
                 }
               }
             } catch (err) {
-              core.warning(`Defensive re-list for straggler cleanup failed: ${err.message}`);
+              core.error(`Defensive re-list for straggler cleanup failed: ${err.message}`);
             }
 
             core.setOutput('comment_id', commentId);
@@ -279,7 +291,6 @@ jobs:
             core.setOutput('issue_author', issueAuthor);
             core.setOutput('issue_labels', labels.join(','));
             core.setOutput('issue_type', issueType);
-            core.setOutput('comments_json', JSON.stringify(comments.data));
             core.setOutput('comment_count', comments.data.length);
             core.setOutput('author_comments', authorComments || 'No additional comments from author');
 
@@ -407,7 +418,6 @@ jobs:
           ISSUE_BODY: '${{ steps.issue_data.outputs.issue_body }}'
           ISSUE_AUTHOR: '${{ steps.issue_data.outputs.issue_author }}'
           ISSUE_LABELS: '${{ steps.issue_data.outputs.issue_labels }}'
-          COMMENTS_JSON: '${{ steps.issue_data.outputs.comments_json }}'
           COMMENT_COUNT: '${{ steps.issue_data.outputs.comment_count }}'
           REPO_OWNER: '${{ github.repository_owner }}'
           REPO_NAME: '${{ github.event.repository.name }}'
@@ -677,34 +687,48 @@ jobs:
             } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
               // Missing-info path. The evaluate step said the issue isn't
               // ready for full analysis, so its output is a question for the
-              // user. Trust the prose — only the genuinely-broken cases
-              // (empty/garbage refusals, runaway monologues) get diverted to
-              // the generic notice. A coherent prose paragraph asking for
-              // version + install method is just as useful to the user as a
-              // bullet list and shouldn't be dressed up as "infra failure".
+              // user. Trust the prose — but guard against two ways it can
+              // go wrong:
               //
-              // The 4000-char cap is a "this looks like an LLM monologue, not
-              // a missing-info checklist" heuristic; it has nothing to do
-              // with GitHub's 65536-char comment limit. The 8-char floor
-              // catches truly empty or one-token refusals like "No." while
-              // letting through tight one-liners ("- HA version").
+              //   1. The model refused or errored ("I cannot help with that",
+              //      "Error: rate limit"). Posting that under "Information
+              //      Needed" puts words in the bot's mouth that contradict
+              //      the prose. Divert to the generic notice instead.
+              //   2. The model monologued (>4000 chars). Posting that on
+              //      every issue is a comment bomb. Divert.
+              //
+              // Anything else — bullet list, numbered list, prose
+              // question — gets posted verbatim. Shape mismatch (no list
+              // markers) is logged as a warning so prompt drift is visible
+              // in run logs, but doesn't gate the post; a coherent prose
+              // question is just as useful to the user as a bullet list.
+              //
+              // The 4000-char cap is a "looks like an LLM monologue, not a
+              // missing-info checklist" heuristic; unrelated to GitHub's
+              // 65536-char comment limit.
               const trimmed = evaluateResult.trim();
-              const looksLikeMissingInfo = trimmed.split('\n').some(line => {
+              const REFUSAL_PATTERNS = [
+                /^i (cannot|can't|won't|am unable|'m unable|'m not able|do not|don't have)/i,
+                /^(sorry|i'?m sorry|i apologize|my apologies)/i,
+                /^error:/i,
+                /\b(safety policy|content policy|i refuse|won't help|cannot assist)\b/i,
+              ];
+              const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
+              const tooLong = trimmed.length > 4000;
+              const matchesMissingInfoShape = trimmed.split('\n').some(line => {
                 const l = line.trimStart();
                 return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
                        l.startsWith('**') || /^\d+\.\s/.test(l);
               });
-              const tooShort = trimmed.length < 8;
-              const tooLong = trimmed.length > 4000;
-              if (tooShort || tooLong) {
-                core.error(`evaluate output failed length check (length=${trimmed.length}); posting generic notice instead.`);
+
+              if (looksLikeRefusal || tooLong) {
+                core.error(`evaluate output diverted to generic notice (looksLikeRefusal=${looksLikeRefusal}, length=${trimmed.length}); raw output: ${trimmed.slice(0, 200)}`);
                 analysisBody = GENERIC_FAILURE_BODY;
               } else {
-                if (!looksLikeMissingInfo) {
-                  core.warning(`evaluate output didn't match expected bullet/numbered/bold list shape (length=${trimmed.length}); posting LLM prose verbatim under Information Needed header.`);
+                if (!matchesMissingInfoShape) {
+                  core.warning(`evaluate output didn't match expected bullet/numbered/bold list shape (length=${trimmed.length}); posting LLM prose verbatim.`);
                 }
                 analysisBody = `## ℹ️ Information Needed\n\n`;
-                analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
                 analysisBody += trimmed + '\n\n';
                 analysisBody += `---\n\n`;
                 analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
