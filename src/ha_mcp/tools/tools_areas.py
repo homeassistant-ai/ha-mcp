@@ -6,7 +6,7 @@ Home Assistant areas and floors - essential organizational features for smart ho
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -166,186 +166,6 @@ class AreaTools:
             exception_to_structured_error(e, context={"operation": "list_areas"}, suggestions=[
                 "Check Home Assistant connection",
                 "Verify WebSocket connection is active",
-            ])
-
-    @tool(
-        name="ha_config_set_area",
-        tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "title": "Create or Update Area"},
-    )
-    @log_tool_usage
-    async def ha_config_set_area(
-        self,
-        name: Annotated[
-            str | None,
-            Field(
-                description="Name for the area (required for create, optional for update, e.g., 'Living Room', 'Kitchen')",
-                default=None,
-            ),
-        ] = None,
-        area_id: Annotated[
-            str | None,
-            Field(
-                description="Area ID to update (omit to create new area, use ha_config_list_areas to find IDs)",
-                default=None,
-            ),
-        ] = None,
-        floor_id: Annotated[
-            str | None,
-            Field(
-                description="Floor ID to assign this area to (use ha_config_list_floors to find IDs, empty string to remove)",
-                default=None,
-            ),
-        ] = None,
-        icon: Annotated[
-            str | None,
-            Field(
-                description="Material Design Icon (e.g., 'mdi:sofa', 'mdi:bed', empty string to remove)",
-                default=None,
-            ),
-        ] = None,
-        aliases: Annotated[
-            str | list[str] | None,
-            Field(
-                description="Alternative names for voice assistant recognition (e.g., ['lounge', 'family room'], empty list to clear)",
-                default=None,
-            ),
-        ] = None,
-        picture: Annotated[
-            str | None,
-            Field(
-                description="URL to a picture representing the area (empty string to remove)",
-                default=None,
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant area (room).
-
-        Areas organize entities by physical location for room-based control.
-
-        Create: provide name only.
-        Update: provide area_id (from ha_config_list_areas) plus any fields to change.
-
-        EXAMPLES:
-        ha_config_set_area(name="Kitchen")
-        ha_config_set_area(name="Living Room", icon="mdi:sofa")
-        ha_config_set_area(area_id="kitchen", name="Kitchen Renamed", floor_id="ground_floor")
-        """
-        try:
-            # Parse aliases if provided as string
-            try:
-                parsed_aliases = parse_string_list_param(aliases, "aliases")
-            except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid aliases parameter: {e}",
-                ))
-
-            # Determine if this is a create or update operation
-            if area_id:
-                message = self._build_area_update_message(
-                    area_id, name, floor_id, icon, parsed_aliases, picture,
-                )
-                operation = "update"
-            else:
-                if not name:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "name is required when creating a new area",
-                        context={"operation": "create_area"},
-                        suggestions=["Provide a name for the new area"],
-                    ))
-                message = self._build_area_create_message(
-                    name, floor_id, icon, parsed_aliases, picture,
-                )
-                operation = "create"
-
-            result = await self._client.send_websocket_message(message)
-
-            if result.get("success"):
-                area_data = result.get("result", {})
-                area_name = name or area_data.get("name", area_id)
-                return {
-                    "success": True,
-                    "area": area_data,
-                    "area_id": area_data.get("area_id", area_id),
-                    "message": f"Successfully {operation}d area: {area_name}",
-                }
-
-            error = result.get("error", {})
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-            ctx: dict[str, Any] = {"operation": operation}
-            if name:
-                ctx["name"] = name
-            if area_id:
-                ctx["area_id"] = area_id
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to {operation} area: {error_msg}",
-                context=ctx,
-            ))
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Error {operation} area {name!r}: {e}")
-            exception_to_structured_error(e, context={"operation": operation, "name": name, "area_id": area_id}, suggestions=[
-                "Check Home Assistant connection",
-                "For create: Verify the name is unique",
-                "For update: Verify the area_id exists using ha_config_list_areas()",
-                "If assigning to a floor, verify floor_id exists",
-            ])
-
-    @tool(
-        name="ha_config_remove_area",
-        tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area"},
-    )
-    @log_tool_usage
-    async def ha_config_remove_area(
-        self,
-        area_id: Annotated[
-            str,
-            Field(description="Area ID to delete (use ha_config_list_areas to find IDs)"),
-        ],
-    ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant area.
-
-        Entities and devices in the area are not deleted, just unassigned.
-        May break automations referencing this area.
-        """
-        try:
-            message: dict[str, Any] = {
-                "type": "config/area_registry/delete",
-                "area_id": area_id,
-            }
-
-            result = await self._client.send_websocket_message(message)
-
-            if result.get("success"):
-                return {
-                    "success": True,
-                    "area_id": area_id,
-                    "message": f"Successfully deleted area: {area_id}",
-                }
-            else:
-                error = result.get("error", {})
-                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete area: {error_msg}",
-                    context={"area_id": area_id},
-                ))
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Error removing area {area_id!r}: {e}")
-            exception_to_structured_error(e, context={"area_id": area_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify the area_id exists using ha_config_list_areas()",
             ])
 
     # ============================================================
@@ -533,58 +353,86 @@ class AreaTools:
                 ],
             )
 
+    # ============================================================
+    # COMBINED SET / REMOVE
+    # ============================================================
+
     @tool(
-        name="ha_config_set_floor",
+        name="ha_set_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "title": "Create or Update Floor"},
+        annotations={"destructiveHint": True, "title": "Create or Update Area or Floor"},
     )
     @log_tool_usage
-    async def ha_config_set_floor(
+    async def ha_set_area_or_floor(
         self,
+        kind: Annotated[
+            Literal["area", "floor"],
+            Field(
+                description="Which registry to operate on: 'area' for rooms, 'floor' for building levels",
+            ),
+        ],
         name: Annotated[
             str | None,
             Field(
-                description="Name for the floor (required for create, optional for update, e.g., 'Ground Floor', 'Basement')",
+                description="Name (required when creating; optional when updating, e.g., 'Living Room', 'Ground Floor')",
+                default=None,
+            ),
+        ] = None,
+        id: Annotated[  # noqa: A002
+            str | None,
+            Field(
+                description="Existing area_id or floor_id to update (omit to create a new entry; use ha_list_floors_areas to find IDs)",
                 default=None,
             ),
         ] = None,
         floor_id: Annotated[
             str | None,
             Field(
-                description="Floor ID to update (omit to create new floor, use ha_config_list_floors to find IDs)",
+                description="Floor assignment when kind='area' (use empty string to clear). Ignored when kind='floor'.",
                 default=None,
             ),
         ] = None,
         level: Annotated[
             int | None,
             Field(
-                description="Numeric level for ordering (0=ground, 1=first, -1=basement, etc.)",
+                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement). Ignored when kind='area'.",
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:home-floor-1', 'mdi:home-floor-b', empty string to remove)",
+                description="Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1', empty string to remove)",
                 default=None,
             ),
         ] = None,
         aliases: Annotated[
             str | list[str] | None,
             Field(
-                description="Alternative names for voice assistant recognition (e.g., ['downstairs', 'main level'], empty list to clear)",
+                description="Alternative names for voice assistant recognition (e.g., ['lounge'], empty list to clear)",
+                default=None,
+            ),
+        ] = None,
+        picture: Annotated[
+            str | None,
+            Field(
+                description="Picture URL when kind='area' (empty string to remove). Ignored when kind='floor'.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant floor.
+        """Create or update a Home Assistant area or floor.
 
-        Provide name only to create a new floor. Provide floor_id to update existing.
-        Floors organize areas into vertical levels for building-wide control.
+        Pass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).
+        Provide name only to create a new entry; provide id to update an existing one.
+
+        EXAMPLES:
+        ha_set_area_or_floor(kind="area", name="Kitchen")
+        ha_set_area_or_floor(kind="area", id="kitchen", floor_id="ground_floor")
+        ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
         """
+        operation = "create"
         try:
-            # Parse aliases if provided as string
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
@@ -593,83 +441,119 @@ class AreaTools:
                     f"Invalid aliases parameter: {e}",
                 ))
 
-            # Determine if this is a create or update operation
-            if floor_id:
-                message = self._build_floor_update_message(
-                    floor_id, name, level, icon, parsed_aliases,
-                )
-                operation = "update"
-            else:
-                if not name:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "name is required when creating a new floor",
-                        context={"operation": "create_floor"},
-                        suggestions=["Provide a name for the new floor"],
-                    ))
-                message = self._build_floor_create_message(
-                    name, level, icon, parsed_aliases,
-                )
-                operation = "create"
+            if kind == "area":
+                if id:
+                    message = self._build_area_update_message(
+                        id, name, floor_id, icon, parsed_aliases, picture,
+                    )
+                    operation = "update"
+                else:
+                    if not name:
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            "name is required when creating a new area",
+                            context={"operation": "create_area"},
+                            suggestions=["Provide a name for the new area"],
+                        ))
+                    message = self._build_area_create_message(
+                        name, floor_id, icon, parsed_aliases, picture,
+                    )
+                    operation = "create"
+                result_key = "area"
+                id_key = "area_id"
+            else:  # kind == "floor"
+                if id:
+                    message = self._build_floor_update_message(
+                        id, name, level, icon, parsed_aliases,
+                    )
+                    operation = "update"
+                else:
+                    if not name:
+                        raise_tool_error(create_error_response(
+                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            "name is required when creating a new floor",
+                            context={"operation": "create_floor"},
+                            suggestions=["Provide a name for the new floor"],
+                        ))
+                    message = self._build_floor_create_message(
+                        name, level, icon, parsed_aliases,
+                    )
+                    operation = "create"
+                result_key = "floor"
+                id_key = "floor_id"
 
             result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
-                floor_data = result.get("result", {})
-                floor_name = name or floor_data.get("name", floor_id)
+                data = result.get("result", {})
+                returned_id = data.get(id_key, id)
+                display_name = name or data.get("name", returned_id)
                 return {
                     "success": True,
-                    "floor": floor_data,
-                    "floor_id": floor_data.get("floor_id", floor_id),
-                    "message": f"Successfully {operation}d floor: {floor_name}",
+                    result_key: data,
+                    id_key: returned_id,
+                    "kind": kind,
+                    "message": f"Successfully {operation}d {kind}: {display_name}",
                 }
 
             error = result.get("error", {})
             error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-            ctx: dict[str, Any] = {"operation": operation}
+            ctx: dict[str, Any] = {"operation": operation, "kind": kind}
             if name:
                 ctx["name"] = name
-            if floor_id:
-                ctx["floor_id"] = floor_id
+            if id:
+                ctx[id_key] = id
             raise_tool_error(create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to {operation} floor: {error_msg}",
+                f"Failed to {operation} {kind}: {error_msg}",
                 context=ctx,
             ))
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error {operation} floor {name!r}: {e}")
-            exception_to_structured_error(e, context={"operation": operation, "name": name, "floor_id": floor_id}, suggestions=[
+            logger.error(f"Error {operation} {kind} {name!r}: {e}")
+            suggestions = [
                 "Check Home Assistant connection",
                 "For create: Verify the name is unique",
-                "For update: Verify the floor_id exists using ha_config_list_floors()",
-            ])
+                f"For update: Verify the {kind} id exists using ha_list_floors_areas()",
+            ]
+            if kind == "area":
+                suggestions.append("If assigning to a floor, verify floor_id exists")
+            exception_to_structured_error(
+                e,
+                context={"operation": operation, "kind": kind, "name": name, "id": id},
+                suggestions=suggestions,
+            )
 
     @tool(
-        name="ha_config_remove_floor",
+        name="ha_remove_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Floor"},
+        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area or Floor"},
     )
     @log_tool_usage
-    async def ha_config_remove_floor(
+    async def ha_remove_area_or_floor(
         self,
-        floor_id: Annotated[
+        kind: Annotated[
+            Literal["area", "floor"],
+            Field(description="Which registry to delete from: 'area' or 'floor'"),
+        ],
+        id: Annotated[  # noqa: A002
             str,
-            Field(description="Floor ID to delete (use ha_config_list_floors to find IDs)"),
+            Field(description="Area ID or floor ID to delete (use ha_list_floors_areas to find IDs)"),
         ],
     ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant floor.
+        """Delete a Home Assistant area or floor.
 
-        Areas on this floor are not deleted, just unassigned.
-        May break automations referencing this floor.
+        Entities, devices, or areas attached to the deleted entry are not deleted —
+        just unassigned. May break automations referencing the removed area/floor.
         """
+        registry = "area_registry" if kind == "area" else "floor_registry"
+        id_key = "area_id" if kind == "area" else "floor_id"
         try:
             message: dict[str, Any] = {
-                "type": "config/floor_registry/delete",
-                "floor_id": floor_id,
+                "type": f"config/{registry}/delete",
+                id_key: id,
             }
 
             result = await self._client.send_websocket_message(message)
@@ -677,26 +561,31 @@ class AreaTools:
             if result.get("success"):
                 return {
                     "success": True,
-                    "floor_id": floor_id,
-                    "message": f"Successfully deleted floor: {floor_id}",
+                    id_key: id,
+                    "kind": kind,
+                    "message": f"Successfully deleted {kind}: {id}",
                 }
-            else:
-                error = result.get("error", {})
-                error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete floor: {error_msg}",
-                    context={"floor_id": floor_id},
-                ))
+
+            error = result.get("error", {})
+            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to delete {kind}: {error_msg}",
+                context={"kind": kind, id_key: id},
+            ))
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error removing floor {floor_id!r}: {e}")
-            exception_to_structured_error(e, context={"floor_id": floor_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify the floor_id exists using ha_config_list_floors()",
-            ])
+            logger.error(f"Error removing {kind} {id!r}: {e}")
+            exception_to_structured_error(
+                e,
+                context={"kind": kind, id_key: id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    f"Verify the {kind} id exists using ha_list_floors_areas()",
+                ],
+            )
 
 
 def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
