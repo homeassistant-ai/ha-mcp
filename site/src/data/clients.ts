@@ -22,7 +22,7 @@ export const clients: Client[] = [
     accuracy: 5,
     platforms: ['macOS', 'Windows', 'Linux'],
     configFormat: 'json',
-    configLocation: '~/Library/Application Support/Claude/claude_desktop_config.json (macOS)\n%APPDATA%\\Claude\\claude_desktop_config.json (Windows)',
+    configLocation: '~/Library/Application Support/Claude/claude_desktop_config.json (macOS)\n%APPDATA%\\Claude\\claude_desktop_config.json (Windows traditional installer)\nMicrosoft Store install: path varies by package — see Windows setup guide for a detection snippet',
     description: 'The official Claude desktop application by Anthropic.',
     config: `{
   "mcpServers": {

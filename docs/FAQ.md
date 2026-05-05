@@ -212,7 +212,8 @@ source ~/.zshrc
 1. **Restart Claude completely** - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window
 2. **Check config file location:**
    - Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+   - Windows (traditional installer): `%APPDATA%\Claude\claude_desktop_config.json`
+   - Windows (Microsoft Store): path varies by package — see the [Windows setup guide](https://homeassistant-ai.github.io/ha-mcp/guide-windows) for a detection snippet
 3. **Verify JSON syntax** - No trailing commas, proper quotes
 4. **Check the MCP icon** - Bottom left of Claude Desktop shows connected servers
 

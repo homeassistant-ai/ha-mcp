@@ -6,7 +6,8 @@ transports: ['stdio']
 configFormat: json
 configLocation: |
   macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
-  Windows: %APPDATA%\Claude\claude_desktop_config.json
+  Windows (traditional installer): %APPDATA%\Claude\claude_desktop_config.json
+  Windows (Microsoft Store): path varies by package — see the Windows setup guide for a detection snippet
 accuracy: 5
 order: 1
 httpNote: Use mcp-proxy for HTTP connections (see Network/Remote setup)

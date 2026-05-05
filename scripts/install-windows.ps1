@@ -5,13 +5,34 @@
 $ErrorActionPreference = "Stop"
 
 # Configuration
-# Claude Desktop installed from the Microsoft Store uses a virtualized/sandboxed path
-# under LocalPackages; the traditional installer uses the real %APPDATA% path.
-$MsixPackage = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter "Claude_*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($MsixPackage) {
-    $ConfigDir = "$($MsixPackage.FullName)\LocalCache\Roaming\Claude"
+# Claude Desktop installed from the Microsoft Store uses a virtualized/sandboxed
+# path under %LOCALAPPDATA%\Packages; the traditional installer uses %APPDATA%.
+# Get-AppxPackage queries the package registry, so a previously-installed Store
+# build that has been uninstalled (which can leave a stale package folder behind
+# for days) won't be detected here.
+try {
+    $ClaudeAppx = Get-AppxPackage -Name Claude -ErrorAction Stop | Select-Object -First 1
+} catch {
+    $ClaudeAppx = $null
+}
+
+if ($ClaudeAppx) {
+    $ConfigDir = "$env:LOCALAPPDATA\Packages\$($ClaudeAppx.PackageFamilyName)\LocalCache\Roaming\Claude"
+    $DetectedVariant = "Microsoft Store install"
 } else {
-    $ConfigDir = "$env:APPDATA\Claude"
+    # Fallback: filesystem probe in case Get-AppxPackage isn't available
+    # (e.g., constrained PowerShell, Windows Sandbox). Pin to the known
+    # Anthropic publisher hash so we don't pick up unrelated packages,
+    # and require LocalCache\Roaming\Claude to exist so we don't write
+    # into a "zombie" folder left behind after an MSIX uninstall.
+    $MsixPackage = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter "Claude_pzs8sxrjxfjjc" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($MsixPackage -and (Test-Path "$($MsixPackage.FullName)\LocalCache\Roaming\Claude")) {
+        $ConfigDir = "$($MsixPackage.FullName)\LocalCache\Roaming\Claude"
+        $DetectedVariant = "Microsoft Store install"
+    } else {
+        $ConfigDir = "$env:APPDATA\Claude"
+        $DetectedVariant = "Traditional install"
+    }
 }
 $ConfigFile = "$ConfigDir\claude_desktop_config.json"
 $DemoUrl = "https://ha-mcp-demo-server.qc-h.net"
@@ -51,6 +72,7 @@ Write-Host ""
 
 # Step 2: Configure Claude Desktop
 Write-Host "Step 2: Configuring Claude Desktop..." -ForegroundColor Yellow
+Write-Host "  Detected: $DetectedVariant" -ForegroundColor White
 $ClaudeNotInstalled = $false
 if (-not (Test-Path $ConfigDir)) {
     $ClaudeNotInstalled = $true

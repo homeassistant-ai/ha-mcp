@@ -61,7 +61,8 @@ Then add to your Claude Desktop configuration file:
 
 **Location:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows (traditional installer): `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows (Microsoft Store): path varies by package — see the [Windows setup guide](https://homeassistant-ai.github.io/ha-mcp/guide-windows) for a detection snippet
 
 **Configuration:**
 ```json
