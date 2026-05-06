@@ -539,9 +539,19 @@ class TestFlowHelperRouting:
             }
         )
 
-        # Simulate HA: first call lists 3 entities (select + 2 tariff sensors);
-        # subsequent calls are entity_registry/update, all succeed.
+        # Simulate HA: Bug 12 collision check (config_entries/get) returns
+        # empty (no collision); Bug 16 registry-ID validation lookups (area +
+        # label); first business call lists 3 entities (select + 2 tariff
+        # sensors); then entity_registry/update calls all succeed.
         responses = [
+            # Bug 12 collision check
+            {"success": True, "result": []},
+            # Bug 16 validation: area_registry/list, label_registry/list
+            {"success": True, "result": [{"area_id": "kitchen", "name": "Kitchen"}]},
+            {
+                "success": True,
+                "result": [{"label_id": "metered", "name": "Metered"}],
+            },
             {
                 "success": True,
                 "result": [
@@ -604,8 +614,11 @@ class TestFlowHelperRouting:
                 "result": {"entry_id": "entry-g", "title": "grp", "domain": "group"},
             }
         )
-        # One entity, registry/update fails
+        # Bug 12 collision check (no collision), then Bug 16 area_registry/list,
+        # then entity_registry/list, then entity_registry/update (which fails).
         responses = [
+            {"success": True, "result": []},
+            {"success": True, "result": [{"area_id": "hallway", "name": "Hallway"}]},
             {
                 "success": True,
                 "result": [
@@ -674,11 +687,12 @@ class TestFlowHelperRouting:
                 "result": {"entry_id": "entry-w3", "title": "um", "domain": "utility_meter"},
             }
         )
-        # First call: registry/list returns 3 entities.
-        # Call #2: update for entity 1 raises.
-        # Call #3: update for entity 2 succeeds.
-        # Call #4: update for entity 3 succeeds.
+        # Bug 12 collision check (no collision), Bug 16 area_registry/list
+        # (only area_id passed, no labels/category), entity_registry/list
+        # returns 3 entities, then update for entity 1 raises, entity 2+3 succeed.
         responses: list = [
+            {"success": True, "result": []},
+            {"success": True, "result": [{"area_id": "hallway", "name": "Hallway"}]},
             {
                 "success": True,
                 "result": [

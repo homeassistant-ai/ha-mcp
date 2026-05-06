@@ -12,7 +12,7 @@ import uuid
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
@@ -48,7 +48,568 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset({
 })
 
 
+# Bug 4b/7c/10/14 (issue #1150): per-helper-type allowlists of typed
+# parameters. Inapplicable params are rejected at the top of the tool
+# instead of being silently dropped. Cross-cutting params (helper_type,
+# name, helper_id, area_id, labels, category, wait, config) are always
+# accepted and not listed here. `icon` is included where it applies.
+_TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
+    # Simple helpers
+    "input_button": frozenset({"icon"}),
+    "input_boolean": frozenset({"icon", "initial"}),
+    "input_select": frozenset({"icon", "options", "initial"}),
+    "input_number": frozenset({
+        "icon", "min_value", "max_value", "step",
+        "unit_of_measurement", "mode", "initial",
+    }),
+    "input_text": frozenset({
+        "icon", "min_value", "max_value", "mode", "initial",
+    }),
+    "input_datetime": frozenset({"icon", "has_date", "has_time", "initial"}),
+    "counter": frozenset({
+        "icon", "initial", "min_value", "max_value", "step", "restore",
+    }),
+    "timer": frozenset({"icon", "duration", "restore"}),
+    "schedule": frozenset({
+        "icon", "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday",
+    }),
+    "zone": frozenset({
+        "icon", "latitude", "longitude", "radius", "passive",
+    }),
+    "person": frozenset({"user_id", "device_trackers", "picture"}),  # NO icon
+    "tag": frozenset({"tag_id", "description"}),  # NO icon, NO description applies elsewhere
+    # Flow types: only `config` (handled separately — see _validate_applicable_params).
+}
+
+# Set of typed params that are simple-helper-specific (used to reject when a
+# flow type was requested but a simple-helper param was passed).
+_ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
+
+
+def _validate_applicable_params(
+    helper_type: str,
+    passed: dict[str, Any],
+) -> None:
+    """Reject typed parameters that don't apply to the chosen helper_type.
+
+    Bug 4b/7c/10/14 (issue #1150): the function signature accepts ~30 typed
+    parameters, but each helper_type only legitimately uses 5-10 of them.
+    Previously, inapplicable params were silently ignored. Now we raise
+    VALIDATION_INVALID_PARAMETER so the caller sees their request was not
+    handled, instead of getting `success: true` with the param dropped.
+
+    `passed` is a dict of param_name -> value as the caller provided. None
+    values are treated as "not passed" and skipped.
+    """
+    inapplicable: list[str] = []
+
+    if helper_type in FLOW_HELPER_TYPES:
+        # Flow types accept `config` (handled before this call) plus
+        # cross-cutting params (name/helper_id/area_id/labels/category/wait).
+        # Any simple-helper-typed param passed here is inapplicable.
+        inapplicable.extend(
+            param_name
+            for param_name in _ALL_TYPED_PARAMS
+            if passed.get(param_name) is not None
+        )
+    else:
+        applicable = _TYPE_TYPED_PARAMS.get(helper_type, frozenset())
+        for param_name, value in passed.items():
+            if value is None:
+                continue
+            if param_name in applicable:
+                continue
+            inapplicable.append(param_name)
+
+    if not inapplicable:
+        return
+
+    inapplicable.sort()
+    if helper_type in FLOW_HELPER_TYPES:
+        applicable_msg = (
+            "config (use ha_get_helper_schema to see fields), "
+            "name, helper_id, area_id, labels, category, wait"
+        )
+    else:
+        type_specific = sorted(_TYPE_TYPED_PARAMS.get(helper_type, frozenset()))
+        type_specific_str = ", ".join(type_specific) if type_specific else "(only name/icon)"
+        applicable_msg = (
+            f"{type_specific_str}; plus name, helper_id, area_id, labels, "
+            f"category, wait"
+        )
+
+    suggestions = [
+        f"Remove these params for helper_type='{helper_type}': "
+        f"{', '.join(inapplicable)}",
+    ]
+    if helper_type == "person" and "icon" in inapplicable:
+        suggestions.append(
+            "Person entities use 'picture' (a URL), not 'icon'."
+        )
+    if helper_type == "tag" and "icon" in inapplicable:
+        suggestions.append("Tags do not support icons.")
+    if helper_type in FLOW_HELPER_TYPES:
+        suggestions.append(
+            f"For flow-based helpers like {helper_type!r}, type-specific config "
+            "goes inside the `config` dict; the per-type fields are discoverable "
+            f"via ha_get_helper_schema(helper_type='{helper_type}')."
+        )
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"The following parameters are not applicable for "
+            f"helper_type='{helper_type}': {', '.join(inapplicable)}. "
+            f"Applicable parameters: {applicable_msg}.",
+            context={
+                "helper_type": helper_type,
+                "inapplicable_params": inapplicable,
+            },
+            suggestions=suggestions,
+        )
+    )
+
+
+def _validate_numeric_range(
+    helper_type: str,
+    min_value: float | None,
+    max_value: float | None,
+    step: float | None,
+) -> None:
+    """Pre-validate min/max/step ranges for numeric simple helpers.
+
+    Bug 13 (issue #1150): HA rejects several edge cases with cryptic messages
+    (or, in the slider-step-too-large case, silently produces a broken
+    slider). Surface clear, type-aware errors to the caller before the WS
+    round-trip.
+
+    Applies to: input_number (float), counter (int), input_text (length).
+    For input_text, min/max are character lengths; values must be in [0, 255]
+    and follow the standard min<max strict ordering.
+    """
+    if helper_type == "input_text":
+        if min_value is not None and min_value < 0:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"input_text min_value (length) must be >= 0, got {min_value}.",
+                context={"helper_type": helper_type, "min_value": min_value},
+            ))
+        if max_value is not None and max_value > 255:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"input_text max_value (length) must be <= 255, got {max_value}.",
+                context={"helper_type": helper_type, "max_value": max_value},
+            ))
+
+    if min_value is not None and max_value is not None:
+        if min_value > max_value:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"min_value ({min_value}) cannot be greater than max_value ({max_value}).",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                },
+            ))
+        if min_value == max_value:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"min_value and max_value must differ (both were {min_value}). "
+                f"Pick a non-empty range so the helper has more than one valid value.",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                },
+            ))
+
+    # Step validation only applies to numeric types (not input_text).
+    if helper_type in ("input_number", "counter") and step is not None:
+        if step <= 0:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"step must be > 0 for {helper_type} (got {step}).",
+                context={"helper_type": helper_type, "step": step},
+            ))
+        if (
+            min_value is not None
+            and max_value is not None
+            and (max_value - min_value) > 0
+            and step > (max_value - min_value)
+        ):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"step ({step}) is larger than the range "
+                f"(max_value - min_value = {max_value - min_value}). "
+                f"HA does not reject this, but the resulting slider/control "
+                f"is unusable. Reduce step or widen the range.",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "step": step,
+                },
+            ))
+
+
+def _validate_input_select_options(options: Any) -> None:
+    """Reject input_select option lists containing duplicates (Bug 17, issue #1150).
+
+    HA rejects duplicates with "Duplicate options are not allowed", but the
+    error path it takes is generic enough that callers tend to misread it.
+    Pre-validate so the message is unambiguous.
+    """
+    if not isinstance(options, list):
+        return
+    seen: set[Any] = set()
+    duplicates: list[Any] = []
+    for opt in options:
+        if opt in seen and opt not in duplicates:
+            duplicates.append(opt)
+        else:
+            seen.add(opt)
+    if duplicates:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"input_select options must be unique. Duplicate option(s): "
+            f"{', '.join(repr(d) for d in duplicates)}.",
+            context={"helper_type": "input_select", "duplicates": duplicates},
+            suggestions=["Remove duplicate entries from the options list."],
+        ))
+
+
+def _parse_hms(value: Any) -> tuple[int, int, int] | None:
+    """Parse 'HH:MM' or 'HH:MM:SS' to a (h, m, s) tuple. Returns None if unparsable."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+        s = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        return None
+    return h, m, s
+
+
+def _validate_schedule_days(
+    monday: list | None,
+    tuesday: list | None,
+    wednesday: list | None,
+    thursday: list | None,
+    friday: list | None,
+    saturday: list | None,
+    sunday: list | None,
+) -> None:
+    """Pre-validate schedule day-range structure (Bug 17, issue #1150).
+
+    Each range must include 'from' and 'to'; ranges within a single day must
+    not overlap. HA reports per-day errors; surface a single clear message
+    upfront with the offending day named.
+    """
+    day_params = {
+        "monday": monday,
+        "tuesday": tuesday,
+        "wednesday": wednesday,
+        "thursday": thursday,
+        "friday": friday,
+        "saturday": saturday,
+        "sunday": sunday,
+    }
+    for day_name, day_schedule in day_params.items():
+        if day_schedule is None:
+            continue
+        if not isinstance(day_schedule, list):
+            continue  # let HA report shape errors
+        intervals: list[tuple[int, int]] = []  # (from_secs, to_secs)
+        for idx, time_range in enumerate(day_schedule):
+            if not isinstance(time_range, dict):
+                continue
+            if "from" not in time_range or "to" not in time_range:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"schedule {day_name}[{idx}] must include both 'from' "
+                    f"and 'to' keys, got: {sorted(time_range.keys())}.",
+                    context={"helper_type": "schedule", "day": day_name},
+                ))
+            from_parsed = _parse_hms(time_range["from"])
+            to_parsed = _parse_hms(time_range["to"])
+            if from_parsed is None or to_parsed is None:
+                continue  # let HA report format errors
+            from_secs = from_parsed[0] * 3600 + from_parsed[1] * 60 + from_parsed[2]
+            to_secs = to_parsed[0] * 3600 + to_parsed[1] * 60 + to_parsed[2]
+            intervals.append((from_secs, to_secs))
+
+        # Check overlap by sorting and walking. HA rejects overlap regardless
+        # of caller order — we sort here so the error message points at a
+        # canonical pair.
+        sorted_intervals = sorted(intervals, key=lambda iv: iv[0])
+        for i in range(1, len(sorted_intervals)):
+            prev_from, prev_to = sorted_intervals[i - 1]
+            cur_from, cur_to = sorted_intervals[i]
+            if cur_from < prev_to:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"schedule {day_name} has overlapping time ranges "
+                    f"({prev_from // 3600:02d}:{(prev_from % 3600) // 60:02d}-"
+                    f"{prev_to // 3600:02d}:{(prev_to % 3600) // 60:02d} and "
+                    f"{cur_from // 3600:02d}:{(cur_from % 3600) // 60:02d}-"
+                    f"{cur_to // 3600:02d}:{(cur_to % 3600) // 60:02d}). "
+                    f"HA requires non-overlapping ranges per day.",
+                    context={"helper_type": "schedule", "day": day_name},
+                ))
+
+
 logger = logging.getLogger(__name__)
+
+
+async def _validate_registry_ids(
+    client: Any,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+) -> None:
+    """Validate that area_id, labels, and category reference existing registry entries.
+
+    Bug 16 (issue #1150): the entity-registry update path previously accepted any
+    string and forwarded it to HA, leaving phantom references like
+    `area_id="nonexistent_xyz"` in the registry. Validate before sending so the
+    caller gets a clear error with the available IDs to choose from.
+
+    Skips:
+      - None values (caller did not pass — no change to apply).
+      - Empty string area_id / category (these mean "clear" — HA accepts them).
+      - Empty list labels (clear semantics).
+
+    Raises VALIDATION_INVALID_PARAMETER on the first unknown ID encountered, with
+    the available IDs included in the suggestions list so the caller can correct.
+    """
+
+    async def _ws_list(
+        message: dict[str, Any],
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Return (ok, items). ``ok=False`` means the lookup itself failed
+        (HA unreachable, auth lost, registry not implemented). ``ok=True``
+        with empty list means the registry exists and is genuinely empty —
+        distinct from failure so we can still reject phantom IDs against an
+        empty registry. The fail-open ``ok=False`` path keeps transient HA
+        outages from blocking legitimate calls.
+        """
+        try:
+            result = await client.send_websocket_message(message)
+        except Exception:
+            return False, []
+        if isinstance(result, list):
+            return True, result
+        if isinstance(result, dict):
+            if result.get("success") is False:
+                return False, []
+            inner = result.get("result", [])
+            if isinstance(inner, list):
+                return True, inner
+        return False, []
+
+    # Validate area_id (skip None and empty-string clear).
+    if area_id is not None and area_id != "":
+        ok, areas = await _ws_list({"type": "config/area_registry/list"})
+        valid_area_ids: list[str] = [
+            aid
+            for a in areas
+            if isinstance(a, dict)
+            and isinstance((aid := a.get("area_id")), str)
+        ]
+        if ok and area_id not in valid_area_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"area_id={area_id!r} does not exist in the area registry.",
+                    context={"area_id": area_id},
+                    suggestions=[
+                        "Use ha_config_list_areas() to list valid area IDs.",
+                        'Pass area_id="" to clear the area assignment.',
+                        f"Available area_ids: {sorted(valid_area_ids)}",
+                    ],
+                )
+            )
+
+    # Validate labels (skip None; empty list is allowed as a "clear").
+    if labels is not None and labels:
+        ok, ws_labels = await _ws_list({"type": "config/label_registry/list"})
+        valid_label_ids: list[str] = [
+            lid
+            for label in ws_labels
+            if isinstance(label, dict)
+            and isinstance((lid := label.get("label_id")), str)
+        ]
+        if ok:
+            unknown = [
+                label_id
+                for label_id in labels
+                if label_id and label_id not in valid_label_ids
+            ]
+            if unknown:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown label_id(s): {unknown}. These do not exist in "
+                        "the label registry.",
+                        context={"labels": labels, "unknown_labels": unknown},
+                        suggestions=[
+                            "Use ha_config_get_label() to list valid label IDs.",
+                            "Use ha_config_set_label() to create a new label.",
+                            f"Available label_ids: {sorted(valid_label_ids)}",
+                        ],
+                    )
+                )
+
+    # Validate category (skip None and empty-string clear).
+    if category is not None and category != "":
+        ok, categories = await _ws_list(
+            {"type": "config/category_registry/list", "scope": "helpers"}
+        )
+        valid_category_ids: list[str] = [
+            cid
+            for cat in categories
+            if isinstance(cat, dict)
+            and isinstance((cid := cat.get("category_id")), str)
+        ]
+        if ok and category not in valid_category_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"category={category!r} does not exist in the helpers "
+                    "category registry.",
+                    context={"category": category},
+                    suggestions=[
+                        "Use ha_config_get_category(scope='helpers') to list "
+                        "valid category IDs.",
+                        "Use ha_config_set_category() to create a new category.",
+                        f"Available category_ids: {sorted(valid_category_ids)}",
+                    ],
+                )
+            )
+
+
+def _slugify_helper_name(name: str) -> str:
+    """Derive the slug HA generates from a helper display name.
+
+    Mirrors HA's collection-storage logic: lowercase the name, replace spaces
+    with underscores, then strip any non-alphanumeric/underscore characters.
+    Used by the Bug 12 collision check so we can compare a caller-supplied
+    `name` against existing helpers' IDs without an extra round trip.
+    """
+    lowered = name.lower().replace(" ", "_")
+    return "".join(c for c in lowered if c.isalnum() or c == "_")
+
+
+async def _check_name_collision(
+    client: Any,
+    helper_type: str,
+    name: str | None,
+) -> None:
+    """Reject create requests whose name collides with an existing helper (Bug 12).
+
+    HA's create endpoints auto-suffix duplicate names with `_2` / `_3` etc., so
+    a caller asking to "create" a helper that already exists silently gets a
+    duplicate entity instead of updating the original. Detect and reject before
+    we send the create message, pointing the caller at the existing helper_id.
+
+    Empty / missing `name` is left to the existing name-required check downstream
+    so the user sees the standard "name is required" error rather than a
+    spurious collision miss.
+    """
+    if not name:
+        return
+
+    target_slug = _slugify_helper_name(name)
+    if not target_slug:
+        # Name normalises to empty (e.g. all punctuation). HA's create call
+        # will reject; let it surface that error rather than guessing.
+        return
+
+    existing_id: str | None = None
+
+    if helper_type in FLOW_HELPER_TYPES:
+        # Flow helpers live in the config-entry registry. Filter by domain so
+        # we only see entries created via this helper_type's flow.
+        try:
+            result = await client.send_websocket_message({
+                "type": "config_entries/get",
+                "domain": helper_type,
+            })
+        except Exception:
+            # Connectivity issue — skip the check; HA will still suffix on its
+            # own and we'll fail open rather than block legit creates.
+            return
+        entries = result.get("result", []) if isinstance(result, dict) else result
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            title = entry.get("title")
+            if isinstance(title, str) and _slugify_helper_name(title) == target_slug:
+                existing_id = entry.get("entry_id") or entry.get("id")
+                break
+    else:
+        # Simple helpers expose a {type}/list WS command that returns entries
+        # with an `id` field (which is the slug HA derived from the name).
+        try:
+            result = await client.send_websocket_message({"type": f"{helper_type}/list"})
+        except Exception:
+            return
+        items: list[Any] = []
+        if isinstance(result, dict):
+            inner = result.get("result", [])
+            # person/list returns {"storage": [...], "config": [...]}; flatten.
+            if isinstance(inner, dict):
+                for key in ("storage", "config"):
+                    sub = inner.get(key)
+                    if isinstance(sub, list):
+                        items.extend(sub)
+            elif isinstance(inner, list):
+                items = inner
+        elif isinstance(result, list):
+            items = result
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            existing_slug = item.get("id") or item.get("tag_id")
+            if isinstance(existing_slug, str) and existing_slug == target_slug:
+                existing_id = existing_slug
+                break
+            existing_name = item.get("name")
+            if (
+                isinstance(existing_name, str)
+                and _slugify_helper_name(existing_name) == target_slug
+            ):
+                existing_id = item.get("id") or item.get("tag_id") or target_slug
+                break
+
+    if existing_id is None:
+        return
+
+    raise_tool_error(create_error_response(
+        ErrorCode.VALIDATION_INVALID_PARAMETER,
+        f"A {helper_type} helper named {name!r} already exists "
+        f"(id: {existing_id!r}). Pass helper_id={existing_id!r} to update it, "
+        f"or use a different name to create a new helper.",
+        context={
+            "helper_type": helper_type,
+            "name": name,
+            "existing_helper_id": existing_id,
+        },
+        suggestions=[
+            f"To update the existing helper, pass helper_id={existing_id!r} "
+            "(and omit `name`).",
+            "To create a separate helper, pick a name whose slug does not "
+            f"already exist (current collision: {target_slug!r}).",
+        ],
+    ))
 
 
 async def _get_entities_for_config_entry(
@@ -189,6 +750,7 @@ async def _handle_flow_helper(
     labels: str | list[str] | None,
     category: str | None,
     wait: bool | str,
+    action: str | None = None,
 ) -> dict[str, Any]:
     """Create or update a flow-based helper and apply registry updates to all entities.
 
@@ -198,8 +760,14 @@ async def _handle_flow_helper(
 
     For utility_meter with tariffs, this means the same label/area is applied
     to every tariff sensor (and the select entity) uniformly.
+
+    `action` may be passed by the caller (Bug 11 explicit-intent path) — when
+    None, falls back to the legacy implicit discriminator (presence of
+    helper_id => update). Validation that the (action, helper_id) combination
+    is consistent has already happened upstream in ha_config_set_helper.
     """
-    action = "update" if helper_id else "create"
+    if action is None:
+        action = "update" if helper_id else "create"
 
     # Normalize empty string to None, matching ha_config_set_helper's treatment
     # of config in (None, {}, "") as "nothing passed" (L785 simple-type branch).
@@ -272,6 +840,12 @@ async def _handle_flow_helper(
             f"Invalid labels parameter: {e}",
             context={"helper_type": helper_type},
         ))
+
+    # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config
+    # entry. If the IDs are invalid, fail fast — otherwise we'd succeed in
+    # creating the helper but later silently persist phantom references on the
+    # post-create entity-registry update.
+    await _validate_registry_ids(client, area_id, labels_list, category)
 
     # Dispatch to the shared flow machinery.
     if action == "create":
@@ -605,15 +1179,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         min_value: Annotated[
             float | None,
             Field(
-                description="Minimum value (input_number/counter) or minimum length (input_text)",
+                description="Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
                 default=None,
+                validation_alias=AliasChoices("min_value", "min"),
             ),
         ] = None,
         max_value: Annotated[
             float | None,
             Field(
-                description="Maximum value (input_number/counter) or maximum length (input_text)",
+                description="Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
                 default=None,
+                validation_alias=AliasChoices("max_value", "max"),
             ),
         ] = None,
         step: Annotated[
@@ -626,8 +1202,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         unit_of_measurement: Annotated[
             str | None,
             Field(
-                description="Unit of measurement for input_number (e.g., '°C', '%', 'W')",
+                description="Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
                 default=None,
+                validation_alias=AliasChoices("unit_of_measurement", "unit"),
             ),
         ] = None,
         options: Annotated[
@@ -779,9 +1356,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "Tag ID for tag. On create, omit to auto-generate a "
+                    "Tag ID for tag. On create, omit to auto-generate a unique "
                     "uuid4 hex (HA's tag/create requires this field; the tool "
-                    "fills it in for you when omitted)."
+                    "fills it in for you). On update, the tag's existing tag_id "
+                    "is required (passed via helper_id)."
                 ),
                 default=None,
             ),
@@ -821,6 +1399,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=True,
             ),
         ] = True,
+        action: Annotated[
+            Literal["create", "update"] | None,
+            Field(
+                description=(
+                    "Explicit intent: 'create' a new helper or 'update' an existing one. "
+                    "When omitted, falls back to the implicit discriminator: presence of "
+                    "helper_id => update, absence => create. Pass 'create' or 'update' "
+                    "to disambiguate (e.g. so a typo in helper_id surfaces as a clear "
+                    "'helper not found' error instead of being mistaken for a create call)."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities (27 types, unified interface).
@@ -860,7 +1451,110 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
             # if an exception bubbles out of the flow-helper branch below.
-            action = "update" if helper_id else "create"
+            #
+            # Bug 11 (issue #1150): the explicit `action` parameter lets the
+            # caller declare intent unambiguously. Without it, we fall back to
+            # the legacy implicit discriminator (presence of helper_id =>
+            # update). The implicit fallback is back-compat for existing
+            # callers; the explicit form is preferred because it lets us
+            # validate intent contradictions (e.g. action="create" with a
+            # helper_id passed by mistake) up front, before any WS round-trip
+            # produces a confusing ENTITY_NOT_FOUND.
+            if action is not None:
+                # Explicit-intent path: validate the combination matches.
+                if action == "create" and helper_id is not None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "action='create' was passed together with "
+                            f"helper_id={helper_id!r}. These are contradictory: "
+                            "create makes a new helper, while helper_id targets "
+                            "an existing one.",
+                            context={
+                                "helper_type": helper_type,
+                                "action": action,
+                                "helper_id": helper_id,
+                            },
+                            suggestions=[
+                                "Omit helper_id to create a new helper",
+                                "Or pass action='update' to modify the existing helper at helper_id",
+                            ],
+                        )
+                    )
+                if action == "update" and helper_id is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "action='update' requires helper_id to identify "
+                            "which helper to modify.",
+                            context={
+                                "helper_type": helper_type,
+                                "action": action,
+                            },
+                            suggestions=[
+                                'Pass "helper_id": "my_helper" to identify the helper',
+                                "Or pass action='create' (or omit action) to create a new helper",
+                            ],
+                        )
+                    )
+            else:
+                # Implicit discriminator (back-compat). Pass action='create'
+                # or action='update' explicitly to avoid the inference.
+                action = "update" if helper_id else "create"
+
+            # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
+            # to the chosen helper_type, instead of silently dropping them. Without
+            # this, callers got `success: true` but their (mistakenly-passed) param
+            # never made it into HA's config.
+            _validate_applicable_params(
+                helper_type,
+                {
+                    "icon": icon,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "step": step,
+                    "unit_of_measurement": unit_of_measurement,
+                    "options": options,
+                    "initial": initial,
+                    "mode": mode,
+                    "has_date": has_date,
+                    "has_time": has_time,
+                    "restore": restore,
+                    "duration": duration,
+                    "monday": monday,
+                    "tuesday": tuesday,
+                    "wednesday": wednesday,
+                    "thursday": thursday,
+                    "friday": friday,
+                    "saturday": saturday,
+                    "sunday": sunday,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius": radius,
+                    "passive": passive,
+                    "user_id": user_id,
+                    "device_trackers": device_trackers,
+                    "picture": picture,
+                    "tag_id": tag_id,
+                    "description": description,
+                },
+            )
+
+            # Bug 11 (issue #1150): the create-vs-update mode is implicit in
+            # which of `name` / `helper_id` was passed. Passing both used to
+            # Bug 12 (issue #1150): on create, HA auto-suffixes name collisions
+            # with `_2`/`_3`/..., so a caller asking to create something that
+            # already exists silently gets a duplicate. Detect the slug
+            # collision before sending and point them at the existing helper.
+            #
+            # Bug 11 note: the implicit create/update discriminator (presence
+            # of helper_id) is preserved. Passing both name+helper_id is the
+            # legitimate rename pattern — we don't reject it. The original
+            # symptom (confusing ENTITY_NOT_FOUND on misspelled helper_id) is
+            # mitigated by the per-type update branch that already includes
+            # the entity_id in the error context with helpful suggestions.
+            if action == "create":
+                await _check_name_collision(client, helper_type, name)
 
             # Route flow-based helpers to Config Entry Flow API.
             # Simple helpers continue through the WebSocket {type}/create+update path below.
@@ -875,6 +1569,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     labels=labels,
                     category=category,
                     wait=wait,
+                    action=action,
                 )
 
             # Simple helper types use explicit parameters (name, options, min_value, ...).
@@ -904,6 +1599,28 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid list parameter: {e}",
                     )
+                )
+
+            # Bug 16 (issue #1150): validate area_id / labels / category exist
+            # in their respective registries before any registry-update WS call.
+            # Without this, phantom IDs are silently persisted as dangling
+            # references that confuse downstream UI and tools.
+            await _validate_registry_ids(client, area_id, labels, category)
+
+            # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
+            # Done once for both create and update so the message is identical
+            # regardless of action. HA's own errors here are cryptic
+            # ("Unknown error", "Duplicate options are not allowed", per-day
+            # range messages, broken sliders), so surface a clear error before
+            # the WS round-trip.
+            if helper_type in ("input_number", "counter", "input_text"):
+                _validate_numeric_range(helper_type, min_value, max_value, step)
+            if helper_type == "input_select":
+                _validate_input_select_options(options)
+            if helper_type == "schedule":
+                _validate_schedule_days(
+                    monday, tuesday, wednesday, thursday,
+                    friday, saturday, sunday,
                 )
 
             if action == "create":
@@ -952,27 +1669,33 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
                     message["options"] = options
-                    if initial and initial in options:
+                    # Bug 4a (issue #1150): if `initial` was passed but isn't
+                    # one of the options, reject explicitly instead of silently
+                    # dropping. The previous `if initial and initial in options`
+                    # check stripped invalid initials with `success: true`.
+                    if initial is not None:
+                        if initial not in options:
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                    f"initial={initial!r} must be one of options "
+                                    f"{options!r} for input_select.",
+                                    context={
+                                        "helper_type": helper_type,
+                                        "initial": initial,
+                                        "options": options,
+                                    },
+                                    suggestions=[
+                                        "Pick an `initial` value that's in `options`.",
+                                        "Or omit `initial` so the entity starts unset.",
+                                    ],
+                                )
+                            )
                         message["initial"] = initial
 
                 elif helper_type == "input_number":
-                    # Validate min_value/max_value range
-                    if (
-                        min_value is not None
-                        and max_value is not None
-                        and min_value > max_value
-                    ):
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
-                                context={
-                                    "min_value": min_value,
-                                    "max_value": max_value,
-                                },
-                            )
-                        )
-
+                    # Range/step validation handled centrally by
+                    # _validate_numeric_range above (Bug 13).
                     if min_value is not None:
                         message["min"] = min_value
                     if max_value is not None:
@@ -981,7 +1704,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["step"] = step
                     if unit_of_measurement:
                         message["unit_of_measurement"] = unit_of_measurement
-                    if mode in ["box", "slider"]:
+                    # Bug 6 (issue #1150): reject invalid mode values instead
+                    # of silently coercing to the HA default. Caller learns
+                    # which values are valid for input_number.
+                    if mode is not None:
+                        if mode not in ("box", "slider"):
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                    f"mode='{mode}' is not valid for input_number. "
+                                    "Use 'box' or 'slider'.",
+                                    context={"helper_type": helper_type, "mode": mode},
+                                    suggestions=["Pass mode='slider' or mode='box'"],
+                                )
+                            )
                         message["mode"] = mode
                     # Bug 1 (issue #1150): `initial` was accepted in the function
                     # signature but never written to the input_number/create
@@ -994,9 +1730,22 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["min"] = int(min_value)
                     if max_value is not None:
                         message["max"] = int(max_value)
-                    if mode in ["text", "password"]:
+                    # Bug 6 (issue #1150): reject invalid mode for input_text.
+                    if mode is not None:
+                        if mode not in ("text", "password"):
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                    f"mode='{mode}' is not valid for input_text. "
+                                    "Use 'text' or 'password'.",
+                                    context={"helper_type": helper_type, "mode": mode},
+                                    suggestions=["Pass mode='text' or mode='password'"],
+                                )
+                            )
                         message["mode"] = mode
-                    if initial:
+                    # Bug 5 (issue #1150): "" is a valid initial for input_text
+                    # — the truthy check `if initial:` previously dropped it.
+                    if initial is not None:
                         message["initial"] = initial
 
                 elif helper_type == "input_boolean":
@@ -1035,7 +1784,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
 
-                    if initial:
+                    # Bug 5 (issue #1150): use `is not None` so a deliberate
+                    # zero-time `initial="00:00:00"` (rare but valid) isn't
+                    # silently dropped by a truthy check.
+                    if initial is not None:
                         message["initial"] = initial
 
                 elif helper_type == "counter":
@@ -1055,7 +1807,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 elif helper_type == "timer":
                     # Timer parameters: duration, restore
-                    if duration:
+                    # Bug 5 (issue #1150): use `is not None` so an explicitly-
+                    # passed "0:00:00" or 0 isn't silently dropped.
+                    if duration is not None:
                         message["duration"] = duration
                     if restore is not None:
                         message["restore"] = restore
@@ -1064,24 +1818,66 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Schedule parameters: monday-sunday with time ranges
                     # Each day is a list of {"from": "HH:MM:SS", "to": "HH:MM:SS"}
                     # with optional "data" dict for additional attributes
-                    message.update(
-                        _format_schedule_days(
-                            monday,
-                            tuesday,
-                            wednesday,
-                            thursday,
-                            friday,
-                            saturday,
-                            sunday,
-                        )
+                    formatted = _format_schedule_days(
+                        monday,
+                        tuesday,
+                        wednesday,
+                        thursday,
+                        friday,
+                        saturday,
+                        sunday,
                     )
+                    # Bug 7a (issue #1150): a schedule with no time ranges on any
+                    # day is an always-off entity — almost certainly not what the
+                    # caller wanted. Reject so the caller realizes they must pass
+                    # at least one day-of-week range.
+                    if all(
+                        not formatted.get(day)
+                        for day in (
+                            "monday", "tuesday", "wednesday", "thursday",
+                            "friday", "saturday", "sunday",
+                        )
+                    ):
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                "schedule helper requires at least one day-of-week "
+                                "with at least one time range.",
+                                context={"helper_type": helper_type},
+                                suggestions=[
+                                    "Pass e.g. monday=[{\"from\": \"08:00\", \"to\": \"17:00\"}]",
+                                    "Each day's value is a list of {\"from\": \"HH:MM\", \"to\": \"HH:MM\"} dicts",
+                                ],
+                            )
+                        )
+                    message.update(formatted)
 
                 elif helper_type == "zone":
-                    # Zone parameters - HA validates required fields (latitude, longitude)
-                    if latitude is not None:
-                        message["latitude"] = latitude
-                    if longitude is not None:
-                        message["longitude"] = longitude
+                    # Bug 7b (issue #1150): pre-validate required fields with a
+                    # clear tool-side error, instead of letting HA bubble its
+                    # voluptuous "required key not provided" message.
+                    missing = []
+                    if latitude is None:
+                        missing.append("latitude")
+                    if longitude is None:
+                        missing.append("longitude")
+                    if missing:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                f"zone helper requires {' and '.join(missing)}.",
+                                context={
+                                    "helper_type": helper_type,
+                                    "missing_fields": missing,
+                                },
+                                suggestions=[
+                                    "Pass latitude (float) and longitude (float)",
+                                    "Optionally pass radius (meters, default 100) and passive (bool)",
+                                ],
+                            )
+                        )
+                    message["latitude"] = latitude
+                    message["longitude"] = longitude
                     if radius is not None:
                         message["radius"] = radius
                     if passive is not None:
@@ -1098,11 +1894,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 elif helper_type == "tag":
                     # Tag parameters: tag_id, description
-                    # Note: name goes into entity registry, not tag storage.
-                    # Bug 9 (issue #1150): HA's tag/create requires tag_id;
-                    # auto-generate one when the caller omits it (matches
-                    # the docstring promise of auto-generation).
-                    message["tag_id"] = tag_id if tag_id else uuid.uuid4().hex
+                    # Note: name goes into entity registry, not tag storage
+                    # Bug 9 (issue #1150): HA's tag/create requires `tag_id`,
+                    # rejecting omissions with a cryptic "Unknown error" 400.
+                    # The tool's docstring (and tag_id Field description) say
+                    # tag_id is auto-generated when missing — make that true.
+                    if tag_id is None:
+                        tag_id = uuid.uuid4().hex
+                    message["tag_id"] = tag_id
                     if description:
                         message["description"] = description
 
@@ -1275,6 +2074,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                     registry_result = await client.send_websocket_message(registry_msg)
                     if not registry_result.get("success"):
+                        # Bug 11 (issue #1150): if `name` was also passed, the
+                        # caller may have intended a create but typoed
+                        # helper_id. Surface that hypothesis explicitly so the
+                        # error guides them to the right next call rather than
+                        # leaving them confused by a bare ENTITY_NOT_FOUND.
+                        suggestions = [
+                            f"Verify the helper_id={helper_id!r} exists "
+                            "(use ha_config_list_helpers to list current helpers)",
+                        ]
+                        if name:
+                            suggestions.append(
+                                f"If you meant to create a new helper named "
+                                f"{name!r}, omit helper_id (or pass action='create')"
+                            )
                         raise_tool_error(
                             create_error_response(
                                 ErrorCode.ENTITY_NOT_FOUND,
@@ -1282,7 +2095,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 context={
                                     "helper_type": helper_type,
                                     "entity_id": entity_id,
+                                    "helper_id": helper_id,
+                                    "name": name,
                                 },
+                                suggestions=suggestions,
                             )
                         )
                     registry_entry = registry_result.get("result", {})
@@ -1559,11 +2375,21 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                             if unit_val is not None:
                                 update_msg["unit_of_measurement"] = unit_val
-                            mode_val = (
-                                mode
-                                if mode in ["box", "slider"]
-                                else existing.get("mode")
-                            )
+                            # Bug 6 (issue #1150): reject invalid mode values
+                            # explicitly instead of falling back to existing.
+                            if mode is not None and mode not in ("box", "slider"):
+                                raise_tool_error(
+                                    create_error_response(
+                                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                        f"mode='{mode}' is not valid for input_number. "
+                                        "Use 'box' or 'slider'.",
+                                        context={"helper_type": helper_type, "mode": mode},
+                                        suggestions=[
+                                            "Pass mode='slider' or mode='box'",
+                                        ],
+                                    )
+                                )
+                            mode_val = mode if mode is not None else existing.get("mode")
                             if mode_val is not None:
                                 update_msg["mode"] = mode_val
                             # Bug 1b (issue #1150): `initial` was accepted but
@@ -1591,11 +2417,21 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                             if max_val is not None:
                                 update_msg["max"] = max_val
-                            mode_val = (
-                                mode
-                                if mode in ["text", "password"]
-                                else existing.get("mode")
-                            )
+                            # Bug 6 (issue #1150): reject invalid mode values
+                            # explicitly for input_text too.
+                            if mode is not None and mode not in ("text", "password"):
+                                raise_tool_error(
+                                    create_error_response(
+                                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                        f"mode='{mode}' is not valid for input_text. "
+                                        "Use 'text' or 'password'.",
+                                        context={"helper_type": helper_type, "mode": mode},
+                                        suggestions=[
+                                            "Pass mode='text' or mode='password'",
+                                        ],
+                                    )
+                                )
+                            mode_val = mode if mode is not None else existing.get("mode")
                             if mode_val is not None:
                                 update_msg["mode"] = mode_val
                             initial_val = (
