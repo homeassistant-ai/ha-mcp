@@ -18,6 +18,7 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
+    get_user_step_field_names,
     update_flow_helper,
 )
 from .util_helpers import (
@@ -44,6 +45,128 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset({
     "person",
     "tag",
 })
+
+
+# Bug 4b/7c/10/14 (issue #1150): per-helper-type allowlists of typed
+# parameters. Inapplicable params are rejected at the top of the tool
+# instead of being silently dropped. Cross-cutting params (helper_type,
+# name, helper_id, area_id, labels, category, wait, config) are always
+# accepted and not listed here. `icon` is included where it applies.
+_TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
+    # Simple helpers
+    "input_button": frozenset({"icon"}),
+    "input_boolean": frozenset({"icon", "initial"}),
+    "input_select": frozenset({"icon", "options", "initial"}),
+    "input_number": frozenset({
+        "icon", "min_value", "max_value", "step",
+        "unit_of_measurement", "mode", "initial",
+    }),
+    "input_text": frozenset({
+        "icon", "min_value", "max_value", "mode", "initial",
+    }),
+    "input_datetime": frozenset({"icon", "has_date", "has_time", "initial"}),
+    "counter": frozenset({
+        "icon", "initial", "min_value", "max_value", "step", "restore",
+    }),
+    "timer": frozenset({"icon", "duration", "restore"}),
+    "schedule": frozenset({
+        "icon", "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday",
+    }),
+    "zone": frozenset({
+        "icon", "latitude", "longitude", "radius", "passive",
+    }),
+    "person": frozenset({"user_id", "device_trackers", "picture"}),  # NO icon
+    "tag": frozenset({"tag_id", "description"}),  # NO icon, NO description applies elsewhere
+    # Flow types: only `config` (handled separately — see _validate_applicable_params).
+}
+
+# Set of typed params that are simple-helper-specific (used to reject when a
+# flow type was requested but a simple-helper param was passed).
+_ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
+
+
+def _validate_applicable_params(
+    helper_type: str,
+    passed: dict[str, Any],
+) -> None:
+    """Reject typed parameters that don't apply to the chosen helper_type.
+
+    Bug 4b/7c/10/14 (issue #1150): the function signature accepts ~30 typed
+    parameters, but each helper_type only legitimately uses 5-10 of them.
+    Previously, inapplicable params were silently ignored. Now we raise
+    VALIDATION_INVALID_PARAMETER so the caller sees their request was not
+    handled, instead of getting `success: true` with the param dropped.
+
+    `passed` is a dict of param_name -> value as the caller provided. None
+    values are treated as "not passed" and skipped.
+    """
+    inapplicable: list[str] = []
+
+    if helper_type in FLOW_HELPER_TYPES:
+        # Flow types accept `config` (handled before this call) plus
+        # cross-cutting params (name/helper_id/area_id/labels/category/wait).
+        # Any simple-helper-typed param passed here is inapplicable.
+        for param_name in _ALL_TYPED_PARAMS:
+            if passed.get(param_name) is not None:
+                inapplicable.append(param_name)
+    else:
+        applicable = _TYPE_TYPED_PARAMS.get(helper_type, frozenset())
+        for param_name, value in passed.items():
+            if value is None:
+                continue
+            if param_name in applicable:
+                continue
+            inapplicable.append(param_name)
+
+    if not inapplicable:
+        return
+
+    inapplicable.sort()
+    if helper_type in FLOW_HELPER_TYPES:
+        applicable_msg = (
+            "config (use ha_get_helper_schema to see fields), "
+            "name, helper_id, area_id, labels, category, wait"
+        )
+    else:
+        type_specific = sorted(_TYPE_TYPED_PARAMS.get(helper_type, frozenset()))
+        type_specific_str = ", ".join(type_specific) if type_specific else "(only name/icon)"
+        applicable_msg = (
+            f"{type_specific_str}; plus name, helper_id, area_id, labels, "
+            f"category, wait"
+        )
+
+    suggestions = [
+        f"Remove these params for helper_type='{helper_type}': "
+        f"{', '.join(inapplicable)}",
+    ]
+    if helper_type == "person" and "icon" in inapplicable:
+        suggestions.append(
+            "Person entities use 'picture' (a URL), not 'icon'."
+        )
+    if helper_type == "tag" and "icon" in inapplicable:
+        suggestions.append("Tags do not support icons.")
+    if helper_type in FLOW_HELPER_TYPES:
+        suggestions.append(
+            f"For flow-based helpers like {helper_type!r}, type-specific config "
+            "goes inside the `config` dict; the per-type fields are discoverable "
+            f"via ha_get_helper_schema(helper_type='{helper_type}')."
+        )
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"The following parameters are not applicable for "
+            f"helper_type='{helper_type}': {', '.join(inapplicable)}. "
+            f"Applicable parameters: {applicable_msg}.",
+            context={
+                "helper_type": helper_type,
+                "inapplicable_params": inapplicable,
+            },
+            suggestions=suggestions,
+        )
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +349,39 @@ async def _handle_flow_helper(
             context={"helper_type": helper_type},
         ))
 
-    # Fold the top-level `name` parameter into config_dict only for create:
-    # options (update) flows are strict about extra keys and will reject `name`
-    # with 400 "extra keys not allowed @ data['name']" — names on existing flow
-    # helpers are not renamed through the options flow.
+    # Pre-flow warnings (e.g. stripped `name` on update) collected here and
+    # surfaced alongside any later warnings on the result.
+    pre_warnings: list[str] = []
+
+    # Name handling differs between create and update flows:
+    #
+    # CREATE: most flow helpers accept `name` as a top-level form field, so the
+    # tool folds the top-level `name` parameter into the form payload. But some
+    # helpers — notably `switch_as_x` — derive the entity name from the source
+    # switch and reject `name` as an extra key with HA-side 400 "extra keys not
+    # allowed @ data['name']". Probe the user-step schema first; only inject if
+    # the schema actually accepts a `name` field. If introspection fails or the
+    # top step is a menu (template, group), fall back to the legacy behaviour
+    # of injecting — those helpers are known to accept `name`.
+    #
+    # UPDATE: options flows are strict about extra keys; HA rejects any
+    # caller-supplied `name` (you cannot rename a flow helper through its
+    # options flow). Strip `name` from config_dict and emit a warning so the
+    # caller learns their attempted rename was a no-op.
     if action == "create" and name and "name" not in config_dict:
-        config_dict["name"] = name
+        schema_fields = await get_user_step_field_names(client, helper_type)
+        if schema_fields is None or "name" in schema_fields:
+            config_dict["name"] = name
+        # else: schema is a form that explicitly does not include `name`
+        # (e.g. switch_as_x). Skip injection — HA would reject otherwise.
+    elif action == "update" and "name" in config_dict:
+        stripped_name = config_dict.pop("name")
+        pre_warnings.append(
+            f"Ignored 'name' in config: flow helper options flows do not "
+            f"support renaming (attempted name={stripped_name!r}). Use "
+            f"ha_set_entity to change the friendly name of the resulting "
+            f"entity."
+        )
 
     # Normalize labels to a list for registry updates below.
     try:
@@ -245,7 +395,11 @@ async def _handle_flow_helper(
 
     # Dispatch to the shared flow machinery.
     if action == "create":
-        if not config_dict.get("name"):
+        # Validate against EITHER the top-level `name` arg OR `config_dict["name"]`.
+        # Some helpers (switch_as_x) deliberately don't have `name` injected into
+        # config_dict because their schema rejects it — but the tool still
+        # requires `name` to be supplied so callers fail fast and consistently.
+        if not (name or config_dict.get("name")):
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f'name is required for create action. Include "name" as a '
@@ -285,7 +439,7 @@ async def _handle_flow_helper(
     # Graduated polling: short intervals for the first retries catch local/small
     # instances quickly; steady 500ms matches typical entity_registry/list latency
     # on larger remote setups without missing entities near the deadline.
-    warnings: list[str] = []
+    warnings: list[str] = list(pre_warnings)
     wait_bool = coerce_bool_param(wait, "wait", default=True)
     entities: list[dict[str, Any]] = []
     if entry_id:
@@ -823,6 +977,44 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # outer exception handler's context dict can reference it even
             # if an exception bubbles out of the flow-helper branch below.
             action = "update" if helper_id else "create"
+
+            # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
+            # to the chosen helper_type, instead of silently dropping them. Without
+            # this, callers got `success: true` but their (mistakenly-passed) param
+            # never made it into HA's config.
+            _validate_applicable_params(
+                helper_type,
+                {
+                    "icon": icon,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "step": step,
+                    "unit_of_measurement": unit_of_measurement,
+                    "options": options,
+                    "initial": initial,
+                    "mode": mode,
+                    "has_date": has_date,
+                    "has_time": has_time,
+                    "restore": restore,
+                    "duration": duration,
+                    "monday": monday,
+                    "tuesday": tuesday,
+                    "wednesday": wednesday,
+                    "thursday": thursday,
+                    "friday": friday,
+                    "saturday": saturday,
+                    "sunday": sunday,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius": radius,
+                    "passive": passive,
+                    "user_id": user_id,
+                    "device_trackers": device_trackers,
+                    "picture": picture,
+                    "tag_id": tag_id,
+                    "description": description,
+                },
+            )
 
             # Route flow-based helpers to Config Entry Flow API.
             # Simple helpers continue through the WebSocket {type}/create+update path below.
