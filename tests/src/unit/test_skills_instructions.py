@@ -257,4 +257,4 @@ class TestLogSkillRegistrationSummary:
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
-        assert "guidance_tools=0" in records[0].message % records[0].args
+        assert "guidance_tools=0" in records[0].getMessage()
