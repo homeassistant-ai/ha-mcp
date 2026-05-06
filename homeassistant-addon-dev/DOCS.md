@@ -27,6 +27,15 @@ The dev add-on uses the same configuration as the stable version. See the main a
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
 
+### Permissions
+
+Like the stable add-on, the dev add-on requests `hassio_role: manager` to
+fetch add-on, system-service, and HA-core logs via the Supervisor REST API
+(`/addons/<slug>/logs`, `/<service>/logs`, `/core/logs`) — `default` returns
+403 on these endpoints (see #1116). The role also grants
+start/stop/install/update on other add-ons; ha-mcp only uses the read-side
+capabilities.
+
 ## Tool Settings Web UI
 
 The add-on exposes a web-based settings page for managing which tools are available to AI assistants. Click **"Open Web UI"** on the add-on info page to access it.

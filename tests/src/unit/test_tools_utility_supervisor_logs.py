@@ -52,9 +52,7 @@ def mock_client():
 @pytest.fixture
 def non_addon_install():
     """Force `is_running_in_addon()` False (HA-Core-proxy path)."""
-    with patch(
-        "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
-    ):
+    with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
         yield
 
 
@@ -62,9 +60,7 @@ def non_addon_install():
 def addon_install():
     """Force `is_running_in_addon()` True with a stubbed SUPERVISOR_TOKEN."""
     with (
-        patch(
-            "ha_mcp.client.rest_client.is_running_in_addon", return_value=True
-        ),
+        patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True),
         patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-test"}),
     ):
         yield
@@ -78,9 +74,7 @@ def addon_install_no_token():
     `_supervisor_logs_get` (gate fired but env var not actually set).
     """
     with (
-        patch(
-            "ha_mcp.client.rest_client.is_running_in_addon", return_value=True
-        ),
+        patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True),
         patch.dict("os.environ", {"SUPERVISOR_TOKEN": ""}, clear=False),
     ):
         yield
@@ -98,6 +92,7 @@ def _register_and_collect(client: Any) -> dict[str, Any]:
         def _wrap(fn: Any) -> Any:
             collected[fn.__name__] = fn
             return fn
+
         return _wrap
 
     mcp = SimpleNamespace(tool=_tool)
@@ -352,9 +347,7 @@ class TestGetAddonLogsViaSupervisor:
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 400
-        mock_response.text = (
-            '{"result":"error","message":"Add-on is not running"}'
-        )
+        mock_response.text = '{"result":"error","message":"Add-on is not running"}'
         mock_response.reason_phrase = "Bad Request"
         inner_client.get.return_value = mock_response
 
@@ -464,9 +457,7 @@ class TestGetAddonLogsBranchSelection:
         mock_response.text = "via proxy\n"
         mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
 
-        with patch(
-            "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
-        ):
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
             result = await mock_client.get_addon_logs("core_mosquitto")
 
         assert "via proxy" in result
@@ -499,9 +490,7 @@ class TestGetAddonLogsBranchSelection:
                 "ha_mcp.client.rest_client.is_running_in_addon",
                 return_value=True,
             ),
-            patch.dict(
-                "os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-branch"}
-            ),
+            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-branch"}),
             patch("httpx.AsyncClient", return_value=cm),
         ):
             await mock_client.get_addon_logs("core_mosquitto")
@@ -509,6 +498,46 @@ class TestGetAddonLogsBranchSelection:
         # Sole assertion: HA-Core-proxy path NOT taken. URL/auth contract is
         # pinned by TestGetAddonLogsViaSupervisor.
         mock_client.httpx_client.request.assert_not_called()
+
+
+class TestGetErrorLogBranchSelection:
+    """`get_error_log()` mirrors `get_addon_logs()`'s `is_running_in_addon()`
+    branch. On addon installs, HA Core's ``bootstrap.py`` sets
+    ``err_log_path = None`` when the ``SUPERVISOR`` env var is present, so
+    ``hass.data[DATA_LOGGING]`` is never populated and the ``APIErrorLog``
+    view is not registered — ``/api/error_log`` returns 404 by-design.
+    Same root cause and fix shape as #1116 add-on logs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_addon_install_uses_ha_core_proxy(self, mock_client):
+        """`is_running_in_addon()` False → ``/error_log`` proxy path."""
+        mock_client._request = AsyncMock(return_value="error log via proxy\n")
+
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            result = await mock_client.get_error_log()
+
+        assert "error log via proxy" in result
+        mock_client._request.assert_called_once_with("GET", "/error_log")
+
+    @pytest.mark.asyncio
+    async def test_addon_install_routes_to_supervisor_core(self, mock_client):
+        """`is_running_in_addon()` True → ``_supervisor_logs_get("core")``.
+
+        The HA-Core-proxy ``/error_log`` path must NOT be called: HA Core
+        doesn't register ``APIErrorLog`` when running under Supervisor.
+        """
+        mock_client._request = AsyncMock()
+        mock_client._supervisor_logs_get = AsyncMock(
+            return_value="error log via supervisor\n"
+        )
+
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
+            result = await mock_client.get_error_log()
+
+        assert "error log via supervisor" in result
+        mock_client._supervisor_logs_get.assert_called_once_with("core")
+        mock_client._request.assert_not_called()
 
 
 class TestGetSystemServiceLogs:
@@ -692,9 +721,9 @@ class TestGetSupervisorLogWrapper:
     @pytest.mark.asyncio
     async def test_tail_slicing_returns_last_n_lines(self, client_with_logs):
         """`lines[-effective_limit:]` — users want recent activity, not the head."""
-        client_with_logs.get_addon_logs.return_value = "\n".join(
-            f"line {i}" for i in range(1, 21)
-        ) + "\n"
+        client_with_logs.get_addon_logs.return_value = (
+            "\n".join(f"line {i}" for i in range(1, 21)) + "\n"
+        )
         tools = _register_and_collect(client_with_logs)
 
         result = await tools["ha_get_logs"](
@@ -741,9 +770,7 @@ class TestGetSupervisorLogWrapper:
         tools = _register_and_collect(client_with_logs)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools["ha_get_logs"](
-                source="supervisor", slug="nonexistent"
-            )
+            await tools["ha_get_logs"](source="supervisor", slug="nonexistent")
 
         payload = _parse_tool_error(exc_info)
         suggestions = payload["error"]["suggestions"]
@@ -771,9 +798,7 @@ class TestGetSupervisorLogWrapper:
         tools = _register_and_collect(client_with_logs)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools["ha_get_logs"](
-                source="supervisor", slug="weird_slug"
-            )
+            await tools["ha_get_logs"](source="supervisor", slug="weird_slug")
 
         payload = _parse_tool_error(exc_info)
         suggestions = payload["error"]["suggestions"]
@@ -792,9 +817,7 @@ class TestGetSupervisorLogWrapper:
         tools = _register_and_collect(client_with_logs)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools["ha_get_logs"](
-                source="supervisor", slug="core_mosquitto"
-            )
+            await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
 
         payload = _parse_tool_error(exc_info)
         suggestions = payload["error"]["suggestions"]
@@ -819,10 +842,74 @@ class TestGetSupervisorLogWrapper:
         )
 
         assert result["success"] is True
-        assert "warnings" in result, "Expected a warning when level is set on supervisor"
-        assert any(
-            "level" in w and "supervisor" in w for w in result["warnings"]
-        ), f"Expected level/supervisor warning, got: {result['warnings']}"
+        assert "warnings" in result, (
+            "Expected a warning when level is set on supervisor"
+        )
+        assert any("level" in w and "supervisor" in w for w in result["warnings"]), (
+            f"Expected level/supervisor warning, got: {result['warnings']}"
+        )
+
+
+class TestSlugParameterIncompatibilityWarning:
+    """`slug` only applies to `source='supervisor'` and `source='system_service'`.
+    For any other source it should be flagged in `result["warnings"]` rather
+    than silently dropped — same shape as the existing `level`/`entity_id`
+    incompatibility warnings.
+    """
+
+    @pytest.fixture
+    def client_with_logbook(self):
+        client = MagicMock()
+        client.get_logbook = AsyncMock(return_value=[])
+        return client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["logbook", "system", "error_log", "logger"])
+    async def test_slug_on_non_supervisor_source_warns(
+        self, client_with_logbook, source
+    ):
+        """`slug='x'` paired with any non-supervisor/system_service source
+        produces a warning naming the parameter and the source."""
+        client_with_logbook.get_error_log = AsyncMock(return_value="")
+        # `system` and `logger` sources route via WebSocket → system_log/list
+        # and logger/log_info respectively; stub send_websocket_message so the
+        # tool reaches the warnings-emit path without a real WS client.
+        client_with_logbook.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        tools = _register_and_collect(client_with_logbook)
+
+        result = await tools["ha_get_logs"](source=source, slug="core_mosquitto")
+
+        assert "warnings" in result, (
+            f"Expected a warning when slug is set on source={source!r}, "
+            f"got: {result.keys()}"
+        )
+        assert any("slug" in w and source in w for w in result["warnings"]), (
+            f"Expected slug/{source} warning, got: {result['warnings']}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["supervisor", "system_service"])
+    async def test_slug_on_supervisor_sources_does_not_warn(
+        self, client_with_logbook, source
+    ):
+        """`slug` is meaningful for these sources — no warning should fire.
+
+        Pins that the warning trigger doesn't accidentally cover the supported
+        cases, which would silently break the legitimate slug usage flow.
+        """
+        client_with_logbook.get_addon_logs = AsyncMock(return_value="line\n")
+        client_with_logbook._get_system_service_logs = AsyncMock(return_value="line\n")
+        tools = _register_and_collect(client_with_logbook)
+
+        slug = "core_mosquitto" if source == "supervisor" else "host"
+        result = await tools["ha_get_logs"](source=source, slug=slug)
+
+        if "warnings" in result:
+            assert not any("slug" in w for w in result["warnings"]), (
+                f"Did not expect a slug warning on {source}, got: {result['warnings']}"
+            )
 
 
 class TestGetSystemServiceLogWrapper:
@@ -849,12 +936,12 @@ class TestGetSystemServiceLogWrapper:
         assert result["slug"] == "host"
         assert "host log line 1" in result["log"]
         assert result["total_lines"] == 2
-        client_with_system_logs._get_system_service_logs.assert_awaited_once_with("host")
+        client_with_system_logs._get_system_service_logs.assert_awaited_once_with(
+            "host"
+        )
 
     @pytest.mark.asyncio
-    async def test_missing_slug_raises_validation_error(
-        self, client_with_system_logs
-    ):
+    async def test_missing_slug_raises_validation_error(self, client_with_system_logs):
         tools = _register_and_collect(client_with_system_logs)
 
         with pytest.raises(ToolError) as exc_info:
@@ -907,7 +994,9 @@ class TestGetSystemServiceLogWrapper:
 
         assert result["success"] is True
         assert result["slug"] == service
-        client_with_system_logs._get_system_service_logs.assert_awaited_once_with(service)
+        client_with_system_logs._get_system_service_logs.assert_awaited_once_with(
+            service
+        )
 
     @pytest.mark.asyncio
     async def test_403_role_hint_suggestion(self, client_with_system_logs):
@@ -943,9 +1032,7 @@ class TestGetSystemServiceLogWrapper:
 
         assert result["success"] is True
         assert "warnings" in result
-        assert any(
-            "level" in w and "system_service" in w for w in result["warnings"]
-        )
+        assert any("level" in w and "system_service" in w for w in result["warnings"])
 
 
 class TestStaleToolNameReferences:
@@ -958,12 +1045,7 @@ class TestStaleToolNameReferences:
         the guard catches regressions in any module, not just tools_utility.py,
         and ignores substrings inside longer identifiers.
         """
-        tools_dir = (
-            Path(__file__).resolve().parents[3]
-            / "src"
-            / "ha_mcp"
-            / "tools"
-        )
+        tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
         pattern = re.compile(r"\bha_list_addons\b")
         offenders = [
             f.relative_to(tools_dir)

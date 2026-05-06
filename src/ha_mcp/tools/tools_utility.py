@@ -26,7 +26,16 @@ logger = logging.getLogger(__name__)
 
 # Fields to keep in compact logbook mode (strips attribute dictionaries
 # and other bulky fields that can cause context exhaustion — see #683)
-COMPACT_LOGBOOK_FIELDS = {"when", "entity_id", "state", "name", "message", "domain", "context_id", "source"}
+COMPACT_LOGBOOK_FIELDS = {
+    "when",
+    "entity_id",
+    "state",
+    "name",
+    "message",
+    "domain",
+    "context_id",
+    "source",
+}
 
 
 # Supervisor-managed system services exposed via /<slug>/logs. Stable set
@@ -65,15 +74,24 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> int:
         """Coerce and validate a limit parameter, raising a structured tool error on failure."""
         try:
-            return coerce_int_param(limit, param_name="limit", default=default, min_value=1, max_value=MAX_LIMIT)
+            return coerce_int_param(
+                limit,
+                param_name="limit",
+                default=default,
+                min_value=1,
+                max_value=MAX_LIMIT,
+            )
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(e),
-                    suggestions=[f"Provide limit as an integer (e.g., {suggestion_example})"],
+                    suggestions=[
+                        f"Provide limit as an integer (e.g., {suggestion_example})"
+                    ],
                 )
             )
+
     # Regex to match log level at the start of a log line
     _LOG_LEVEL_RE = re.compile(
         r"(?:^|\s)(DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\s|:|\])", re.IGNORECASE
@@ -88,7 +106,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Logs",
-        }
+        },
     )
     @log_tool_usage
     async def ha_get_logs(
@@ -152,7 +170,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Collect warnings about source-incompatible parameters
         warnings: list[str] = []
         if source != "logbook" and any(p is not None for p in [entity_id, end_time]):
-            ignored = [p for p, v in [("entity_id", entity_id), ("end_time", end_time)] if v is not None]
+            ignored = [
+                p
+                for p, v in [("entity_id", entity_id), ("end_time", end_time)]
+                if v is not None
+            ]
             warnings.append(
                 f"Parameters {', '.join(ignored)} only apply to source='logbook'; "
                 f"ignored for source='{source}'"
@@ -164,6 +186,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             warnings.append(
                 "Parameter 'level' only applies to source='system' or 'error_log'; "
                 f"ignored for source='{source}'"
+            )
+        if source not in ("supervisor", "system_service") and slug is not None:
+            warnings.append(
+                "Parameter 'slug' only applies to source='supervisor' or "
+                f"'system_service'; ignored for source='{source}'"
             )
 
         # --- source="logbook" ---
@@ -521,7 +548,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         level: str | None = None,
     ) -> dict[str, Any]:
         """Fetch raw error log text from home-assistant.log."""
-        effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
+        effective_limit = _coerce_limit(
+            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+        )
 
         try:
             raw_log = await client.get_error_log()
@@ -631,7 +660,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if search:
                 search_lower = search.lower()
                 loggers = [
-                    entry for entry in loggers
+                    entry
+                    for entry in loggers
                     if search_lower in entry["domain"].lower()
                 ]
                 filters_applied["search"] = search
@@ -687,7 +717,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         token there — see #1116); on non-addon installs falls back to the
         HA-Core proxy. Both paths return ``text/plain``.
         """
-        effective_limit = _coerce_limit(limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100")
+        effective_limit = _coerce_limit(
+            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+        )
 
         try:
             log_text = await client.get_addon_logs(slug)
@@ -877,8 +909,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Evaluate Template"
-        }
+            "title": "Evaluate Template",
+        },
     )
     @log_tool_usage
     async def ha_eval_template(
@@ -1060,18 +1092,22 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
             else:
                 error_info = result.get("error", "Unknown error occurred")
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    str(error_info) if not isinstance(error_info, str) else error_info,
-                    context={"template": template, "request_id": request_id},
-                    suggestions=[
-                        "Check template syntax - ensure proper Jinja2 formatting",
-                        "Verify entity_ids exist using ha_get_state()",
-                        "Use default values: {{ states('sensor.temp') | float(0) }}",
-                        "Check for typos in function names and entity references",
-                        "Test simpler templates first to isolate issues",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(error_info)
+                        if not isinstance(error_info, str)
+                        else error_info,
+                        context={"template": template, "request_id": request_id},
+                        suggestions=[
+                            "Check template syntax - ensure proper Jinja2 formatting",
+                            "Verify entity_ids exist using ha_get_state()",
+                            "Use default values: {{ states('sensor.temp') | float(0) }}",
+                            "Check for typos in function names and entity references",
+                            "Test simpler templates first to isolate issues",
+                        ],
+                    )
+                )
 
         except ToolError:
             raise

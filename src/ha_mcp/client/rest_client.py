@@ -28,6 +28,7 @@ def _is_ssl_error(exc: BaseException) -> bool:
         cur = cur.__cause__ or cur.__context__
     return False
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,15 +36,12 @@ class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
 
 
-
 class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
 
 
-
 class HomeAssistantAuthError(HomeAssistantError):
     """Authentication error with Home Assistant."""
-
 
 
 class HomeAssistantAPIError(HomeAssistantError):
@@ -127,7 +125,7 @@ class HomeAssistantClient:
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
-    async def __aenter__(self) -> 'HomeAssistantClient':
+    async def __aenter__(self) -> "HomeAssistantClient":
         """Async context manager entry."""
         return self
 
@@ -194,7 +192,9 @@ class HomeAssistantClient:
         except httpx.HTTPError as e:
             raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
 
-    async def _request(self, method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> dict[str, Any]:
         """
         Make authenticated request to Home Assistant API and parse JSON body.
 
@@ -269,8 +269,11 @@ class HomeAssistantClient:
         return await self._request("POST", f"/states/{entity_id}", json=payload)
 
     async def call_service(
-        self, domain: str, service: str, data: dict[str, Any] | None = None,
-        return_response: bool = False
+        self,
+        domain: str,
+        service: str,
+        data: dict[str, Any] | None = None,
+        return_response: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """
         Call Home Assistant service.
@@ -286,7 +289,9 @@ class HomeAssistantClient:
             Service response data - list of affected states normally, or dict with
             service response if return_response=True
         """
-        logger.debug(f"Calling service {domain}.{service} (return_response={return_response})")
+        logger.debug(
+            f"Calling service {domain}.{service} (return_response={return_response})"
+        )
 
         payload = data or {}
 
@@ -296,7 +301,10 @@ class HomeAssistantClient:
             params["return_response"] = "true"
 
         result = await self._request(
-            "POST", f"/services/{domain}/{service}", json=payload, params=params if params else None
+            "POST",
+            f"/services/{domain}/{service}",
+            json=payload,
+            params=params if params else None,
         )
 
         # When return_response is True, HA returns a dict with service_response key
@@ -368,7 +376,9 @@ class HomeAssistantClient:
         Returns:
             Logbook entries
         """
-        logger.debug(f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}")
+        logger.debug(
+            f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}"
+        )
 
         # Build endpoint - start_time goes in URL path if provided
         if start_time:
@@ -430,8 +440,33 @@ class HomeAssistantClient:
         return await self._request("POST", "/config/core/check_config")
 
     async def get_error_log(self) -> str:
-        """Get Home Assistant error log."""
-        logger.debug("Fetching error log")
+        """Get Home Assistant error log.
+
+        Branch on ``is_running_in_addon()``: inside the add-on container,
+        HA Core's ``bootstrap.py`` sets ``err_log_path = None`` when the
+        ``SUPERVISOR`` env var is present, so ``hass.data[DATA_LOGGING]``
+        is never populated and the ``APIErrorLog`` view is not registered
+        — ``/api/error_log`` returns 404 by-design on HA OS / Supervised.
+        Route to ``_supervisor_logs_get("core")`` on this branch: same
+        content (HA Core's container log) via a different transport
+        (Supervisor REST). On non-addon installs keep the
+        ``/api/error_log`` proxy path.
+
+        Same root cause and fix shape as ``get_addon_logs`` — see #1116.
+
+        Raises:
+            HomeAssistantAuthError: 401, or empty ``SUPERVISOR_TOKEN`` on
+                the addon branch.
+            HomeAssistantAPIError: 403 (role too low — addon needs
+                ``hassio_role: manager``), 404, other non-2xx.
+            HomeAssistantConnectionError: Network, timeout, or transport
+                error.
+        """
+        if is_running_in_addon():
+            logger.debug("Fetching error log via Supervisor direct (core service)")
+            return await self._supervisor_logs_get("core")
+
+        logger.debug("Fetching error log via HA Core proxy")
         response = await self._request("GET", "/error_log")
         return response if isinstance(response, str) else str(response)
 
@@ -536,9 +571,7 @@ class HomeAssistantClient:
             ) from e
 
         if response.status_code == 401:
-            raise HomeAssistantAuthError(
-                f"Invalid Supervisor token for /{path}/logs"
-            )
+            raise HomeAssistantAuthError(f"Invalid Supervisor token for /{path}/logs")
         if response.status_code == 403:
             # Distinct from 401: token is valid but addon's hassio_role isn't
             # high enough. Most-likely cause for this exact endpoint at the
@@ -571,12 +604,12 @@ class HomeAssistantClient:
             except json.JSONDecodeError:
                 pass
             if not message:
-                message = (
-                    text_body.strip() or response.reason_phrase or "<empty body>"
-                )
+                message = text_body.strip() or response.reason_phrase or "<empty body>"
             logger.warning(
                 "Supervisor returned %s for /%s/logs: %s",
-                response.status_code, path, message,
+                response.status_code,
+                path,
+                message,
             )
             raise HomeAssistantAPIError(
                 f"API error: {response.status_code} - {message}",
@@ -1078,7 +1111,9 @@ class HomeAssistantClient:
                         await asyncio.sleep(retry_delay)
                         continue
                     else:
-                        logger.error(f"WebSocket 403 error after {max_retries} attempts: {error_str}")
+                        logger.error(
+                            f"WebSocket 403 error after {max_retries} attempts: {error_str}"
+                        )
                         return {
                             "success": False,
                             "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
@@ -1176,7 +1211,7 @@ class HomeAssistantClient:
         except Exception:
             logger.debug(
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
-                exc_info=True # Log full traceback for better debugging
+                exc_info=True,  # Log full traceback for better debugging
             )
         return bare_id
 

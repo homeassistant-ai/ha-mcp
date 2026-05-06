@@ -287,6 +287,15 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 - **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
 
+### Supervisor Permissions
+
+The add-on requests `hassio_role: manager` (declared in `config.yaml`).
+`manager` is required for the Supervisor REST endpoints used to fetch
+add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
+`/core/logs`) — `default` returns 403 (see #1116). The role also grants
+start/stop/install/update on other add-ons, but ha-mcp only uses the
+read-side capabilities.
+
 ---
 
 ## Troubleshooting
