@@ -250,10 +250,10 @@ async def _handle_flow_helper(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f'name is required for create action. Include "name" as a '
                 f'top-level argument, e.g. {{"helper_type": "{helper_type}", '
-                f'"name": "<display name>"}}.',
+                f'"name": "My Helper"}}.',
                 suggestions=[
-                    'Add "name": "<display name>" at the top level of the JSON arguments',
-                    'Or include "name": "<display name>" inside the "config" dict',
+                    'Add "name": "My Helper" at the top level of the JSON arguments',
+                    'Or include "name": "My Helper" inside the "config" dict',
                 ],
                 context={"helper_type": helper_type},
             ))
@@ -549,7 +549,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         helper_id: Annotated[
             str | None,
             Field(
-                description="Helper ID for updates (e.g., 'my_button' or 'input_button.my_button'). If not provided, creates a new helper.",
+                description="REQUIRED when updating an existing helper. Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
                 default=None,
             ),
         ] = None,
@@ -876,10 +876,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f'name is required for create action. Include '
                             f'"name" as a top-level argument, e.g. '
                             f'{{"helper_type": "{helper_type}", "name": '
-                            f'"<display name>"}}.',
+                            f'"My Helper"}}.',
                             suggestions=[
-                                'Add "name": "<display name>" at the top level of the JSON arguments',
-                                'Or pass "helper_id": "<existing>" if you intended to update an existing helper',
+                                'Add "name": "My Helper" at the top level of the JSON arguments',
+                                'Or pass "helper_id": "my_helper" if you intended to update an existing helper',
                             ],
                             context={"helper_type": helper_type},
                         )
