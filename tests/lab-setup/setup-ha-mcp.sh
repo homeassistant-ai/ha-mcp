@@ -67,7 +67,7 @@ fi
 # 4. UV
 if [[ ! -f "$UV_PATH" ]]; then
     info "Installing uv..."
-    sudo -u "$SETUP_USER" bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+    sudo -i -u "$SETUP_USER" bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 else
     info "uv already installed"
 fi
