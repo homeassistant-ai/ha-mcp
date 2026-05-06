@@ -248,9 +248,12 @@ async def _handle_flow_helper(
         if not config_dict.get("name"):
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "name is required for create action",
+                f'name is required for create action. Include "name" as a '
+                f'top-level argument, e.g. {{"helper_type": "{helper_type}", '
+                f'"name": "<display name>"}}.',
                 suggestions=[
-                    "Pass the name argument directly or include 'name' in config",
+                    'Add name="<display name>" as a top-level argument',
+                    'Or include "name": "<display name>" inside the config dict',
                 ],
                 context={"helper_type": helper_type},
             ))
@@ -533,11 +536,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "Display name for the helper. Required on create; optional on "
-                    "update (pass helper_id to skip). For flow-based helper types on "
-                    "update (template, group, utility_meter, ...), this is typically "
-                    "ignored — options flows don't expose renaming. Rename a flow "
-                    "helper by deleting and recreating instead."
+                    "REQUIRED when creating (no helper_id provided). Display name "
+                    "for the helper. Optional on update — pass helper_id instead. "
+                    "For flow-based helper types on update (template, group, "
+                    "utility_meter, ...), this is typically ignored — options flows "
+                    "don't expose renaming. Rename a flow helper by deleting and "
+                    "recreating instead."
                 ),
                 default=None,
             ),
@@ -783,7 +787,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         Create or update Home Assistant helper entities (27 types, unified interface).
 
-        Creates new helper if helper_id is omitted, updates existing if helper_id is provided.
+        Create requires `name`; update requires `helper_id`.
 
         SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
@@ -869,7 +873,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "name is required for create action",
+                            f'name is required for create action. Include '
+                            f'"name" as a top-level argument, e.g. '
+                            f'{{"helper_type": "{helper_type}", "name": '
+                            f'"<display name>"}}.',
+                            suggestions=[
+                                'Add name="<display name>" as a top-level argument',
+                            ],
                             context={"helper_type": helper_type},
                         )
                     )
