@@ -1575,16 +1575,22 @@ class TestCodeModeAdditionalResourceLimits:
     async def test_memory_limit_enforced(self, mcp_client_with_code_mode):
         """Allocating more than ``CODE_MODE_MAX_MEMORY`` must raise
         ``SANDBOX_LIMIT_EXCEEDED``, not silently succeed.
+
+        Uses string multiplication rather than ``bytearray`` because
+        Monty's sandbox doesn't expose ``bytearray`` as a builtin
+        (``LookupError: Unable to find 'bytearray' in external functions
+        dict``); ``str * int`` is a pure operator with no builtin
+        lookup.
         """
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "Memory limit enforcement")
 
-        # Default limit is 10 MB; allocating 20 MB must trip it.
+        # Default limit is 10 MB; allocating ~12 MB must trip it.
         data = await safe_call_tool(
             mcp_client_with_code_mode,
             TOOL_NAME,
             {
-                "code": "x = bytearray(20 * 1024 * 1024)\nlen(x)",
+                "code": "x = 'x' * (12 * 1024 * 1024)\nlen(x)",
                 "justification": "E2E test: memory limit enforcement",
             },
         )
@@ -1596,31 +1602,37 @@ class TestCodeModeAdditionalResourceLimits:
         )
         logger.info("Memory limit correctly classified")
 
-    async def test_recursion_limit_enforced(self, mcp_client_with_code_mode):
-        """Recursion deeper than ``CODE_MODE_MAX_RECURSION`` must raise
-        ``SANDBOX_LIMIT_EXCEEDED``.
-        """
-        check = await _check_tool_available(mcp_client_with_code_mode)
-        _skip_if_unavailable(check, "Recursion limit enforcement")
+    async def test_recursion_limit_unreachable_from_user_code(
+        self, mcp_client_with_code_mode
+    ):
+        """Document that ``CODE_MODE_MAX_RECURSION`` is not directly
+        exercisable from sandbox-supplied code.
 
-        # Direct recursion is hard in Monty (no def). Use a recursive
-        # lambda via assignment — Monty supports lambda binding.
-        code = (
-            "f = lambda n: 1 if n <= 0 else 1 + f(n - 1)\n"
-            "f(500)"
+        Monty doesn't allow ``def`` (`SANDBOX_SYNTAX_UNSUPPORTED` —
+        see ``test_no_class_definitions``-adjacent coverage), and an
+        assigned lambda can't reference its own binding name from
+        inside its own body (``LookupError: Unable to find 'f' in
+        external functions dict``). User code therefore has no way to
+        construct a recursive call deep enough to trip the
+        ``ResourceLimits.max_recursion_depth`` cap.
+
+        The setting still flows through to the sandbox runtime — see
+        ``_run_sandboxed_code``, where ``ResourceLimits(...,
+        max_recursion_depth=settings.code_mode_max_recursion)`` is
+        constructed — and the classifier maps a ``RecursionError`` to
+        ``SANDBOX_LIMIT_EXCEEDED`` (covered by the unit-level
+        ``test_classify_recursion_error`` in
+        ``tests/src/unit/test_saved_tools_persistence.py``-adjacent
+        suite). This test is a deliberate skip so a future maintainer
+        sees the gap and the rationale rather than rediscovering the
+        Monty constraint from scratch.
+        """
+        pytest.skip(
+            "Monty doesn't support recursive user-defined functions; "
+            "the recursion limit fires only on Monty's internal AST "
+            "evaluation depth, which sandbox-supplied code can't reach. "
+            "Classifier mapping is unit-tested directly."
         )
-        data = await safe_call_tool(
-            mcp_client_with_code_mode,
-            TOOL_NAME,
-            {"code": code, "justification": "E2E test: recursion limit"},
-        )
-        assert data.get("success") is False, f"Should fail: {data}"
-        err = data.get("error", {})
-        err_code = err.get("code") if isinstance(err, dict) else ""
-        assert err_code == "SANDBOX_LIMIT_EXCEEDED", (
-            f"Expected SANDBOX_LIMIT_EXCEEDED, got {err_code}: {data}"
-        )
-        logger.info("Recursion limit correctly classified")
 
     async def test_invocation_cap_enforced(self, mcp_client_with_code_mode):
         """Looping past ``code_mode_max_invocations`` must trip the cap
