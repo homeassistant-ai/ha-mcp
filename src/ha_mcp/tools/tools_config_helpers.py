@@ -12,7 +12,7 @@ import uuid
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
@@ -108,9 +108,11 @@ def _validate_applicable_params(
         # Flow types accept `config` (handled before this call) plus
         # cross-cutting params (name/helper_id/area_id/labels/category/wait).
         # Any simple-helper-typed param passed here is inapplicable.
-        for param_name in _ALL_TYPED_PARAMS:
-            if passed.get(param_name) is not None:
-                inapplicable.append(param_name)
+        inapplicable.extend(
+            param_name
+            for param_name in _ALL_TYPED_PARAMS
+            if passed.get(param_name) is not None
+        )
     else:
         applicable = _TYPE_TYPED_PARAMS.get(helper_type, frozenset())
         for param_name, value in passed.items():
@@ -387,29 +389,40 @@ async def _validate_registry_ids(
     the available IDs included in the suggestions list so the caller can correct.
     """
 
-    async def _ws_list(message: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _ws_list(
+        message: dict[str, Any],
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Return (ok, items). ``ok=False`` means the lookup itself failed
+        (HA unreachable, auth lost, registry not implemented). ``ok=True``
+        with empty list means the registry exists and is genuinely empty —
+        distinct from failure so we can still reject phantom IDs against an
+        empty registry. The fail-open ``ok=False`` path keeps transient HA
+        outages from blocking legitimate calls.
+        """
         try:
             result = await client.send_websocket_message(message)
         except Exception:
-            # If HA is unreachable, don't block the request on this validation —
-            # the registry update itself will fail downstream with a clearer
-            # warning. Treat as "could not validate" and skip.
-            return []
+            return False, []
         if isinstance(result, list):
-            return result
+            return True, result
         if isinstance(result, dict):
+            if result.get("success") is False:
+                return False, []
             inner = result.get("result", [])
             if isinstance(inner, list):
-                return inner
-        return []
+                return True, inner
+        return False, []
 
     # Validate area_id (skip None and empty-string clear).
     if area_id is not None and area_id != "":
-        areas = await _ws_list({"type": "config/area_registry/list"})
-        valid_area_ids = [
-            a.get("area_id") for a in areas if isinstance(a, dict) and a.get("area_id")
+        ok, areas = await _ws_list({"type": "config/area_registry/list"})
+        valid_area_ids: list[str] = [
+            aid
+            for a in areas
+            if isinstance(a, dict)
+            and isinstance((aid := a.get("area_id")), str)
         ]
-        if valid_area_ids and area_id not in valid_area_ids:
+        if ok and area_id not in valid_area_ids:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -425,13 +438,14 @@ async def _validate_registry_ids(
 
     # Validate labels (skip None; empty list is allowed as a "clear").
     if labels is not None and labels:
-        ws_labels = await _ws_list({"type": "config/label_registry/list"})
-        valid_label_ids = [
-            label.get("label_id")
+        ok, ws_labels = await _ws_list({"type": "config/label_registry/list"})
+        valid_label_ids: list[str] = [
+            lid
             for label in ws_labels
-            if isinstance(label, dict) and label.get("label_id")
+            if isinstance(label, dict)
+            and isinstance((lid := label.get("label_id")), str)
         ]
-        if valid_label_ids:
+        if ok:
             unknown = [
                 label_id
                 for label_id in labels
@@ -454,15 +468,16 @@ async def _validate_registry_ids(
 
     # Validate category (skip None and empty-string clear).
     if category is not None and category != "":
-        categories = await _ws_list(
+        ok, categories = await _ws_list(
             {"type": "config/category_registry/list", "scope": "helpers"}
         )
-        valid_category_ids = [
-            cat.get("category_id")
+        valid_category_ids: list[str] = [
+            cid
             for cat in categories
-            if isinstance(cat, dict) and cat.get("category_id")
+            if isinstance(cat, dict)
+            and isinstance((cid := cat.get("category_id")), str)
         ]
-        if valid_category_ids and category not in valid_category_ids:
+        if ok and category not in valid_category_ids:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -735,6 +750,7 @@ async def _handle_flow_helper(
     labels: str | list[str] | None,
     category: str | None,
     wait: bool | str,
+    action: str | None = None,
 ) -> dict[str, Any]:
     """Create or update a flow-based helper and apply registry updates to all entities.
 
@@ -744,8 +760,14 @@ async def _handle_flow_helper(
 
     For utility_meter with tariffs, this means the same label/area is applied
     to every tariff sensor (and the select entity) uniformly.
+
+    `action` may be passed by the caller (Bug 11 explicit-intent path) — when
+    None, falls back to the legacy implicit discriminator (presence of
+    helper_id => update). Validation that the (action, helper_id) combination
+    is consistent has already happened upstream in ha_config_set_helper.
     """
-    action = "update" if helper_id else "create"
+    if action is None:
+        action = "update" if helper_id else "create"
 
     # Normalize empty string to None, matching ha_config_set_helper's treatment
     # of config in (None, {}, "") as "nothing passed" (L785 simple-type branch).
@@ -1157,15 +1179,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         min_value: Annotated[
             float | None,
             Field(
-                description="Minimum value (input_number/counter) or minimum length (input_text)",
+                description="Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.",
                 default=None,
+                validation_alias=AliasChoices("min_value", "min"),
             ),
         ] = None,
         max_value: Annotated[
             float | None,
             Field(
-                description="Maximum value (input_number/counter) or maximum length (input_text)",
+                description="Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.",
                 default=None,
+                validation_alias=AliasChoices("max_value", "max"),
             ),
         ] = None,
         step: Annotated[
@@ -1178,8 +1202,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         unit_of_measurement: Annotated[
             str | None,
             Field(
-                description="Unit of measurement for input_number (e.g., '°C', '%', 'W')",
+                description="Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.",
                 default=None,
+                validation_alias=AliasChoices("unit_of_measurement", "unit"),
             ),
         ] = None,
         options: Annotated[
@@ -1374,6 +1399,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=True,
             ),
         ] = True,
+        action: Annotated[
+            Literal["create", "update"] | None,
+            Field(
+                description=(
+                    "Explicit intent: 'create' a new helper or 'update' an existing one. "
+                    "When omitted, falls back to the implicit discriminator: presence of "
+                    "helper_id => update, absence => create. Pass 'create' or 'update' "
+                    "to disambiguate (e.g. so a typo in helper_id surfaces as a clear "
+                    "'helper not found' error instead of being mistaken for a create call)."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities (27 types, unified interface).
@@ -1413,7 +1451,56 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
             # if an exception bubbles out of the flow-helper branch below.
-            action = "update" if helper_id else "create"
+            #
+            # Bug 11 (issue #1150): the explicit `action` parameter lets the
+            # caller declare intent unambiguously. Without it, we fall back to
+            # the legacy implicit discriminator (presence of helper_id =>
+            # update). The implicit fallback is back-compat for existing
+            # callers; the explicit form is preferred because it lets us
+            # validate intent contradictions (e.g. action="create" with a
+            # helper_id passed by mistake) up front, before any WS round-trip
+            # produces a confusing ENTITY_NOT_FOUND.
+            if action is not None:
+                # Explicit-intent path: validate the combination matches.
+                if action == "create" and helper_id is not None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "action='create' was passed together with "
+                            f"helper_id={helper_id!r}. These are contradictory: "
+                            "create makes a new helper, while helper_id targets "
+                            "an existing one.",
+                            context={
+                                "helper_type": helper_type,
+                                "action": action,
+                                "helper_id": helper_id,
+                            },
+                            suggestions=[
+                                "Omit helper_id to create a new helper",
+                                "Or pass action='update' to modify the existing helper at helper_id",
+                            ],
+                        )
+                    )
+                if action == "update" and helper_id is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "action='update' requires helper_id to identify "
+                            "which helper to modify.",
+                            context={
+                                "helper_type": helper_type,
+                                "action": action,
+                            },
+                            suggestions=[
+                                'Pass "helper_id": "my_helper" to identify the helper',
+                                "Or pass action='create' (or omit action) to create a new helper",
+                            ],
+                        )
+                    )
+            else:
+                # Implicit discriminator (back-compat). Pass action='create'
+                # or action='update' explicitly to avoid the inference.
+                action = "update" if helper_id else "create"
 
             # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
             # to the chosen helper_type, instead of silently dropping them. Without
@@ -1482,6 +1569,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     labels=labels,
                     category=category,
                     wait=wait,
+                    action=action,
                 )
 
             # Simple helper types use explicit parameters (name, options, min_value, ...).
@@ -1581,7 +1669,28 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
                     message["options"] = options
-                    if initial and initial in options:
+                    # Bug 4a (issue #1150): if `initial` was passed but isn't
+                    # one of the options, reject explicitly instead of silently
+                    # dropping. The previous `if initial and initial in options`
+                    # check stripped invalid initials with `success: true`.
+                    if initial is not None:
+                        if initial not in options:
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                    f"initial={initial!r} must be one of options "
+                                    f"{options!r} for input_select.",
+                                    context={
+                                        "helper_type": helper_type,
+                                        "initial": initial,
+                                        "options": options,
+                                    },
+                                    suggestions=[
+                                        "Pick an `initial` value that's in `options`.",
+                                        "Or omit `initial` so the entity starts unset.",
+                                    ],
+                                )
+                            )
                         message["initial"] = initial
 
                 elif helper_type == "input_number":
@@ -1965,6 +2074,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                     registry_result = await client.send_websocket_message(registry_msg)
                     if not registry_result.get("success"):
+                        # Bug 11 (issue #1150): if `name` was also passed, the
+                        # caller may have intended a create but typoed
+                        # helper_id. Surface that hypothesis explicitly so the
+                        # error guides them to the right next call rather than
+                        # leaving them confused by a bare ENTITY_NOT_FOUND.
+                        suggestions = [
+                            f"Verify the helper_id={helper_id!r} exists "
+                            "(use ha_config_list_helpers to list current helpers)",
+                        ]
+                        if name:
+                            suggestions.append(
+                                f"If you meant to create a new helper named "
+                                f"{name!r}, omit helper_id (or pass action='create')"
+                            )
                         raise_tool_error(
                             create_error_response(
                                 ErrorCode.ENTITY_NOT_FOUND,
@@ -1972,7 +2095,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 context={
                                     "helper_type": helper_type,
                                     "entity_id": entity_id,
+                                    "helper_id": helper_id,
+                                    "name": name,
                                 },
+                                suggestions=suggestions,
                             )
                         )
                     registry_entry = registry_result.get("result", {})

@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — match the local-fixture style used by the other helper unit tests.
 # ---------------------------------------------------------------------------
@@ -139,13 +138,12 @@ class TestPhantomAreaIdRejected:
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
-        ):
-            with pytest.raises(ToolError) as excinfo:
-                await register_tools["ha_config_set_helper"](
-                    helper_type="input_boolean",
-                    name="Test",
-                    area_id="nonexistent_area_id_xyz",
-                )
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                area_id="nonexistent_area_id_xyz",
+            )
         _assert_invalid_param(excinfo)
         # Ensure the available IDs are surfaced for the caller.
         msg = str(excinfo.value)
@@ -164,13 +162,12 @@ class TestPhantomLabelRejected:
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
-        ):
-            with pytest.raises(ToolError) as excinfo:
-                await register_tools["ha_config_set_helper"](
-                    helper_type="input_boolean",
-                    name="Test",
-                    labels=["does_not_exist"],
-                )
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                labels=["does_not_exist"],
+            )
         _assert_invalid_param(excinfo)
         msg = str(excinfo.value)
         assert "does_not_exist" in msg
@@ -188,13 +185,12 @@ class TestPhantomCategoryRejected:
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
             new_callable=AsyncMock,
             return_value=True,
-        ):
-            with pytest.raises(ToolError) as excinfo:
-                await register_tools["ha_config_set_helper"](
-                    helper_type="input_boolean",
-                    name="Test",
-                    category="phantom_category",
-                )
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                category="phantom_category",
+            )
         _assert_invalid_param(excinfo)
         msg = str(excinfo.value)
         assert "phantom_category" in msg
