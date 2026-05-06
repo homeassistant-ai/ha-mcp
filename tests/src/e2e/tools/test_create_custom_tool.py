@@ -1410,39 +1410,74 @@ class TestCodeModeWsSendBlocklist:
         )
         logger.info("ws_send correctly blocked lovelace/config/save")
 
-    async def test_ws_send_blocks_registry_mutations(
-        self, mcp_client_with_code_mode
+    @pytest.mark.parametrize(
+        "ws_type",
+        [
+            # Each member of _BLOCKED_WS_COMMANDS must be rejected by
+            # ws_send. Listed explicitly so a regression that drops an
+            # entry from the frozenset surfaces as a missing parametrize
+            # row in CI rather than passing silently.
+            "config/core/update",
+            "lovelace/config/save",
+            "lovelace/dashboards/create",
+            "lovelace/dashboards/delete",
+            "lovelace/dashboards/update",
+            "config/area_registry/delete",
+            "config/area_registry/disable",
+            "config/area_registry/update",
+            "config/device_registry/delete",
+            "config/device_registry/disable",
+            "config/device_registry/update",
+            "config/device_registry/remove_config_entry",
+            "config/entity_registry/delete",
+            "config/entity_registry/disable",
+            "config/entity_registry/update",
+            "config/entity_registry/remove",
+            "config/floor_registry/create",
+            "config/floor_registry/delete",
+            "config/floor_registry/update",
+            "config/label_registry/create",
+            "config/label_registry/delete",
+            "config/label_registry/update",
+            "config/category_registry/create",
+            "config/category_registry/delete",
+            "config/category_registry/update",
+        ],
+    )
+    async def test_ws_send_blocks_command(
+        self, mcp_client_with_code_mode, ws_type
     ):
-        """Registry mutation commands are blocked — must go through their
-        wrapping tools (ha_config_set_area, ha_update_device, ha_set_entity).
+        """Every entry in _BLOCKED_WS_COMMANDS must be rejected by ws_send.
+
+        Parametrizing over the full set catches the "blocklist names a
+        command HA Core doesn't actually accept" class of bug — if a
+        future refactor drops an entry, the corresponding row fails;
+        if HA Core renames a command and we forget to update the
+        blocklist, the test fails with the old name still in the
+        parametrize list.
         """
         check = await _check_tool_available(mcp_client_with_code_mode)
-        _skip_if_unavailable(check, "ws_send registry mutation blocklist")
+        _skip_if_unavailable(check, f"ws_send blocks {ws_type}")
 
-        for ws_type in (
-            "config/area_registry/update",
-            "config/device_registry/update",
-            "config/entity_registry/update",
-        ):
-            code = (
-                f'result = await ws_send({{"type": "{ws_type}", "id": "x"}})\n'
-                '{"has_error": "error" in result if isinstance(result, dict) else False,'
-                ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
-            )
-            data = await safe_call_tool(
-                mcp_client_with_code_mode,
-                TOOL_NAME,
-                {"code": code, "justification": f"E2E test: blocked {ws_type}"},
-            )
-            assert data.get("success") is True, f"Sandbox should succeed: {data}"
-            result = data["data"]["result"]
-            assert result["has_error"] is True, (
-                f"ws_send must block {ws_type}: {data}"
-            )
-            assert ws_type in result["error"], (
-                f"Error should mention the blocked command: {result}"
-            )
-            logger.info("ws_send correctly blocked %s", ws_type)
+        code = (
+            f'result = await ws_send({{"type": "{ws_type}", "id": "x"}})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": f"E2E test: blocked {ws_type}"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"ws_send must block {ws_type}: {data}"
+        )
+        assert ws_type in result["error"], (
+            f"Error should mention the blocked command: {result}"
+        )
+        logger.info("ws_send correctly blocked %s", ws_type)
 
     async def test_ws_send_allows_registry_list(self, mcp_client_with_code_mode):
         """Registry LIST queries stay allowed — only mutations are blocked."""

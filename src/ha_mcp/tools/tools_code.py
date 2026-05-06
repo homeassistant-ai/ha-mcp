@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import tempfile
+import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,33 +40,21 @@ from .helpers import log_tool_usage, raise_tool_error
 logger = logging.getLogger(__name__)
 
 # In-memory cache for saved custom tools, optionally persisted to disk.
+#
+# Lives at module level deliberately: ``ha_manage_custom_tool`` is a
+# stateless MCP tool that needs ``run_saved`` / ``list_saved`` to see
+# entries written by earlier ``save_as`` calls in the same process.
+# Hydrated from ``settings.code_mode_saved_tools_path`` on
+# ``register_code_tools`` startup (one-time) and persisted on every
+# subsequent ``save_as`` / ``delete_saved_tool``. Per-call request
+# scope wouldn't work because ``run_saved`` would never see prior
+# saves; ``code_mode_saved_tools_path`` is the documented persistence
+# boundary.
+#
 # WARNING: This is shared across all clients in the same server process.
 # In multi-user modes (OAuth, HTTP), one user's saved tools are visible to
 # all other users. Scope to per-session/user before multi-user support.
-# When ``settings.code_mode_saved_tools_path`` is set, the cache is hydrated
-# from disk on registration and persisted on every save_as / delete.
 _saved_tools: dict[str, dict[str, str]] = {}
-
-# Translation table for ``_log_safe`` — replaces CR / LF / TAB with a single
-# space so an LLM-controlled string interpolated into a log line via ``%s``
-# can't manufacture extra log records.
-_LOG_CONTROL_CHARS_MAP = str.maketrans({"\r": " ", "\n": " ", "\t": " "})
-
-
-def _log_safe(value: Any, max_len: int = 200) -> str:
-    """Return ``value`` flattened to a single line, safe for ``%s`` log interpolation.
-
-    Replaces ``\\r`` / ``\\n`` / ``\\t`` with spaces and truncates to
-    ``max_len`` characters. Used on user-controlled strings (``justification``,
-    saved-tool ``name``, etc.) before they reach ``logger.info(..., %s, ...)``
-    so a crafted input like ``"real reason\\nFAKE_CRITICAL: thing crashed"``
-    cannot inject a second log line.
-    """
-    text = str(value)
-    if len(text) > max_len:
-        text = text[:max_len]
-    return text.translate(_LOG_CONTROL_CHARS_MAP)
-
 
 # Tools that sandbox code must not call. Includes ``ha_manage_custom_tool``
 # itself (prevents recursive self-invocation) plus the four synthetics that
@@ -179,9 +168,18 @@ _BLOCKED_WS_COMMANDS: frozenset[str] = frozenset({
     "config/device_registry/delete",
     "config/device_registry/disable",
     "config/device_registry/update",
+    # Device registry deletion is registered as ``remove_config_entry`` on
+    # HA Core, not ``delete`` — see ``tools_registry.py:753`` for the
+    # actually-emitted command. ``ha_remove_device`` wraps it; raw
+    # ``ws_send`` would skip those checks.
+    "config/device_registry/remove_config_entry",
     "config/entity_registry/delete",
     "config/entity_registry/disable",
     "config/entity_registry/update",
+    # Entity registry deletion is registered as ``remove`` on HA Core,
+    # not ``delete`` — see ``tools_entities.py:1130`` for the
+    # actually-emitted command. ``ha_remove_entity`` wraps it.
+    "config/entity_registry/remove",
     # Floor / label / category registries follow the same rationale as
     # area / device / entity above: each has a wrapping MCP tool
     # (``ha_config_set_floor``, ``ha_config_set_label``,
@@ -497,6 +495,8 @@ def _save_saved_tools(
     """
     if not path_str:
         return True
+    # Read-only access to the module-level flag; ``global`` declaration
+    # only needed at the set sites in ``_load_saved_tools``.
     if _saved_tools_load_failed:
         logger.warning(
             "Skipping persist to %s because the prior load failed; "
@@ -555,6 +555,18 @@ def _extract_tool_result(result: Any) -> Any:
     # Already a basic type — pass through
     if isinstance(result, (str, int, float, bool, type(None), dict)):
         return result
+
+    # ``list`` is also a basic type Monty handles, but a list might also
+    # be FastMCP's "list of content objects" shape (each element having
+    # a ``.text`` or being a content-block ``dict``). Distinguish: if the
+    # first element looks like a content object, treat as a ToolResult
+    # payload; otherwise pass through as a normal list of basic values.
+    if isinstance(result, list):
+        looks_like_content = bool(result) and (
+            hasattr(result[0], "text") or hasattr(result[0], "type")
+        )
+        if not looks_like_content:
+            return result
 
     # ToolResult or similar: extract content list
     content = None
@@ -615,6 +627,18 @@ async def _run_sandboxed_code(
     - api_post(endpoint, data) — POST request to HA REST API
     - ws_send(message) — send a HA WebSocket command and return its result
     - call_tool(name, args) — call a registered MCP tool (for existing tools)
+
+    **Error shape contract.** All bridge functions return a dict with an
+    ``"error"`` key on failure; the value may be either a plain string
+    (``api_get`` / ``api_post`` / ``ws_send`` / ``delete_saved_tool`` —
+    transport-level failures, validation rejections) or a structured
+    sub-dict ``{"code": "<ErrorCode>", "message": "<text>"}`` from
+    ``_sandbox_error`` (``call_tool`` — propagates the underlying tool's
+    ``ErrorCode`` so sandbox code can branch on category). The structured
+    form also includes ``"success": False`` at the top level. **Consumers
+    should always probe with ``if "error" in result:``** — never
+    ``result["error"].lower()`` blindly, because the value isn't always a
+    string.
     """
     call_count = 0
 
@@ -641,13 +665,21 @@ async def _run_sandboxed_code(
           or ``@`` before the first ``/`` (userinfo). Without this httpx
           will dispatch the request to the absolute host *with the HA
           bearer token still attached*, leaking credentials.
+
+          Note: ``@`` later in the path (``events/foo@bar``) is fine —
+          only userinfo position (before the first ``/``) is the
+          credential-leaking shape that http URL parsers will treat as
+          ``user@host``.
         * ``..`` path segments — httpx happily resolves
           ``base_url='http://ha:8123/api'`` + endpoint ``'../auth/providers'``
           to ``http://ha:8123/auth/providers``, escaping the ``/api/``
           prefix entirely. HA exposes other bearer-authenticated routes
           at root (``/auth/...``, ``/profile``, etc.) — every one of
           those becomes reachable from the sandbox unless we reject
-          ``..`` here.
+          ``..`` here. Each segment is also percent-decoded once before
+          the comparison so ``%2e%2e`` (and other percent-encoded
+          variants of ``..``) can't slip past on reverse-proxy setups
+          that decode-then-resolve.
         """
         if not isinstance(endpoint, str):
             raise ValueError("endpoint must be a string path (e.g. '/states')")
@@ -666,12 +698,14 @@ async def _run_sandboxed_code(
             ep = ep[4:]
         # ``..`` segments would let the sandbox escape the ``/api/`` prefix
         # via httpx URL resolution. Check after stripping so the comparison
-        # is against actual path segments, and return the same error for
-        # leading-, mid-, or trailing-position cases.
+        # is against actual path segments, and percent-decode each segment
+        # so encoded forms (``%2e%2e`` and similar) don't slip past on
+        # reverse-proxy setups that decode-then-resolve.
         for segment in ep.split("/"):
-            if segment == "..":
+            if urllib.parse.unquote(segment) == "..":
                 raise ValueError(
-                    "endpoint must not contain '..' path segments; "
+                    "endpoint must not contain '..' path segments "
+                    "(including percent-encoded forms like %2e%2e); "
                     "the sandbox is restricted to /api/ routes"
                 )
         return ep
@@ -1169,9 +1203,15 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
+        # ``%r`` (repr) defends against log-line injection by escaping
+        # ``\r`` / ``\n`` / ``\t`` as literal ``\r``/``\n``/``\t``
+        # sequences in the formatted output — same primitive used by
+        # the audit-log endpoint/type fields below. Truncate to keep
+        # log lines bounded; an LLM can supply a multi-KB
+        # justification.
         logger.info(
-            "ha_manage_custom_tool invoked — justification: %s",
-            _log_safe(justification),
+            "ha_manage_custom_tool invoked — justification: %r",
+            justification[:200],
         )
         # Code is logged at DEBUG and the multi-line shape is intentional
         # (the LLM-authored snippet is the operator's primary forensic
