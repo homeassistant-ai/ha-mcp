@@ -252,8 +252,8 @@ async def _handle_flow_helper(
                 f'top-level argument, e.g. {{"helper_type": "{helper_type}", '
                 f'"name": "<display name>"}}.',
                 suggestions=[
-                    'Add name="<display name>" as a top-level argument',
-                    'Or include "name": "<display name>" inside the config dict',
+                    'Add "name": "<display name>" at the top level of the JSON arguments',
+                    'Or include "name": "<display name>" inside the "config" dict',
                 ],
                 context={"helper_type": helper_type},
             ))
@@ -878,7 +878,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f'{{"helper_type": "{helper_type}", "name": '
                             f'"<display name>"}}.',
                             suggestions=[
-                                'Add name="<display name>" as a top-level argument',
+                                'Add "name": "<display name>" at the top level of the JSON arguments',
+                                'Or pass "helper_id": "<existing>" if you intended to update an existing helper',
                             ],
                             context={"helper_type": helper_type},
                         )
