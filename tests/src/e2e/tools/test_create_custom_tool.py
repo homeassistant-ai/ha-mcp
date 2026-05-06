@@ -981,7 +981,15 @@ class TestSavedTools:
         logger.info("Overwrite correctly replaced saved tool")
 
     async def test_list_saved_tools(self, mcp_client_with_code_mode):
-        """list_saved=True returns saved tools."""
+        """list_saved=True returns saved tools nested under data.saved_tools.
+
+        The shape is intentionally ``data.saved_tools[name]`` rather than
+        ``data[name]`` because saved-tool names share the namespace with
+        keys used by the *other* response shapes (``result``,
+        ``saved_tool``, ``count``, ``code``, ``justification``). Without
+        the nesting a saved tool literally named ``result`` would
+        shadow ``data.result`` for the run_saved branch.
+        """
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "List saved tools")
 
@@ -1004,12 +1012,22 @@ class TestSavedTools:
             {"list_saved": True},
         )
         assert data.get("success") is True, f"Should succeed: {data}"
-        tools = data.get("data", {})
+        outer = data.get("data", {})
+        assert "saved_tools" in outer, (
+            f"Response should nest under data.saved_tools: {data}"
+        )
+        assert "count" in outer, (
+            f"Response should include data.count: {data}"
+        )
+        tools = outer["saved_tools"]
         assert "e2e_listed" in tools, f"Should contain saved tool: {data}"
         assert tools["e2e_listed"]["code"] == "'listed'", (
             f"Code should match: {data}"
         )
-        logger.info("List saved tools returns correct data")
+        assert outer["count"] == len(tools), (
+            f"Count must equal saved_tools length: {data}"
+        )
+        logger.info("List saved tools returns correct shape (data.saved_tools[name])")
 
     async def test_run_nonexistent_saved_tool(self, mcp_client_with_code_mode):
         """Running a nonexistent saved tool returns error."""
@@ -1540,3 +1558,245 @@ class TestCodeModeErrorClassification:
             f"Expected SANDBOX_SYNTAX_UNSUPPORTED, got {err_code}: {data}"
         )
         logger.info("Syntax error classification correct")
+
+
+# ---------------------------------------------------------------------------
+# Patch76 review fixes — additional resource-limit, traversal, and
+# proxy-laundering coverage
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeAdditionalResourceLimits:
+    """``TestCodeModeResourceLimits`` only covers timeout. These pin the
+    other three sandbox limits (memory, recursion, invocation cap) so a
+    regression that severs the wiring on any one of them surfaces in CI.
+    """
+
+    async def test_memory_limit_enforced(self, mcp_client_with_code_mode):
+        """Allocating more than ``CODE_MODE_MAX_MEMORY`` must raise
+        ``SANDBOX_LIMIT_EXCEEDED``, not silently succeed.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Memory limit enforcement")
+
+        # Default limit is 10 MB; allocating 20 MB must trip it.
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "x = bytearray(20 * 1024 * 1024)\nlen(x)",
+                "justification": "E2E test: memory limit enforcement",
+            },
+        )
+        assert data.get("success") is False, f"Should fail: {data}"
+        err = data.get("error", {})
+        err_code = err.get("code") if isinstance(err, dict) else ""
+        assert err_code == "SANDBOX_LIMIT_EXCEEDED", (
+            f"Expected SANDBOX_LIMIT_EXCEEDED, got {err_code}: {data}"
+        )
+        logger.info("Memory limit correctly classified")
+
+    async def test_recursion_limit_enforced(self, mcp_client_with_code_mode):
+        """Recursion deeper than ``CODE_MODE_MAX_RECURSION`` must raise
+        ``SANDBOX_LIMIT_EXCEEDED``.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Recursion limit enforcement")
+
+        # Direct recursion is hard in Monty (no def). Use a recursive
+        # lambda via assignment — Monty supports lambda binding.
+        code = (
+            "f = lambda n: 1 if n <= 0 else 1 + f(n - 1)\n"
+            "f(500)"
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: recursion limit"},
+        )
+        assert data.get("success") is False, f"Should fail: {data}"
+        err = data.get("error", {})
+        err_code = err.get("code") if isinstance(err, dict) else ""
+        assert err_code == "SANDBOX_LIMIT_EXCEEDED", (
+            f"Expected SANDBOX_LIMIT_EXCEEDED, got {err_code}: {data}"
+        )
+        logger.info("Recursion limit correctly classified")
+
+    async def test_invocation_cap_enforced(self, mcp_client_with_code_mode):
+        """Looping past ``code_mode_max_invocations`` must trip the cap
+        and surface the cap error to sandbox code (not raise into the
+        tool wrapper).
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "Invocation cap enforcement")
+
+        # Default cap is 100. Loop 110 api_get calls and expect at
+        # least one to hit the cap.
+        code = (
+            "errors = 0\n"
+            "i = 0\n"
+            "while i < 110:\n"
+            "    r = await api_get('/config')\n"
+            "    if isinstance(r, dict) and 'error' in r and "
+            "'limit exceeded' in str(r.get('error', '')).lower():\n"
+            "        errors += 1\n"
+            "    i = i + 1\n"
+            "{'errors': errors}"
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: invocation cap"},
+        )
+        # The sandbox itself should still return success — the cap is
+        # surfaced as ``{"error": ...}`` to user code, not as a tool
+        # error.
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["errors"] > 0, (
+            f"Cap must fire at least once during a 110-call loop: {data}"
+        )
+        logger.info("Invocation cap correctly fires (%d cap hits)", result["errors"])
+
+
+class TestCodeModeNormalizeEndpointTraversal:
+    """``..`` segments in ``api_get`` / ``api_post`` endpoints must be
+    rejected before httpx resolves the URL. Without this, the sandbox
+    can escape ``/api/`` to bearer-authenticated routes elsewhere on
+    the HA instance (``/auth/...``, ``/profile``, etc.).
+    """
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "../auth/providers",          # single ..
+            "../../etc/passwd",            # double .. (path-traversal classic)
+            "..//evil.example.com/foo",   # ..// reverse-proxy edge case
+            "foo/../bar",                  # mid-path ..
+        ],
+    )
+    async def test_api_get_rejects_dot_dot_segment(
+        self, mcp_client_with_code_mode, endpoint
+    ):
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, f"api_get traversal {endpoint}")
+
+        code = (
+            f'result = await api_get({endpoint!r})\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": f"E2E test: traversal {endpoint}"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_get must reject {endpoint!r}: {data}"
+        )
+        # Either the protocol-relative '//' guard fires (catches
+        # '..//evil.example.com/foo') or the explicit '..' guard does;
+        # both produce errors that mention the rejection cause.
+        err = result["error"].lower()
+        assert "blocked" in err or "absolute" in err or ".." in err, (
+            f"Error should explain traversal rejection: {result}"
+        )
+        logger.info("api_get correctly rejected %r", endpoint)
+
+
+class TestCodeModeProxyLaunderingBlocked:
+    """The recursive-self-call guard at ``_BLOCKED_TOOLS`` must hold even
+    when ``ENABLE_TOOL_SEARCH=true`` — i.e. a sandbox cannot launder a
+    recursive ``ha_manage_custom_tool`` invocation through
+    ``ha_call_write_tool``. Two layered fixes close this:
+
+    1. ``CategorizedSearchTransform`` (with ``enable_code_mode=True``)
+       excludes pinned tools from the proxy's category sets, so the
+       proxy returns ``RESOURCE_NOT_FOUND`` for ``ha_manage_custom_tool``.
+    2. The sandbox's ``_BLOCKED_TOOLS`` set includes the four search
+       synthetics (``ha_search_tools``, ``ha_call_{read,write,delete}_tool``)
+       so even if a future regression re-enabled the proxy dispatch, the
+       in-sandbox guard would still refuse.
+
+    These tests pin the second layer (which is always active when code
+    mode is on, regardless of tool-search state). The first layer is
+    tested by ``test_recursive_self_call_blocked_via_proxy`` which
+    requires ``enable_tool_search=true`` and is therefore conditional.
+    """
+
+    async def test_call_tool_to_search_synthetic_blocked(
+        self, mcp_client_with_code_mode
+    ):
+        """Sandbox cannot call ``ha_call_write_tool`` directly via
+        ``call_tool`` — it's in ``_BLOCKED_TOOLS`` so any tool-search
+        synthetic is unreachable from inside the sandbox.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "call_tool synthetic block")
+
+        for synthetic in (
+            "ha_search_tools",
+            "ha_call_read_tool",
+            "ha_call_write_tool",
+            "ha_call_delete_tool",
+        ):
+            code = (
+                f'result = await call_tool({synthetic!r}, '
+                '{"name": "ha_get_overview", "arguments": {}})\n'
+                'result'
+            )
+            data = await safe_call_tool(
+                mcp_client_with_code_mode,
+                TOOL_NAME,
+                {"code": code, "justification": f"E2E test: blocked {synthetic}"},
+            )
+            assert data.get("success") is True, f"Sandbox should succeed: {data}"
+            result = data["data"]["result"]
+            # _call_tool returns a structured _sandbox_error for blocked
+            # tools, with success=False and error.code=AUTH_INSUFFICIENT_PERMISSIONS.
+            assert isinstance(result, dict) and result.get("success") is False, (
+                f"Synthetic {synthetic!r} must be blocked: {result}"
+            )
+            err = result.get("error", {})
+            err_message = err.get("message", "") if isinstance(err, dict) else ""
+            assert "cannot be called" in err_message, (
+                f"Block message should explain rejection: {result}"
+            )
+            logger.info("call_tool to %r correctly blocked", synthetic)
+
+
+class TestCodeModeSavePersistenceFailure:
+    """Companion to the unit tests in ``test_saved_tools_persistence.py``
+    — verifies the user-facing E2E shape of the save_warning rollback.
+    Reaches the persistence-failure path by configuring an unwriteable
+    directory.
+    """
+
+    async def test_save_warning_rollback_shape(
+        self, mcp_client_with_code_mode, tmp_path, monkeypatch
+    ):
+        """When persistence fails, the response must include
+        ``save_warning`` and reset ``saved_as`` to None. The unit
+        suite covers the helper behaviour; this test pins the
+        end-to-end shape returned to MCP clients.
+
+        Skipped when the in-process server doesn't expose a way to
+        reconfigure the saved-tools path mid-run; the unit tests
+        cover the core behaviour either way.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "save_warning rollback path")
+        # The E2E fixture spins up the addon container; we can't easily
+        # poison /data from the test runner. The unit tests cover the
+        # rollback behaviour; this E2E is a placeholder skip so future
+        # maintainers see the gap and the test file documents the
+        # contract. See test_saved_tools_persistence.py:TestSaveSavedTools
+        # for the round-trip + return-bool coverage.
+        pytest.skip(
+            "save_warning rollback covered by unit tests "
+            "(test_saved_tools_persistence.py); E2E requires runtime "
+            "filesystem poisoning that the addon container model "
+            "doesn't currently expose."
+        )

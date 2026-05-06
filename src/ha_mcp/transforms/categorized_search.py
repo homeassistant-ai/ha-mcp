@@ -166,6 +166,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
         call_read_name: str = "ha_call_read_tool",
         call_write_name: str = "ha_call_write_tool",
         call_delete_name: str = "ha_call_delete_tool",
+        enable_code_mode: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -183,6 +184,15 @@ class CategorizedSearchTransform(BM25SearchTransform):
         self._call_delete_name = call_delete_name
         self._search_tool_description = search_tool_description
         self._proxy_descs = _build_proxy_descriptions(search_tool_name)
+        # When code mode is enabled, the proxy must NOT dispatch to pinned
+        # tools (specifically ``ha_manage_custom_tool``) — otherwise a
+        # sandbox call to ``ha_call_write_tool`` with name=
+        # "ha_manage_custom_tool" would launder a recursive invocation
+        # past ``_BLOCKED_TOOLS`` inside the sandbox. Default False
+        # preserves existing behaviour for installations that aren't
+        # running code mode; server.py flips this on when
+        # ``settings.enable_code_mode`` is True.
+        self._enable_code_mode = enable_code_mode
 
         # Category caches rebuilt when the catalog hash changes,
         # matching BM25SearchTransform's staleness detection pattern.
@@ -201,8 +211,21 @@ class CategorizedSearchTransform(BM25SearchTransform):
         return hashlib.sha256(key.encode()).hexdigest()
 
     async def _rebuild_category_cache(self, ctx: Any) -> None:
-        """Rebuild the read/write/delete category sets if catalog changed."""
-        catalog = await self.get_tool_catalog(ctx)
+        """Rebuild the read/write/delete category sets if catalog changed.
+
+        When ``self._enable_code_mode`` is True, pinned tools are excluded
+        from the category sets via ``_get_visible_tools`` (the same
+        FastMCP helper that ``BM25SearchTransform`` uses). This prevents
+        a sandbox-side recursive invocation laundered as
+        ``ha_call_write_tool(name="ha_manage_custom_tool", ...)`` —
+        without the filter, the pinned-and-callable
+        ``ha_manage_custom_tool`` ends up in ``_write_tools`` and the
+        proxy will happily dispatch.
+        """
+        if self._enable_code_mode:
+            catalog = await self._get_visible_tools(ctx)
+        else:
+            catalog = await self.get_tool_catalog(ctx)
         current_hash = self._catalog_hash(catalog)
         if current_hash == self._last_catalog_hash:
             return

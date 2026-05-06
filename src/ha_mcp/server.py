@@ -614,12 +614,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     max_results=self.settings.tool_search_max_results,
                     always_visible=pinned,
                     search_tool_description=description,
+                    # Pinned tools must be excluded from the proxy's
+                    # category sets when code mode is on; otherwise sandbox
+                    # code can launder a recursive ``ha_manage_custom_tool``
+                    # invocation through ``ha_call_write_tool``. See the
+                    # docstring on ``_rebuild_category_cache``.
+                    enable_code_mode=self.settings.enable_code_mode,
                 )
             )
             logger.info(
-                "Tool search transform applied (%d pinned tools, max_results=%d)",
+                "Tool search transform applied (%d pinned tools, max_results=%d, code_mode=%s)",
                 len(pinned),
                 self.settings.tool_search_max_results,
+                self.settings.enable_code_mode,
             )
         except Exception:
             logger.exception("Failed to apply tool search transform")

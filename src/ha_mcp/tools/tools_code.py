@@ -46,8 +46,45 @@ logger = logging.getLogger(__name__)
 # from disk on registration and persisted on every save_as / delete.
 _saved_tools: dict[str, dict[str, str]] = {}
 
-# Tools that sandbox code must not call (prevents recursive self-invocation)
-_BLOCKED_TOOLS = frozenset({"ha_manage_custom_tool"})
+# Translation table for ``_log_safe`` — replaces CR / LF / TAB with a single
+# space so an LLM-controlled string interpolated into a log line via ``%s``
+# can't manufacture extra log records.
+_LOG_CONTROL_CHARS_MAP = str.maketrans({"\r": " ", "\n": " ", "\t": " "})
+
+
+def _log_safe(value: Any, max_len: int = 200) -> str:
+    """Return ``value`` flattened to a single line, safe for ``%s`` log interpolation.
+
+    Replaces ``\\r`` / ``\\n`` / ``\\t`` with spaces and truncates to
+    ``max_len`` characters. Used on user-controlled strings (``justification``,
+    saved-tool ``name``, etc.) before they reach ``logger.info(..., %s, ...)``
+    so a crafted input like ``"real reason\\nFAKE_CRITICAL: thing crashed"``
+    cannot inject a second log line.
+    """
+    text = str(value)
+    if len(text) > max_len:
+        text = text[:max_len]
+    return text.translate(_LOG_CONTROL_CHARS_MAP)
+
+
+# Tools that sandbox code must not call. Includes ``ha_manage_custom_tool``
+# itself (prevents recursive self-invocation) plus the four synthetics that
+# the categorized-search transform exposes when ``ENABLE_TOOL_SEARCH=true``
+# (``ha_search_tools``, ``ha_call_{read,write,delete}_tool``). Without those
+# four entries, sandbox code could "launder" a recursive call as
+# ``call_tool("ha_call_write_tool", {"name": "ha_manage_custom_tool", ...})``
+# — the proxy would then dispatch the underlying tool and the in-sandbox
+# guard never fires. The architectural fix lives in
+# ``CategorizedSearchTransform`` (excludes pinned tools from category sets
+# when code mode is on); this set is the defense-in-depth that closes the
+# inner-call path even if the proxy is reachable some other way.
+_BLOCKED_TOOLS = frozenset({
+    "ha_manage_custom_tool",
+    "ha_search_tools",
+    "ha_call_read_tool",
+    "ha_call_write_tool",
+    "ha_call_delete_tool",
+})
 
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
@@ -99,6 +136,7 @@ _BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset({
     "service_executed",
     "automation_reloaded",
     "script_started",
+    "script_finished",
     "homeassistant_start",
     "homeassistant_started",
     "homeassistant_stop",
@@ -111,6 +149,11 @@ _BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset({
     "category_registry_updated",
     "floor_registry_updated",
     "label_registry_updated",
+    # ``logbook_entry`` is the documented logbook write API — the Logbook
+    # integration consumes it to render rows. Sandbox code firing this
+    # event would inject attacker-fabricated rows directly into the
+    # user's primary investigation tool, which is a data-integrity issue.
+    "logbook_entry",
     "lovelace_updated",
     "panels_updated",
     "themes_updated",
@@ -139,6 +182,20 @@ _BLOCKED_WS_COMMANDS: frozenset[str] = frozenset({
     "config/entity_registry/delete",
     "config/entity_registry/disable",
     "config/entity_registry/update",
+    # Floor / label / category registries follow the same rationale as
+    # area / device / entity above: each has a wrapping MCP tool
+    # (``ha_config_set_floor``, ``ha_config_set_label``,
+    # ``ha_config_set_category``) that performs invariant checks the
+    # raw WS command skips.
+    "config/floor_registry/create",
+    "config/floor_registry/delete",
+    "config/floor_registry/update",
+    "config/label_registry/create",
+    "config/label_registry/delete",
+    "config/label_registry/update",
+    "config/category_registry/create",
+    "config/category_registry/delete",
+    "config/category_registry/update",
 })
 
 
@@ -578,13 +635,19 @@ async def _run_sandboxed_code(
         path works whether the caller wrote ``"events"``, ``"/events"``, or
         ``"/api/events"``.
 
-        Rejects anything that looks like an absolute URL or a userinfo
-        injection: an ``://`` substring, a leading ``//`` (protocol-relative),
-        or an ``@`` before the first ``/``. Without this the httpx client
-        will dispatch the request to the absolute host *with the HA bearer
-        token still attached*, leaking credentials to whoever the LLM was
-        prompted to point at. The sandbox is supposed to be on-instance
-        only.
+        Rejects:
+
+        * Absolute URL forms — ``://``, leading ``//`` (protocol-relative),
+          or ``@`` before the first ``/`` (userinfo). Without this httpx
+          will dispatch the request to the absolute host *with the HA
+          bearer token still attached*, leaking credentials.
+        * ``..`` path segments — httpx happily resolves
+          ``base_url='http://ha:8123/api'`` + endpoint ``'../auth/providers'``
+          to ``http://ha:8123/auth/providers``, escaping the ``/api/``
+          prefix entirely. HA exposes other bearer-authenticated routes
+          at root (``/auth/...``, ``/profile``, etc.) — every one of
+          those becomes reachable from the sandbox unless we reject
+          ``..`` here.
         """
         if not isinstance(endpoint, str):
             raise ValueError("endpoint must be a string path (e.g. '/states')")
@@ -601,6 +664,16 @@ async def _run_sandboxed_code(
         ep = endpoint.lstrip("/")
         if ep.startswith("api/"):
             ep = ep[4:]
+        # ``..`` segments would let the sandbox escape the ``/api/`` prefix
+        # via httpx URL resolution. Check after stripping so the comparison
+        # is against actual path segments, and return the same error for
+        # leading-, mid-, or trailing-position cases.
+        for segment in ep.split("/"):
+            if segment == "..":
+                raise ValueError(
+                    "endpoint must not contain '..' path segments; "
+                    "the sandbox is restricted to /api/ routes"
+                )
         return ep
 
     async def _api_get(endpoint: str) -> Any:
@@ -992,16 +1065,26 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # --- Mode: list saved tools ---
         if list_saved:
+            # The saved-tools dict is nested under a stable ``saved_tools``
+            # key rather than spread directly under ``data`` because the
+            # name pattern (``^[a-zA-Z_][a-zA-Z0-9_]{0,63}$``) accepts
+            # values like ``result``, ``count``, ``code`` — every one of
+            # which is also a key the *other* response shapes use. A
+            # consumer reading ``r["data"]["result"]`` after a list_saved
+            # call would otherwise get a saved-tool entry instead of a
+            # run-result.
             return {
                 "success": True,
                 "data": {
-                    name: {
-                        "code": info["code"],
-                        "justification": info["justification"],
-                    }
-                    for name, info in _saved_tools.items()
+                    "saved_tools": {
+                        name: {
+                            "code": info["code"],
+                            "justification": info["justification"],
+                        }
+                        for name, info in _saved_tools.items()
+                    },
+                    "count": len(_saved_tools),
                 },
-                "count": len(_saved_tools),
             }
 
         # --- Mode: run saved tool ---
@@ -1086,7 +1169,15 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
-        logger.info("ha_manage_custom_tool invoked — justification: %s", justification[:200])
+        logger.info(
+            "ha_manage_custom_tool invoked — justification: %s",
+            _log_safe(justification),
+        )
+        # Code is logged at DEBUG and the multi-line shape is intentional
+        # (the LLM-authored snippet is the operator's primary forensic
+        # artefact). No control-char sanitisation here because the log
+        # format string already opens a fresh line — there's nothing to
+        # inject into.
         logger.debug("ha_manage_custom_tool code:\n%s", code)
 
         try:
