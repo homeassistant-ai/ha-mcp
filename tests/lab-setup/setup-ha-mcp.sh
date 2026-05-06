@@ -95,6 +95,7 @@ cat > /etc/systemd/system/hamcp-demo.service << SVCEOF
 [Unit]
 Description=HA-MCP Demo Test Environment
 After=docker.service network-online.target
+Wants=network-online.target
 Requires=docker.service
 
 [Service]
@@ -203,6 +204,7 @@ AUTOEOF
 #=============================================================================
 # 9. STOP OLD CONTAINERS + PROCESSES
 info "Cleaning up old containers and processes..."
+systemctl stop hamcp-demo 2>/dev/null || true
 docker ps -aq --filter "ancestor=ghcr.io/home-assistant/home-assistant" | xargs -r docker rm -f 2>/dev/null || true
 docker ps -aq --filter "ancestor=testcontainers/ryuk" | xargs -r docker rm -f 2>/dev/null || true
 pkill -u "$SETUP_USER" -f "hamcp-test-env" 2>/dev/null || true
