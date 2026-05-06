@@ -20,6 +20,7 @@ from fastmcp.server.transforms import ResourcesAsTools
 from mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
+from .middleware import JMESPathFilterMiddleware
 from .tools.enhanced import EnhancedToolsMixin
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -200,6 +201,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             icons=SERVER_ICONS,
             instructions=instructions,
         )
+        self.mcp.add_middleware(JMESPathFilterMiddleware())
 
         # Register all tools and expert prompts
         self._initialize_server()

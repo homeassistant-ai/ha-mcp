@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "fastmcp==3.2.4",
     "httpx[socks]==0.28.1",
+    "jmespath==1.0.1",
     "pydantic==2.13.3",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
@@ -75,7 +76,8 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = [
     "fastmcp.*",
-    "jq",
+    "jmespath",
+    "jmespath.*",
     "pydantic_monty",
     "pydantic_monty.*",
 ]
