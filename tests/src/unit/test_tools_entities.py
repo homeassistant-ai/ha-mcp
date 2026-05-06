@@ -1670,6 +1670,11 @@ class TestHaSetEntityShowAs:
         assert body["options_succeeded"] == {}
         assert body["error"]["message"].startswith("Failed to update options for")
         assert "Partially" not in body["error"]["message"]
+        # entity_entry must NOT be present on a clean failure: the captured
+        # entity_entry is the empty stub {}, and surfacing it would be
+        # indistinguishable from "entity has nothing set". Mirrors the
+        # expose_to failure path which gates entity_entry on prior_mutation.
+        assert "entity_entry" not in body
 
     @pytest.mark.asyncio
     async def test_options_failure_with_empty_error_envelope_uses_fallback(

@@ -138,10 +138,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
 
         if device_class is not None:
-            message["device_class"] = device_class if device_class else None
+            # Treat whitespace-only as the documented "clear" sentinel so
+            # accidental spaces don't reach HA as a literal validation error.
+            normalized_device_class = device_class.strip() or None
+            message["device_class"] = normalized_device_class
             updates_made.append(
-                f"device_class='{device_class}'"
-                if device_class
+                f"device_class='{normalized_device_class}'"
+                if normalized_device_class
                 else "device_class cleared"
             )
 
@@ -319,20 +322,31 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # `updates_applied` is the human-readable prose list
                     # including non-options updates (name=, icon=, etc.).
                     # Both are surfaced — they serve different consumers.
+                    options_failure_context: dict[str, Any] = {
+                        "entity_id": entity_id,
+                        "options_domain": opts_domain,
+                        "partial": partial,
+                        "options_succeeded": options_succeeded,
+                        "updates_applied": list(updates_made),
+                    }
+                    # Only include entity_entry when something actually mutated;
+                    # _format_entity_entry({}) returns an all-None stub that's
+                    # indistinguishable from "entity has nothing set". Mirrors
+                    # the expose_to failure path below.
+                    if partial:
+                        options_failure_context["entity_entry"] = _format_entity_entry(
+                            entity_entry
+                        )
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
                             f"{msg_prefix} domain '{opts_domain}': {err_msg}",
-                            context={
-                                "entity_id": entity_id,
-                                "options_domain": opts_domain,
-                                "partial": partial,
-                                "options_succeeded": options_succeeded,
-                                "updates_applied": list(updates_made),
-                                "entity_entry": _format_entity_entry(entity_entry),
-                            },
+                            context=options_failure_context,
                         )
                     )
+                # HA returns the cumulative entity_entry on each per-domain
+                # call, so last-call-wins reassignment leaves the final loop
+                # iteration carrying the full state.
                 entity_entry = opts_result.get("result", {}).get(
                     "entity_entry", entity_entry
                 )
@@ -575,7 +589,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     'e.g. {"sensor": {"display_precision": 2}}. JSON-string form also accepted. '
                     "Multiple domains are sent as separate registry updates. "
                     "For 'Show As' use the dedicated `device_class` parameter — that is "
-                    "what the HA UI Show As dropdown writes. Single entity only."
+                    "what the HA UI Show As dropdown writes. Voice-assistant exposure is "
+                    "stored under `options.<assistant>.should_expose` but must be managed "
+                    "via the dedicated `expose_to` parameter, not this options dict. "
+                    "Single entity only."
                 ),
                 default=None,
             ),

@@ -281,11 +281,14 @@ class TestShowAsOnIntegrationEntity:
                 {"entity_id": self.TARGET, "device_class": restore_dc},
             )
             # Restore the sensor sub-options to their pre-test value so any
-            # demo-platform default we overwrote is put back intact.
-            await mcp_client.call_tool(
-                "ha_set_entity",
-                {
-                    "entity_id": self.TARGET,
-                    "options": {"sensor": dict(original_sensor_options)},
-                },
-            )
+            # demo-platform default we overwrote is put back intact. Skip the
+            # round-trip when there was nothing captured — sending an empty
+            # sub-dict would otherwise emit a no-op options={"sensor": {}} call.
+            if original_sensor_options:
+                await mcp_client.call_tool(
+                    "ha_set_entity",
+                    {
+                        "entity_id": self.TARGET,
+                        "options": {"sensor": dict(original_sensor_options)},
+                    },
+                )
