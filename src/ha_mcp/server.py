@@ -633,6 +633,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         healthy, partially degraded, or fully unavailable. Without that
         summary, three independent ``logger.exception`` calls leave
         operators reconstructing state from scattered log lines.
+
+        Failure modes degrade unevenly across clients: if Phase 3
+        (transform) fails, resource-capable clients still see skills,
+        but tool-only clients (claude.ai etc.) lose ha_list_resources
+        and ha_read_resource from their catalog with no protocol-level
+        error — only the warning summary signals it.
         """
         status: dict[str, str | int] = {
             "provider": "skipped",
@@ -701,21 +707,24 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     def _log_skill_registration_summary(status: dict[str, str | int]) -> None:
         """Emit one-line summary of skill registration outcome.
 
-        ``info`` when both provider and transform succeeded; ``warning``
-        otherwise. This is the line operators should grep for when a
-        user reports missing skill features — the per-phase exception
-        logs above carry the stack traces, but this one tells you which
-        phase to look at.
+        ``info`` when both provider and transform succeeded *and* at least
+        one guidance tool registered; ``warning`` otherwise. The
+        guidance>0 gate catches the "shipped but exposes nothing" case
+        (skills directory exists but is empty, or every SKILL.md fails to
+        parse) — both prior phases succeed yet no skill is actually
+        reachable. This is the line operators should grep for when a
+        user reports missing skill features.
         """
         provider = status.get("provider")
         transform = status.get("transform")
-        guidance = status.get("guidance_tools", 0)
+        raw_guidance = status.get("guidance_tools", 0)
+        guidance = raw_guidance if isinstance(raw_guidance, int) else 0
 
         message = (
             "Skill system summary: provider=%s, transform=%s, guidance_tools=%d"
         )
         args = (provider, transform, guidance)
-        if provider == "ok" and transform == "ok":
+        if provider == "ok" and transform == "ok" and guidance > 0:
             logger.info(message, *args)
         else:
             logger.warning(message, *args)

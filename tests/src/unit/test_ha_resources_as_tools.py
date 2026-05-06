@@ -12,12 +12,13 @@ from ha_mcp.settings_ui import TRANSFORM_GENERATED_TOOLS
 
 
 def test_transform_generated_tool_names_match_class_constants():
-    """The settings UI stub keys must match the class constants so a future
-    rename of either tool can't drift the two sides apart."""
-    expected = {HaResourcesAsTools.LIST_TOOL_NAME, HaResourcesAsTools.READ_TOOL_NAME}
-    assert set(TRANSFORM_GENERATED_TOOLS) >= expected, (
+    """The settings UI stub keys must equal _RENAMES.values() exactly so a
+    future rename can't drift the two sides apart in either direction —
+    a missing stub or an orphan stub both fail this assertion."""
+    expected = set(HaResourcesAsTools._RENAMES.values())
+    assert set(TRANSFORM_GENERATED_TOOLS) == expected, (
         f"TRANSFORM_GENERATED_TOOLS keys {set(TRANSFORM_GENERATED_TOOLS)} "
-        f"must include both {expected}"
+        f"must equal HaResourcesAsTools._RENAMES.values() {expected}"
     )
 
 

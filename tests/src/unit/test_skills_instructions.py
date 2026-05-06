@@ -179,3 +179,82 @@ class TestBuildSkillsInstructions:
         with patch.object(server, "_get_skills_dir", return_value=tmp_path):
             result = server._build_skills_instructions()
         assert result is None
+
+
+class TestLogSkillRegistrationSummary:
+    """Tests for _log_skill_registration_summary's branch logic.
+
+    The summary line is the operator-facing signal for skill-system health,
+    so the warning-vs-info gating (which feeds log-grep alerts) needs to
+    behave deterministically across all four meaningful states.
+    """
+
+    @pytest.fixture
+    def emit(self):
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        return HomeAssistantSmartMCPServer._log_skill_registration_summary
+
+    def test_logs_info_when_all_phases_ok_and_guidance_present(
+        self, emit, caplog
+    ):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="ha_mcp.server"):
+            emit({"provider": "ok", "transform": "ok", "guidance_tools": 3})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.INFO
+
+    def test_logs_warning_when_provider_failed(self, emit, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            emit({"provider": "failed", "transform": "skipped", "guidance_tools": 0})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+
+    def test_logs_warning_when_transform_failed(self, emit, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            emit({"provider": "ok", "transform": "failed", "guidance_tools": 2})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+
+    def test_logs_warning_when_both_skipped(self, emit, caplog):
+        """`skipped` is not the same as `ok` — the summary must still warn."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            emit({"provider": "skipped", "transform": "skipped", "guidance_tools": 0})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+
+    def test_logs_warning_when_guidance_zero_despite_ok_phases(self, emit, caplog):
+        """Both phases healthy but no skill bundle exposed → warning, not info.
+
+        Catches the "shipped but exposes nothing" failure mode where the
+        skills directory exists but is empty or every SKILL.md fails to
+        parse.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            emit({"provider": "ok", "transform": "ok", "guidance_tools": 0})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+
+    def test_missing_guidance_key_treated_as_zero(self, emit, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            emit({"provider": "ok", "transform": "ok"})
+        records = [r for r in caplog.records if "Skill system summary" in r.message]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert "guidance_tools=0" in records[0].message % records[0].args

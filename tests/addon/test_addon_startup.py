@@ -333,6 +333,53 @@ class TestResolveBoolOption:
         )
 
 
+class TestCleanupStaleMigrationMarker:
+    """Unit tests for cleanup_stale_migration_marker.
+
+    Best-effort cleanup of the one-time enable_skills_as_tools migration
+    marker (removed in #1133). Runs on every boot, so silent failure on
+    permission-restricted /data mounts is the production-only failure
+    mode worth locking down.
+    """
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_removes_marker_when_present(self, tmp_path):
+        marker = tmp_path / ".skills_as_tools_default_migration_v1"
+        marker.write_text("")
+        assert marker.exists()
+
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+        assert not marker.exists()
+
+    def test_noop_when_marker_absent(self, tmp_path):
+        # No marker present — must not raise (missing_ok=True).
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+    def test_swallows_oserror_and_logs(self, tmp_path, monkeypatch, capsys):
+        """Permission-restricted /data mounts must not crash boot.
+
+        Simulates the real-world failure mode where unlink raises despite
+        ``missing_ok=True`` (e.g. EACCES on a read-only bind mount).
+        """
+        marker = tmp_path / ".skills_as_tools_default_migration_v1"
+        marker.write_text("")
+
+        def boom(self, missing_ok=False):
+            raise PermissionError("read-only filesystem")
+
+        monkeypatch.setattr(Path, "unlink", boom)
+
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+        captured = capsys.readouterr()
+        assert "Failed to remove stale migration marker" in captured.err
+        assert "Safe to ignore" in captured.err
+
+
 @pytest.mark.slow
 class TestAddonStartup:
     """Test add-on container startup behavior."""
