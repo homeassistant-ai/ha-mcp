@@ -29,6 +29,16 @@ class TestPriorityOrder:
     def test_addon_path_when_supervisor_token_set(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        # ``/data`` is not present on dev/CI machines; stub the writability
+        # probe rather than relying on the real path.
+        original_mkdir = Path.mkdir
+
+        def fake_mkdir(self: Path, *args, **kwargs):
+            if self == Path("/data"):
+                return None
+            return original_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
         assert get_data_dir() == Path("/data")
 
     def test_home_path_when_no_supervisor_token(self, monkeypatch, tmp_path):
@@ -52,6 +62,19 @@ class TestPriorityOrder:
         result = get_data_dir()
         assert result == custom_dir
         assert custom_dir.is_dir()
+
+    def test_whitespace_only_ha_mcp_config_dir_is_ignored(self, monkeypatch, tmp_path):
+        """``HA_MCP_CONFIG_DIR="   "`` (e.g. trailing space in a .env file) is
+        truthy but ``Path("   ")`` resolves cwd-relative — without
+        ``.strip()`` the resolver would mkdir a literal three-space-named
+        directory. Whitespace-only must be treated as unset.
+        """
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", "   ")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        result = get_data_dir()
+        assert result == tmp_path / ".ha-mcp"
+        assert not (Path.cwd() / "   ").exists()
 
 
 class TestFallbacks:
@@ -115,13 +138,81 @@ class TestFallbacks:
         assert result.is_dir()
         assert not broken_target.exists()
 
+    def test_ha_mcp_config_dir_unwritable_in_addon_mode_chains_to_tmpdir(
+        self, monkeypatch, tmp_path
+    ):
+        """Silent-override-discard regression: ``HA_MCP_CONFIG_DIR`` mkdir
+        fails AND ``SUPERVISOR_TOKEN`` is set. The resolver must NOT
+        silently write to ``/data`` — the user picked the override
+        deliberately, so fall through to the tmpdir instead.
+        """
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        readonly_parent = tmp_path / "readonly-parent"
+        readonly_parent.mkdir()
+        broken_target = readonly_parent / "cannot-create"
+        original_mkdir = Path.mkdir
+
+        def fake_mkdir(self: Path, *args, **kwargs):
+            if self == broken_target:
+                raise OSError(30, "Read-only file system")
+            if self == Path("/data"):
+                return None  # /data is "writable" — must still be skipped
+            return original_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(broken_target))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "unused-home")
+        fallback_root = tmp_path / "fallback-tmp"
+        fallback_root.mkdir()
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.tempfile.gettempdir", lambda: str(fallback_root)
+        )
+
+        result = get_data_dir()
+
+        assert result == fallback_root / "ha-mcp"
+        assert result.is_dir()
+
+    def test_falls_back_when_addon_data_dir_unwritable(self, monkeypatch, tmp_path):
+        """Residual same-class bug: ``/data`` may be read-only (degraded
+        supervisor, or supervisor container running with ``read_only:
+        true``). With no ``HA_MCP_CONFIG_DIR``, the resolver must fall
+        through to the home/tmpdir chain instead of returning a path the
+        first ``write_text`` will crash on.
+        """
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        readonly_home = tmp_path / "readonly-home"
+        readonly_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: readonly_home)
+        fallback_root = tmp_path / "fallback-tmp"
+        fallback_root.mkdir()
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.tempfile.gettempdir", lambda: str(fallback_root)
+        )
+        original_mkdir = Path.mkdir
+
+        def fake_mkdir(self: Path, *args, **kwargs):
+            if self in (Path("/data"), readonly_home / ".ha-mcp"):
+                raise OSError(30, "Read-only file system")
+            return original_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+
+        result = get_data_dir()
+
+        assert result == fallback_root / "ha-mcp"
+        assert result.is_dir()
+
     def test_returns_unwritable_tmpdir_when_everything_fails(
         self, monkeypatch, tmp_path, caplog
     ):
         """Last-resort branch: env mkdir fails, home mkdir fails, tmpdir mkdir
         fails. The resolver returns the tmpdir path anyway so callers (which
         wrap their own writes in ``try/except OSError``) can degrade
-        gracefully rather than crashing the server. Warning fires.
+        gracefully rather than crashing the server. Logged at ERROR because
+        persistence is silently disabled — operator-visible state, not just
+        a warning.
         """
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
@@ -146,9 +237,11 @@ class TestFallbacks:
             result = get_data_dir()
 
         assert result == fake_tmp / "ha-mcp"
-        assert any(
-            "persistence is disabled" in r.getMessage() for r in caplog.records
-        )
+        persistence_records = [
+            r for r in caplog.records if "persistence is disabled" in r.getMessage()
+        ]
+        assert persistence_records, "expected a persistence-disabled log record"
+        assert all(r.levelno == logging.ERROR for r in persistence_records)
 
 
 class TestMemoization:
