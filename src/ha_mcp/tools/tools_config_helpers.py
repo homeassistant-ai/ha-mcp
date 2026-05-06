@@ -8,6 +8,7 @@ input_number, input_text, input_datetime, counter, timer, schedule).
 
 import asyncio
 import logging
+import uuid
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
@@ -168,7 +169,314 @@ def _validate_applicable_params(
     )
 
 
+def _validate_numeric_range(
+    helper_type: str,
+    min_value: float | None,
+    max_value: float | None,
+    step: float | None,
+) -> None:
+    """Pre-validate min/max/step ranges for numeric simple helpers.
+
+    Bug 13 (issue #1150): HA rejects several edge cases with cryptic messages
+    (or, in the slider-step-too-large case, silently produces a broken
+    slider). Surface clear, type-aware errors to the caller before the WS
+    round-trip.
+
+    Applies to: input_number (float), counter (int), input_text (length).
+    For input_text, min/max are character lengths; values must be in [0, 255]
+    and follow the standard min<max strict ordering.
+    """
+    if helper_type == "input_text":
+        if min_value is not None and min_value < 0:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"input_text min_value (length) must be >= 0, got {min_value}.",
+                context={"helper_type": helper_type, "min_value": min_value},
+            ))
+        if max_value is not None and max_value > 255:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"input_text max_value (length) must be <= 255, got {max_value}.",
+                context={"helper_type": helper_type, "max_value": max_value},
+            ))
+
+    if min_value is not None and max_value is not None:
+        if min_value > max_value:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"min_value ({min_value}) cannot be greater than max_value ({max_value}).",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                },
+            ))
+        if min_value == max_value:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"min_value and max_value must differ (both were {min_value}). "
+                f"Pick a non-empty range so the helper has more than one valid value.",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                },
+            ))
+
+    # Step validation only applies to numeric types (not input_text).
+    if helper_type in ("input_number", "counter") and step is not None:
+        if step <= 0:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"step must be > 0 for {helper_type} (got {step}).",
+                context={"helper_type": helper_type, "step": step},
+            ))
+        if (
+            min_value is not None
+            and max_value is not None
+            and (max_value - min_value) > 0
+            and step > (max_value - min_value)
+        ):
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"step ({step}) is larger than the range "
+                f"(max_value - min_value = {max_value - min_value}). "
+                f"HA does not reject this, but the resulting slider/control "
+                f"is unusable. Reduce step or widen the range.",
+                context={
+                    "helper_type": helper_type,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "step": step,
+                },
+            ))
+
+
+def _validate_input_select_options(options: Any) -> None:
+    """Reject input_select option lists containing duplicates (Bug 17, issue #1150).
+
+    HA rejects duplicates with "Duplicate options are not allowed", but the
+    error path it takes is generic enough that callers tend to misread it.
+    Pre-validate so the message is unambiguous.
+    """
+    if not isinstance(options, list):
+        return
+    seen: set[Any] = set()
+    duplicates: list[Any] = []
+    for opt in options:
+        if opt in seen and opt not in duplicates:
+            duplicates.append(opt)
+        else:
+            seen.add(opt)
+    if duplicates:
+        raise_tool_error(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"input_select options must be unique. Duplicate option(s): "
+            f"{', '.join(repr(d) for d in duplicates)}.",
+            context={"helper_type": "input_select", "duplicates": duplicates},
+            suggestions=["Remove duplicate entries from the options list."],
+        ))
+
+
+def _parse_hms(value: Any) -> tuple[int, int, int] | None:
+    """Parse 'HH:MM' or 'HH:MM:SS' to a (h, m, s) tuple. Returns None if unparsable."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+        s = int(parts[2]) if len(parts) == 3 else 0
+    except ValueError:
+        return None
+    return h, m, s
+
+
+def _validate_schedule_days(
+    monday: list | None,
+    tuesday: list | None,
+    wednesday: list | None,
+    thursday: list | None,
+    friday: list | None,
+    saturday: list | None,
+    sunday: list | None,
+) -> None:
+    """Pre-validate schedule day-range structure (Bug 17, issue #1150).
+
+    Each range must include 'from' and 'to'; ranges within a single day must
+    not overlap. HA reports per-day errors; surface a single clear message
+    upfront with the offending day named.
+    """
+    day_params = {
+        "monday": monday,
+        "tuesday": tuesday,
+        "wednesday": wednesday,
+        "thursday": thursday,
+        "friday": friday,
+        "saturday": saturday,
+        "sunday": sunday,
+    }
+    for day_name, day_schedule in day_params.items():
+        if day_schedule is None:
+            continue
+        if not isinstance(day_schedule, list):
+            continue  # let HA report shape errors
+        intervals: list[tuple[int, int]] = []  # (from_secs, to_secs)
+        for idx, time_range in enumerate(day_schedule):
+            if not isinstance(time_range, dict):
+                continue
+            if "from" not in time_range or "to" not in time_range:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"schedule {day_name}[{idx}] must include both 'from' "
+                    f"and 'to' keys, got: {sorted(time_range.keys())}.",
+                    context={"helper_type": "schedule", "day": day_name},
+                ))
+            from_parsed = _parse_hms(time_range["from"])
+            to_parsed = _parse_hms(time_range["to"])
+            if from_parsed is None or to_parsed is None:
+                continue  # let HA report format errors
+            from_secs = from_parsed[0] * 3600 + from_parsed[1] * 60 + from_parsed[2]
+            to_secs = to_parsed[0] * 3600 + to_parsed[1] * 60 + to_parsed[2]
+            intervals.append((from_secs, to_secs))
+
+        # Check overlap by sorting and walking. HA rejects overlap regardless
+        # of caller order — we sort here so the error message points at a
+        # canonical pair.
+        sorted_intervals = sorted(intervals, key=lambda iv: iv[0])
+        for i in range(1, len(sorted_intervals)):
+            prev_from, prev_to = sorted_intervals[i - 1]
+            cur_from, cur_to = sorted_intervals[i]
+            if cur_from < prev_to:
+                raise_tool_error(create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"schedule {day_name} has overlapping time ranges "
+                    f"({prev_from // 3600:02d}:{(prev_from % 3600) // 60:02d}-"
+                    f"{prev_to // 3600:02d}:{(prev_to % 3600) // 60:02d} and "
+                    f"{cur_from // 3600:02d}:{(cur_from % 3600) // 60:02d}-"
+                    f"{cur_to // 3600:02d}:{(cur_to % 3600) // 60:02d}). "
+                    f"HA requires non-overlapping ranges per day.",
+                    context={"helper_type": "schedule", "day": day_name},
+                ))
+
+
 logger = logging.getLogger(__name__)
+
+
+async def _validate_registry_ids(
+    client: Any,
+    area_id: str | None,
+    labels: list[str] | None,
+    category: str | None,
+) -> None:
+    """Validate that area_id, labels, and category reference existing registry entries.
+
+    Bug 16 (issue #1150): the entity-registry update path previously accepted any
+    string and forwarded it to HA, leaving phantom references like
+    `area_id="nonexistent_xyz"` in the registry. Validate before sending so the
+    caller gets a clear error with the available IDs to choose from.
+
+    Skips:
+      - None values (caller did not pass — no change to apply).
+      - Empty string area_id / category (these mean "clear" — HA accepts them).
+      - Empty list labels (clear semantics).
+
+    Raises VALIDATION_INVALID_PARAMETER on the first unknown ID encountered, with
+    the available IDs included in the suggestions list so the caller can correct.
+    """
+
+    async def _ws_list(message: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            result = await client.send_websocket_message(message)
+        except Exception:
+            # If HA is unreachable, don't block the request on this validation —
+            # the registry update itself will fail downstream with a clearer
+            # warning. Treat as "could not validate" and skip.
+            return []
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            inner = result.get("result", [])
+            if isinstance(inner, list):
+                return inner
+        return []
+
+    # Validate area_id (skip None and empty-string clear).
+    if area_id is not None and area_id != "":
+        areas = await _ws_list({"type": "config/area_registry/list"})
+        valid_area_ids = [
+            a.get("area_id") for a in areas if isinstance(a, dict) and a.get("area_id")
+        ]
+        if valid_area_ids and area_id not in valid_area_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"area_id={area_id!r} does not exist in the area registry.",
+                    context={"area_id": area_id},
+                    suggestions=[
+                        "Use ha_config_list_areas() to list valid area IDs.",
+                        'Pass area_id="" to clear the area assignment.',
+                        f"Available area_ids: {sorted(valid_area_ids)}",
+                    ],
+                )
+            )
+
+    # Validate labels (skip None; empty list is allowed as a "clear").
+    if labels is not None and labels:
+        ws_labels = await _ws_list({"type": "config/label_registry/list"})
+        valid_label_ids = [
+            label.get("label_id")
+            for label in ws_labels
+            if isinstance(label, dict) and label.get("label_id")
+        ]
+        if valid_label_ids:
+            unknown = [
+                label_id
+                for label_id in labels
+                if label_id and label_id not in valid_label_ids
+            ]
+            if unknown:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown label_id(s): {unknown}. These do not exist in "
+                        "the label registry.",
+                        context={"labels": labels, "unknown_labels": unknown},
+                        suggestions=[
+                            "Use ha_config_get_label() to list valid label IDs.",
+                            "Use ha_config_set_label() to create a new label.",
+                            f"Available label_ids: {sorted(valid_label_ids)}",
+                        ],
+                    )
+                )
+
+    # Validate category (skip None and empty-string clear).
+    if category is not None and category != "":
+        categories = await _ws_list(
+            {"type": "config/category_registry/list", "scope": "helpers"}
+        )
+        valid_category_ids = [
+            cat.get("category_id")
+            for cat in categories
+            if isinstance(cat, dict) and cat.get("category_id")
+        ]
+        if valid_category_ids and category not in valid_category_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"category={category!r} does not exist in the helpers "
+                    "category registry.",
+                    context={"category": category},
+                    suggestions=[
+                        "Use ha_config_get_category(scope='helpers') to list "
+                        "valid category IDs.",
+                        "Use ha_config_set_category() to create a new category.",
+                        f"Available category_ids: {sorted(valid_category_ids)}",
+                    ],
+                )
+            )
 
 
 async def _get_entities_for_config_entry(
@@ -392,6 +700,12 @@ async def _handle_flow_helper(
             f"Invalid labels parameter: {e}",
             context={"helper_type": helper_type},
         ))
+
+    # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config
+    # entry. If the IDs are invalid, fail fast — otherwise we'd succeed in
+    # creating the helper but later silently persist phantom references on the
+    # post-create entity-registry update.
+    await _validate_registry_ids(client, area_id, labels_list, category)
 
     # Dispatch to the shared flow machinery.
     if action == "create":
@@ -898,7 +1212,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         tag_id: Annotated[
             str | None,
             Field(
-                description="Tag ID for tag (auto-generated if not provided)",
+                description=(
+                    "Tag ID for tag. On create, omit to auto-generate a unique "
+                    "uuid4 hex (HA's tag/create requires this field; the tool "
+                    "fills it in for you). On update, the tag's existing tag_id "
+                    "is required (passed via helper_id)."
+                ),
                 default=None,
             ),
         ] = None,
@@ -1060,6 +1379,28 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+            # Bug 16 (issue #1150): validate area_id / labels / category exist
+            # in their respective registries before any registry-update WS call.
+            # Without this, phantom IDs are silently persisted as dangling
+            # references that confuse downstream UI and tools.
+            await _validate_registry_ids(client, area_id, labels, category)
+
+            # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
+            # Done once for both create and update so the message is identical
+            # regardless of action. HA's own errors here are cryptic
+            # ("Unknown error", "Duplicate options are not allowed", per-day
+            # range messages, broken sliders), so surface a clear error before
+            # the WS round-trip.
+            if helper_type in ("input_number", "counter", "input_text"):
+                _validate_numeric_range(helper_type, min_value, max_value, step)
+            if helper_type == "input_select":
+                _validate_input_select_options(options)
+            if helper_type == "schedule":
+                _validate_schedule_days(
+                    monday, tuesday, wednesday, thursday,
+                    friday, saturday, sunday,
+                )
+
             if action == "create":
                 if not name:
                     raise_tool_error(
@@ -1110,23 +1451,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["initial"] = initial
 
                 elif helper_type == "input_number":
-                    # Validate min_value/max_value range
-                    if (
-                        min_value is not None
-                        and max_value is not None
-                        and min_value > max_value
-                    ):
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                f"Minimum value ({min_value}) cannot be greater than maximum value ({max_value})",
-                                context={
-                                    "min_value": min_value,
-                                    "max_value": max_value,
-                                },
-                            )
-                        )
-
+                    # Range/step validation handled centrally by
+                    # _validate_numeric_range above (Bug 13).
                     if min_value is not None:
                         message["min"] = min_value
                     if max_value is not None:
@@ -1253,8 +1579,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 elif helper_type == "tag":
                     # Tag parameters: tag_id, description
                     # Note: name goes into entity registry, not tag storage
-                    if tag_id:
-                        message["tag_id"] = tag_id
+                    # Bug 9 (issue #1150): HA's tag/create requires `tag_id`,
+                    # rejecting omissions with a cryptic "Unknown error" 400.
+                    # The tool's docstring (and tag_id Field description) say
+                    # tag_id is auto-generated when missing — make that true.
+                    if tag_id is None:
+                        tag_id = uuid.uuid4().hex
+                    message["tag_id"] = tag_id
                     if description:
                         message["description"] = description
 

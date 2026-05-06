@@ -19,6 +19,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -197,12 +198,199 @@ def _handle_form_step(
     return form_data
 
 
+def _parse_flow_api_error(
+    api_error: HomeAssistantAPIError,
+) -> dict[str, Any]:
+    """Extract structured field-level info from an HA flow 4xx response.
+
+    Home Assistant returns voluptuous validation failures during flow
+    submission as either:
+
+    - ``{"message": "User input malformed: extra keys not allowed @ data['name']"}``
+      (raised before form validation, e.g. unknown field in payload)
+    - ``{"errors": {"base": "..."}, "description_placeholders": {...}}``
+      (per-field errors after voluptuous validation succeeds)
+    - Free-form text (when the body isn't JSON).
+
+    Returns a dict with at least:
+      - ``message``: the most informative human-readable string we found.
+      - ``field_errors``: dict of field-name -> error code/message, when
+        the body contained an ``errors`` map. Empty dict otherwise.
+      - ``raw``: the response_data dict (or ``None``) for diagnostics.
+    """
+    body = api_error.response_data or {}
+    field_errors: dict[str, Any] = {}
+    message_parts: list[str] = []
+
+    if isinstance(body, dict):
+        errors_field = body.get("errors")
+        if isinstance(errors_field, dict):
+            field_errors = {
+                key: val
+                for key, val in errors_field.items()
+                if isinstance(key, str)
+            }
+
+        # HA's stock 400 carries a `message` key with the voluptuous detail.
+        msg = body.get("message")
+        if isinstance(msg, str) and msg.strip():
+            message_parts.append(msg.strip())
+
+        # description_placeholders sometimes carry the human-readable error.
+        placeholders = body.get("description_placeholders")
+        if isinstance(placeholders, dict):
+            for key, val in placeholders.items():
+                if isinstance(val, str) and val.strip():
+                    message_parts.append(f"{key}: {val.strip()}")
+
+    if not message_parts:
+        # Fall back to the wrapper exception message ("API error: 400 - ...").
+        message_parts.append(str(api_error))
+
+    return {
+        "message": " | ".join(dict.fromkeys(message_parts)),  # de-dupe, preserve order
+        "field_errors": field_errors,
+        "raw": body if isinstance(body, dict) else None,
+    }
+
+
+async def _fetch_data_schema_for_error_context(
+    client: Any,
+    helper_type: str | None,
+    menu_choice: str | None,
+) -> list[Any] | None:
+    """Best-effort fetch of the helper's data_schema for error context.
+
+    Starts a fresh introspection flow (always aborted), and returns the
+    user step's ``data_schema`` so the LLM has something concrete to react
+    to when HA's error body is unstructured. Returns ``None`` on any
+    failure or when the helper is menu-based without a chosen branch.
+    """
+    if not helper_type or client is None:
+        return None
+    intro_flow_id: str | None = None
+    try:
+        flow_result = await client.start_config_flow(helper_type)
+        intro_flow_id = flow_result.get("flow_id")
+        flow_type = flow_result.get("type")
+
+        if flow_type == _FlowType.FORM:
+            schema = flow_result.get("data_schema")
+            return schema if isinstance(schema, list) else None
+
+        if flow_type == _FlowType.MENU and menu_choice and intro_flow_id:
+            try:
+                step = await asyncio.wait_for(
+                    client.submit_config_flow_step(
+                        intro_flow_id, {"next_step_id": menu_choice}
+                    ),
+                    timeout=10.0,
+                )
+            except Exception:
+                return None
+            if step.get("type") == _FlowType.FORM:
+                schema = step.get("data_schema")
+                return schema if isinstance(schema, list) else None
+        return None
+    except Exception:
+        return None
+    finally:
+        if intro_flow_id:
+            try:
+                await asyncio.wait_for(
+                    client.abort_config_flow(intro_flow_id), timeout=5.0
+                )
+            except Exception as abort_err:
+                logger.debug(
+                    f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
+                )
+
+
+async def _raise_flow_api_error(
+    api_error: HomeAssistantAPIError,
+    *,
+    client: Any,
+    flow_id: str,
+    helper_type: str | None,
+    menu_choice: str | None,
+    current_step: dict[str, Any] | None,
+    submitted: dict[str, Any] | None,
+) -> None:
+    """Translate an HA 4xx during a flow submit into a structured ToolError.
+
+    For 400/422 responses, parses ``response_data`` for field-level info
+    via ``_parse_flow_api_error``. When the body is unstructured (no
+    ``errors`` map), attaches the helper's ``data_schema`` (if it can be
+    fetched) so the caller has actionable information.
+
+    Always raises ``ToolError`` — never returns.
+    """
+    parsed = _parse_flow_api_error(api_error)
+    field_errors = parsed["field_errors"]
+    status_code = api_error.status_code or 0
+
+    context: dict[str, Any] = {
+        "flow_id": flow_id,
+        "status_code": status_code,
+    }
+    if helper_type:
+        context["helper_type"] = helper_type
+    if menu_choice:
+        context["menu_choice"] = menu_choice
+    if current_step is not None:
+        context["step_id"] = current_step.get("step_id")
+    if submitted is not None:
+        context["submitted_keys"] = sorted(submitted.keys())
+    if parsed["raw"] is not None:
+        context["response_body"] = parsed["raw"]
+
+    suggestions: list[str] = []
+    message: str
+
+    if field_errors:
+        # Structured field errors — tell the caller which fields failed.
+        context["field_errors"] = field_errors
+        readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
+        message = f"Helper validation failed — {readable}"
+        suggestions.append(
+            "Fix the field(s) listed in 'field_errors' and retry the call."
+        )
+    else:
+        # Unstructured — attach the data_schema so the LLM has something to use.
+        message = (
+            f"Home Assistant rejected the {helper_type or 'flow'} request "
+            f"({status_code}): {parsed['message']}"
+        )
+        schema = await _fetch_data_schema_for_error_context(
+            client, helper_type, menu_choice
+        )
+        if schema is not None:
+            context["data_schema"] = schema
+            suggestions.append(
+                "Inspect 'data_schema' in this error to see the fields HA expects, "
+                "then retry with a corrected config."
+            )
+        suggestions.append(
+            f"Call ha_get_helper_schema(helper_type='{helper_type}') for the "
+            f"full field list and selectors." if helper_type else
+            "Call ha_get_helper_schema for this helper to see required fields."
+        )
+
+    raise_tool_error(create_error_response(
+        ErrorCode.SERVICE_CALL_FAILED,
+        message,
+        suggestions=suggestions,
+        context=context,
+    ))
+
+
 async def _handle_flow_steps(
     client: Any,
     flow_id: str,
     initial_step: dict[str, Any],
     config: dict[str, Any],
     submit_fn: Any = None,
+    helper_type: str | None = None,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps (max 10 steps).
 
@@ -222,6 +410,9 @@ async def _handle_flow_steps(
         submit_fn: Async function to submit a step. Defaults to
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
+        helper_type: Optional helper type (e.g. ``"statistics"``). When
+            provided, surfaces the helper's data_schema in error context
+            for unstructured HA 4xx responses so the caller can react.
 
     Returns:
         ``{"success": True, "entry": result}`` on success.
@@ -231,6 +422,7 @@ async def _handle_flow_steps(
         submit_fn = client.submit_config_flow_step
     remaining_config = dict(config)
     current_step = initial_step
+    last_menu_choice: str | None = None
     max_steps = 10
 
     for step_num in range(max_steps):
@@ -248,14 +440,29 @@ async def _handle_flow_steps(
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
+            last_menu_choice = menu_choice
             logger.debug(
                 f"Flow step {step_num}: menu '{menu_choice}' "
                 f"(step_id={current_step.get('step_id')})"
             )
-            current_step = await asyncio.wait_for(
-                submit_fn(flow_id, {"next_step_id": menu_choice}),
-                timeout=20.0,
-            )
+            menu_payload = {"next_step_id": menu_choice}
+            try:
+                current_step = await asyncio.wait_for(
+                    submit_fn(flow_id, menu_payload),
+                    timeout=20.0,
+                )
+            except HomeAssistantAPIError as api_err:
+                if api_err.status_code in (400, 422):
+                    await _raise_flow_api_error(
+                        api_err,
+                        client=client,
+                        flow_id=flow_id,
+                        helper_type=helper_type,
+                        menu_choice=last_menu_choice,
+                        current_step=current_step,
+                        submitted=menu_payload,
+                    )
+                raise
 
         elif result_type == _FlowType.FORM:
             # _handle_form_step pops only the keys declared in the current
@@ -267,10 +474,23 @@ async def _handle_flow_steps(
                 f"Flow step {step_num}: form submit "
                 f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
             )
-            current_step = await asyncio.wait_for(
-                submit_fn(flow_id, form_data),
-                timeout=20.0,
-            )
+            try:
+                current_step = await asyncio.wait_for(
+                    submit_fn(flow_id, form_data),
+                    timeout=20.0,
+                )
+            except HomeAssistantAPIError as api_err:
+                if api_err.status_code in (400, 422):
+                    await _raise_flow_api_error(
+                        api_err,
+                        client=client,
+                        flow_id=flow_id,
+                        helper_type=helper_type,
+                        menu_choice=last_menu_choice,
+                        current_step=current_step,
+                        submitted=form_data,
+                    )
+                raise
 
         else:
             raise_tool_error(create_error_response(
@@ -365,6 +585,7 @@ async def update_flow_helper(
         result = await _handle_flow_steps(
             client, flow_id, flow_result, config_dict,
             submit_fn=client.submit_options_flow_step,
+            helper_type=helper_type,
         )
     except Exception:
         try:
@@ -406,7 +627,10 @@ async def create_flow_helper(
         ))
 
     try:
-        result = await _handle_flow_steps(client, flow_id, flow_result, config_dict)
+        result = await _handle_flow_steps(
+            client, flow_id, flow_result, config_dict,
+            helper_type=helper_type,
+        )
     except Exception:
         try:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
