@@ -945,6 +945,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["unit_of_measurement"] = unit_of_measurement
                     if mode in ["box", "slider"]:
                         message["mode"] = mode
+                    # Bug 1 (issue #1150): `initial` was accepted in the function
+                    # signature but never written to the input_number/create
+                    # message, so the requested default was silently dropped.
+                    if initial is not None:
+                        message["initial"] = initial
 
                 elif helper_type == "input_text":
                     if min_value is not None:
@@ -1453,6 +1458,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 )
                             )
 
+                        # Bug 8 (issue #1150): HA's storage-collection update commands
+                        # are full-replace — fields missing from the message get
+                        # cleared. Per-type config fields below all use a merge
+                        # pattern: take the new value if the caller passed one,
+                        # else preserve the existing value. Without this, an
+                        # innocent rename wipes initial/icon/unit_of_measurement
+                        # and other fields the caller never intended to change.
                         update_msg = {
                             "type": f"{helper_type}/update",
                             f"{helper_type}_id": unique_id,
@@ -1460,8 +1472,15 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             if name is not None
                             else existing.get("name"),
                         }
-                        if icon is not None:
-                            update_msg["icon"] = icon
+                        # Icon lives in the helper's storage entry for all simple
+                        # types except person and tag; merge from existing so
+                        # rename-style updates don't wipe the previously set icon.
+                        if helper_type not in ("person", "tag"):
+                            icon_val = (
+                                icon if icon is not None else existing.get("icon")
+                            )
+                            if icon_val is not None:
+                                update_msg["icon"] = icon_val
 
                         if helper_type == "input_select":
                             update_msg["options"] = (
@@ -1469,8 +1488,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if options is not None
                                 else existing.get("options", [])
                             )
-                            if initial is not None:
-                                update_msg["initial"] = initial
+                            initial_val = (
+                                initial
+                                if initial is not None
+                                else existing.get("initial")
+                            )
+                            if initial_val is not None:
+                                update_msg["initial"] = initial_val
 
                         elif helper_type == "input_number":
                             update_msg["min"] = (
@@ -1483,22 +1507,64 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if max_value is not None
                                 else existing.get("max", 100)
                             )
-                            if step is not None:
-                                update_msg["step"] = step
-                            if unit_of_measurement is not None:
-                                update_msg["unit_of_measurement"] = unit_of_measurement
-                            if mode in ["box", "slider"]:
-                                update_msg["mode"] = mode
+                            step_val = (
+                                step if step is not None else existing.get("step")
+                            )
+                            if step_val is not None:
+                                update_msg["step"] = step_val
+                            unit_val = (
+                                unit_of_measurement
+                                if unit_of_measurement is not None
+                                else existing.get("unit_of_measurement")
+                            )
+                            if unit_val is not None:
+                                update_msg["unit_of_measurement"] = unit_val
+                            mode_val = (
+                                mode
+                                if mode in ["box", "slider"]
+                                else existing.get("mode")
+                            )
+                            if mode_val is not None:
+                                update_msg["mode"] = mode_val
+                            # Bug 1b (issue #1150): `initial` was accepted but
+                            # never written here, so updates always wiped it.
+                            initial_val = (
+                                initial
+                                if initial is not None
+                                else existing.get("initial")
+                            )
+                            if initial_val is not None:
+                                update_msg["initial"] = initial_val
 
                         elif helper_type == "input_text":
-                            if min_value is not None:
-                                update_msg["min"] = int(min_value)
-                            if max_value is not None:
-                                update_msg["max"] = int(max_value)
-                            if mode in ["text", "password"]:
-                                update_msg["mode"] = mode
-                            if initial is not None:
-                                update_msg["initial"] = initial
+                            min_val = (
+                                int(min_value)
+                                if min_value is not None
+                                else existing.get("min")
+                            )
+                            if min_val is not None:
+                                update_msg["min"] = min_val
+                            max_val = (
+                                int(max_value)
+                                if max_value is not None
+                                else existing.get("max")
+                            )
+                            if max_val is not None:
+                                update_msg["max"] = max_val
+                            mode_val = (
+                                mode
+                                if mode in ["text", "password"]
+                                else existing.get("mode")
+                            )
+                            if mode_val is not None:
+                                update_msg["mode"] = mode_val
+                            initial_val = (
+                                initial
+                                if initial is not None
+                                else existing.get("initial")
+                            )
+                            if initial_val is not None:
+                                update_msg["initial"] = initial_val
 
                         elif helper_type == "input_boolean":
                             if initial is not None:
@@ -1509,32 +1575,80 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     "yes",
                                     "1",
                                 ]
+                            elif "initial" in existing:
+                                update_msg["initial"] = existing["initial"]
 
                         elif helper_type == "input_datetime":
-                            if has_date is not None:
-                                update_msg["has_date"] = has_date
-                            if has_time is not None:
-                                update_msg["has_time"] = has_time
-                            if initial is not None:
-                                update_msg["initial"] = initial
+                            update_msg["has_date"] = (
+                                has_date
+                                if has_date is not None
+                                else existing.get("has_date", False)
+                            )
+                            update_msg["has_time"] = (
+                                has_time
+                                if has_time is not None
+                                else existing.get("has_time", False)
+                            )
+                            initial_val = (
+                                initial
+                                if initial is not None
+                                else existing.get("initial")
+                            )
+                            if initial_val is not None:
+                                update_msg["initial"] = initial_val
 
                         elif helper_type == "counter":
-                            if initial is not None:
-                                update_msg["initial"] = int(initial)
-                            if min_value is not None:
-                                update_msg["minimum"] = int(min_value)
-                            if max_value is not None:
-                                update_msg["maximum"] = int(max_value)
-                            if step is not None:
-                                update_msg["step"] = int(step)
-                            if restore is not None:
-                                update_msg["restore"] = restore
+                            initial_val = (
+                                int(initial)
+                                if initial is not None
+                                else existing.get("initial")
+                            )
+                            if initial_val is not None:
+                                update_msg["initial"] = initial_val
+                            minimum_val = (
+                                int(min_value)
+                                if min_value is not None
+                                else existing.get("minimum")
+                            )
+                            if minimum_val is not None:
+                                update_msg["minimum"] = minimum_val
+                            maximum_val = (
+                                int(max_value)
+                                if max_value is not None
+                                else existing.get("maximum")
+                            )
+                            if maximum_val is not None:
+                                update_msg["maximum"] = maximum_val
+                            step_val = (
+                                int(step)
+                                if step is not None
+                                else existing.get("step")
+                            )
+                            if step_val is not None:
+                                update_msg["step"] = step_val
+                            restore_val = (
+                                restore
+                                if restore is not None
+                                else existing.get("restore")
+                            )
+                            if restore_val is not None:
+                                update_msg["restore"] = restore_val
 
                         elif helper_type == "timer":
-                            if duration is not None:
-                                update_msg["duration"] = duration
-                            if restore is not None:
-                                update_msg["restore"] = restore
+                            duration_val = (
+                                duration
+                                if duration is not None
+                                else existing.get("duration")
+                            )
+                            if duration_val is not None:
+                                update_msg["duration"] = duration_val
+                            restore_val = (
+                                restore
+                                if restore is not None
+                                else existing.get("restore")
+                            )
+                            if restore_val is not None:
+                                update_msg["restore"] = restore_val
 
                         # input_button has no type-specific params beyond name/icon
 
