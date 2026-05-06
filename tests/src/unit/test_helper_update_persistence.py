@@ -484,7 +484,11 @@ class TestFlowHelperRouting:
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-1"
         assert result["entity_ids"] == ["sensor.avg_temp"]
-        mock_client.start_config_flow.assert_awaited_once_with("min_max")
+        # start_config_flow is awaited twice for create: once for schema
+        # introspection (to decide whether to inject `name`), once for the
+        # real flow. Both calls pass the same helper_type.
+        for call in mock_client.start_config_flow.await_args_list:
+            assert call.args == ("min_max",)
 
     async def test_flow_helper_update_routes_via_options_flow(
         self, register_tools, mock_client
@@ -847,7 +851,10 @@ class TestFlowHelperRouting:
         assert result["action"] == "create"
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-empty"
-        mock_client.start_config_flow.assert_awaited_once_with("min_max")
+        # start_config_flow is awaited twice for create: introspection + real
+        # flow. Both calls use the same helper_type.
+        for call in mock_client.start_config_flow.await_args_list:
+            assert call.args == ("min_max",)
 
     async def test_flow_helper_clears_area_on_empty_string(
         self, register_tools, mock_client

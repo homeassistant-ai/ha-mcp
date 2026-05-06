@@ -5,7 +5,8 @@ the right *message type* is sent (`input_number/update`), but echo-reflect the
 payload back as the result, so a bug that silently drops fields from the
 payload still produces ``success: True`` and passes.
 
-These tests instead assert the **contents** of the outgoing WebSocket payload.
+These tests instead assert the **contents** of the outgoing WebSocket payload,
+and that inapplicable typed params are rejected rather than silently dropped.
 """
 
 from typing import Any

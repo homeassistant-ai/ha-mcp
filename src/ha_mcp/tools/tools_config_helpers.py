@@ -8,6 +8,7 @@ input_number, input_text, input_datetime, counter, timer, schedule).
 
 import asyncio
 import logging
+import uuid
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
@@ -18,6 +19,7 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
+    get_user_step_field_names,
     update_flow_helper,
 )
 from .util_helpers import (
@@ -44,6 +46,7 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset({
     "person",
     "tag",
 })
+
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +229,39 @@ async def _handle_flow_helper(
             context={"helper_type": helper_type},
         ))
 
-    # Fold the top-level `name` parameter into config_dict only for create:
-    # options (update) flows are strict about extra keys and will reject `name`
-    # with 400 "extra keys not allowed @ data['name']" — names on existing flow
-    # helpers are not renamed through the options flow.
+    # Pre-flow warnings (e.g. stripped `name` on update) collected here and
+    # surfaced alongside any later warnings on the result.
+    pre_warnings: list[str] = []
+
+    # Name handling differs between create and update flows:
+    #
+    # CREATE: most flow helpers accept `name` as a top-level form field, so the
+    # tool folds the top-level `name` parameter into the form payload. But some
+    # helpers — notably `switch_as_x` — derive the entity name from the source
+    # switch and reject `name` as an extra key with HA-side 400 "extra keys not
+    # allowed @ data['name']". Probe the user-step schema first; only inject if
+    # the schema actually accepts a `name` field. If introspection fails or the
+    # top step is a menu (template, group), fall back to the legacy behaviour
+    # of injecting — those helpers are known to accept `name`.
+    #
+    # UPDATE: options flows are strict about extra keys; HA rejects any
+    # caller-supplied `name` (you cannot rename a flow helper through its
+    # options flow). Strip `name` from config_dict and emit a warning so the
+    # caller learns their attempted rename was a no-op.
     if action == "create" and name and "name" not in config_dict:
-        config_dict["name"] = name
+        schema_fields = await get_user_step_field_names(client, helper_type)
+        if schema_fields is None or "name" in schema_fields:
+            config_dict["name"] = name
+        # else: schema is a form that explicitly does not include `name`
+        # (e.g. switch_as_x). Skip injection — HA would reject otherwise.
+    elif action == "update" and "name" in config_dict:
+        stripped_name = config_dict.pop("name")
+        pre_warnings.append(
+            f"Ignored 'name' in config: flow helper options flows do not "
+            f"support renaming (attempted name={stripped_name!r}). Use "
+            f"ha_set_entity to change the friendly name of the resulting "
+            f"entity."
+        )
 
     # Normalize labels to a list for registry updates below.
     try:
@@ -245,7 +275,11 @@ async def _handle_flow_helper(
 
     # Dispatch to the shared flow machinery.
     if action == "create":
-        if not config_dict.get("name"):
+        # Validate against EITHER the top-level `name` arg OR `config_dict["name"]`.
+        # Some helpers (switch_as_x) deliberately don't have `name` injected into
+        # config_dict because their schema rejects it — but the tool still
+        # requires `name` to be supplied so callers fail fast and consistently.
+        if not (name or config_dict.get("name")):
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f'name is required for create action. Include "name" as a '
@@ -285,7 +319,7 @@ async def _handle_flow_helper(
     # Graduated polling: short intervals for the first retries catch local/small
     # instances quickly; steady 500ms matches typical entity_registry/list latency
     # on larger remote setups without missing entities near the deadline.
-    warnings: list[str] = []
+    warnings: list[str] = list(pre_warnings)
     wait_bool = coerce_bool_param(wait, "wait", default=True)
     entities: list[dict[str, Any]] = []
     if entry_id:
@@ -744,7 +778,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         tag_id: Annotated[
             str | None,
             Field(
-                description="Tag ID for tag (auto-generated if not provided)",
+                description=(
+                    "Tag ID for tag. On create, omit to auto-generate a "
+                    "uuid4 hex (HA's tag/create requires this field; the tool "
+                    "fills it in for you when omitted)."
+                ),
                 default=None,
             ),
         ] = None,
@@ -1060,9 +1098,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 elif helper_type == "tag":
                     # Tag parameters: tag_id, description
-                    # Note: name goes into entity registry, not tag storage
-                    if tag_id:
-                        message["tag_id"] = tag_id
+                    # Note: name goes into entity registry, not tag storage.
+                    # Bug 9 (issue #1150): HA's tag/create requires tag_id;
+                    # auto-generate one when the caller omits it (matches
+                    # the docstring promise of auto-generation).
+                    message["tag_id"] = tag_id if tag_id else uuid.uuid4().hex
                     if description:
                         message["description"] = description
 

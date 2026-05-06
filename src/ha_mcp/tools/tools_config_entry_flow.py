@@ -126,6 +126,25 @@ def _handle_menu_step(
     return str(menu_choice)
 
 
+def _extract_schema_field_names(data_schema: Any) -> set[str] | None:
+    """Extract the set of field names declared by a step's data_schema.
+
+    HA returns data_schema as a list of {name, selector, required, ...} dicts.
+    Returns ``None`` when the schema is absent or not a list (signalling
+    the caller to fall back to legacy submit-all behaviour). Returns a
+    (possibly empty) set when the schema is present and parseable.
+    """
+    if not isinstance(data_schema, list):
+        return None
+    names: set[str] = set()
+    for field in data_schema:
+        if isinstance(field, dict):
+            name = field.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
 def _handle_form_step(
     flow_id: str,
     current_step: dict[str, Any],
@@ -133,8 +152,16 @@ def _handle_form_step(
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
-    Raises ToolError on validation errors. Returns the filtered form data
-    (menu selection keys stripped).
+    When the step's ``data_schema`` is provided, pops ONLY the keys declared
+    in that schema from ``remaining_config`` (mutating it) so any unconsumed
+    keys remain available for subsequent steps. Menu selection keys are never
+    submitted.
+
+    When ``data_schema`` is absent (HA didn't tell us field names), falls
+    back to legacy behaviour: submit all non-menu keys and clear them. This
+    keeps single-step flows working when HA omits the schema.
+
+    Raises ToolError on validation errors.
     """
     if current_step.get("errors"):
         raise_tool_error(create_error_response(
@@ -149,11 +176,25 @@ def _handle_form_step(
             },
         ))
 
-    return {
-        k: v
-        for k, v in remaining_config.items()
-        if k not in _MENU_SELECTION_KEYS
-    }
+    schema_fields = _extract_schema_field_names(current_step.get("data_schema"))
+
+    form_data: dict[str, Any] = {}
+    if schema_fields is None:
+        # Legacy fallback: no schema info — dump every non-menu key and
+        # consume them all so a follow-up step (rare without schema) won't
+        # re-submit the same data.
+        for key in list(remaining_config.keys()):
+            if key in _MENU_SELECTION_KEYS:
+                continue
+            form_data[key] = remaining_config.pop(key)
+    else:
+        for key in list(remaining_config.keys()):
+            if key in _MENU_SELECTION_KEYS:
+                continue
+            if key in schema_fields:
+                form_data[key] = remaining_config.pop(key)
+
+    return form_data
 
 
 async def _handle_flow_steps(
@@ -217,6 +258,10 @@ async def _handle_flow_steps(
             )
 
         elif result_type == _FlowType.FORM:
+            # _handle_form_step pops only the keys declared in the current
+            # step's data_schema, leaving any other keys in remaining_config
+            # for subsequent steps (HA can present multi-step forms, e.g.
+            # statistics: user step then pick-characteristic step).
             form_data = _handle_form_step(flow_id, current_step, remaining_config)
             logger.debug(
                 f"Flow step {step_num}: form submit "
@@ -226,8 +271,6 @@ async def _handle_flow_steps(
                 submit_fn(flow_id, form_data),
                 timeout=20.0,
             )
-            # Clear so subsequent steps don't re-submit the same data.
-            remaining_config = {}
 
         else:
             raise_tool_error(create_error_response(
@@ -241,6 +284,47 @@ async def _handle_flow_steps(
         f"Flow exceeded {max_steps} steps",
         context={"flow_id": flow_id, "max_steps": max_steps},
     ))
+
+
+async def get_user_step_field_names(
+    client: Any, helper_type: str
+) -> set[str] | None:
+    """Return field names in the user-step form schema for ``helper_type``.
+
+    Starts a config flow, peeks at the initial step's ``data_schema``,
+    and immediately aborts the flow. Used to decide whether to fold the
+    top-level ``name`` parameter into the form payload — some helpers
+    (e.g. ``switch_as_x``) take their entity name from the source switch
+    and reject ``name`` as an extra key.
+
+    Returns:
+        A set of field names if the initial step is a form. ``None`` if
+        the flow type is not introspectable from the top step (menu or
+        unexpected) — callers should fall back to the legacy behaviour
+        in that case to avoid regressing menu helpers (template, group).
+        Also returns ``None`` if the introspection itself fails; the
+        subsequent real flow will surface the error in context.
+    """
+    flow_id = None
+    try:
+        flow_result = await client.start_config_flow(helper_type)
+        flow_id = flow_result.get("flow_id")
+        if flow_result.get("type") != _FlowType.FORM:
+            return None
+        return _extract_schema_field_names(flow_result.get("data_schema"))
+    except Exception as e:
+        logger.debug(f"Schema introspection failed for {helper_type}: {e}")
+        return None
+    finally:
+        if flow_id:
+            try:
+                await asyncio.wait_for(
+                    client.abort_config_flow(flow_id), timeout=5.0
+                )
+            except Exception as abort_err:
+                logger.warning(
+                    f"Failed to abort introspection flow {flow_id}: {abort_err}"
+                )
 
 
 async def update_flow_helper(
