@@ -87,6 +87,33 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
 _ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
 
 
+# Bug 6 (issue #1150): valid mode values per helper type. The CREATE and
+# UPDATE branches both validate against this; an invalid value is rejected
+# instead of silently coerced to HA's default.
+_MODE_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "input_number": ("box", "slider"),
+    "input_text": ("text", "password"),
+}
+
+
+def _validate_mode(helper_type: str, mode: str | None) -> None:
+    """Reject an invalid `mode` value for the chosen helper_type (Bug 6)."""
+    if mode is None:
+        return
+    allowed = _MODE_BY_TYPE.get(helper_type)
+    if allowed is None or mode in allowed:
+        return
+    options = " or ".join(repr(m) for m in allowed)
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"mode={mode!r} is not valid for {helper_type}. Use {options}.",
+            context={"helper_type": helper_type, "mode": mode},
+            suggestions=[f"Pass mode={allowed[0]!r} or mode={allowed[1]!r}"],
+        )
+    )
+
+
 def _validate_applicable_params(
     helper_type: str,
     passed: dict[str, Any],
@@ -419,43 +446,33 @@ async def _validate_registry_ids(
                 return True, inner
         return False, []
 
+    def _id_set(items: list[dict[str, Any]], field: str) -> list[str]:
+        """Pull non-empty string values of `field` from a list of dicts."""
+        return [
+            v
+            for it in items
+            if isinstance(it, dict) and isinstance((v := it.get(field)), str)
+        ]
+
     # Run the three registry lookups concurrently — they're independent and
     # each is a separate WS round-trip.
-    area_lookup = (
-        _ws_list({"type": "config/area_registry/list"})
-        if needs_area
-        else None
-    )
-    label_lookup = (
-        _ws_list({"type": "config/label_registry/list"})
-        if needs_labels
-        else None
-    )
-    category_lookup = (
-        _ws_list({"type": "config/category_registry/list", "scope": "helpers"})
-        if needs_category
-        else None
-    )
-    coros = [c for c in (area_lookup, label_lookup, category_lookup) if c is not None]
-    results = await asyncio.gather(*coros)
-    # Re-associate results with the parameter they belong to.
-    by_param: dict[str, tuple[bool, list[dict[str, Any]]]] = {}
+    lookups: list[tuple[str, Any]] = []
     if needs_area:
-        by_param["area"] = results.pop(0)
+        lookups.append(("area", _ws_list({"type": "config/area_registry/list"})))
     if needs_labels:
-        by_param["labels"] = results.pop(0)
+        lookups.append(("labels", _ws_list({"type": "config/label_registry/list"})))
     if needs_category:
-        by_param["category"] = results.pop(0)
+        lookups.append((
+            "category",
+            _ws_list({"type": "config/category_registry/list", "scope": "helpers"}),
+        ))
+    raw = await asyncio.gather(*(coro for _, coro in lookups))
+    by_param = {key: result for (key, _), result in zip(lookups, raw, strict=True)}
 
-    # Validate area_id.
+    # Validate area_id (single value).
     if needs_area:
         ok, areas = by_param["area"]
-        valid_area_ids: list[str] = [
-            aid
-            for a in areas
-            if isinstance(a, dict)
-            and isinstance((aid := a.get("area_id")), str)
-        ]
+        valid_area_ids = _id_set(areas, "area_id")
         if ok and area_id not in valid_area_ids:
             raise_tool_error(
                 create_error_response(
@@ -470,15 +487,10 @@ async def _validate_registry_ids(
                 )
             )
 
-    # Validate labels.
+    # Validate labels (list of values).
     if needs_labels:
         ok, ws_labels = by_param["labels"]
-        valid_label_ids: list[str] = [
-            lid
-            for label in ws_labels
-            if isinstance(label, dict)
-            and isinstance((lid := label.get("label_id")), str)
-        ]
+        valid_label_ids = _id_set(ws_labels, "label_id")
         if ok:
             unknown = [
                 label_id
@@ -500,15 +512,10 @@ async def _validate_registry_ids(
                     )
                 )
 
-    # Validate category.
+    # Validate category (single value).
     if needs_category:
         ok, categories = by_param["category"]
-        valid_category_ids: list[str] = [
-            cid
-            for cat in categories
-            if isinstance(cat, dict)
-            and isinstance((cid := cat.get("category_id")), str)
-        ]
+        valid_category_ids = _id_set(categories, "category_id")
         if ok and category not in valid_category_ids:
             raise_tool_error(
                 create_error_response(
@@ -1596,19 +1603,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
-            # Bug 11 (issue #1150): the create-vs-update mode is implicit in
-            # which of `name` / `helper_id` was passed. Passing both used to
-            # Bug 12 (issue #1150): on create, HA auto-suffixes name collisions
-            # with `_2`/`_3`/..., so a caller asking to create something that
-            # already exists silently gets a duplicate. Detect the slug
-            # collision before sending and point them at the existing helper.
-            #
-            # Bug 11 note: the implicit create/update discriminator (presence
-            # of helper_id) is preserved. Passing both name+helper_id is the
-            # legitimate rename pattern — we don't reject it. The original
-            # symptom (confusing ENTITY_NOT_FOUND on misspelled helper_id) is
-            # mitigated by the per-type update branch that already includes
-            # the entity_id in the error context with helpful suggestions.
+            # Bug 12: HA auto-suffixes duplicate names with `_2`/`_3`/...
+            # Detect the slug collision before sending so a caller intending
+            # to update an existing helper isn't silently given a duplicate.
             if action == "create":
                 await _check_name_collision(client, helper_type, name)
 
@@ -1760,24 +1757,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["step"] = step
                     if unit_of_measurement:
                         message["unit_of_measurement"] = unit_of_measurement
-                    # Bug 6 (issue #1150): reject invalid mode values instead
-                    # of silently coercing to the HA default. Caller learns
-                    # which values are valid for input_number.
+                    _validate_mode(helper_type, mode)
                     if mode is not None:
-                        if mode not in ("box", "slider"):
-                            raise_tool_error(
-                                create_error_response(
-                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                    f"mode='{mode}' is not valid for input_number. "
-                                    "Use 'box' or 'slider'.",
-                                    context={"helper_type": helper_type, "mode": mode},
-                                    suggestions=["Pass mode='slider' or mode='box'"],
-                                )
-                            )
                         message["mode"] = mode
-                    # Bug 1 (issue #1150): `initial` was accepted in the function
-                    # signature but never written to the input_number/create
-                    # message, so the requested default was silently dropped.
                     if initial is not None:
                         message["initial"] = initial
 
@@ -1786,21 +1768,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["min"] = int(min_value)
                     if max_value is not None:
                         message["max"] = int(max_value)
-                    # Bug 6 (issue #1150): reject invalid mode for input_text.
+                    _validate_mode(helper_type, mode)
                     if mode is not None:
-                        if mode not in ("text", "password"):
-                            raise_tool_error(
-                                create_error_response(
-                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                    f"mode='{mode}' is not valid for input_text. "
-                                    "Use 'text' or 'password'.",
-                                    context={"helper_type": helper_type, "mode": mode},
-                                    suggestions=["Pass mode='text' or mode='password'"],
-                                )
-                            )
                         message["mode"] = mode
-                    # Bug 5 (issue #1150): "" is a valid initial for input_text
-                    # — the truthy check `if initial:` previously dropped it.
+                    # `is not None` so initial="" is honored; HA accepts empty.
                     if initial is not None:
                         message["initial"] = initial
 
@@ -1840,14 +1811,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
 
-                    # Bug 5 (issue #1150): use `is not None` so a deliberate
-                    # zero-time `initial="00:00:00"` (rare but valid) isn't
-                    # silently dropped by a truthy check.
                     if initial is not None:
                         message["initial"] = initial
 
                 elif helper_type == "counter":
-                    # Counter parameters: initial, minimum, maximum, step, restore
                     if initial is not None:
                         message["initial"] = (
                             int(initial) if isinstance(initial, str) else initial
@@ -1862,9 +1829,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["restore"] = restore
 
                 elif helper_type == "timer":
-                    # Timer parameters: duration, restore
-                    # Bug 5 (issue #1150): use `is not None` so an explicitly-
-                    # passed "0:00:00" or 0 isn't silently dropped.
+                    # `is not None` so explicit "0:00:00" or 0 isn't dropped.
                     if duration is not None:
                         message["duration"] = duration
                     if restore is not None:
@@ -2370,13 +2335,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 )
                             )
 
-                        # Bug 8 (issue #1150): HA's storage-collection update commands
-                        # are full-replace — fields missing from the message get
-                        # cleared. Per-type config fields below all use a merge
-                        # pattern: take the new value if the caller passed one,
-                        # else preserve the existing value. Without this, an
-                        # innocent rename wipes initial/icon/unit_of_measurement
-                        # and other fields the caller never intended to change.
+                        # HA's storage-collection update is full-replace, so per-type
+                        # config fields below all merge: take the new value if
+                        # the caller passed one, else preserve the existing value.
                         update_msg = {
                             "type": f"{helper_type}/update",
                             f"{helper_type}_id": unique_id,
@@ -2431,25 +2392,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                             if unit_val is not None:
                                 update_msg["unit_of_measurement"] = unit_val
-                            # Bug 6 (issue #1150): reject invalid mode values
-                            # explicitly instead of falling back to existing.
-                            if mode is not None and mode not in ("box", "slider"):
-                                raise_tool_error(
-                                    create_error_response(
-                                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                        f"mode='{mode}' is not valid for input_number. "
-                                        "Use 'box' or 'slider'.",
-                                        context={"helper_type": helper_type, "mode": mode},
-                                        suggestions=[
-                                            "Pass mode='slider' or mode='box'",
-                                        ],
-                                    )
-                                )
+                            _validate_mode(helper_type, mode)
                             mode_val = mode if mode is not None else existing.get("mode")
                             if mode_val is not None:
                                 update_msg["mode"] = mode_val
-                            # Bug 1b (issue #1150): `initial` was accepted but
-                            # never written here, so updates always wiped it.
                             initial_val = (
                                 initial
                                 if initial is not None
@@ -2473,20 +2419,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                             if max_val is not None:
                                 update_msg["max"] = max_val
-                            # Bug 6 (issue #1150): reject invalid mode values
-                            # explicitly for input_text too.
-                            if mode is not None and mode not in ("text", "password"):
-                                raise_tool_error(
-                                    create_error_response(
-                                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                        f"mode='{mode}' is not valid for input_text. "
-                                        "Use 'text' or 'password'.",
-                                        context={"helper_type": helper_type, "mode": mode},
-                                        suggestions=[
-                                            "Pass mode='text' or mode='password'",
-                                        ],
-                                    )
-                                )
+                            _validate_mode(helper_type, mode)
                             mode_val = mode if mode is not None else existing.get("mode")
                             if mode_val is not None:
                                 update_msg["mode"] = mode_val
