@@ -201,8 +201,10 @@ class TestTemplateAndFormHelperNameInjected:
         and we have no field-list to check. The legacy fallback (inject
         anyway) keeps template/group working unchanged."""
         submit_capture: list[dict] = []
-        # schema_fields=None signals "introspection sees a menu, not a form"
-        start_flow, submit = _make_start_config_flow(
+        # schema_fields=None signals "introspection sees a menu, not a form".
+        # The factory installs handlers on `mock_client` directly; the returned
+        # tuple is unused here.
+        _make_start_config_flow(
             schema_fields=None,
             entry_id="entry-tpl",
             domain="template",

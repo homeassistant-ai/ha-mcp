@@ -613,7 +613,11 @@ class TestInputNumberPartialUpdatePreservesFields:
         self, mcp_client, cleanup_tracker
     ):
         helper_type = "input_number"
-        # Full original config
+        # Full original config. The test must change min within a range that
+        # still contains the existing initial; otherwise HA's voluptuous schema
+        # (correctly) rejects "Initial value 25 not in range 30-100". The
+        # purpose of the test is to verify the merge preserves the other
+        # fields, not to test the cross-field range constraint.
         preserved = {
             "max": 100,
             "step": 5,
@@ -622,7 +626,7 @@ class TestInputNumberPartialUpdatePreservesFields:
             "initial": 25,
             "icon": "mdi:gauge",
         }
-        new_min = 70  # update touches only this field
+        new_min = 20  # 0 -> 20; still <= initial=25 so HA accepts
 
         create_result = await mcp_client.call_tool(
             "ha_config_set_helper",

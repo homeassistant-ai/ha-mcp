@@ -485,8 +485,7 @@ async def _validate_registry_ids(
                     "category registry.",
                     context={"category": category},
                     suggestions=[
-                        "Use ha_config_get_category(scope='helpers') to list "
-                        "valid category IDs.",
+                        "Use ha_config_get_category(scope='helpers') to list valid category IDs.",
                         "Use ha_config_set_category() to create a new category.",
                         f"Available category_ids: {sorted(valid_category_ids)}",
                     ],
