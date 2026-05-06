@@ -438,9 +438,10 @@ class HomeAssistantClient:
     async def get_addon_logs(self, slug: str) -> str:
         """Fetch an add-on's container logs.
 
-        On add-on installs (``SUPERVISOR_TOKEN`` env present), goes directly to
-        the Supervisor REST API at ``http://supervisor/addons/{slug}/logs``
-        with the Supervisor token. The HA Core proxy at
+        Branch on ``is_running_in_addon()`` (which keys off ``SUPERVISOR_TOKEN``
+        in env): inside the add-on container goes directly to the Supervisor
+        REST API at ``http://supervisor/addons/{slug}/logs`` with the
+        Supervisor token. The HA Core proxy at
         ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
         on current HA Core releases (see #1116) — the direct path bypasses
         HA Core entirely and is the documented Supervisor contract.
@@ -452,10 +453,12 @@ class HomeAssistantClient:
         Both branches return ``text/plain`` log content.
 
         Raises:
-            HomeAssistantAuthError: 401 response.
-            HomeAssistantAPIError: Non-2xx response (e.g. 404 unknown slug,
-                400 addon not installed). ``status_code`` is set so callers
-                can map to specific suggestions.
+            HomeAssistantAuthError: 401 response, or ``SUPERVISOR_TOKEN`` empty
+                at call time on the addon branch.
+            HomeAssistantAPIError: 403 (role too low — addon needs hassio_role
+                ``manager``), 404 (unknown slug), or other non-2xx. The
+                ``status_code`` attribute lets callers map to specific
+                suggestions.
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
         if is_running_in_addon():
@@ -469,22 +472,51 @@ class HomeAssistantClient:
         )
         return response.text
 
-    async def _get_addon_logs_via_supervisor(self, slug: str) -> str:
-        """Fetch add-on logs directly from the Supervisor REST API.
+    async def _supervisor_logs_get(self, path: str) -> str:
+        """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
-        Mirrors the access pattern used by ``tools_bug_report._fetch_addon_logs``:
-        a fresh ``httpx.AsyncClient`` against ``http://supervisor`` authed with
-        the Supervisor token. Bypasses ``HomeAssistantClient.httpx_client``
-        because the Supervisor endpoint takes a different base URL and a
-        different token than the HA Core REST API.
+        ``path`` is everything between ``http://supervisor/`` and ``/logs``:
+
+        - ``"addons/<slug>"`` for add-on container logs
+        - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
+          multicast, observer}) for system-service logs
+
+        Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
+        endpoint uses a different base URL (``http://supervisor``) and a
+        different token (``SUPERVISOR_TOKEN``) than HA Core REST. Both
+        endpoints require the addon's ``hassio_role`` to be ``manager`` (not
+        ``default``); a ``default`` role gets a 403 here — see #1116.
+
+        Raises:
+            HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
+                or 401 from Supervisor.
+            HomeAssistantAPIError: 403 (role too low — distinct branch with
+                role hint), 404, other 4xx/5xx. Tries to parse Supervisor's
+                ``{"result":"error","message":"..."}`` JSON envelope before
+                falling back to text body / reason phrase / placeholder.
+            HomeAssistantConnectionError: Timeout or transport error, with
+                distinct messages so callers can tell them apart.
         """
         token = os.environ.get("SUPERVISOR_TOKEN", "")
-        url = f"http://supervisor/addons/{slug}/logs"
-        logger.debug(f"Fetching addon logs for slug={slug} via Supervisor direct")
+        if not token:
+            # The is_running_in_addon() gate already keys off SUPERVISOR_TOKEN
+            # being truthy, so a direct caller landing here without one is a
+            # detection/config mismatch — fail-fast with a distinct message
+            # so operators don't read it as "token rejected".
+            raise HomeAssistantAuthError(
+                f"Supervisor token absent at call time for /{path}/logs "
+                "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
+            )
+
+        url = f"http://supervisor/{path}/logs"
+        logger.debug("Fetching %s via Supervisor direct", url)
 
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout),
+                # `verify` is a no-op for plain http://supervisor, but kept
+                # for symmetry with the other two direct-Supervisor httpx
+                # clients (#1128 establishes the 3-site convention).
                 verify=self.verify_ssl,
             ) as client:
                 response = await client.get(
@@ -496,26 +528,91 @@ class HomeAssistantClient:
                 )
         except httpx.TimeoutException as e:
             raise HomeAssistantConnectionError(
-                f"Request timeout fetching addon logs: {e}"
+                f"Timeout fetching /{path}/logs from Supervisor: {e}"
             ) from e
         except httpx.HTTPError as e:
             raise HomeAssistantConnectionError(
-                f"HTTP error fetching addon logs: {e}"
+                f"Transport error fetching /{path}/logs from Supervisor: {e}"
             ) from e
 
         if response.status_code == 401:
             raise HomeAssistantAuthError(
-                "Invalid Supervisor token for /addons/<slug>/logs"
+                f"Invalid Supervisor token for /{path}/logs"
+            )
+        if response.status_code == 403:
+            # Distinct from 401: token is valid but addon's hassio_role isn't
+            # high enough. Most-likely cause for this exact endpoint at the
+            # time #1116 surfaced (default → manager bump in addon config.yaml
+            # is the same-PR companion fix).
+            logger.warning(
+                "Supervisor returned 403 for /%s/logs — addon hassio_role may "
+                "be too low (need 'manager')",
+                path,
+            )
+            raise HomeAssistantAPIError(
+                f"Supervisor forbids /{path}/logs (403) — addon's hassio_role "
+                "may be 'default'; need 'manager' or higher",
+                status_code=403,
+                response_data={"path": path},
             )
         if response.status_code >= 400:
             text_body = response.text
-            message = text_body.strip() or response.reason_phrase or "<empty body>"
+            # Supervisor returns {"result":"error","message":"..."} JSON on
+            # some 4xx paths. Try parsing that first so the user sees the
+            # human message instead of a JSON blob; then fall back to the
+            # text body, then reason_phrase, then a placeholder.
+            message = ""
+            try:
+                envelope = json.loads(text_body) if text_body else None
+                if isinstance(envelope, dict):
+                    msg = envelope.get("message")
+                    if isinstance(msg, str) and msg:
+                        message = msg
+            except json.JSONDecodeError:
+                pass
+            if not message:
+                message = (
+                    text_body.strip() or response.reason_phrase or "<empty body>"
+                )
+            logger.warning(
+                "Supervisor returned %s for /%s/logs: %s",
+                response.status_code, path, message,
+            )
             raise HomeAssistantAPIError(
                 f"API error: {response.status_code} - {message}",
                 status_code=response.status_code,
-                response_data={"message": text_body},
+                response_data={"message": text_body, "path": path},
             )
         return response.text
+
+    async def _get_addon_logs_via_supervisor(self, slug: str) -> str:
+        """Fetch add-on container logs directly from Supervisor's REST API.
+
+        Distinct from ``tools_bug_report._fetch_addon_logs``: that helper is
+        hardcoded to ``/addons/self/logs`` and silently swallows failures
+        (it's an aux-data fetch for bug reports, fine to skip on error). This
+        helper takes arbitrary slugs and surfaces failures as exceptions
+        because callers (``ha_get_logs(source="supervisor", slug=...)``) need
+        them. Both endpoints require ``hassio_role: manager``.
+
+        Delegates to ``_supervisor_logs_get`` so error handling stays in
+        lockstep with ``_get_system_service_logs``.
+        """
+        return await self._supervisor_logs_get(f"addons/{slug}")
+
+    async def _get_system_service_logs(self, service: str) -> str:
+        """Fetch HA system-service logs directly from Supervisor's REST API.
+
+        Hits ``http://supervisor/{service}/logs``. ``service`` must be one of
+        the seven Supervisor-managed services: ``supervisor``, ``host``,
+        ``core``, ``dns``, ``audio``, ``multicast``, ``observer``. Caller is
+        responsible for validating ``service`` against the allowed set; this
+        helper does no validation and will raise ``HomeAssistantAPIError`` on
+        any unknown path (404 from Supervisor).
+
+        Requires ``hassio_role: manager`` like the addon-logs path.
+        """
+        return await self._supervisor_logs_get(service)
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """

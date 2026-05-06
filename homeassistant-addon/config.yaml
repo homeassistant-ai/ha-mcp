@@ -13,7 +13,10 @@ startup: application
 boot: manual
 # Enable access to Supervisor API for auto-discovery
 hassio_api: true
-hassio_role: default
+# `manager` (not `default`) is required so the Supervisor token grants access
+# to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
+# via live test — `default` returns 403 for both. See #1116.
+hassio_role: manager
 # Enable access to Home Assistant API
 homeassistant_api: true
 # Enable host network mode for local network access

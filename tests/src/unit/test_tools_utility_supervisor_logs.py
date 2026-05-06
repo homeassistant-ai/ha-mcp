@@ -1,14 +1,19 @@
-"""Unit tests for the supervisor add-on log fix (#950).
+"""Unit tests for `ha_get_logs(source="supervisor"|"system_service")`.
 
-Covers:
-- `HomeAssistantClient.get_addon_logs()` — new REST-client method that fetches
-  add-on container logs via HA Core's `/api/hassio/addons/{slug}/logs` proxy,
-  which HA Core returns as text/plain (no JSON decode in the hot path).
-- `_get_supervisor_log` (the `ha_get_logs(source="supervisor")` wrapper) —
-  response shape, tail slicing, search filter, and API-error → ToolError
-  translation with status-code-specific suggestions.
-- Stale `ha_list_addons()` suggestion strings are replaced with
-  `ha_get_addon()`.
+Covers two REST-client paths and their tools_utility wrappers:
+
+- `HomeAssistantClient.get_addon_logs()` — branches on `is_running_in_addon()`:
+  inside the addon container hits Supervisor directly at
+  `http://supervisor/addons/{slug}/logs` (the HA-Core proxy rejects the
+  Supervisor token there — see #1116); otherwise falls back to
+  `/api/hassio/addons/{slug}/logs` (returned as text/plain — see #950).
+- `HomeAssistantClient._get_system_service_logs()` — fetches HA-Supervisor
+  system-service logs at `http://supervisor/{service}/logs` for
+  service ∈ {supervisor, host, core, dns, audio, multicast, observer} (#1116
+  scope-add).
+- The wrappers (`_get_supervisor_log`, `_get_system_service_log`) — response
+  shape, tail slicing, search filter, slug-enum validation, and structured-
+  error translation.
 """
 
 import json
@@ -46,11 +51,7 @@ def mock_client():
 
 @pytest.fixture
 def non_addon_install():
-    """Force `is_running_in_addon()` False so `get_addon_logs` takes the
-    HA-Core-proxy fallback path. Required for tests that mock
-    `httpx_client.request` — the Supervisor-direct branch uses a fresh
-    `httpx.AsyncClient` and would bypass that mock entirely.
-    """
+    """Force `is_running_in_addon()` False (HA-Core-proxy path)."""
     with patch(
         "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
     ):
@@ -59,13 +60,28 @@ def non_addon_install():
 
 @pytest.fixture
 def addon_install():
-    """Force `is_running_in_addon()` True and stub `SUPERVISOR_TOKEN` so
-    `get_addon_logs` takes the direct Supervisor REST API path."""
+    """Force `is_running_in_addon()` True with a stubbed SUPERVISOR_TOKEN."""
     with (
         patch(
             "ha_mcp.client.rest_client.is_running_in_addon", return_value=True
         ),
         patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-test"}),
+    ):
+        yield
+
+
+@pytest.fixture
+def addon_install_no_token():
+    """`is_running_in_addon()` True but SUPERVISOR_TOKEN deliberately empty.
+
+    Models the detection/config mismatch that triggers the fail-fast path in
+    `_supervisor_logs_get` (gate fired but env var not actually set).
+    """
+    with (
+        patch(
+            "ha_mcp.client.rest_client.is_running_in_addon", return_value=True
+        ),
+        patch.dict("os.environ", {"SUPERVISOR_TOKEN": ""}, clear=False),
     ):
         yield
 
@@ -207,22 +223,10 @@ class TestGetAddonLogs:
 
 
 class TestGetAddonLogsViaSupervisor:
-    """Tests for the Supervisor-direct branch of `get_addon_logs`.
-
-    Regression coverage for #1116: on add-on installs, the HA-Core-proxy path
-    `/api/hassio/addons/{slug}/logs` returns 403 for every slug because HA Core
-    rejects the Supervisor-token+route combination. The fix routes around HA
-    Core entirely on add-on installs by hitting the documented Supervisor REST
-    API at `http://supervisor/addons/{slug}/logs` with the Supervisor token.
-    """
+    """Supervisor-direct branch of `get_addon_logs` (#1116 regression scope)."""
 
     @pytest.fixture
     def mock_async_client_class(self):
-        """Patch `httpx.AsyncClient` (the class) inside `rest_client` so the
-        ``async with httpx.AsyncClient(...) as client:`` block returns a
-        controllable mock client. Yields the inner client mock so each test
-        can configure ``.get`` directly.
-        """
         inner_client = MagicMock()
         inner_client.get = AsyncMock()
 
@@ -231,21 +235,17 @@ class TestGetAddonLogsViaSupervisor:
         cm.__aexit__ = AsyncMock(return_value=None)
 
         client_class = MagicMock(return_value=cm)
-        with patch(
-            "ha_mcp.client.rest_client.httpx.AsyncClient", client_class
-        ):
+        # Patching `httpx.AsyncClient` directly (not through the `rest_client`
+        # module attribute) is robust to either `import httpx` or a future
+        # `from httpx import AsyncClient` form (#1126 review item 15).
+        with patch("httpx.AsyncClient", client_class):
             yield inner_client, client_class
 
     @pytest.mark.asyncio
     async def test_uses_direct_supervisor_url_and_supervisor_token(
         self, mock_client, addon_install, mock_async_client_class
     ):
-        """The fix's primary contract: on add-on installs, the request must go
-        to `http://supervisor/addons/{slug}/logs` with `Authorization: Bearer
-        ${SUPERVISOR_TOKEN}` — NOT through HA Core's `/api/hassio/...` proxy
-        with the user's HA token.
-        """
-        inner_client, _ = mock_async_client_class
+        inner_client, client_class = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "addon log line 1\nready\n"
@@ -257,21 +257,21 @@ class TestGetAddonLogsViaSupervisor:
         inner_client.get.assert_awaited_once()
         args, kwargs = inner_client.get.call_args
         assert args[0] == "http://supervisor/addons/81f33d0f_ha_mcp/logs"
-        assert (
-            kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
-        )
+        assert kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
         assert kwargs["headers"]["Accept"] == "text/plain"
-        # Critically: the HA-Core-proxy path must NOT have been touched.
+        # Constructor kwargs (verify_ssl + timeout) propagated from the client
+        # instance — guards against a regression that hard-codes either
+        # (#1126 review item 13).
+        ctor_kwargs = client_class.call_args.kwargs
+        assert ctor_kwargs["verify"] is True  # mirrors mock_client.verify_ssl
+        assert isinstance(ctor_kwargs["timeout"], httpx.Timeout)
+        # The HA-Core-proxy path must NOT have been touched.
         mock_client.httpx_client.request.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_raises_auth_error_on_401(
         self, mock_client, addon_install, mock_async_client_class
     ):
-        """401 from Supervisor (bad/expired token) maps to HomeAssistantAuthError
-        the same way the HA-Core-proxy path does — so error mapping in the
-        wrapper layer stays uniform regardless of which branch ran.
-        """
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 401
@@ -282,12 +282,53 @@ class TestGetAddonLogsViaSupervisor:
             await mock_client.get_addon_logs("core_mosquitto")
 
     @pytest.mark.asyncio
+    async def test_raises_auth_error_on_empty_supervisor_token(
+        self, mock_client, addon_install_no_token, mock_async_client_class
+    ):
+        """Gate fires but SUPERVISOR_TOKEN is empty → fail-fast with a distinct
+        message so it doesn't read as "token rejected" (#1126 review item 1)."""
+        inner_client, _ = mock_async_client_class
+
+        with pytest.raises(HomeAssistantAuthError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "absent at call time" in str(exc_info.value)
+        assert "SUPERVISOR_TOKEN" in str(exc_info.value)
+        # No HTTP request must have been issued — fail-fast happens before.
+        inner_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_api_error_on_403_with_role_hint(
+        self, mock_client, addon_install, mock_async_client_class, caplog
+    ):
+        """403 distinct from 401: addon's hassio_role too low. Surfaces with a
+        role-hint suggestion + warning log so operators don't read this as a
+        token-validity problem (#1126 review items 2 + 9)."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = ""
+        mock_response.reason_phrase = "Forbidden"
+        inner_client.get.return_value = mock_response
+
+        import logging
+
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.client.rest_client"),
+            pytest.raises(HomeAssistantAPIError) as exc_info,
+        ):
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert exc_info.value.status_code == 403
+        msg = str(exc_info.value)
+        assert "hassio_role" in msg and "manager" in msg
+        # Warning log fired before the raise (#1126 review item 9).
+        assert any("403" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_raises_api_error_on_404(
         self, mock_client, addon_install, mock_async_client_class
     ):
-        """404 (unknown slug) propagates as HomeAssistantAPIError with the
-        Supervisor's plain-text body in the message — preserves the same
-        error shape callers expect from the HA-Core-proxy branch."""
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -302,12 +343,34 @@ class TestGetAddonLogsViaSupervisor:
         assert "Addon is not installed" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_parses_supervisor_json_envelope(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """Supervisor's `{"result":"error","message":"..."}` envelope is parsed
+        first — user-facing message gets the human prose, not the JSON blob
+        (#1126 review item 6)."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = (
+            '{"result":"error","message":"Add-on is not running"}'
+        )
+        mock_response.reason_phrase = "Bad Request"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert exc_info.value.status_code == 400
+        msg = str(exc_info.value)
+        assert "Add-on is not running" in msg
+        # The full JSON blob must NOT be in the user-facing message.
+        assert '{"result"' not in msg
+
+    @pytest.mark.asyncio
     async def test_empty_body_falls_back_to_reason_phrase(
         self, mock_client, addon_install, mock_async_client_class
     ):
-        """If Supervisor returns a non-2xx with empty body, the error tail
-        falls back to the HTTP reason phrase rather than landing as
-        ``"API error: 5xx - "`` with a blank tail."""
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 502
@@ -323,24 +386,68 @@ class TestGetAddonLogsViaSupervisor:
         assert not str(exc_info.value).endswith(" - ")
 
     @pytest.mark.asyncio
-    async def test_raises_connection_error_on_timeout(
+    async def test_empty_body_no_reason_phrase_uses_placeholder(
         self, mock_client, addon_install, mock_async_client_class
     ):
+        """Tier-3 fallback parity for the supervisor branch: empty body AND
+        empty reason_phrase → `<empty body>` placeholder (#1126 review item 12).
+        `TestRawRequestEmptyBodyFallback` covers this for the proxy branch."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = ""
+        mock_response.reason_phrase = ""
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert exc_info.value.status_code == 503
+        assert "<empty body>" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_raises_connection_error_on_timeout_with_distinct_message(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """Timeout vs transport error get distinct messages so callers (and
+        log-watchers) can tell them apart (#1126 review item 7)."""
         inner_client, _ = mock_async_client_class
         inner_client.get.side_effect = httpx.TimeoutException("supervisor timeout")
 
-        with pytest.raises(HomeAssistantConnectionError):
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
             await mock_client.get_addon_logs("core_mosquitto")
 
+        assert "Timeout" in str(exc_info.value)
+
     @pytest.mark.asyncio
-    async def test_raises_connection_error_on_network_failure(
+    async def test_raises_connection_error_on_network_failure_with_distinct_message(
         self, mock_client, addon_install, mock_async_client_class
     ):
         inner_client, _ = mock_async_client_class
         inner_client.get.side_effect = httpx.ConnectError("supervisor unreachable")
 
-        with pytest.raises(HomeAssistantConnectionError):
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
             await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "Transport" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_raises_connection_error_on_remote_protocol_error(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """A non-Connect/non-Timeout subclass of `httpx.HTTPError` (e.g.
+        RemoteProtocolError on partial responses) hits the broad-except clause
+        — pinned so a future refactor can't silently narrow it (#1126 review
+        item 11)."""
+        inner_client, _ = mock_async_client_class
+        inner_client.get.side_effect = httpx.RemoteProtocolError(
+            "server closed connection without response"
+        )
+
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "Transport" in str(exc_info.value)
 
 
 class TestGetAddonLogsBranchSelection:
@@ -368,13 +475,19 @@ class TestGetAddonLogsBranchSelection:
         assert args[1] == "/hassio/addons/core_mosquitto/logs"
 
     @pytest.mark.asyncio
-    async def test_addon_install_uses_supervisor_direct(self, mock_client):
-        """`is_running_in_addon()` True → Supervisor-direct path, no HA-Core call."""
+    async def test_addon_install_does_not_call_ha_core_proxy(self, mock_client):
+        """`is_running_in_addon()` True → HA-Core-proxy path must be skipped.
+
+        Shrunk per #1126 review item 14: the URL/auth contract for the
+        Supervisor-direct branch lives in `TestGetAddonLogsViaSupervisor`;
+        this test only verifies the gate consultation. Asserting URL/auth
+        here too would mock-the-mock without re-asserting anything.
+        """
         inner_client = MagicMock()
         inner_client.get = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = "via supervisor\n"
+        mock_response.text = ""
         inner_client.get.return_value = mock_response
 
         cm = MagicMock()
@@ -389,17 +502,102 @@ class TestGetAddonLogsBranchSelection:
             patch.dict(
                 "os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-branch"}
             ),
-            patch(
-                "ha_mcp.client.rest_client.httpx.AsyncClient",
-                return_value=cm,
-            ),
+            patch("httpx.AsyncClient", return_value=cm),
         ):
-            result = await mock_client.get_addon_logs("core_mosquitto")
+            await mock_client.get_addon_logs("core_mosquitto")
 
-        assert "via supervisor" in result
-        # HA-Core-proxy must NOT have been called.
+        # Sole assertion: HA-Core-proxy path NOT taken. URL/auth contract is
+        # pinned by TestGetAddonLogsViaSupervisor.
         mock_client.httpx_client.request.assert_not_called()
-        inner_client.get.assert_awaited_once()
+
+
+class TestGetSystemServiceLogs:
+    """REST-client `_get_system_service_logs` — system-service variant of the
+    Supervisor-direct path covering ``/{service}/logs`` (#1116 scope-add)."""
+
+    @pytest.fixture
+    def mock_async_client_class(self):
+        inner_client = MagicMock()
+        inner_client.get = AsyncMock()
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        client_class = MagicMock(return_value=cm)
+        with patch("httpx.AsyncClient", client_class):
+            yield inner_client, client_class
+
+    @pytest.mark.asyncio
+    async def test_uses_service_url_with_supervisor_token(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, client_class = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "supervisor service log line\n"
+        inner_client.get.return_value = mock_response
+
+        result = await mock_client._get_system_service_logs("supervisor")
+
+        assert "supervisor service log line" in result
+        args, kwargs = inner_client.get.call_args
+        assert args[0] == "http://supervisor/supervisor/logs"
+        assert kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
+        # Constructor kwargs propagated (parity with addon-logs branch).
+        ctor_kwargs = client_class.call_args.kwargs
+        assert ctor_kwargs["verify"] is True
+        assert isinstance(ctor_kwargs["timeout"], httpx.Timeout)
+
+    @pytest.mark.asyncio
+    async def test_raises_auth_error_on_empty_supervisor_token(
+        self, mock_client, addon_install_no_token, mock_async_client_class
+    ):
+        """Same fail-fast as the addon-logs branch — shared helper means
+        coverage extends to system_service automatically."""
+        inner_client, _ = mock_async_client_class
+
+        with pytest.raises(HomeAssistantAuthError) as exc_info:
+            await mock_client._get_system_service_logs("host")
+
+        assert "absent at call time" in str(exc_info.value)
+        inner_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_api_error_on_403_with_role_hint(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = ""
+        mock_response.reason_phrase = "Forbidden"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client._get_system_service_logs("core")
+
+        assert exc_info.value.status_code == 403
+        assert "hassio_role" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_raises_api_error_on_404(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """Supervisor returns 404 for unknown service paths — caller-layer
+        validation already rejects unknown service names, so this is the
+        fail-safe for upstream Supervisor changes."""
+        inner_client, _ = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "service unknown"
+        mock_response.reason_phrase = "Not Found"
+        inner_client.get.return_value = mock_response
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client._get_system_service_logs("nonexistent")
+
+        assert exc_info.value.status_code == 404
 
 
 class TestRawRequestEmptyBodyFallback:
@@ -625,6 +823,129 @@ class TestGetSupervisorLogWrapper:
         assert any(
             "level" in w and "supervisor" in w for w in result["warnings"]
         ), f"Expected level/supervisor warning, got: {result['warnings']}"
+
+
+class TestGetSystemServiceLogWrapper:
+    """`ha_get_logs(source='system_service')` — slug enum validation, response
+    shape, and routing to ``client._get_system_service_logs`` (#1116 scope-add)."""
+
+    @pytest.fixture
+    def client_with_system_logs(self):
+        client = MagicMock()
+        client._get_system_service_logs = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_happy_path_response_shape(self, client_with_system_logs):
+        client_with_system_logs._get_system_service_logs.return_value = (
+            "host log line 1\nhost log line 2\n"
+        )
+        tools = _register_and_collect(client_with_system_logs)
+
+        result = await tools["ha_get_logs"](source="system_service", slug="host")
+
+        assert result["success"] is True
+        assert result["source"] == "system_service"
+        assert result["slug"] == "host"
+        assert "host log line 1" in result["log"]
+        assert result["total_lines"] == 2
+        client_with_system_logs._get_system_service_logs.assert_awaited_once_with("host")
+
+    @pytest.mark.asyncio
+    async def test_missing_slug_raises_validation_error(
+        self, client_with_system_logs
+    ):
+        tools = _register_and_collect(client_with_system_logs)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools["ha_get_logs"](source="system_service")
+
+        body = _parse_tool_error(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "slug" in body["error"]["message"]
+        client_with_system_logs._get_system_service_logs.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_slug_raises_validation_error_with_enum_hint(
+        self, client_with_system_logs
+    ):
+        """Unknown service name fails fast with the allowed-set listed —
+        better than a 404 from Supervisor several layers down."""
+        tools = _register_and_collect(client_with_system_logs)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools["ha_get_logs"](
+                source="system_service", slug="not_a_real_service"
+            )
+
+        body = _parse_tool_error(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Allowed values appear in either the message or the suggestions
+        # so callers can see what's acceptable.
+        searchable = body["error"]["message"] + " ".join(
+            body["error"].get("suggestions", [])
+        )
+        for service in ("supervisor", "host", "core", "dns"):
+            assert service in searchable
+        client_with_system_logs._get_system_service_logs.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "service",
+        ["supervisor", "host", "core", "dns", "audio", "multicast", "observer"],
+    )
+    @pytest.mark.asyncio
+    async def test_all_seven_allowed_services_dispatch(
+        self, client_with_system_logs, service
+    ):
+        """Every allowed service routes through to the client helper. Catches
+        a regression where the slug enum is narrowed in one place but not the
+        other."""
+        client_with_system_logs._get_system_service_logs.return_value = "ok\n"
+        tools = _register_and_collect(client_with_system_logs)
+
+        result = await tools["ha_get_logs"](source="system_service", slug=service)
+
+        assert result["success"] is True
+        assert result["slug"] == service
+        client_with_system_logs._get_system_service_logs.assert_awaited_once_with(service)
+
+    @pytest.mark.asyncio
+    async def test_403_role_hint_suggestion(self, client_with_system_logs):
+        client_with_system_logs._get_system_service_logs.side_effect = (
+            HomeAssistantAPIError(
+                "Supervisor forbids /core/logs (403) — addon's hassio_role "
+                "may be 'default'; need 'manager' or higher",
+                status_code=403,
+                response_data={"path": "core"},
+            )
+        )
+        tools = _register_and_collect(client_with_system_logs)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools["ha_get_logs"](source="system_service", slug="core")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("hassio_role" in s and "manager" in s for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_level_param_emits_warning_for_system_service_source(
+        self, client_with_system_logs
+    ):
+        """Parity with the supervisor-source level-warning behavior — raw
+        container stdout, level-filtering doesn't apply."""
+        client_with_system_logs._get_system_service_logs.return_value = "x\n"
+        tools = _register_and_collect(client_with_system_logs)
+
+        result = await tools["ha_get_logs"](
+            source="system_service", slug="supervisor", level="ERROR"
+        )
+
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any(
+            "level" in w and "system_service" in w for w in result["warnings"]
+        )
 
 
 class TestStaleToolNameReferences:
