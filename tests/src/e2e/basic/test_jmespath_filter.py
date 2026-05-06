@@ -5,6 +5,8 @@ import logging
 
 import pytest
 
+from ..utilities.assertions import parse_mcp_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,9 +35,7 @@ async def test_jmespath_projection_reduces_response(mcp_client):
         {"entity_id": "sun.sun", "_jmespath": "{entity_id: data.entity_id, state: data.state}"},
     )
 
-    assert result, "Expected a non-empty result"
-    text = result[0].text if hasattr(result[0], "text") else str(result[0])
-    data = json.loads(text)
+    data = parse_mcp_result(result)
 
     assert "entity_id" in data, f"Projection must include entity_id; got {data}"
     assert "state" in data, f"Projection must include state; got {data}"
@@ -51,9 +51,7 @@ async def test_jmespath_invalid_expression_degrades_gracefully(mcp_client):
         {"entity_id": "sun.sun", "_jmespath": "!!not valid!!"},
     )
 
-    assert result, "Expected a non-empty result"
-    text = result[0].text if hasattr(result[0], "text") else str(result[0])
-    data = json.loads(text)
+    data = parse_mcp_result(result)
 
     assert "_jmespath_warning" in data, (
         f"Expected _jmespath_warning in degraded response; got keys: {list(data)}"
@@ -71,11 +69,7 @@ async def test_jmespath_param_not_passed_to_tool(mcp_client):
         "ha_get_state",
         {"entity_id": "sun.sun", "_jmespath": "data.state"},
     )
-    assert result, "Call should succeed (proves _jmespath was stripped)"
-    text = result[0].text if hasattr(result[0], "text") else str(result[0])
-    data = json.loads(text)
-    # With 'data.state' expression the result should be a single string wrapped in {"result": ...}
-    assert "result" in data or isinstance(data.get("result"), str) or isinstance(data, dict), (
-        f"Unexpected shape: {data}"
-    )
+    data = parse_mcp_result(result)
+    # With 'data.state' expression the result should be a scalar wrapped in {"result": ...}
+    assert "result" in data, f"Expected scalar result wrapped in dict; got: {data}"
     logger.info(f"✅ Tool received clean args; filtered result: {data}")
