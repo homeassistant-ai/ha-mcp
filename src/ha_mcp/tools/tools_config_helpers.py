@@ -388,6 +388,12 @@ async def _validate_registry_ids(
     Raises VALIDATION_INVALID_PARAMETER on the first unknown ID encountered, with
     the available IDs included in the suggestions list so the caller can correct.
     """
+    # Early-out: nothing to validate.
+    needs_area = area_id is not None and area_id != ""
+    needs_labels = bool(labels)
+    needs_category = category is not None and category != ""
+    if not (needs_area or needs_labels or needs_category):
+        return
 
     async def _ws_list(
         message: dict[str, Any],
@@ -413,9 +419,37 @@ async def _validate_registry_ids(
                 return True, inner
         return False, []
 
-    # Validate area_id (skip None and empty-string clear).
-    if area_id is not None and area_id != "":
-        ok, areas = await _ws_list({"type": "config/area_registry/list"})
+    # Run the three registry lookups concurrently — they're independent and
+    # each is a separate WS round-trip.
+    area_lookup = (
+        _ws_list({"type": "config/area_registry/list"})
+        if needs_area
+        else None
+    )
+    label_lookup = (
+        _ws_list({"type": "config/label_registry/list"})
+        if needs_labels
+        else None
+    )
+    category_lookup = (
+        _ws_list({"type": "config/category_registry/list", "scope": "helpers"})
+        if needs_category
+        else None
+    )
+    coros = [c for c in (area_lookup, label_lookup, category_lookup) if c is not None]
+    results = await asyncio.gather(*coros)
+    # Re-associate results with the parameter they belong to.
+    by_param: dict[str, tuple[bool, list[dict[str, Any]]]] = {}
+    if needs_area:
+        by_param["area"] = results.pop(0)
+    if needs_labels:
+        by_param["labels"] = results.pop(0)
+    if needs_category:
+        by_param["category"] = results.pop(0)
+
+    # Validate area_id.
+    if needs_area:
+        ok, areas = by_param["area"]
         valid_area_ids: list[str] = [
             aid
             for a in areas
@@ -436,9 +470,9 @@ async def _validate_registry_ids(
                 )
             )
 
-    # Validate labels (skip None; empty list is allowed as a "clear").
-    if labels is not None and labels:
-        ok, ws_labels = await _ws_list({"type": "config/label_registry/list"})
+    # Validate labels.
+    if needs_labels:
+        ok, ws_labels = by_param["labels"]
         valid_label_ids: list[str] = [
             lid
             for label in ws_labels
@@ -448,7 +482,7 @@ async def _validate_registry_ids(
         if ok:
             unknown = [
                 label_id
-                for label_id in labels
+                for label_id in labels or []
                 if label_id and label_id not in valid_label_ids
             ]
             if unknown:
@@ -466,11 +500,9 @@ async def _validate_registry_ids(
                     )
                 )
 
-    # Validate category (skip None and empty-string clear).
-    if category is not None and category != "":
-        ok, categories = await _ws_list(
-            {"type": "config/category_registry/list", "scope": "helpers"}
-        )
+    # Validate category.
+    if needs_category:
+        ok, categories = by_param["category"]
         valid_category_ids: list[str] = [
             cid
             for cat in categories
@@ -680,10 +712,19 @@ async def _apply_registry_updates_to_entity(
     """
     applied: dict[str, Any] = {"entity_id": entity_id}
 
-    # area_id + labels in one entity_registry/update.
-    # Use `is not None` to distinguish "not provided" (no change) from
-    # "explicit clear" (empty string / empty list). Mirrors ha_set_entity.
-    if area_id is not None or labels is not None:
+    # Run the two independent registry calls concurrently:
+    # 1. config/entity_registry/update for area_id + labels (combined)
+    # 2. apply_entity_category for category (separate WS shape).
+    # `is not None` distinguishes "not provided" from "explicit clear" (empty
+    # string / empty list). Mirrors ha_set_entity. A transient raise on either
+    # call is captured via return_exceptions so a multi-entity flow helper
+    # (e.g. utility_meter with N tariffs) can still report partial success.
+    needs_registry = area_id is not None or labels is not None
+    needs_category = bool(category)
+    if not (needs_registry or needs_category):
+        return applied
+
+    async def _do_registry_update() -> Any:
         update_message: dict[str, Any] = {
             "type": "config/entity_registry/update",
             "entity_id": entity_id,
@@ -692,25 +733,39 @@ async def _apply_registry_updates_to_entity(
             update_message["area_id"] = area_id if area_id else None
         if labels is not None:
             update_message["labels"] = labels
-        try:
-            ws_result = await client.send_websocket_message(update_message)
-        except Exception as e:
-            # Transient raise (timeout, connection drop) mid-loop must not
-            # abort the remaining entities for a multi-entity flow helper
-            # (e.g. utility_meter with tariffs #3..#5 of 5). Record and
-            # continue; soft-failure via ws_result["success"]=False is
-            # already handled below.
-            warnings.append(
-                f"{entity_id}: entity registry update raised: {e}"
-            )
-            return applied
-        if ws_result.get("success"):
+        return await client.send_websocket_message(update_message)
+
+    async def _do_category_apply() -> dict[str, Any]:
+        cat_ack: dict[str, Any] = {}
+        # `category` is non-None whenever we entered this branch (needs_category).
+        assert category is not None
+        await apply_entity_category(
+            client, entity_id, category, "helpers", cat_ack, "helper"
+        )
+        return cat_ack
+
+    reg_task = _do_registry_update() if needs_registry else None
+    cat_task = _do_category_apply() if needs_category else None
+    coros = [c for c in (reg_task, cat_task) if c is not None]
+    raw_results: list[Any] = list(
+        await asyncio.gather(*coros, return_exceptions=True)
+    )
+    reg_result = raw_results.pop(0) if needs_registry else None
+    cat_result = raw_results.pop(0) if needs_category else None
+
+    # Handle entity_registry/update outcome.
+    if isinstance(reg_result, BaseException):
+        warnings.append(
+            f"{entity_id}: entity registry update raised: {reg_result}"
+        )
+    elif reg_result is not None:
+        if reg_result.get("success"):
             if area_id is not None:
                 applied["area_id"] = area_id if area_id else None
             if labels is not None:
                 applied["labels"] = labels
         else:
-            error_detail = ws_result.get("error", {})
+            error_detail = reg_result.get("error", {})
             error_msg = (
                 error_detail.get("message", "Unknown error")
                 if isinstance(error_detail, dict)
@@ -720,21 +775,16 @@ async def _apply_registry_updates_to_entity(
                 f"{entity_id}: entity registry update failed: {error_msg}"
             )
 
-    # category via shared helper (consistent with simple helpers / automations / scripts)
-    if category:
-        cat_ack: dict[str, Any] = {}
-        await apply_entity_category(
-            client,
-            entity_id,
-            category,
-            "helpers",
-            cat_ack,
-            "helper",
+    # Handle category outcome.
+    if isinstance(cat_result, BaseException):
+        warnings.append(
+            f"{entity_id}: category apply raised: {cat_result}"
         )
-        if "category" in cat_ack:
-            applied["category"] = cat_ack["category"]
-        elif "category_warning" in cat_ack:
-            warnings.append(f"{entity_id}: {cat_ack['category_warning']}")
+    elif cat_result is not None:
+        if "category" in cat_result:
+            applied["category"] = cat_result["category"]
+        elif "category_warning" in cat_result:
+            warnings.append(f"{entity_id}: {cat_result['category_warning']}")
 
     return applied
 
@@ -935,12 +985,19 @@ async def _handle_flow_helper(
     if entity_ids and (
         area_id is not None or labels_list is not None or category is not None
     ):
-        applied_per_entity: list[dict[str, Any]] = []
-        for eid in entity_ids:
-            applied = await _apply_registry_updates_to_entity(
-                client, eid, area_id, labels_list, category, warnings
+        # Apply per-entity updates concurrently — each entity's update is
+        # independent, so a multi-entity helper (e.g. utility_meter with N
+        # tariffs) finishes in one round-trip instead of N.
+        applied_per_entity = list(
+            await asyncio.gather(
+                *(
+                    _apply_registry_updates_to_entity(
+                        client, eid, area_id, labels_list, category, warnings
+                    )
+                    for eid in entity_ids
+                )
             )
-            applied_per_entity.append(applied)
+        )
         if area_id is not None:
             result["area_id"] = area_id if area_id else None
         if labels_list is not None:
