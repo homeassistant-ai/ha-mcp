@@ -53,9 +53,7 @@ class JMESPathFilterMiddleware(Middleware):
         jmespath_expr: str | None = args.get(_PARAM_NAME)
 
         if jmespath_expr is not None:
-            clean_args = {k: v for k, v in args.items() if k != _PARAM_NAME}
-            new_message = context.message.model_copy(update={"arguments": clean_args})
-            context = context.copy(message=new_message)
+            context.message.arguments = {k: v for k, v in args.items() if k != _PARAM_NAME}
 
         result = await call_next(context)
 

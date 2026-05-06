@@ -1,6 +1,5 @@
 """E2E tests for the JMESPath response-filter middleware."""
 
-import json
 import logging
 
 import pytest
