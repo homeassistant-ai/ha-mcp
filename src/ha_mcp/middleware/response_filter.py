@@ -85,7 +85,7 @@ def _apply_jmespath(result: ToolResult, expr: str) -> ToolResult:
     except jmespath.exceptions.JMESPathError as exc:
         warning: dict[str, Any] = dict(data) if isinstance(data, dict) else {"result": data}
         warning["_jmespath_warning"] = str(exc)
-        return ToolResult(content=warning, structured_content=warning)
+        return ToolResult(content=[mt.TextContent(type="text", text=json.dumps(warning))], structured_content=warning)
 
     if filtered is None:
         filtered_dict: dict[str, Any] = {}
@@ -94,4 +94,4 @@ def _apply_jmespath(result: ToolResult, expr: str) -> ToolResult:
     else:
         filtered_dict = {"result": filtered}
 
-    return ToolResult(content=filtered_dict, structured_content=filtered_dict)
+    return ToolResult(content=[mt.TextContent(type="text", text=json.dumps(filtered_dict))], structured_content=filtered_dict)
