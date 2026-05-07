@@ -22,7 +22,7 @@ _PARAM_SCHEMA: dict[str, Any] = {
     "type": "string",
     "description": (
         "Optional JMESPath filter for results - see jmespath.org"
-        "Examples: 'state', '{id: entity_id, state: state}', 'entities[?domain==`light`]'."
+        "Examples: '{areas:areas[*].{id: area_id, name: name}'."
     ),
 }
 
