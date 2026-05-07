@@ -242,31 +242,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # If we also have a query, filter the area results
                 if query and query.strip():
                     # Collect entities from all matched areas, applying
-                    # domain_filter if present.
+                    # domain_filter if present. get_entities_by_area is called
+                    # with group_by_domain=True above, so entities is always a
+                    # dict keyed by domain.
                     all_area_entities = []
-                    if "areas" in area_result:
-                        for area_data in area_result["areas"].values():
-                            entities = area_data.get("entities")
-                            if not entities:
-                                continue
-                            if isinstance(entities, dict):  # grouped by domain
-                                if domain_filter:
-                                    all_area_entities.extend(
-                                        entities.get(domain_filter, [])
-                                    )
-                                else:
-                                    for domain_entities in entities.values():
-                                        all_area_entities.extend(domain_entities)
-                            else:  # flat list
-                                if domain_filter:
-                                    prefix = f"{domain_filter}."
-                                    all_area_entities.extend(
-                                        e
-                                        for e in entities
-                                        if e.get("entity_id", "").startswith(prefix)
-                                    )
-                                else:
-                                    all_area_entities.extend(entities)
+                    for area_data in area_result.get("areas", {}).values():
+                        entities = area_data.get("entities") or {}
+                        if domain_filter:
+                            all_area_entities.extend(entities.get(domain_filter, []))
+                        else:
+                            for domain_entities in entities.values():
+                                all_area_entities.extend(domain_entities)
 
                     # Apply fuzzy search to area entities
                     from ..utils.fuzzy_search import create_fuzzy_searcher
@@ -337,24 +323,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         # Build a flat results list, applying domain_filter and
                         # tagging each entity with its `domain` so the optional
                         # by_domain rebuild below can group without re-parsing
-                        # entity_id. Both dict and flat shapes from
-                        # get_entities_by_area are handled to mirror its two
-                        # return shapes. Using `{**entity, "domain": domain}`
-                        # avoids mutating dicts owned by the helper.
+                        # entity_id. `{**entity, "domain": domain}` avoids
+                        # mutating dicts owned by the helper.
                         all_results: list[dict[str, Any]] = []
-                        if isinstance(entities_data, dict):
-                            for domain, entities in entities_data.items():
-                                if domain_filter and domain != domain_filter:
-                                    continue
-                                all_results.extend(
-                                    {**entity, "domain": domain} for entity in entities
-                                )
-                        elif entities_data:  # flat list
-                            for entity in entities_data:
-                                domain = entity.get("entity_id", "").split(".", 1)[0]
-                                if domain_filter and domain != domain_filter:
-                                    continue
-                                all_results.append({**entity, "domain": domain})
+                        for domain, entities in (entities_data or {}).items():
+                            if domain_filter and domain != domain_filter:
+                                continue
+                            all_results.extend(
+                                {**entity, "domain": domain} for entity in entities
+                            )
 
                         paginated = all_results[offset : offset + limit]
 
