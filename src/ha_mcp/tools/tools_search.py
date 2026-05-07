@@ -242,7 +242,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # If we also have a query, filter the area results
                 if query and query.strip():
                     # Collect entities from all matched areas, applying
-                    # domain_filter if present (issue #1162).
+                    # domain_filter if present.
                     all_area_entities = []
                     if "areas" in area_result:
                         for area_data in area_result["areas"].values():
@@ -332,32 +332,37 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
                         first_area = next(iter(area_result["areas"].values()))
-                        area_by_domain: dict[str, list[dict[str, Any]]] = (
-                            first_area.get("entities", {})
-                        )
+                        entities_data = first_area.get("entities")
 
-                        # Apply domain_filter to the area's by_domain mapping
-                        # before flattening (issue #1162).
-                        if domain_filter:
-                            area_by_domain = {
-                                domain_filter: area_by_domain.get(domain_filter, [])
-                            }
-
-                        # Flatten to a single results list, then paginate.
-                        all_results = []
-                        for domain, entities in area_by_domain.items():
-                            for entity in entities:
-                                entity["domain"] = domain
-                                all_results.append(entity)
+                        # Build a flat results list, applying domain_filter and
+                        # handling both dict (grouped-by-domain) and flat-list
+                        # shapes from get_entities_by_area for defensive
+                        # symmetry with the with-query branch above. Using
+                        # `{**entity, "domain": domain}` avoids mutating the
+                        # caller's dicts.
+                        all_results: list[dict[str, Any]] = []
+                        if isinstance(entities_data, dict):
+                            for domain, entities in entities_data.items():
+                                if domain_filter and domain != domain_filter:
+                                    continue
+                                all_results.extend(
+                                    {**entity, "domain": domain} for entity in entities
+                                )
+                        elif entities_data:  # flat list
+                            all_results.extend(
+                                {
+                                    **entity,
+                                    "domain": entity.get("entity_id", "").split(".", 1)[
+                                        0
+                                    ],
+                                }
+                                for entity in entities_data
+                                if not domain_filter
+                                or entity.get("entity_id", "").split(".", 1)[0]
+                                == domain_filter
+                            )
 
                         paginated = all_results[offset : offset + limit]
-
-                        # Rebuild by_domain from the paginated subset so the
-                        # grouped view matches the flat results.
-                        paginated_by_domain: dict[str, list[dict[str, Any]]] = {}
-                        for entity in paginated:
-                            d = entity["domain"]
-                            paginated_by_domain.setdefault(d, []).append(entity)
 
                         area_search_data: dict[str, Any] = {
                             "success": True,
@@ -366,12 +371,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 len(all_results), offset, limit, paginated
                             ),
                             "results": paginated,
-                            "by_domain": paginated_by_domain,
                             "search_type": "area_only",
                             "area_name": first_area.get("area_name", area_filter),
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
+                        if group_by_domain_bool:
+                            # Build by_domain from the paginated subset so the
+                            # grouped view matches the flat results.
+                            paginated_by_domain: dict[str, list[dict[str, Any]]] = {}
+                            for entity in paginated:
+                                paginated_by_domain.setdefault(
+                                    entity["domain"], []
+                                ).append(entity)
+                            area_search_data["by_domain"] = paginated_by_domain
                         return await add_timezone_metadata(client, area_search_data)
                     else:
                         empty_area_data: dict[str, Any] = {
@@ -379,12 +392,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "area_filter": area_filter,
                             **_build_pagination_metadata(0, offset, limit, []),
                             "results": [],
-                            "by_domain": {},
                             "search_type": "area_only",
                             "message": f"No entities found in area: {area_filter}",
                         }
                         if domain_filter:
                             empty_area_data["domain_filter"] = domain_filter
+                        if group_by_domain_bool:
+                            empty_area_data["by_domain"] = {}
                         return await add_timezone_metadata(client, empty_area_data)
 
             # Regular entity search (no area filter)

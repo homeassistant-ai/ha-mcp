@@ -657,14 +657,25 @@ async def area_with_mixed_domains(mcp_client):
         logger.warning(f"Cleanup failed for area {area_id}: {exc}")
 
 
+PAGINATION_FIELDS = (
+    "total_matches",
+    "offset",
+    "limit",
+    "count",
+    "has_more",
+    "next_offset",
+)
+
+
 @pytest.mark.asyncio
 async def test_area_filter_with_domain_filter_no_query(
     mcp_client, area_with_mixed_domains
 ):
-    """Issue #1162: area_filter + domain_filter (no query) returns only domain matches.
+    """area_filter + domain_filter (no query) returns only domain matches.
 
     Before the fix, the area_only branch ignored domain_filter and returned every
-    entity in the area regardless of domain.
+    entity in the area regardless of domain. by_domain must be absent when
+    group_by_domain is not requested (response-shape consistency).
     """
     fixture = area_with_mixed_domains
 
@@ -689,11 +700,44 @@ async def test_area_filter_with_domain_filter_no_query(
     assert all(eid.startswith("input_boolean.") for eid in entity_ids), (
         f"Non-boolean entities leaked through domain_filter: {entity_ids}"
     )
+    assert "by_domain" not in data, (
+        f"by_domain must only appear when group_by_domain=True: {data}"
+    )
 
-    # by_domain must reflect the domain restriction.
-    by_domain = data.get("by_domain", {})
-    assert set(by_domain.keys()) <= {"input_boolean"}, (
-        f"by_domain leaked non-matching domains: {list(by_domain)}"
+
+@pytest.mark.asyncio
+async def test_area_filter_with_domain_filter_group_by_domain(
+    mcp_client, area_with_mixed_domains
+):
+    """area_filter + domain_filter + group_by_domain restricts by_domain keys.
+
+    Verifies the by_domain rebuild is also restricted to the filtered domain,
+    not just the flat results list.
+    """
+    fixture = area_with_mixed_domains
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "domain_filter": "input_boolean",
+            "group_by_domain": True,
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "area+domain+group_by_domain")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_only"
+    assert "by_domain" in data, (
+        f"by_domain must appear when group_by_domain=True: {data}"
+    )
+    by_domain = data["by_domain"]
+    assert set(by_domain) == {"input_boolean"}, (
+        f"by_domain must be restricted to filtered domain: {list(by_domain)}"
+    )
+    assert all(
+        e["entity_id"].startswith("input_boolean.") for e in by_domain["input_boolean"]
     )
 
 
@@ -701,7 +745,7 @@ async def test_area_filter_with_domain_filter_no_query(
 async def test_area_filter_with_domain_filter_and_query(
     mcp_client, area_with_mixed_domains
 ):
-    """Issue #1162: area_filter + domain_filter + query also respects the domain."""
+    """area_filter + domain_filter + query also respects the domain."""
     fixture = area_with_mixed_domains
 
     result = await mcp_client.call_tool(
@@ -728,7 +772,7 @@ async def test_area_filter_with_domain_filter_and_query(
 
 @pytest.mark.asyncio
 async def test_area_filter_only_paginates(mcp_client, area_with_mixed_domains):
-    """Issue #1162 (bonus): area_only branch must respect limit/offset and emit pagination metadata.
+    """area_only branch respects limit/offset and emits full pagination metadata.
 
     Before the fix, the area_only branch returned every entity and omitted
     has_more / next_offset / count, breaking response-shape consistency with
@@ -743,22 +787,16 @@ async def test_area_filter_only_paginates(mcp_client, area_with_mixed_domains):
     raw = assert_mcp_success(page, "area_only with limit=1")
     data = raw.get("data", raw)
 
-    # Pagination metadata fields must all be present.
-    for field in (
-        "total_matches",
-        "offset",
-        "limit",
-        "count",
-        "has_more",
-        "next_offset",
-    ):
+    for field in PAGINATION_FIELDS:
         assert field in data, f"Missing pagination field {field}: {data}"
 
     assert data["limit"] == 1
     assert data["offset"] == 0
     assert data["count"] == len(data["results"]) == 1
-    assert data["total_matches"] >= 2, (
-        f"Fixture creates 2 entities; total_matches should reflect that: {data}"
+    # Fixture provisions exactly two entities into the unique area, so
+    # total_matches must equal 2 — anything else means the area leaked.
+    assert data["total_matches"] == 2, (
+        f"Expected exactly 2 entities in fixture area: {data}"
     )
     assert data["has_more"] is True
     assert data["next_offset"] == 1
@@ -774,3 +812,40 @@ async def test_area_filter_only_paginates(mcp_client, area_with_mixed_domains):
     ids1 = {r["entity_id"] for r in data["results"]}
     ids2 = {r["entity_id"] for r in data2["results"]}
     assert ids1.isdisjoint(ids2), f"Pages overlap: {ids1 & ids2}"
+
+
+@pytest.mark.asyncio
+async def test_area_filter_empty_area_response_shape(mcp_client):
+    """Empty-area branch emits full pagination metadata + domain_filter echo.
+
+    Covers the `area_result["areas"]` empty path: a regression there would
+    silently ship a response without has_more / next_offset / count or
+    domain_filter echo, breaking consistency with the populated branch.
+    """
+    nonexistent_area = f"e2e_1162_no_such_area_{uuid.uuid4().hex[:8]}"
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": nonexistent_area,
+            "domain_filter": "input_boolean",
+            "limit": 5,
+        },
+    )
+    raw = assert_mcp_success(result, "empty-area branch")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_only"
+    assert data["total_matches"] == 0
+    assert data["results"] == []
+    assert data.get("domain_filter") == "input_boolean", (
+        f"Empty-area response must still echo domain_filter: {data}"
+    )
+    for field in PAGINATION_FIELDS:
+        assert field in data, f"Missing pagination field {field}: {data}"
+    assert data["has_more"] is False
+    assert data["next_offset"] is None
+    # group_by_domain not requested, so by_domain must be absent.
+    assert "by_domain" not in data, (
+        f"by_domain must only appear when group_by_domain=True: {data}"
+    )
