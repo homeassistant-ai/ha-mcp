@@ -602,14 +602,14 @@ class AreaTools:
                     "success": True,
                     id_key: id,
                     "kind": kind,
-                    "message": f"Successfully deleted {kind}: {id}",
+                    "message": f"Successfully removed {kind}: {id}",
                 }
 
             error = result.get("error", {})
             error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise_tool_error(create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to delete {kind}: {error_msg}",
+                f"Failed to remove {kind}: {error_msg}",
                 context={"kind": kind, id_key: id},
             ))
 
