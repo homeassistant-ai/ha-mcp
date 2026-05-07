@@ -247,18 +247,20 @@ class TestBlueprintManagement:
             logger.info("ha_import_blueprint properly handles non-existent URL")
 
     @pytest.mark.slow
-    async def test_import_blueprint_saves_to_disk(self, mcp_client):
+    async def test_import_blueprint_saves_to_disk(self, mcp_client, local_blueprint_server):
         """
         Test: Import blueprint actually saves to disk (issue #685)
 
         Validates that ha_import_blueprint calls both blueprint/import (validate)
         AND blueprint/save (persist), so the blueprint appears in the list.
-        Uses a known community blueprint that won't already be installed.
+        Uses a locally-served blueprint file to avoid external network dependencies.
         """
         logger.info("Testing ha_import_blueprint saves blueprint to disk...")
 
-        # Use a community blueprint unlikely to be pre-installed
-        test_url = "https://gist.github.com/Blackshome/4010fb83bb8c19b5fa1425526c6ff0e2"
+        # Serve the blueprint from a local HTTP server accessible by the HA container.
+        # This avoids flaky failures caused by transient GitHub network issues on CI.
+        test_url = f"{local_blueprint_server['base_url']}/e2e_test_blueprint.yaml"
+        logger.info(f"Using local blueprint URL: {test_url}")
 
         async with MCPAssertions(mcp_client) as mcp:
             # List blueprints before import
