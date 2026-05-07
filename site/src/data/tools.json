@@ -2595,6 +2595,45 @@
     "source_file": "tools_updates.py"
   },
   {
+    "name": "ha_manage_custom_tool",
+    "title": "Custom Tool",
+    "description": "Create and run a custom tool in a sandbox, or manage saved custom tools.\n\n⚠️  **LAST RESORT** — search for existing tools first.\n\n**Modes** (mutually exclusive):\n- Provide ``code`` + ``justification`` to execute custom code\n- Set ``run_saved`` to re-run a previously saved tool by name\n- Set ``list_saved=True`` to list all saved tools\n\n**Available functions in sandbox:**\n- ``api_get(endpoint)`` — GET request to HA REST API\n- ``api_post(endpoint, data)`` — POST request to HA REST API\n- ``ws_send(message)`` — send a HA WebSocket command (e.g. registry\n  lookups, ``render_template``, dashboard ops). ``message`` must include\n  a ``\"type\"`` field; the MCP server adds ``id`` and handles auth.\n- ``call_tool(name, args)`` — call a registered MCP tool\n- ``delete_saved_tool(name)`` — remove a previously saved custom\n  tool by name. Returns ``{\"deleted\": True, \"name\": name}`` or\n  ``{\"error\": ...}``.\n\nUse ``api_get``/``api_post`` for REST operations not covered by existing\ntools.  Use ``ws_send`` when the operation is only available over the\nHome Assistant WebSocket API (most registry CRUD, template rendering,\nand Lovelace operations).  Use ``call_tool`` when an existing tool\nalready does what you need. Use ``delete_saved_tool`` to clean up\nsaved tools you no longer need.\n\nSaved tools persist across server restarts when\n``CODE_MODE_SAVED_TOOLS_PATH`` is set (the addon sets this by\ndefault to ``/data/saved_tools.json``).\n\nExample — check repairs (no built-in tool for this):\n```python\nrepairs = await api_get(\"/repairs/issues\")\nrepairs\n```\n\nExample — list areas via WebSocket:\n```python\nresult = await ws_send({\"type\": \"config/area_registry/list\"})\nresult.get(\"result\", [])\n```\n\nExample — chain existing tools:\n```python\nresult = await call_tool(\"ha_search_entities\", {\"query\": \"light\", \"limit\": 5})\ndata = result.get(\"data\", result)\nlights = data.get(\"results\", [])\nfor e in lights:\n    await call_tool(\"ha_call_service\", {\n        \"domain\": \"light\", \"service\": \"turn_off\",\n        \"entity_id\": e[\"entity_id\"]})\n{\"turned_off\": len(lights)}\n```\n\nExample — delete an obsolete saved tool:\n```python\ndelete_saved_tool(\"old_movie_mode\")\n```\n\nArgs:\n    code: Python code to execute.  Last expression is the return value.\n    justification: Why no existing tool works (required with code).\n    save_as: Save the tool under this name for reuse (alphanumeric/underscores, max 64 chars).\n    run_saved: Name of a previously saved tool to re-run.\n    list_saved: Set True to list all saved tools.",
+    "inputSchema": {
+      "properties": {
+        "code": {
+          "type": "str | None",
+          "default": null
+        },
+        "justification": {
+          "type": "str | None",
+          "default": null
+        },
+        "save_as": {
+          "type": "str | None",
+          "default": null
+        },
+        "run_saved": {
+          "type": "str | None",
+          "default": null
+        },
+        "list_saved": {
+          "type": "bool",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false
+    },
+    "tags": [
+      "System",
+      "beta"
+    ],
+    "source_file": "tools_code.py"
+  },
+  {
     "name": "ha_reload_core",
     "title": "Reload Core Components",
     "description": "Reload Home Assistant configuration without full restart.\n\nThis tool reloads specific configuration components, allowing changes\nto take effect without restarting the entire Home Assistant instance.\nThis is much faster than a full restart.\n\n**Parameters:**\n- target: What to reload. Options:\n  - \"all\": Reload all reloadable components\n  - \"automations\": Reload automation configurations\n  - \"scripts\": Reload script configurations\n  - \"scenes\": Reload scene configurations\n  - \"groups\": Reload group configurations\n  - \"input_booleans\": Reload input_boolean helpers\n  - \"input_numbers\": Reload input_number helpers\n  - \"input_texts\": Reload input_text helpers\n  - \"input_selects\": Reload input_select helpers\n  - \"input_datetimes\": Reload input_datetime helpers\n  - \"input_buttons\": Reload input_button helpers\n  - \"timers\": Reload timer helpers\n  - \"counters\": Reload counter helpers\n  - \"templates\": Reload template sensors/entities\n  - \"persons\": Reload person configurations\n  - \"zones\": Reload zone configurations\n  - \"core\": Reload core configuration (customize, packages)\n  - \"themes\": Reload frontend themes\n\n**Example Usage:**\n```python\n# Reload just automations after editing\nha_reload_core(target=\"automations\")\n\n# Reload all configurations\nha_reload_core(target=\"all\")\n\n# Reload input helpers after adding new ones\nha_reload_core(target=\"input_booleans\")\n```\n\n**When to Use:**\n- After editing automation/script YAML files\n- After adding new input helpers via YAML\n- After modifying customize.yaml\n- After theme changes",
