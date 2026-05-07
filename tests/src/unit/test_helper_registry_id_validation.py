@@ -257,3 +257,71 @@ class TestEmptyStringAreaIdSkipsValidation:
             for call in mock_client.send_websocket_message.call_args_list
         ]
         assert "config/area_registry/list" not in sent_types
+
+
+class TestPhantomRejectedAgainstEmptyRegistry:
+    """Pin the (ok=True, items=[]) contract: phantom IDs must be rejected even
+    when the registry is genuinely empty.
+
+    The ``_validate_registry_ids`` helper returns a (ok, items) tuple to
+    distinguish a successful-but-empty lookup from a lookup failure. Without
+    explicit coverage, a future refactor that fails open on empty results
+    would silently regress phantom-ID rejection."""
+
+    async def test_phantom_area_rejected_against_empty_area_registry(
+        self, register_tools, mock_client
+    ):
+        # Empty area registry — but a real phantom area_id must still be rejected.
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_make_ws_handler(area_ids=[])
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                area_id="phantom_area",
+            )
+        _assert_invalid_param(excinfo)
+        assert "phantom_area" in str(excinfo.value)
+
+    async def test_phantom_label_rejected_against_empty_label_registry(
+        self, register_tools, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_make_ws_handler(label_ids=[])
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                labels=["phantom_label"],
+            )
+        _assert_invalid_param(excinfo)
+        assert "phantom_label" in str(excinfo.value)
+
+    async def test_phantom_category_rejected_against_empty_category_registry(
+        self, register_tools, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_make_ws_handler(category_ids=[])
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                category="phantom_category",
+            )
+        _assert_invalid_param(excinfo)
+        assert "phantom_category" in str(excinfo.value)

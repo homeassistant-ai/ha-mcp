@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 from fastmcp.exceptions import ToolError
 from pydantic import AliasChoices, Field
 
+from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .tools_config_entry_flow import (
@@ -78,7 +79,7 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
         "icon", "latitude", "longitude", "radius", "passive",
     }),
     "person": frozenset({"user_id", "device_trackers", "picture"}),  # NO icon
-    "tag": frozenset({"tag_id", "description"}),  # NO icon, NO description applies elsewhere
+    "tag": frozenset({"tag_id", "description"}),  # NO icon
     # Flow types: only `config` (handled separately — see _validate_applicable_params).
 }
 
@@ -579,7 +580,7 @@ async def _check_name_collision(
                 "type": "config_entries/get",
                 "domain": helper_type,
             })
-        except Exception:
+        except (HomeAssistantAPIError, ConnectionError, asyncio.TimeoutError):
             # Connectivity issue — skip the check; HA will still suffix on its
             # own and we'll fail open rather than block legit creates.
             return
@@ -594,11 +595,16 @@ async def _check_name_collision(
                 existing_id = entry.get("entry_id") or entry.get("id")
                 break
     else:
-        # Simple helpers expose a {type}/list WS command that returns entries
-        # with an `id` field (which is the slug HA derived from the name).
+        # Simple helpers expose a {type}/list WS command. Most types return
+        # entries with an `id` field (the slug HA derived from the name) plus
+        # `name`. Tags differ: their primary key is `tag_id` (UUID hex, not a
+        # slug), so the slug match below never fires and tag duplicates are
+        # caught by the name-slug fallback at line 623.
         try:
             result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-        except Exception:
+        except (HomeAssistantAPIError, ConnectionError, asyncio.TimeoutError):
+            # Connectivity issue — skip the check; HA will still suffix on its
+            # own and we'll fail open rather than block legit creates.
             return
         items: list[Any] = []
         if isinstance(result, dict):
@@ -1493,6 +1499,16 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
         reject the `name` key on update — to rename a flow helper, delete and recreate.
+
+        Behavior notes:
+        - UPDATE preserves type-specific fields not re-passed (rename never wipes
+          initial/icon/etc. for any simple helper).
+        - Pass `action="create"` or `action="update"` to disambiguate intent —
+          without it the tool falls back to the implicit `helper_id`-presence
+          discriminator.
+        - For flow-based helpers, config keys not declared by any step's
+          data_schema are silently ignored by HA; verify field names with
+          `ha_get_helper_schema` before relying on them.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:
