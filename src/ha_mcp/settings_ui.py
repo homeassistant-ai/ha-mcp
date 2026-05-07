@@ -50,6 +50,7 @@ class ToolStub(TypedDict):
     destructiveHint: NotRequired[bool]
     disabled_by: NotRequired[str]
 
+
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
 logger = logging.getLogger(__name__)
@@ -261,7 +262,9 @@ def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
     return rendered
 
 
-async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
+async def _get_tool_metadata(
+    server: HomeAssistantSmartMCPServer,
+) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
     Uses FastMCP's internal ``local_provider._list_tools()`` because the
@@ -291,14 +294,16 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
         title = getattr(tool, "title", None) or tool.name
         if tool.annotations and getattr(tool.annotations, "title", None):
             title = tool.annotations.title
-        tools.append({
-            "name": tool.name,
-            "title": title,
-            "description": (tool.description or "")[:200],
-            "tags": tags,
-            "primary_tag": primary,
-            "annotations": annotations,
-        })
+        tools.append(
+            {
+                "name": tool.name,
+                "title": title,
+                "description": (tool.description or "")[:200],
+                "tags": tags,
+                "primary_tag": primary,
+                "annotations": annotations,
+            }
+        )
 
     registered_names = {t["name"] for t in tools}
 
@@ -362,7 +367,8 @@ def apply_tool_visibility(
     return pinned_names
 
 
-_SETTINGS_HTML = """\
+_SETTINGS_HTML = (
+    """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -525,8 +531,12 @@ async function restartAddon() {
   }
 }
 
-const DEFAULT_PINNED = """ + json.dumps(list(DEFAULT_PINNED_TOOLS)) + """;
-const MANDATORY = """ + json.dumps(list(MANDATORY_TOOLS)) + """;
+const DEFAULT_PINNED = """
+    + json.dumps(list(DEFAULT_PINNED_TOOLS))
+    + """;
+const MANDATORY = """
+    + json.dumps(list(MANDATORY_TOOLS))
+    + """;
 
 function getState(name) {
   if (toolStates[name]) return toolStates[name];
@@ -763,6 +773,7 @@ loadTools();
 </body>
 </html>
 """
+)
 
 
 def register_settings_routes(
@@ -868,15 +879,18 @@ def register_settings_routes(
         pinned_count = sum(1 for s in states.values() if s == "pinned")
         logger.info(
             "Saved tool config (restart required to apply): %d disabled, %d pinned",
-            disabled_count, pinned_count,
+            disabled_count,
+            pinned_count,
         )
 
-        return JSONResponse({
-            "success": True,
-            "disabled": disabled_count,
-            "pinned": pinned_count,
-            "restart_required": True,
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "disabled": disabled_count,
+                "pinned": pinned_count,
+                "restart_required": True,
+            }
+        )
 
     async def _restart_addon(_: Request) -> JSONResponse:
         token = os.environ.get("SUPERVISOR_TOKEN")
@@ -892,13 +906,20 @@ def register_settings_routes(
         # Short timeout — the supervisor kills our process during restart so
         # the connection will drop. A connection drop is actually success.
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, verify=server.settings.verify_ssl
+            ) as client:
                 resp = await client.post(
                     "http://supervisor/addons/self/restart",
                     headers={"Authorization": f"Bearer {token}"},
                 )
-        except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError):
-            # Connection dropped mid-request — restart is happening
+        except (httpx.ReadError, httpx.RemoteProtocolError):
+            # Connection dropped mid-request — restart is happening.
+            # `ConnectError` is deliberately NOT in this tuple: it fires
+            # before a connection is established (DNS failure, TCP refused,
+            # Supervisor socket misconfigured) and means the restart was
+            # never initiated. Falls through to the `httpx.HTTPError`
+            # handler below, which returns 502 + CONNECTION_FAILED.
             logger.info("Restart request connection dropped (expected during restart)")
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
@@ -924,9 +945,11 @@ def register_settings_routes(
         return JSONResponse({"success": True, "message": "Restart initiated"})
 
     async def _settings_info(_: Request) -> JSONResponse:
-        return JSONResponse({
-            "is_addon": is_running_in_addon(),
-        })
+        return JSONResponse(
+            {
+                "is_addon": is_running_in_addon(),
+            }
+        )
 
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
@@ -958,7 +981,15 @@ def register_settings_routes(
         # endpoint. The frontend uses relative fetches (./api/settings/...)
         # so the JS works at either prefix unchanged.
         mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(_settings_page)
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(_get_tools)
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(_save_tools)
-        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(_restart_addon)
-        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(_settings_info)
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
+            _get_tools
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(
+            _save_tools
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(
+            _restart_addon
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
+            _settings_info
+        )

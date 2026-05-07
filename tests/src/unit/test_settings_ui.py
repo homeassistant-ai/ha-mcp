@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -197,9 +198,7 @@ class TestConfigPath:
         sys.platform == "win32",
         reason="chmod 0o000 doesn't model POSIX EACCES on Windows",
     )
-    def test_load_tool_config_handles_real_eacces_on_posix(
-        self, monkeypatch, tmp_path
-    ):
+    def test_load_tool_config_handles_real_eacces_on_posix(self, monkeypatch, tmp_path):
         """End-to-end variant of the EACCES regression: a real 0o000 dir.
 
         The mocked-``read_text`` test above pins the going-forward contract,
@@ -256,7 +255,9 @@ class TestTransformGeneratedTools:
         assert "ha_read_resource" in TRANSFORM_GENERATED_TOOLS
 
     @pytest.mark.asyncio
-    async def test_metadata_includes_ha_resource_tools_when_local_provider_omits_them(self):
+    async def test_metadata_includes_ha_resource_tools_when_local_provider_omits_them(
+        self,
+    ):
         """Closes the gap from #1133: transform tools never reach
         local_provider, so _get_tool_metadata must inject stubs."""
         server = MagicMock()
@@ -433,3 +434,167 @@ class TestSaveToolsValidation:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert "HA_MCP_CONFIG_DIR" in str(body)
+
+
+class TestRestartAddon:
+    """Tests for the `/api/settings/restart` handler — pins the previously
+    untested branches in `_restart_addon`. Boy-Scout pin landed alongside
+    the `verify_ssl` propagation in this PR. Symbol-based references below
+    rather than line numbers, since the kwarg-split here shifts them."""
+
+    def _capture_handler(self, monkeypatch, *, with_token: bool = True) -> SaveHandler:
+        """Capture the `_restart_addon` closure from `register_settings_routes`.
+
+        Mirrors `TestSaveToolsValidation._capture_handler`. `with_token`
+        toggles the env so the no-token branch and the happy-path branches
+        can both be exercised from the same fixture.
+        """
+        if with_token:
+            monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        else:
+            monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+        captured: dict[str, Any] = {}
+
+        def custom_route_factory(path: str, methods: list[str]):
+            def decorator(fn: Any) -> Any:
+                if path.endswith("/api/settings/restart") and "POST" in methods:
+                    captured["restart"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        # `_restart_addon` reads `server.settings.verify_ssl` — must resolve
+        # to a real bool, not a MagicMock, because httpx accepts only
+        # bool/SSLContext for `verify=`.
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["restart"]
+
+    @pytest.mark.asyncio
+    async def test_returns_400_without_supervisor_token(self, monkeypatch):
+        """No-token branch (the `if not token:` guard at the top of
+        `_restart_addon`): when SUPERVISOR_TOKEN is unset (non-addon
+        install), the endpoint must surface a structured 400 rather than
+        ever reaching the Supervisor URL.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=False)
+        request = MagicMock()
+
+        resp = await restart(request)
+
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc_cls",
+        [httpx.ReadError, httpx.RemoteProtocolError],
+    )
+    async def test_treats_connection_drop_as_success(self, monkeypatch, exc_cls):
+        """Drop-as-success branch (the catch on
+        `(ReadError, RemoteProtocolError)` inside the `httpx.AsyncClient`
+        block): the Supervisor kills our process mid-request during a
+        restart, so the connection-drop is the documented success signal —
+        not a failure to surface. ConnectError is excluded because it fires
+        BEFORE a connection is established (DNS / TCP refused / socket
+        misconfigured) and means Supervisor was unreachable, not that a
+        restart was initiated.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        # Patch the AsyncClient at the module level so the restart's
+        # `httpx.AsyncClient(...)` block resolves to a controllable mock.
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=exc_cls("kill"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert "Restart initiated" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_connect_error_returns_502(self, monkeypatch):
+        """ConnectError fires before a connection is established and means
+        Supervisor was unreachable — must NOT be treated as a successful
+        restart. Falls through to the generic `httpx.HTTPError` handler
+        which returns 502 with `CONNECTION_FAILED`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("no route"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_generic_http_error_returns_502(self, monkeypatch):
+        """The generic `httpx.HTTPError` handler (catches anything not
+        already special-cased) maps to 502 + CONNECTION_FAILED. Pins the
+        last unconvered transport-error path in `_restart_addon`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        mock_client = MagicMock()
+        # PoolTimeout subclasses httpx.HTTPError but is NOT in the
+        # drop-as-success tuple — exercises the fall-through.
+        mock_client.post = AsyncMock(side_effect=httpx.PoolTimeout("pool full"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_supervisor_4xx_returns_502(self, monkeypatch):
+        """When Supervisor returns a non-2xx status (e.g. 401 Unauthorized),
+        the handler must surface a 502 to the caller — the restart was not
+        initiated. Pins the `status_code >= 400` branch in `_restart_addon`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        response = MagicMock()
+        response.status_code = 401
+        response.text = "Unauthorized"
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False

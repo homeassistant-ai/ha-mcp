@@ -19,6 +19,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
+from ..config import get_global_settings
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
     get_recent_logs,
@@ -181,7 +182,9 @@ async def _fetch_addon_logs() -> str:
         return ""
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as http_client:
+        async with httpx.AsyncClient(
+            timeout=10.0, verify=get_global_settings().verify_ssl
+        ) as http_client:
             resp = await http_client.get(
                 "http://supervisor/addons/self/logs",
                 headers={"Authorization": f"Bearer {token}"},
