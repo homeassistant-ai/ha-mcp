@@ -1720,6 +1720,13 @@ class TestCodeModeNormalizeEndpointTraversal:
             "../../etc/passwd",            # double .. (path-traversal classic)
             "..//evil.example.com/foo",   # ..// reverse-proxy edge case
             "foo/../bar",                  # mid-path ..
+            # Percent-encoded traversal — pins the M2 fix's
+            # ``urllib.parse.unquote(segment)`` call. Without that
+            # call the segment loop sees ``%2e%2e`` as a normal
+            # filename and would let it slip past on reverse-proxy
+            # setups that decode-then-resolve.
+            "%2e%2e/auth/providers",      # lowercase percent-encoded
+            "%2E%2E/auth/providers",      # uppercase percent-encoded
         ],
     )
     async def test_api_get_rejects_dot_dot_segment(
