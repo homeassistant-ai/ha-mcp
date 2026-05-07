@@ -1430,7 +1430,7 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreate requires `name`; update requires `helper_id`.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(helper_type=\"tod\", name=\"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
+    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreate requires `name`; update requires `helper_id`.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nBehavior notes:\n- UPDATE preserves type-specific fields not re-passed (rename never wipes\n  initial/icon/etc. for any simple helper).\n- Pass `action=\"create\"` or `action=\"update\"` to disambiguate intent —\n  without it the tool falls back to the implicit `helper_id`-presence\n  discriminator.\n- For flow-based helpers, config keys not declared by any step's\n  data_schema are silently ignored by HA; verify field names with\n  `ha_get_helper_schema` before relying on them.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(helper_type=\"tod\", name=\"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -1457,11 +1457,11 @@
           "default": null
         },
         "min_value": {
-          "type": "Annotated[float | None, Field(description='Minimum value (input_number/counter) or minimum length (input_text)', default=None)]",
+          "type": "Annotated[float | None, Field(description=\"Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.\", default=None, validation_alias=AliasChoices('min_value', 'min'))]",
           "default": null
         },
         "max_value": {
-          "type": "Annotated[float | None, Field(description='Maximum value (input_number/counter) or maximum length (input_text)', default=None)]",
+          "type": "Annotated[float | None, Field(description=\"Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.\", default=None, validation_alias=AliasChoices('max_value', 'max'))]",
           "default": null
         },
         "step": {
@@ -1469,7 +1469,7 @@
           "default": null
         },
         "unit_of_measurement": {
-          "type": "Annotated[str | None, Field(description=\"Unit of measurement for input_number (e.g., '°C', '%', 'W')\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.\", default=None, validation_alias=AliasChoices('unit_of_measurement', 'unit'))]",
           "default": null
         },
         "options": {
@@ -1557,7 +1557,7 @@
           "default": null
         },
         "tag_id": {
-          "type": "Annotated[str | None, Field(description='Tag ID for tag (auto-generated if not provided)', default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Tag ID for tag. On create, omit to auto-generate a unique uuid4 hex (HA's tag/create requires this field; the tool fills it in for you). On update, the tag's existing tag_id is required (passed via helper_id).\", default=None)]",
           "default": null
         },
         "description": {
@@ -1575,6 +1575,10 @@
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
+        },
+        "action": {
+          "type": "Annotated[Literal['create', 'update'] | None, Field(description=\"Explicit intent: 'create' a new helper or 'update' an existing one. When omitted, falls back to the implicit discriminator: presence of helper_id => update, absence => create. Pass 'create' or 'update' to disambiguate (e.g. so a typo in helper_id surfaces as a clear 'helper not found' error instead of being mistaken for a create call).\", default=None)]",
+          "default": null
         }
       },
       "required": [
