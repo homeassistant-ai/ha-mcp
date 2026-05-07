@@ -241,20 +241,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # If we also have a query, filter the area results
                 if query and query.strip():
-                    # Get all entities from all areas in the result
+                    # Collect entities from all matched areas, applying
+                    # domain_filter if present (issue #1162).
                     all_area_entities = []
                     if "areas" in area_result:
                         for area_data in area_result["areas"].values():
-                            if "entities" in area_data:
-                                if isinstance(
-                                    area_data["entities"], dict
-                                ):  # grouped by domain
-                                    for domain_entities in area_data[
-                                        "entities"
-                                    ].values():
+                            entities = area_data.get("entities")
+                            if not entities:
+                                continue
+                            if isinstance(entities, dict):  # grouped by domain
+                                if domain_filter:
+                                    all_area_entities.extend(
+                                        entities.get(domain_filter, [])
+                                    )
+                                else:
+                                    for domain_entities in entities.values():
                                         all_area_entities.extend(domain_entities)
-                                else:  # flat list
-                                    all_area_entities.extend(area_data["entities"])
+                            else:  # flat list
+                                if domain_filter:
+                                    all_area_entities.extend(
+                                        e
+                                        for e in entities
+                                        if e.get("entity_id", "").split(".", 1)[0]
+                                        == domain_filter
+                                    )
+                                else:
+                                    all_area_entities.extend(entities)
 
                     # Apply fuzzy search to area entities
                     from ..utils.fuzzy_search import create_fuzzy_searcher
@@ -303,6 +315,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "results": results,
                         "search_type": "area_filtered_query",
                     }
+                    if domain_filter:
+                        search_data["domain_filter"] = domain_filter
 
                     if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
@@ -318,35 +332,59 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
                         first_area = next(iter(area_result["areas"].values()))
-                        by_domain = first_area.get("entities", {})
+                        area_by_domain: dict[str, list[dict[str, Any]]] = (
+                            first_area.get("entities", {})
+                        )
 
-                        # Flatten for results while keeping by_domain structure
+                        # Apply domain_filter to the area's by_domain mapping
+                        # before flattening (issue #1162).
+                        if domain_filter:
+                            area_by_domain = {
+                                domain_filter: area_by_domain.get(domain_filter, [])
+                            }
+
+                        # Flatten to a single results list, then paginate.
                         all_results = []
-                        for domain, entities in by_domain.items():
+                        for domain, entities in area_by_domain.items():
                             for entity in entities:
                                 entity["domain"] = domain
                                 all_results.append(entity)
 
-                        area_search_data = {
+                        paginated = all_results[offset : offset + limit]
+
+                        # Rebuild by_domain from the paginated subset so the
+                        # grouped view matches the flat results.
+                        paginated_by_domain: dict[str, list[dict[str, Any]]] = {}
+                        for entity in paginated:
+                            d = entity["domain"]
+                            paginated_by_domain.setdefault(d, []).append(entity)
+
+                        area_search_data: dict[str, Any] = {
                             "success": True,
                             "area_filter": area_filter,
-                            "total_matches": len(all_results),
-                            "results": all_results,
-                            "by_domain": by_domain,
+                            **_build_pagination_metadata(
+                                len(all_results), offset, limit, paginated
+                            ),
+                            "results": paginated,
+                            "by_domain": paginated_by_domain,
                             "search_type": "area_only",
                             "area_name": first_area.get("area_name", area_filter),
                         }
+                        if domain_filter:
+                            area_search_data["domain_filter"] = domain_filter
                         return await add_timezone_metadata(client, area_search_data)
                     else:
-                        empty_area_data = {
+                        empty_area_data: dict[str, Any] = {
                             "success": True,
                             "area_filter": area_filter,
-                            "total_matches": 0,
+                            **_build_pagination_metadata(0, offset, limit, []),
                             "results": [],
                             "by_domain": {},
                             "search_type": "area_only",
                             "message": f"No entities found in area: {area_filter}",
                         }
+                        if domain_filter:
+                            empty_area_data["domain_filter"] = domain_filter
                         return await add_timezone_metadata(client, empty_area_data)
 
             # Regular entity search (no area filter)
@@ -929,22 +967,28 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         MAX_ENTITIES = 100
 
         if not isinstance(entity_ids, list) or not entity_ids:
-            raise_tool_error(create_validation_error(
-                "entity_id must be a non-empty string or list of entity ID strings",
-                parameter="entity_id",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    "entity_id must be a non-empty string or list of entity ID strings",
+                    parameter="entity_id",
+                )
+            )
 
         if not all(isinstance(eid, str) for eid in entity_ids):
-            raise_tool_error(create_validation_error(
-                "All entity_id values must be strings",
-                parameter="entity_id",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    "All entity_id values must be strings",
+                    parameter="entity_id",
+                )
+            )
 
         if len(entity_ids) > MAX_ENTITIES:
-            raise_tool_error(create_validation_error(
-                f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
-                parameter="entity_id",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Too many entity IDs: {len(entity_ids)} exceeds maximum of {MAX_ENTITIES}",
+                    parameter="entity_id",
+                )
+            )
 
         # Deduplicate while preserving order
         unique_ids = list(dict.fromkeys(entity_ids))
