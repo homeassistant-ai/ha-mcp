@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
+from fastmcp.server.transforms import ResourcesAsTools
 from mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
@@ -23,10 +24,83 @@ from .tools.enhanced import EnhancedToolsMixin
 from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from fastmcp.server.transforms import GetToolNext
+    from fastmcp.tools.base import Tool
+    from fastmcp.utilities.versions import VersionSpec
+
     from .client.rest_client import HomeAssistantClient
     from .tools.registry import ToolsRegistry
 
 logger = logging.getLogger(__name__)
+
+
+class HaResourcesAsTools(ResourcesAsTools):
+    """ResourcesAsTools renamed to follow ha-mcp's ha_<verb>_<noun> convention.
+
+    FastMCP's ResourcesAsTools transform hardcodes ``list_resources`` and
+    ``read_resource``. This subclass renames them to ``ha_list_resources``
+    and ``ha_read_resource`` so they behave like every other tool in the
+    catalog (consistent prefix, discoverable in the web settings UI).
+
+    Upgrade fragility: depends on FastMCP's ``_make_list_resources_tool`` /
+    ``_make_read_resource_tool`` private factories and on the names
+    ``list_resources`` / ``read_resource`` produced by them. A FastMCP
+    upgrade that renames either factory or either tool name will require
+    a matching update here. ``list_tools`` logs a warning if the rename
+    fails to match exactly two tools so the regression is loud at boot.
+    """
+
+    LIST_TOOL_NAME = "ha_list_resources"
+    READ_TOOL_NAME = "ha_read_resource"
+    _RENAMES: ClassVar[dict[str, str]] = {
+        "list_resources": LIST_TOOL_NAME,
+        "read_resource": READ_TOOL_NAME,
+    }
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        # Scan the entire result rather than slicing the tail so a future
+        # FastMCP change that reorders or expands the appended tool set
+        # surfaces as a logged warning instead of silently leaking the
+        # unprefixed names into the catalog.
+        result = list(await super().list_tools(tools))
+        renamed: list[Tool] = []
+        matches = 0
+        for tool in result:
+            new_name = self._RENAMES.get(tool.name)
+            if new_name is None:
+                renamed.append(tool)
+                continue
+            renamed.append(tool.model_copy(update={"name": new_name}))
+            matches += 1
+        if matches != len(self._RENAMES):
+            logger.warning(
+                "HaResourcesAsTools: expected to rename %d tools (%s) but "
+                "matched %d in the upstream tool list — fastmcp's "
+                "ResourcesAsTools contract may have changed",
+                len(self._RENAMES),
+                ", ".join(self._RENAMES),
+                matches,
+            )
+        return renamed
+
+    async def get_tool(
+        self,
+        name: str,
+        call_next: GetToolNext,
+        *,
+        version: VersionSpec | None = None,
+    ) -> Tool | None:
+        if name == self.LIST_TOOL_NAME:
+            return self._make_list_resources_tool().model_copy(
+                update={"name": self.LIST_TOOL_NAME}
+            )
+        if name == self.READ_TOOL_NAME:
+            return self._make_read_resource_tool().model_copy(
+                update={"name": self.READ_TOOL_NAME}
+            )
+        return await call_next(name, version=version)
 
 # Server icon configuration using GitHub-hosted images
 # These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
@@ -179,12 +253,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         is authored for LLM consumption and should not be parsed or
         restructured by code.
 
-        Returns None when skills are disabled, leaving instructions unchanged
-        from the default (None).
+        Returns None when no skills directory or no parseable skills are
+        present, leaving instructions unchanged from the default (None).
         """
-        if not self.settings.enable_skills:
-            return None
-
         skills_dir = self._get_skills_dir()
         if not skills_dir:
             return None
@@ -208,22 +279,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if not skill_blocks:
             return None
 
-        # Build the access method instruction based on config
-        if self.settings.enable_skills_as_tools:
-            access_method = (
-                "Read the skill via MCP resources (resources/read with the "
-                "skill:// URI) — if you can read these instructions, you "
-                "should be able to access resources as well. If for any "
-                "reason you cannot access MCP resources, use the "
-                "list_resources and read_resource tools as a fallback. "
-                "If you can access resources normally, do not waste "
-                "time or tokens on those tools."
-            )
-        else:
-            access_method = (
-                "Read the skill via MCP resources (resources/read with the "
-                "skill:// URI)."
-            )
+        access_method = (
+            "Read the skill via MCP resources (resources/read with the "
+            "skill:// URI) — if you can read these instructions, you "
+            "should be able to access resources as well. If for any "
+            "reason you cannot access MCP resources, use the "
+            "ha_list_resources and ha_read_resource tools as a fallback. "
+            "If you can access resources normally, do not waste "
+            "time or tokens on those tools."
+        )
 
         header = (
             "IMPORTANT: This server provides best-practice skills that MUST "
@@ -517,25 +581,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         pinned = list(self._PINNED_TOOLS)
         pinned.extend(self._user_pinned_tools)
 
-        # Pin ResourcesAsTools and skill guidance tools if skills-as-tools is enabled
-        if self.settings.enable_skills_as_tools:
-            pinned.extend(["list_resources", "read_resource"])
-            # Forward-compatible: pin skill guidance tools registered by #732
-            pinned.extend(getattr(self, "_skill_tool_names", []))
+        # Pin the skills-as-tools transform pair and the per-skill guidance
+        # tools so they remain visible when search-based discovery is on.
+        # The settings UI's mcp.disable() flow runs after these transforms
+        # are appended, so a per-tool disable still wins over this pin.
+        pinned.extend(
+            [HaResourcesAsTools.LIST_TOOL_NAME, HaResourcesAsTools.READ_TOOL_NAME]
+        )
+        pinned.extend(getattr(self, "_skill_tool_names", []))
 
-        # When skills-as-tools is enabled, the client likely doesn't support
-        # resources or server instructions — add skills hint to the search
-        # tool description (the one place the LLM is guaranteed to see).
-        description = self._SEARCH_TOOL_DESCRIPTION
-        if self.settings.enable_skills_as_tools:
-            description += (
-                "\n\nThis server also provides best-practice skills via "
-                "skill:// resources. If your client supports MCP resources, "
-                "prefer reading them directly. Otherwise, call "
-                "list_resources and read_resource (directly, no proxy "
-                "needed) to access the relevant SKILL.md before creating "
-                "automations or configuring devices."
-            )
+        # The client may not support resources or server instructions — add
+        # skills hint to the search tool description (the one place the LLM
+        # is guaranteed to see).
+        description = self._SEARCH_TOOL_DESCRIPTION + (
+            "\n\nThis server also provides best-practice skills via "
+            "skill:// resources. If your client supports MCP resources, "
+            f"prefer reading them directly. Otherwise, call "
+            f"{HaResourcesAsTools.LIST_TOOL_NAME} and "
+            f"{HaResourcesAsTools.READ_TOOL_NAME} (directly, no proxy "
+            "needed) to access the relevant SKILL.md before creating "
+            "automations or configuring devices."
+        )
 
         try:
             self.mcp.add_transform(
@@ -556,14 +622,29 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     def _register_skills(self) -> None:
         """Register bundled HA best-practice skills as MCP resources.
 
-        Uses FastMCP's SkillsDirectoryProvider to serve skill files via skill:// URIs.
-        Optionally exposes skills as tools (list_resources/read_resource) for clients
-        that don't support MCP resources natively.
+        Uses FastMCP's SkillsDirectoryProvider to serve skill files via
+        skill:// URIs and exposes them as tools (ha_list_resources /
+        ha_read_resource) for clients that don't support MCP resources
+        natively. Per-tool visibility is managed via the web settings UI;
+        users who want either tool off can disable it there.
 
-        Controlled by ENABLE_SKILLS and ENABLE_SKILLS_AS_TOOLS settings.
+        Each phase tracks success in ``status`` so the final summary log
+        line tells operators at a glance whether the skill system is
+        healthy, partially degraded, or fully unavailable. Without that
+        summary, three independent ``logger.exception`` calls leave
+        operators reconstructing state from scattered log lines.
+
+        Failure modes degrade unevenly across clients: if Phase 3
+        (transform) fails, resource-capable clients still see skills,
+        but tool-only clients (claude.ai etc.) lose ha_list_resources
+        and ha_read_resource from their catalog with no protocol-level
+        error — only the warning summary signals it.
         """
-        if not self.settings.enable_skills:
-            return
+        status: dict[str, str | int] = {
+            "provider": "skipped",
+            "transform": "skipped",
+            "guidance_tools": 0,
+        }
 
         # Phase 1: Import SkillsDirectoryProvider
         try:
@@ -572,6 +653,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning(
                 "SkillsDirectoryProvider not available in fastmcp, skipping skills"
             )
+            self._log_skill_registration_summary(status)
             return
 
         # Phase 2: Register skills as MCP resources
@@ -582,6 +664,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     "Skills directory not found at %s, skipping skill registration",
                     Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 )
+                self._log_skill_registration_summary(status)
                 return
 
             self.mcp.add_provider(
@@ -590,36 +673,61 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
             )
             logger.info("Registered bundled skills as MCP resources")
+            status["provider"] = "ok"
         except Exception:
             logger.exception("Failed to register skills as resources")
+            status["provider"] = "failed"
+            self._log_skill_registration_summary(status)
             return
 
-        # Phase 3: Optionally expose skills as tools
-        if not self.settings.enable_skills_as_tools:
-            return
-
+        # Phase 3: Expose skills as tools so clients without resource
+        # support can still reach the documentation.
         try:
-            from fastmcp.server.transforms import ResourcesAsTools
-        except ImportError:
-            logger.warning(
-                "ResourcesAsTools not available in fastmcp, "
-                "skills registered as resources but not exposed as tools"
+            self.mcp.add_transform(HaResourcesAsTools(self.mcp))
+            logger.info(
+                "Skills also exposed as tools (ha_list_resources / ha_read_resource)"
             )
-            return
-
-        try:
-            self.mcp.add_transform(ResourcesAsTools(self.mcp))
-            logger.info("Skills also exposed as tools (ResourcesAsTools)")
+            status["transform"] = "ok"
         except Exception:
             logger.exception(
                 "Failed to expose skills as tools (resources still available)"
             )
+            status["transform"] = "failed"
 
         # Phase 4: Register skill guidance tools for clients that don't read
         # server instructions (e.g., claude.ai). The tool description contains
         # the trigger conditions so the AI sees them in the tool listing.
         # Names stored for pinning in search transforms (always-visible).
         self._register_skill_guidance_tools(skills_dir)
+        status["guidance_tools"] = len(self._skill_tool_names)
+
+        self._log_skill_registration_summary(status)
+
+    @staticmethod
+    def _log_skill_registration_summary(status: dict[str, str | int]) -> None:
+        """Emit one-line summary of skill registration outcome.
+
+        ``info`` when both provider and transform succeeded *and* at least
+        one guidance tool registered; ``warning`` otherwise. The
+        guidance>0 gate catches the "shipped but exposes nothing" case
+        (skills directory exists but is empty, or every SKILL.md fails to
+        parse) — both prior phases succeed yet no skill is actually
+        reachable. This is the line operators should grep for when a
+        user reports missing skill features.
+        """
+        provider = status.get("provider")
+        transform = status.get("transform")
+        raw_guidance = status.get("guidance_tools", 0)
+        guidance = raw_guidance if isinstance(raw_guidance, int) else 0
+
+        message = (
+            "Skill system summary: provider=%s, transform=%s, guidance_tools=%d"
+        )
+        args = (provider, transform, guidance)
+        if provider == "ok" and transform == "ok" and guidance > 0:
+            logger.info(message, *args)
+        else:
+            logger.warning(message, *args)
 
     def _register_skill_guidance_tools(self, skills_dir: Path) -> None:
         """Register a lightweight guidance tool per skill.
@@ -628,7 +736,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         so the bootstrap prompt (trigger conditions, symptoms) is invisible.
         This registers a tool per skill whose description contains the trigger
         conditions. The tool itself just lists available reference files —
-        actual content is loaded on demand via read_resource.
+        actual content is loaded on demand via the resources/read MCP method
+        (or the ha_read_resource fallback tool when the client lacks resource
+        support).
         """
         try:
             entries = sorted(skills_dir.iterdir())
@@ -653,7 +763,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_description = (
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
-                f"Returns available reference files. Use read_resource with "
+                f"Returns available reference files. Read each file via "
+                f"resources/read (or ha_read_resource as a fallback) using "
                 f"the file URI to load specific guides as needed."
             )
 
@@ -670,9 +781,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                         "skill": s_name,
                         "skill_uri": s_uri,
                         "how_to_use": (
-                            "Use read_resource with a file URI below to load "
-                            "the specific reference you need. Start with "
-                            "SKILL.md for the decision workflow."
+                            "Read each file via resources/read (or "
+                            "ha_read_resource as a fallback) with a file "
+                            "URI below to load the specific reference you "
+                            "need. Start with SKILL.md for the decision "
+                            "workflow."
                         ),
                         "available_files": files,
                     }

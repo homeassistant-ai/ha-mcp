@@ -1,10 +1,10 @@
 """
-Tests for bundled skills served as MCP resources and optionally as tools.
+Tests for bundled skills served as MCP resources and as tools.
 
 Verifies that:
-- Skills are discoverable via list_resources() when ENABLE_SKILLS=true
+- Skills are discoverable via list_resources()
 - Skill content can be read via resources/read
-- Skills appear as tools when ENABLE_SKILLS_AS_TOOLS=true
+- Skills appear as ha_list_resources / ha_read_resource tools
 - Server instructions (bootstrap prompt) include skill guidance
 """
 
@@ -132,4 +132,64 @@ async def test_skills_reference_files_readable(mcp_client):
     logger.info(
         f"Found {len(reference_resources)} reference resources, "
         f"verified {ref.uri} is readable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skills_as_tools_use_ha_prefix(mcp_client):
+    """The ResourcesAsTools transform pair must use the ha_<verb>_<noun>
+    naming convention used everywhere else in the catalog."""
+    tools = await mcp_client.list_tools()
+    names = {t.name for t in tools}
+
+    assert "ha_list_resources" in names, (
+        f"ha_list_resources missing from tool list. Got: {sorted(names)[:25]}"
+    )
+    assert "ha_read_resource" in names, (
+        f"ha_read_resource missing from tool list. Got: {sorted(names)[:25]}"
+    )
+    # The unprefixed FastMCP defaults must not leak through.
+    assert "list_resources" not in names, (
+        "Unprefixed list_resources is still registered — HaResourcesAsTools "
+        "rename did not apply."
+    )
+    assert "read_resource" not in names, (
+        "Unprefixed read_resource is still registered — HaResourcesAsTools "
+        "rename did not apply."
+    )
+
+
+@pytest.mark.asyncio
+async def test_ha_list_resources_invocation(mcp_client):
+    """Calling ha_list_resources end-to-end must dispatch to the underlying
+    FastMCP-built handler and return the bundled skill resources. Catalog
+    presence (test above) is necessary but not sufficient — this proves
+    the rename doesn't break invocation routing."""
+    result = await mcp_client.call_tool("ha_list_resources", {})
+
+    # The FastMCP handler returns a JSON string of resource metadata.
+    payload = result.content[0].text if hasattr(result, "content") else str(result)
+    assert "skill://" in payload, (
+        f"ha_list_resources output should include skill:// URIs from the "
+        f"bundled provider. Got: {payload[:300]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ha_read_resource_invocation(mcp_client):
+    """Calling ha_read_resource end-to-end must accept a skill:// URI and
+    return the resource contents."""
+    # Find a real skill URI to read.
+    resources = await mcp_client.list_resources()
+    skill_md = next(
+        (r for r in resources if str(r.uri).endswith("SKILL.md")), None
+    )
+    assert skill_md is not None, "No SKILL.md resource available to read"
+
+    result = await mcp_client.call_tool(
+        "ha_read_resource", {"uri": str(skill_md.uri)}
+    )
+    payload = result.content[0].text if hasattr(result, "content") else str(result)
+    assert len(payload) > 100, (
+        f"ha_read_resource should return non-trivial content for {skill_md.uri}"
     )

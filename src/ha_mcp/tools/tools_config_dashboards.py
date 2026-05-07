@@ -483,6 +483,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
 
+        Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
         - Get default dashboard: ha_config_get_dashboard(url_path="default")

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -15,7 +18,9 @@ from starlette.responses import JSONResponse
 from ha_mcp.settings_ui import (
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
+    TRANSFORM_GENERATED_TOOLS,
     _get_config_path,
+    _get_tool_metadata,
     apply_tool_visibility,
     load_tool_config,
     register_settings_routes,
@@ -137,19 +142,137 @@ class TestApplyToolVisibility:
         mcp.disable.assert_not_called()
 
 
+@pytest.fixture(autouse=True)
+def _reset_data_dir_cache():
+    """Clear the shared resolved-dir cache between tests."""
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    get_data_dir.cache_clear()
+    yield
+    get_data_dir.cache_clear()
+
+
 class TestConfigPath:
-    """Test _get_config_path uses SUPERVISOR_TOKEN, not /data heuristic."""
+    """Thin wrapper around utils.data_paths.get_data_dir; full priority
+    order is tested in tests/src/unit/test_data_paths.py.
+    """
 
-    def test_addon_path_when_supervisor_token_set(self, monkeypatch):
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        assert _get_config_path() == Path("/data/tool_config.json")
-
-    def test_home_path_when_no_supervisor_token(self, monkeypatch, tmp_path):
+    def test_returns_data_dir_plus_filename(self, monkeypatch, tmp_path):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _get_config_path()
-        assert result == tmp_path / ".ha-mcp" / "tool_config.json"
-        assert (tmp_path / ".ha-mcp").is_dir()
+        assert _get_config_path() == tmp_path / ".ha-mcp" / "tool_config.json"
+
+    def test_load_tool_config_does_not_crash_on_unreadable_config_dir(
+        self, monkeypatch, tmp_path
+    ):
+        """Regression for #1125 + the same-class follow-up bug.
+
+        When the resolved path's parent isn't traversable by the runtime
+        UID (e.g. ``HA_MCP_CONFIG_DIR`` pointing at an existing 0700 dir
+        owned by another user), ``Path.exists()`` would raise
+        ``PermissionError`` because ``EACCES`` is not in
+        ``pathlib._IGNORED_ERRNOS``. ``load_tool_config()`` must treat it
+        as "no config yet" instead of crashing.
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        unreadable_dir = tmp_path / "unreadable"
+        unreadable_dir.mkdir()
+        cfg_path = unreadable_dir / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+
+        original_read = Path.read_text
+
+        def fake_read_text(self: Path, *args, **kwargs):
+            if self == cfg_path:
+                raise PermissionError(13, "Permission denied")
+            return original_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+        # Must not raise.
+        assert load_tool_config() == {}
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod 0o000 doesn't model POSIX EACCES on Windows",
+    )
+    def test_load_tool_config_handles_real_eacces_on_posix(self, monkeypatch, tmp_path):
+        """End-to-end variant of the EACCES regression: a real 0o000 dir.
+
+        The mocked-``read_text`` test above pins the going-forward contract,
+        but a future maintainer who reintroduces an upstream ``Path.exists()``
+        check would not be caught by it. This test exercises the actual
+        permission boundary: ``read_text`` on a file under a 0o000 dir
+        raises ``PermissionError`` (errno EACCES) from the kernel.
+        """
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        locked_dir = tmp_path / "locked"
+        locked_dir.mkdir()
+        cfg_path = locked_dir / "tool_config.json"
+        cfg_path.write_text("{}")
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+        os.chmod(locked_dir, 0o000)
+        try:
+            assert load_tool_config() == {}
+        finally:
+            os.chmod(locked_dir, 0o755)  # let pytest clean up tmp_path
+
+
+class TestSaveToolConfig:
+    """Tests for the bool return contract added so the HTTP route can
+    surface failures to the UI instead of lying that the save succeeded."""
+
+    def test_returns_true_on_success(self, tmp_path):
+        cfg_path = tmp_path / "tool_config.json"
+        with patch("ha_mcp.settings_ui._get_config_path", return_value=cfg_path):
+            assert save_tool_config({"tools": {"x": "disabled"}}) is True
+        assert cfg_path.exists()
+
+    def test_returns_false_on_oserror(self, monkeypatch, tmp_path):
+        cfg_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
+
+        def fake_write_text(self: Path, *args, **kwargs):
+            if self == cfg_path:
+                raise OSError(30, "Read-only file system")
+            return Path.write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fake_write_text)
+        assert save_tool_config({"tools": {"x": "disabled"}}) is False
+
+
+class TestTransformGeneratedTools:
+    """The ResourcesAsTools pair must be advertised to the settings UI even
+    though they're appended at runtime by the FastMCP transform."""
+
+    def test_ha_list_resources_is_advertised(self):
+        assert "ha_list_resources" in TRANSFORM_GENERATED_TOOLS
+
+    def test_ha_read_resource_is_advertised(self):
+        assert "ha_read_resource" in TRANSFORM_GENERATED_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_metadata_includes_ha_resource_tools_when_local_provider_omits_them(
+        self,
+    ):
+        """Closes the gap from #1133: transform tools never reach
+        local_provider, so _get_tool_metadata must inject stubs."""
+        server = MagicMock()
+        server.mcp.local_provider._list_tools = AsyncMock(return_value=[])
+
+        tools = await _get_tool_metadata(server)
+        names = {t["name"] for t in tools}
+
+        assert "ha_list_resources" in names
+        assert "ha_read_resource" in names
+        # Stubs are not feature-gated; no `disabled_by` should be set.
+        for entry in tools:
+            if entry["name"] in {"ha_list_resources", "ha_read_resource"}:
+                assert "disabled_by" not in entry
+                assert entry["annotations"].get("readOnlyHint") is True
 
 
 class TestFeatureGatedTools:
@@ -168,7 +291,12 @@ class TestFeatureGatedTools:
         # disabled_by should reference the dev addon option name (matches
         # how the JS renders "set <code>{disabled_by}</code> in the dev
         # add-on config or the matching env var (see docs/beta.md)").
-        for name in ("ha_list_files", "ha_read_file", "ha_write_file", "ha_delete_file"):
+        for name in (
+            "ha_list_files",
+            "ha_read_file",
+            "ha_write_file",
+            "ha_delete_file",
+        ):
             assert FEATURE_GATED_TOOLS[name]["disabled_by"] == "enable_filesystem_tools"
 
 
@@ -230,6 +358,7 @@ class TestSaveToolsValidation:
                 if path == "/api/settings/tools" and "POST" in methods:
                     captured["save"] = fn
                 return fn
+
             return decorator
 
         mcp = MagicMock()
@@ -276,24 +405,42 @@ class TestSaveToolsValidation:
         config_path = tmp_path / "tool_config.json"
         monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
         save = self._capture_handler(monkeypatch)
-        resp = await save(self._make_request({
-            "states": {
-                "ha_good_tool": "disabled",
-                "ha_bad_value": "not_a_real_state",
-                42: "disabled",  # non-string key
-            },
-        }))
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        "ha_good_tool": "disabled",
+                        "ha_bad_value": "not_a_real_state",
+                        42: "disabled",  # non-string key
+                    },
+                }
+            )
+        )
         assert resp.status_code == 200
         saved = json.loads(config_path.read_text())
         assert saved["tools"] == {"ha_good_tool": "disabled"}
 
+    @pytest.mark.asyncio
+    async def test_returns_500_when_save_fails(self, monkeypatch, tmp_path):
+        """``save_tool_config`` returning False (read-only fs, etc.) must
+        surface as a 500 to the UI — otherwise the JS shows "Saved" while
+        the change was lost."""
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setattr("ha_mcp.settings_ui.save_tool_config", lambda _: False)
+        save = self._capture_handler(monkeypatch)
+        resp = await save(self._make_request({"states": {"ha_good_tool": "disabled"}}))
+        assert resp.status_code == 500
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "HA_MCP_CONFIG_DIR" in str(body)
+
 
 class TestRestartAddon:
-    """Tests for the `/api/settings/restart` handler — pins the two
-    untested branches in `_restart_addon` (`settings_ui.py:780-789` no-token,
-    `:798-801` connection-drop-as-success). Boy-Scout pin landed alongside
-    the `verify_ssl` propagation in this PR; closes the test-coverage gap
-    flagged in #960's approve-body."""
+    """Tests for the `/api/settings/restart` handler — pins the previously
+    untested branches in `_restart_addon`. Boy-Scout pin landed alongside
+    the `verify_ssl` propagation in this PR. Symbol-based references below
+    rather than line numbers, since the kwarg-split here shifts them."""
 
     def _capture_handler(self, monkeypatch, *, with_token: bool = True) -> SaveHandler:
         """Capture the `_restart_addon` closure from `register_settings_routes`.
@@ -314,23 +461,25 @@ class TestRestartAddon:
                 if path.endswith("/api/settings/restart") and "POST" in methods:
                     captured["restart"] = fn
                 return fn
+
             return decorator
 
         mcp = MagicMock()
         mcp.custom_route = MagicMock(side_effect=custom_route_factory)
         server = MagicMock()
-        # `_restart_addon` reads `server.settings.verify_ssl` in this PR's
-        # post-G1 state — must resolve to a real bool, not a MagicMock,
-        # because httpx accepts only bool/SSLContext for `verify=`.
+        # `_restart_addon` reads `server.settings.verify_ssl` — must resolve
+        # to a real bool, not a MagicMock, because httpx accepts only
+        # bool/SSLContext for `verify=`.
         server.settings.verify_ssl = True
         register_settings_routes(mcp, server, secret_path="/x")
         return captured["restart"]
 
     @pytest.mark.asyncio
     async def test_returns_400_without_supervisor_token(self, monkeypatch):
-        """`settings_ui.py:780-789` no-token branch: when SUPERVISOR_TOKEN is
-        unset (non-addon install), the endpoint must surface a structured 400
-        rather than ever reaching the Supervisor URL.
+        """No-token branch (the `if not token:` guard at the top of
+        `_restart_addon`): when SUPERVISOR_TOKEN is unset (non-addon
+        install), the endpoint must surface a structured 400 rather than
+        ever reaching the Supervisor URL.
         """
         restart = self._capture_handler(monkeypatch, with_token=False)
         request = MagicMock()
@@ -343,11 +492,19 @@ class TestRestartAddon:
         assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
 
     @pytest.mark.asyncio
-    async def test_treats_connection_drop_as_success(self, monkeypatch):
-        """`settings_ui.py:798-801` drop-as-success branch: the Supervisor
-        kills our process mid-request during a restart, so a `ReadError` /
-        `RemoteProtocolError` / `ConnectError` from the POST is the
-        documented success signal — not a failure to surface.
+    @pytest.mark.parametrize(
+        "exc_cls",
+        [httpx.ReadError, httpx.RemoteProtocolError],
+    )
+    async def test_treats_connection_drop_as_success(self, monkeypatch, exc_cls):
+        """Drop-as-success branch (the catch on
+        `(ReadError, RemoteProtocolError)` inside the `httpx.AsyncClient`
+        block): the Supervisor kills our process mid-request during a
+        restart, so the connection-drop is the documented success signal —
+        not a failure to surface. ConnectError is excluded because it fires
+        BEFORE a connection is established (DNS / TCP refused / socket
+        misconfigured) and means Supervisor was unreachable, not that a
+        restart was initiated.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
         request = MagicMock()
@@ -355,7 +512,7 @@ class TestRestartAddon:
         # Patch the AsyncClient at the module level so the restart's
         # `httpx.AsyncClient(...)` block resolves to a controllable mock.
         mock_client = MagicMock()
-        mock_client.post = AsyncMock(side_effect=__import__("httpx").ReadError("kill"))
+        mock_client.post = AsyncMock(side_effect=exc_cls("kill"))
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=mock_client)
         cm.__aexit__ = AsyncMock(return_value=None)
@@ -367,3 +524,77 @@ class TestRestartAddon:
         body = json.loads(resp.body)
         assert body["success"] is True
         assert "Restart initiated" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_connect_error_returns_502(self, monkeypatch):
+        """ConnectError fires before a connection is established and means
+        Supervisor was unreachable — must NOT be treated as a successful
+        restart. Falls through to the generic `httpx.HTTPError` handler
+        which returns 502 with `CONNECTION_FAILED`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("no route"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_generic_http_error_returns_502(self, monkeypatch):
+        """The generic `httpx.HTTPError` handler (catches anything not
+        already special-cased) maps to 502 + CONNECTION_FAILED. Pins the
+        last unconvered transport-error path in `_restart_addon`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        mock_client = MagicMock()
+        # PoolTimeout subclasses httpx.HTTPError but is NOT in the
+        # drop-as-success tuple — exercises the fall-through.
+        mock_client.post = AsyncMock(side_effect=httpx.PoolTimeout("pool full"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_supervisor_4xx_returns_502(self, monkeypatch):
+        """When Supervisor returns a non-2xx status (e.g. 401 Unauthorized),
+        the handler must surface a 502 to the caller — the restart was not
+        initiated. Pins the `status_code >= 400` branch in `_restart_addon`.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        response = MagicMock()
+        response.status_code = 401
+        response.text = "Unauthorized"
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False

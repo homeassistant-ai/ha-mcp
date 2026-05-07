@@ -85,7 +85,15 @@ Try asking Claude:
 
 ## Step 6: Connect Your Home Assistant
 
-Ready to use your own Home Assistant? Edit the config file:
+Ready to use your own Home Assistant? Edit the config file.
+
+If you installed Claude Desktop from the **Microsoft Store**, run this in PowerShell to find your config path:
+
+```powershell
+$pkg = Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pkg) { "$env:LOCALAPPDATA\Packages\$($pkg.PackageFamilyName)\LocalCache\Roaming\Claude\claude_desktop_config.json" } else { "$env:APPDATA\Claude\claude_desktop_config.json" }
+```
+
+Or open it directly (works for the **traditional installer**):
 
 ```powershell
 notepad "$env:APPDATA\Claude\claude_desktop_config.json"

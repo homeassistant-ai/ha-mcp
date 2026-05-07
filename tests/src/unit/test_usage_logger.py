@@ -170,11 +170,31 @@ class TestUsageLoggerRingBuffer:
 class TestUsageLoggerDefaults:
     """Test UsageLogger default behavior."""
 
-    def test_default_log_path(self):
-        """Test that default log path is in user home directory."""
+    @pytest.fixture(autouse=True)
+    def _reset_data_dir_cache(self):
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        yield
+        get_data_dir.cache_clear()
+
+    def test_default_log_path(self, monkeypatch):
+        """Default log path lives under ``~/.ha-mcp/logs/`` when no
+        overrides are in play."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
         logger = UsageLogger()
-        assert str(logger.log_file_path).startswith(str(Path.home()))
-        assert ".ha-mcp" in str(logger.log_file_path)
+        assert logger.log_file_path == Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+        logger.shutdown()
+
+    def test_honors_ha_mcp_config_dir(self, monkeypatch, tmp_path):
+        """``HA_MCP_CONFIG_DIR`` redirects logs the same way it redirects
+        the settings-UI tool config — the two share ``get_data_dir()``."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        custom = tmp_path / "custom"
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(custom))
+        logger = UsageLogger()
+        assert logger.log_file_path == custom / "logs" / "mcp_usage.jsonl"
         logger.shutdown()
 
 

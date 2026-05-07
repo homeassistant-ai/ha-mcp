@@ -28,9 +28,6 @@ from ..utils.python_sandbox import (
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
-from .best_practice_checker import (
-    get_skill_prefix as _get_skill_prefix,
-)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -247,6 +244,8 @@ class AutomationConfigTools:
         Retrieve Home Assistant automation configuration.
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
+
+        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
@@ -573,9 +572,7 @@ class AutomationConfigTools:
                 # Normalize and validate the transformed config
                 transformed_config = _normalize_automation_config(transformed_config)
                 self._validate_required_fields(transformed_config, identifier)
-                bp_warnings = _check_best_practices(
-                    transformed_config, skill_prefix=_get_skill_prefix()
-                )
+                bp_warnings = _check_best_practices(transformed_config)
 
                 # Save transformed config
                 result = await self._client.upsert_automation_config(
@@ -640,9 +637,7 @@ class AutomationConfigTools:
             self._validate_required_fields(config_dict, identifier)
 
             # Pre-check for best-practice issues.
-            bp_warnings = _check_best_practices(
-                config_dict, skill_prefix=_get_skill_prefix()
-            )
+            bp_warnings = _check_best_practices(config_dict)
 
             # Cross-check literal service and entity references against
             # the live registries. Soft warnings only — the write still
