@@ -22,7 +22,6 @@ import json
 import logging
 import os
 import shutil
-import socket
 import sys
 import tempfile
 import threading
@@ -205,20 +204,16 @@ def _detect_docker_host() -> dict:
     - ``hostname`` – hostname that Docker containers use to reach the host
     - ``extra_hosts`` – dict passed to ``container.with_kwargs`` (may be empty)
     """
-    import subprocess
-
     try:
-        result = subprocess.run(
-            [
-                "docker", "run", "--rm", "alpine",
-                "sh", "-c",
-                "getent hosts host.docker.internal 2>/dev/null | awk '{print $1}'",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
+        import docker as docker_sdk
+
+        client = docker_sdk.from_env()
+        output = client.containers.run(
+            "alpine",
+            ["sh", "-c", "getent hosts host.docker.internal 2>/dev/null | awk '{print $1}'"],
+            remove=True,
         )
-        if result.stdout.strip():
+        if output.strip():
             # Docker Desktop DNS resolved the name — use hostname, no override needed
             logger.info("🔍 Docker Desktop DNS detected — using host.docker.internal as-is")
             return {"hostname": "host.docker.internal", "extra_hosts": {}}
@@ -242,16 +237,13 @@ def _blueprint_http_server():
     """
     env = _detect_docker_host()
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        port = s.getsockname()[1]
-
     assets_dir = Path(__file__).parent.parent.parent / "assets" / "blueprints"
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(assets_dir))
     handler.log_message = lambda *args: None  # type: ignore[method-assign]
-    srv = http.server.HTTPServer(("0.0.0.0", port), handler)
+    srv = http.server.HTTPServer(("0.0.0.0", 0), handler)
+    port = srv.server_address[1]
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
 
