@@ -201,8 +201,8 @@ def _detect_docker_host() -> dict:
     it does not resolve, we are on plain Linux Docker and must add extra_hosts.
 
     Returns a dict with:
-    - ``hostname`` – hostname that Docker containers use to reach the host
-    - ``extra_hosts`` – dict passed to ``container.with_kwargs`` (may be empty)
+    - ``hostname`` - hostname that Docker containers use to reach the host
+    - ``extra_hosts`` - dict passed to ``container.with_kwargs`` (may be empty)
     """
     try:
         import docker as docker_sdk
