@@ -87,6 +87,121 @@ class TestUnaryOperators:
         assert result["value"] == -5
 
 
+class TestSafeNodes1159:
+    """Regression tests for issue #1159 — safe AST nodes that were over-restricted.
+
+    The sandbox is documented as a sanity-check whitelist (not a security
+    boundary), so missing pure-AST nodes cause spurious rejections of
+    legitimate Python idioms. These tests pin the gap shut.
+    """
+
+    def test_pass_statement(self):
+        """`pass` is a no-op; rejecting it forced agents to invent dummy expressions."""
+        expr = """
+for view in config['views']:
+    if view.get('path') == 'skip-me':
+        pass
+"""
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_generator_expression(self):
+        """`sum(x for x in ...)` and similar generator-arg patterns must validate."""
+        expr = "config['count'] = sum(1 for c in config['views'][0]['cards'] if c.get('type') == 'tile')"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_ternary_expression(self):
+        """`x if c else y` — fundamental Python idiom."""
+        expr = "config['icon'] = 'mdi:on' if config.get('state') == 'on' else 'mdi:off'"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_keyword_argument_in_call(self):
+        """`func(key=value)` — kwargs in calls must validate."""
+        expr = "config['views'] = sorted(config['views'], key=len, reverse=True)"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_starred_unpacking_in_list(self):
+        """`[*existing, new]` — list spread is a common merge idiom."""
+        expr = "config['views'][0]['cards'] = [*config['views'][0]['cards'], {'type': 'button'}]"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_dict_double_star_unpacking(self):
+        """`{**existing, 'k': v}` — dict spread is a common merge idiom."""
+        expr = "config['views'][0] = {**config['views'][0], 'icon': 'mdi:home'}"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_slice_expression(self):
+        """`list[1:3]` — slicing must validate."""
+        expr = "config['views'][0]['cards'] = config['views'][0]['cards'][:5]"
+        valid, error = validate_expression(expr)
+        assert valid is True, error
+
+    def test_reporter_pattern_executes(self):
+        """End-to-end: reconstruct cards list with conditional skip via `pass`.
+
+        This is the exact shape of the transform from issue #1159 — pass branch
+        inside an if inside a loop. Now executes and produces the expected result.
+        """
+        config = {
+            "views": [
+                {
+                    "path": "home",
+                    "cards": [
+                        {"type": "tile", "name": "keep-1"},
+                        {"type": "tile", "name": "drop"},
+                        {"type": "tile", "name": "keep-2"},
+                    ],
+                }
+            ]
+        }
+        expr = """
+new_cards = []
+for card in config['views'][0]['cards']:
+    if card.get('name') == 'drop':
+        pass
+    else:
+        new_cards.append(card)
+config['views'][0]['cards'] = new_cards
+"""
+        result = safe_execute(expr, config)
+        names = [c["name"] for c in result["views"][0]["cards"]]
+        assert names == ["keep-1", "keep-2"]
+
+
+class TestErrorSuggestions1159:
+    """Issue #1159 — node-rejection errors should hint at the right alternative."""
+
+    def test_try_block_includes_hint(self):
+        """try/except is rejected with a hint pointing at validation alternatives."""
+        expr = "try:\n    config['x'] = 1\nexcept Exception:\n    config['x'] = 0"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "Try" in error
+        assert "isinstance" in error or "validate" in error.lower()
+
+    def test_function_def_includes_hint(self):
+        """Function definitions are rejected with a hint pointing at comprehensions."""
+        expr = "def helper():\n    return 1"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "FunctionDef" in error
+        assert "comprehension" in error.lower() or "inline" in error.lower()
+
+    def test_unmapped_node_falls_back_to_generic(self):
+        """Nodes without a mapped suggestion produce a bare 'Forbidden node type: X'."""
+        # match statements (3.10+) — Match isn't in SAFE_NODES and we don't
+        # map a hint for it, so the message is the legacy format with no hint.
+        expr = "match config:\n    case _:\n        config['x'] = 1"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert error == "Forbidden node type: Match"
+
+
 class TestBlockedOperations:
     """Test that dangerous operations are blocked."""
 

@@ -23,16 +23,19 @@ SAFE_NODES = {
     ast.Assign,
     ast.AugAssign,  # +=, -=, etc.
     ast.AnnAssign,  # type annotations
+    ast.Pass,  # explicit no-op
     # Control flow
     ast.If,
     ast.For,
     ast.While,
     ast.Break,
     ast.Continue,
+    ast.IfExp,  # ternary: x if c else y
     # Data access
     ast.Subscript,
     ast.Attribute,
     ast.Index,
+    ast.Slice,  # list[1:3]
     ast.Name,
     ast.Load,
     ast.Store,
@@ -43,6 +46,7 @@ SAFE_NODES = {
     ast.Dict,
     ast.Tuple,
     ast.Set,
+    ast.Starred,  # *args / [*list] unpacking
     # Operations
     ast.Delete,
     ast.BinOp,
@@ -73,13 +77,35 @@ SAFE_NODES = {
     ast.IsNot,
     # Function calls (validated separately)
     ast.Call,
+    ast.keyword,  # keyword arguments: func(key=value)
     # Comprehensions
     ast.ListComp,
     ast.DictComp,
     ast.SetComp,
+    ast.GeneratorExp,  # (x for x in ...)
     ast.comprehension,
     # Lambda (for comprehensions)
     ast.Lambda,
+}
+
+
+# Hints to help agents recover when a forbidden node is encountered.
+# Keyed on AST class name. Empty / unknown keys fall through to the
+# generic message.
+_NODE_SUGGESTIONS: dict[str, str] = {
+    "Try": "validate inputs with isinstance/in/.get() instead of try/except",
+    "ExceptHandler": "validate inputs with isinstance/in/.get() instead of try/except",
+    "With": "perform the inner logic directly; with-blocks aren't supported",
+    "AsyncWith": "perform the inner logic directly; with-blocks aren't supported",
+    "FunctionDef": "use a list comprehension or inline the logic",
+    "AsyncFunctionDef": "use a list comprehension or inline the logic",
+    "ClassDef": "use a dict literal instead of defining a class",
+    "Yield": "build a list with a comprehension or for-loop append",
+    "YieldFrom": "build a list with a comprehension or for-loop append",
+    "Global": "assign directly to the variable; scope keywords aren't supported",
+    "Nonlocal": "assign directly to the variable; scope keywords aren't supported",
+    "Import": "imports aren't available; built-ins like isinstance/len/range are exposed",
+    "ImportFrom": "imports aren't available; built-ins like isinstance/len/range are exposed",
 }
 
 # Whitelist of safe methods that can be called
@@ -203,7 +229,11 @@ def validate_expression(expr: str) -> tuple[bool, str]:
 def _validate_node(node: ast.AST) -> str | None:
     """Validate a single AST node. Returns error message or None if safe."""
     if type(node) not in SAFE_NODES:
-        return f"Forbidden node type: {type(node).__name__}"
+        name = type(node).__name__
+        hint = _NODE_SUGGESTIONS.get(name)
+        if hint:
+            return f"Forbidden node type: {name} — {hint}"
+        return f"Forbidden node type: {name}"
 
     if isinstance(node, (ast.Import, ast.ImportFrom)):
         return "Forbidden: imports not allowed"
@@ -346,12 +376,16 @@ PYTHON TRANSFORM SECURITY:
 
 ✅ ALLOWED:
 - Dictionary/list access: config['views'][0]['cards'][1]
+- Slicing: config['views'][0]['cards'][1:3]
 - Assignment: config['key'] = 'value'
 - Deletion: del config['key'] or config.pop('key')
 - List methods: append, insert, pop, remove, clear, extend
 - Dict methods: update, get, setdefault, keys, values, items
-- Loops: for, while, if/else
-- Comprehensions: [x for x in ...]
+- Loops: for, while, if/else, pass, break, continue
+- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)
+- Ternary: x if condition else y
+- Unpacking: [*list], {**dict}, func(*args, **kwargs)
+- Keyword arguments: func(key=value)
 - String methods: startswith, endswith, lower, upper, split, join
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
   min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
@@ -363,5 +397,13 @@ PYTHON TRANSFORM SECURITY:
 - Dunder access: __class__, __bases__, __subclasses__
 - Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr
 - Function definitions: def, class
-- Exception handling: try/except (use validation instead)
+- Exception handling: try/except (validate with isinstance/in/.get() instead)
+
+🎯 PATTERNS:
+- Filter cards: cards = [c for c in cards if keep(c)]
+- Skip in a loop: use `continue`, not a `pass` branch
+- Conditionally include: cards.append(x) only when wanted, instead of
+  rebuilding the list with if/pass branches
+- Modify in place when possible (single pass, fewer surprises) over
+  reconstructing the entire list
 """.strip()
