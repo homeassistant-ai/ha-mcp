@@ -214,6 +214,7 @@ def main() -> int:
     custom_secret_path = ""  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
+    enable_jmespath_filter = False  # default
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
@@ -233,6 +234,8 @@ def main() -> int:
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            raw_jmespath = config.get("enable_jmespath_filter", False)
+            enable_jmespath_filter = raw_jmespath if isinstance(raw_jmespath, bool) else False
             raw_filesystem_tools = config.get("enable_filesystem_tools", False)
             enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
             raw_custom_component = config.get("enable_custom_component_integration", False)
@@ -275,6 +278,7 @@ def main() -> int:
     os.environ["BACKUP_HINT"] = backup_hint
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
+    os.environ["ENABLE_JMESPATH_FILTER"] = str(enable_jmespath_filter).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()

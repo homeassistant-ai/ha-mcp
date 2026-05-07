@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # JMESPath response-filter middleware — injects an optional _jmespath parameter
+    # into every tool, allowing agents to filter responses server-side before they are
+    # returned. Reduces token usage for large HA payloads. Disabled by default.
+    enable_jmespath_filter: bool = Field(False, alias="ENABLE_JMESPATH_FILTER")
+
     # Seed values for tool visibility (comma-separated tool names).
     # Used as initial config when no tool_config.json exists.
     # The web settings UI (/settings) is the primary interface for managing these.

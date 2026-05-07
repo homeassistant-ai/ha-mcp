@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import parse_mcp_result
+from ..utilities.assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,26 @@ async def test_jmespath_param_present_on_all_tools(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_on_list_tools_idempotent(mcp_client):
+    """Calling list_tools twice must not accumulate or change the _jmespath schema."""
+    tools_first = await mcp_client.list_tools()
+    tools_second = await mcp_client.list_tools()
+
+    schema_first = {
+        t.name: (t.inputSchema or {}).get("properties", {}).get("_jmespath")
+        for t in tools_first
+    }
+    schema_second = {
+        t.name: (t.inputSchema or {}).get("properties", {}).get("_jmespath")
+        for t in tools_second
+    }
+    assert schema_first == schema_second, (
+        "_jmespath schema must be identical across list_tools calls (no mutation of registry objects)"
+    )
+    logger.info(f"✅ _jmespath schema stable across {len(tools_first)} tools")
+
+
+@pytest.mark.asyncio
 async def test_jmespath_projection_reduces_response(mcp_client):
     """A projection expression returns only the requested fields."""
     result = await mcp_client.call_tool(
@@ -43,19 +63,52 @@ async def test_jmespath_projection_reduces_response(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_jmespath_invalid_expression_degrades_gracefully(mcp_client):
-    """An invalid JMESPath expression returns the full response plus a warning."""
+async def test_jmespath_projection_preserves_envelope(mcp_client):
+    """Envelope fields (success, partial, warning) survive a sub-field projection."""
     result = await mcp_client.call_tool(
+        "ha_get_state",
+        {"entity_id": "sun.sun", "_jmespath": "data.state"},
+    )
+    data = parse_mcp_result(result)
+
+    # ha_get_state returns success=True; a scalar projection wraps in {"result": ...}
+    # but the envelope key must be re-attached by the middleware
+    assert "success" in data, f"Envelope 'success' must be preserved; got keys: {list(data)}"
+    logger.info(f"✅ Envelope preserved after projection: {data}")
+
+
+@pytest.mark.asyncio
+async def test_jmespath_invalid_expression_raises_error(mcp_client):
+    """An invalid JMESPath expression raises a structured ToolError."""
+    data = await safe_call_tool(
+        mcp_client,
         "ha_get_state",
         {"entity_id": "sun.sun", "_jmespath": "!!not valid!!"},
     )
 
+    assert data.get("success") is False, (
+        f"Expected success=False for invalid expression; got: {data}"
+    )
+    error = data.get("error", {})
+    assert isinstance(error, dict), f"Expected structured error dict; got: {error!r}"
+    assert error.get("code") == "VALIDATION_INVALID_PARAMETER", (
+        f"Expected VALIDATION_INVALID_PARAMETER error code; got: {error.get('code')!r}"
+    )
+    logger.info(f"✅ Invalid expression raised ToolError: {error.get('message')!r}")
+
+
+@pytest.mark.asyncio
+async def test_jmespath_none_result(mcp_client):
+    """An expression that matches nothing returns explicit null, not an empty dict."""
+    result = await mcp_client.call_tool(
+        "ha_get_state",
+        {"entity_id": "sun.sun", "_jmespath": "nonexistent_field_xyz"},
+    )
     data = parse_mcp_result(result)
 
-    assert "_jmespath_warning" in data, (
-        f"Expected _jmespath_warning in degraded response; got keys: {list(data)}"
-    )
-    logger.info(f"✅ Graceful degradation: warning = {data['_jmespath_warning']!r}")
+    assert "result" in data, f"None-match must use explicit {{'result': None}}; got: {data}"
+    assert data["result"] is None, f"result must be null; got: {data['result']!r}"
+    logger.info("✅ None-match returned {'result': None}")
 
 
 @pytest.mark.asyncio

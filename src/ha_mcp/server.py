@@ -201,7 +201,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             icons=SERVER_ICONS,
             instructions=instructions,
         )
-        self.mcp.add_middleware(JMESPathFilterMiddleware())
+        if self.settings.enable_jmespath_filter:
+            self.mcp.add_middleware(JMESPathFilterMiddleware())
 
         # Register all tools and expert prompts
         self._initialize_server()

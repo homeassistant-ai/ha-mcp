@@ -378,6 +378,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
         # Enable feature flags for e2e tests
         os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+        os.environ["ENABLE_JMESPATH_FILTER"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
 

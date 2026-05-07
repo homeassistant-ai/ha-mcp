@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from collections.abc import Sequence
@@ -8,8 +9,11 @@ from typing import Any
 import jmespath
 import jmespath.exceptions
 import mcp.types as mt
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
+
+from ha_mcp.errors import ErrorCode, create_error_response
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +21,12 @@ _PARAM_NAME = "_jmespath"
 _PARAM_SCHEMA: dict[str, Any] = {
     "type": "string",
     "description": (
-        "Optional JMESPath expression applied server-side to filter this tool's "
-        "response before it is returned, reducing token usage. "
-        "Examples: 'state' — single field; "
-        "'{id: entity_id, state: state}' — projection; "
-        "'entities[?domain==`light`].entity_id' — filter array. "
-        "On expression error the full response is returned with a '_jmespath_warning' key."
+        "Optional JMESPath filter applied server-side before returning (see jmespath.org). "
+        "Examples: 'state', '{id: entity_id, state: state}', 'entities[?domain==`light`]'."
     ),
 }
+
+_ENVELOPE_KEYS = ("success", "partial", "warning", "error", "count", "message")
 
 
 class JMESPathFilterMiddleware(Middleware):
@@ -40,9 +42,10 @@ class JMESPathFilterMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
         tools = await call_next(context)
-        for tool in tools:
+        tools_copy = copy.deepcopy(list(tools))
+        for tool in tools_copy:
             tool.parameters.setdefault("properties", {})[_PARAM_NAME] = _PARAM_SCHEMA
-        return tools
+        return tools_copy
 
     async def on_call_tool(
         self,
@@ -64,7 +67,7 @@ class JMESPathFilterMiddleware(Middleware):
 
 
 def _apply_jmespath(result: ToolResult, expr: str) -> ToolResult:
-    """Apply a JMESPath expression to the tool result, degrading gracefully on error."""
+    """Apply a JMESPath expression to the tool result."""
     data: Any = result.structured_content
 
     if data is None:
@@ -75,7 +78,7 @@ def _apply_jmespath(result: ToolResult, expr: str) -> ToolResult:
                     data = json.loads(text)
                     break
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    logger.warning("_jmespath: text block is not JSON, skipping filter")
 
     if data is None:
         return result
@@ -83,15 +86,26 @@ def _apply_jmespath(result: ToolResult, expr: str) -> ToolResult:
     try:
         filtered = jmespath.compile(expr).search(data)
     except jmespath.exceptions.JMESPathError as exc:
-        warning: dict[str, Any] = dict(data) if isinstance(data, dict) else {"result": data}
-        warning["_jmespath_warning"] = str(exc)
-        return ToolResult(content=[mt.TextContent(type="text", text=json.dumps(warning))], structured_content=warning)
+        raise ToolError(json.dumps(create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Invalid JMESPath expression: {exc}",
+            context={"expression": expr},
+            suggestions=["Check JMESPath syntax — see https://jmespath.org/examples.html"],
+        ))) from exc
 
     if filtered is None:
-        filtered_dict: dict[str, Any] = {}
+        filtered_dict: dict[str, Any] = {"result": None}
     elif isinstance(filtered, dict):
         filtered_dict = filtered
     else:
         filtered_dict = {"result": filtered}
 
-    return ToolResult(content=[mt.TextContent(type="text", text=json.dumps(filtered_dict))], structured_content=filtered_dict)
+    if isinstance(data, dict):
+        for key in _ENVELOPE_KEYS:
+            if key in data and key not in filtered_dict:
+                filtered_dict[key] = data[key]
+
+    return ToolResult(
+        content=[mt.TextContent(type="text", text=json.dumps(filtered_dict))],
+        structured_content=filtered_dict,
+    )
