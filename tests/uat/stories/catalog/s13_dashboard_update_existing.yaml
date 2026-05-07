@@ -16,6 +16,6 @@ expected:
   tools_should_use:
     - ha_config_get_dashboard
     - ha_get_skill_home_assistant_best_practices
-    - read_resource
+    - ha_read_resource
     - ha_config_get_dashboard
     - ha_config_set_dashboard

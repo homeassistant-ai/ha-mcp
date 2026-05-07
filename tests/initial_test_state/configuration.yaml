@@ -20,3 +20,32 @@ http:
     - 192.168.0.0/16
 
 demo:
+
+# YAML-configured template sensors providing the `sensor.demo_temperature`
+# and `sensor.demo_outside_temperature` names that several existing e2e
+# tests reference (test_helper_crud.py, test_config_entry_flow.py). The
+# bare `demo:` line above does NOT create entities in modern HA — the
+# demo integration is config-flow-only since it was migrated — so without
+# these YAML fixtures those tests passed only because HA helper configs
+# accept unknown entity IDs (the helper's state would be 'unknown' at
+# runtime, but the helper itself was created successfully).
+#
+# These same fixtures double as the non-helper integration entity for
+# tests/src/e2e/workflows/entities/test_show_as.py — YAML template
+# entities aren't reachable via ha_config_set_helper (which uses the
+# config-flow API), so they're a legitimate "integration-provided" fixture
+# for proving ha_set_entity works on entities with no helper alternative.
+template:
+  - sensor:
+      - name: demo Temperature
+        unique_id: e2e_demo_temperature
+        state: "{{ 22.5 }}"
+        device_class: temperature
+        state_class: measurement
+        unit_of_measurement: "°C"
+      - name: demo Outside Temperature
+        unique_id: e2e_demo_outside_temperature
+        state: "{{ 10.0 }}"
+        device_class: temperature
+        state_class: measurement
+        unit_of_measurement: "°C"

@@ -13,20 +13,43 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from ._version import is_running_in_addon
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
+from .utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from .config import Settings
     from .server import HomeAssistantSmartMCPServer
+
+
+class ToolStub(TypedDict):
+    """Metadata advertised in the settings UI for a tool that isn't visible
+    in ``local_provider._list_tools()``.
+
+    Two reasons a tool needs a stub: it's added by a FastMCP transform at
+    runtime (``TRANSFORM_GENERATED_TOOLS``), or it's feature-gated and
+    only registers when a setting is on (``FEATURE_GATED_TOOLS``). The
+    consumer (`_get_tool_metadata`) renders the same shape for both;
+    ``disabled_by`` is the only field that differs and signals UI
+    placement of the "Beta — set X" hint.
+    """
+
+    title: str
+    primary_tag: str
+    description: str
+    readOnlyHint: NotRequired[bool]
+    destructiveHint: NotRequired[bool]
+    disabled_by: NotRequired[str]
+
 
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
@@ -46,6 +69,39 @@ MANDATORY_TOOLS: set[str] = {
     "ha_report_issue",
 }
 
+# Tools created by FastMCP transforms (not registered through
+# local_provider). The ``ResourcesAsTools`` transform — subclassed in
+# server.py as ``HaResourcesAsTools`` — appends ``ha_list_resources`` and
+# ``ha_read_resource`` at runtime, so they never show up in
+# ``local_provider._list_tools()``. Inject stub metadata so the UI can
+# render them and ``mcp.disable()`` can hide them from the catalog.
+#
+# Keys MUST match ``HaResourcesAsTools.LIST_TOOL_NAME`` / ``READ_TOOL_NAME``;
+# server.py is not imported here to avoid a top-level cycle, but the
+# ``test_transform_generated_tool_names_match_class_constants`` unit test
+# fails fast if either side drifts.
+TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {
+    "ha_list_resources": {
+        "title": "List Resources",
+        "primary_tag": "System",
+        "description": (
+            "List bundled skill files and other MCP resources exposed via "
+            "skill:// URIs. Fallback for clients that do not support MCP "
+            "resources natively."
+        ),
+        "readOnlyHint": True,
+    },
+    "ha_read_resource": {
+        "title": "Read Resource",
+        "primary_tag": "System",
+        "description": (
+            "Read a skill or resource by URI. Fallback for clients that do "
+            "not support MCP resources natively."
+        ),
+        "readOnlyHint": True,
+    },
+}
+
 # Tools that exist in the codebase but are only registered when a
 # corresponding feature flag/env var is set. When the flag is off, these
 # won't appear in local_provider._list_tools(), so we inject stub entries
@@ -53,82 +109,84 @@ MANDATORY_TOOLS: set[str] = {
 # it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
 # source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py)
 # — a future rename or removal needs to land in both places.
-FEATURE_GATED_TOOLS: dict[str, dict[str, str]] = {
+FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
         "primary_tag": "System",
         "description": "Add, replace, or remove top-level keys in configuration.yaml or package files.",
         "disabled_by": "enable_yaml_config_editing",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_list_files": {
         "title": "List Files",
         "primary_tag": "Files",
         "description": "List files in a directory within the Home Assistant config.",
         "disabled_by": "enable_filesystem_tools",
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
     "ha_read_file": {
         "title": "Read File",
         "primary_tag": "Files",
         "description": "Read a file from the Home Assistant config directory.",
         "disabled_by": "enable_filesystem_tools",
-        "readOnlyHint": "true",
+        "readOnlyHint": True,
     },
     "ha_write_file": {
         "title": "Write File",
         "primary_tag": "Files",
         "description": "Write a file to allowed directories in the Home Assistant config.",
         "disabled_by": "enable_filesystem_tools",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_delete_file": {
         "title": "Delete File",
         "primary_tag": "Files",
         "description": "Delete a file from allowed directories.",
         "disabled_by": "enable_filesystem_tools",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
     "ha_install_mcp_tools": {
         "title": "Install MCP Tools Component",
         "primary_tag": "Utilities",
         "description": "Install the ha_mcp_tools custom component via HACS.",
         "disabled_by": "enable_custom_component_integration",
-        "destructiveHint": "true",
+        "destructiveHint": True,
     },
 }
 
 
-def _is_addon() -> bool:
-    """Return True when running inside the Home Assistant add-on container.
-
-    Mirrors the existing convention in this module (and ``__main__.py``)
-    of treating ``SUPERVISOR_TOKEN`` as the add-on detector. Using the env
-    var is more reliable than checking for ``/data`` because some Docker
-    setups (and macOS dev environments) have a ``/data`` directory that
-    isn't the add-on data dir.
-    """
-    return bool(os.environ.get("SUPERVISOR_TOKEN"))
-
-
 def _get_config_path() -> Path:
-    """Return the path to the tool config JSON file."""
-    if _is_addon():
-        return Path("/data") / "tool_config.json"
-    home_dir = Path.home() / ".ha-mcp"
-    home_dir.mkdir(parents=True, exist_ok=True)
-    return home_dir / "tool_config.json"
+    """Return the path to the tool config JSON file.
+
+    Delegates directory resolution to :func:`utils.data_paths.get_data_dir`,
+    which handles ``HA_MCP_CONFIG_DIR`` override, add-on ``/data``,
+    home-dir, and tmpdir fallback (memoized).
+    """
+    return get_data_dir() / "tool_config.json"
 
 
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
-    if path.exists():
+    # ``Path.exists()`` only swallows ``ENOENT/ENOTDIR/EBADF/ELOOP``; an
+    # ``EACCES`` (e.g. ``HA_MCP_CONFIG_DIR`` pointing at a dir that exists
+    # but isn't readable by the runtime UID) propagates. Read directly and
+    # treat ``FileNotFoundError`` as "no config yet"; log other ``OSError``s.
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        raw = None
+    except OSError:
+        logger.warning("Cannot read tool config at %s", path, exc_info=True)
+        raw = None
+
+    if raw is not None:
         try:
-            result: dict[str, Any] = json.loads(path.read_text())
+            result: dict[str, Any] = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Tool config at %s is not valid JSON; ignoring.", path)
+        else:
             return result
-        except (OSError, json.JSONDecodeError):
-            logger.warning("Failed to read tool config from %s", path)
 
     if settings is None:
         return {}
@@ -156,17 +214,57 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {}
 
 
-def save_tool_config(config: dict[str, Any]) -> None:
-    """Persist tool config to disk."""
+def save_tool_config(config: dict[str, Any]) -> bool:
+    """Persist tool config to disk.
+
+    Returns True on success, False on failure (read-only filesystem,
+    permission denied, etc.). Caller is responsible for surfacing the
+    failure to the user — the HTTP route at ``_save_tools`` returns 500
+    so the UI's ``saveConfig`` shows "Save failed!" instead of the
+    misleading "Saved — restart required".
+    """
     path = _get_config_path()
     try:
         path.write_text(json.dumps(config, indent=2))
-        logger.info("Saved tool config to %s", path)
     except OSError:
         logger.exception("Failed to save tool config to %s", path)
+        return False
+    logger.info("Saved tool config to %s", path)
+    return True
 
 
-async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[str, Any]]:
+def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
+    """Render a ToolStub as the dict shape ``_get_tool_metadata`` returns.
+
+    Both transform-generated and feature-gated stubs share the same UI
+    representation; the only meaningful difference is whether
+    ``disabled_by`` carries the safety-toggle name (which the JS
+    template renders as a "Beta — set X" hint). Annotations come
+    through as bools and are dropped from the final dict when False
+    so the JSON payload stays small.
+    """
+    annotations: dict[str, bool] = {}
+    if meta.get("readOnlyHint"):
+        annotations["readOnlyHint"] = True
+    if meta.get("destructiveHint"):
+        annotations["destructiveHint"] = True
+
+    rendered: dict[str, Any] = {
+        "name": name,
+        "title": meta["title"],
+        "description": meta["description"],
+        "tags": [meta["primary_tag"]],
+        "primary_tag": meta["primary_tag"],
+        "annotations": annotations,
+    }
+    if "disabled_by" in meta:
+        rendered["disabled_by"] = meta["disabled_by"]
+    return rendered
+
+
+async def _get_tool_metadata(
+    server: HomeAssistantSmartMCPServer,
+) -> list[dict[str, Any]]:
     """Extract metadata for all registered tools from the server.
 
     Uses FastMCP's internal ``local_provider._list_tools()`` because the
@@ -196,34 +294,32 @@ async def _get_tool_metadata(server: HomeAssistantSmartMCPServer) -> list[dict[s
         title = getattr(tool, "title", None) or tool.name
         if tool.annotations and getattr(tool.annotations, "title", None):
             title = tool.annotations.title
-        tools.append({
-            "name": tool.name,
-            "title": title,
-            "description": (tool.description or "")[:200],
-            "tags": tags,
-            "primary_tag": primary,
-            "annotations": annotations,
-        })
+        tools.append(
+            {
+                "name": tool.name,
+                "title": title,
+                "description": (tool.description or "")[:200],
+                "tags": tags,
+                "primary_tag": primary,
+                "annotations": annotations,
+            }
+        )
+
+    registered_names = {t["name"] for t in tools}
+
+    # Inject stub entries for tools generated by FastMCP transforms — these
+    # never reach local_provider so they have to be advertised explicitly.
+    for name, transform_meta in TRANSFORM_GENERATED_TOOLS.items():
+        if name in registered_names:
+            continue
+        tools.append(_render_stub(name, transform_meta))
+        registered_names.add(name)
 
     # Inject stub entries for feature-gated tools that aren't registered
-    registered_names = {t["name"] for t in tools}
     for name, meta in FEATURE_GATED_TOOLS.items():
         if name in registered_names:
             continue
-        stub_annotations: dict[str, bool] = {}
-        if meta.get("readOnlyHint") == "true":
-            stub_annotations["readOnlyHint"] = True
-        if meta.get("destructiveHint") == "true":
-            stub_annotations["destructiveHint"] = True
-        tools.append({
-            "name": name,
-            "title": meta["title"],
-            "description": meta["description"],
-            "tags": [meta["primary_tag"]],
-            "primary_tag": meta["primary_tag"],
-            "annotations": stub_annotations,
-            "disabled_by": meta["disabled_by"],
-        })
+        tools.append(_render_stub(name, meta))
 
     tools.sort(key=lambda t: (t["primary_tag"], t["name"]))
     return tools
@@ -271,7 +367,8 @@ def apply_tool_visibility(
     return pinned_names
 
 
-_SETTINGS_HTML = """\
+_SETTINGS_HTML = (
+    """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -367,7 +464,7 @@ _SETTINGS_HTML = """\
   <span id="status" class="status">Loading...</span>
 </div>
 <div class="readonly-notice">
-  Safety toggles (Enable Skills, Tool Search, YAML Config Editing) are managed in the
+  Safety toggles (Tool Search, YAML Config Editing) are managed in the
   add-on configuration page and require a restart to change.
 </div>
 <div class="pin-notice show" id="pinNotice">
@@ -434,8 +531,12 @@ async function restartAddon() {
   }
 }
 
-const DEFAULT_PINNED = """ + json.dumps(list(DEFAULT_PINNED_TOOLS)) + """;
-const MANDATORY = """ + json.dumps(list(MANDATORY_TOOLS)) + """;
+const DEFAULT_PINNED = """
+    + json.dumps(list(DEFAULT_PINNED_TOOLS))
+    + """;
+const MANDATORY = """
+    + json.dumps(list(MANDATORY_TOOLS))
+    + """;
 
 function getState(name) {
   if (toolStates[name]) return toolStates[name];
@@ -672,6 +773,7 @@ loadTools();
 </body>
 </html>
 """
+)
 
 
 def register_settings_routes(
@@ -760,21 +862,35 @@ def register_settings_routes(
 
         config = load_tool_config()
         config["tools"] = states
-        save_tool_config(config)
+        if not save_tool_config(config):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Failed to persist tool config to disk",
+                    suggestions=[
+                        "Set HA_MCP_CONFIG_DIR to a writable path (read-only filesystem?)",
+                        "Check the server logs for the underlying OSError",
+                    ],
+                ),
+                status_code=500,
+            )
 
         disabled_count = sum(1 for s in states.values() if s == "disabled")
         pinned_count = sum(1 for s in states.values() if s == "pinned")
         logger.info(
             "Saved tool config (restart required to apply): %d disabled, %d pinned",
-            disabled_count, pinned_count,
+            disabled_count,
+            pinned_count,
         )
 
-        return JSONResponse({
-            "success": True,
-            "disabled": disabled_count,
-            "pinned": pinned_count,
-            "restart_required": True,
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "disabled": disabled_count,
+                "pinned": pinned_count,
+                "restart_required": True,
+            }
+        )
 
     async def _restart_addon(_: Request) -> JSONResponse:
         token = os.environ.get("SUPERVISOR_TOKEN")
@@ -790,13 +906,20 @@ def register_settings_routes(
         # Short timeout — the supervisor kills our process during restart so
         # the connection will drop. A connection drop is actually success.
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, verify=server.settings.verify_ssl
+            ) as client:
                 resp = await client.post(
                     "http://supervisor/addons/self/restart",
                     headers={"Authorization": f"Bearer {token}"},
                 )
-        except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError):
-            # Connection dropped mid-request — restart is happening
+        except (httpx.ReadError, httpx.RemoteProtocolError):
+            # Connection dropped mid-request — restart is happening.
+            # `ConnectError` is deliberately NOT in this tuple: it fires
+            # before a connection is established (DNS failure, TCP refused,
+            # Supervisor socket misconfigured) and means the restart was
+            # never initiated. Falls through to the `httpx.HTTPError`
+            # handler below, which returns 502 + CONNECTION_FAILED.
             logger.info("Restart request connection dropped (expected during restart)")
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
@@ -822,12 +945,14 @@ def register_settings_routes(
         return JSONResponse({"success": True, "message": "Restart initiated"})
 
     async def _settings_info(_: Request) -> JSONResponse:
-        return JSONResponse({
-            "is_addon": _is_addon(),
-        })
+        return JSONResponse(
+            {
+                "is_addon": is_running_in_addon(),
+            }
+        )
 
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
-    is_addon = _is_addon()
+    is_addon = is_running_in_addon()
 
     if not is_addon and not secret_prefix:
         logger.warning(
@@ -856,7 +981,15 @@ def register_settings_routes(
         # endpoint. The frontend uses relative fetches (./api/settings/...)
         # so the JS works at either prefix unchanged.
         mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(_settings_page)
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(_get_tools)
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(_save_tools)
-        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(_restart_addon)
-        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(_settings_info)
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
+            _get_tools
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(
+            _save_tools
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(
+            _restart_addon
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
+            _settings_info
+        )

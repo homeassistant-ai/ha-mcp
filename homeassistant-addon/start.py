@@ -179,84 +179,26 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     return raw if isinstance(raw, bool) else default
 
 
-SKILLS_AS_TOOLS_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
+_STALE_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
 
 
-def migrate_skills_as_tools_default(
-    data_dir: Path,
-    config_file: Path,
-    stored_value: bool,
-    config_read_ok: bool,
-) -> bool:
-    """One-time migration to force enable_skills_as_tools=true for existing users.
+def cleanup_stale_migration_marker(data_dir: Path) -> None:
+    """Remove the one-time enable_skills_as_tools migration marker.
 
-    The Pydantic default in src/ha_mcp/config.py was flipped to True in
-    #806, but the add-on's config.yaml was never updated at the same time.
-    For add-on installs the env var is written from options.json before
-    ha-mcp reads its Pydantic settings, so the new Python default never
-    took effect for existing users. This runs exactly once per install
-    (guarded by a marker file in /data) and forces the flag on for users
-    who still have False stored, then persists the new value to
-    options.json so the supervisor UI reflects it. On subsequent boots the
-    marker is present and the stored value is respected, so users who
-    deliberately toggle it off will not be re-forced.
-
-    config_read_ok must be False when the caller could not load
-    options.json (file unreadable or malformed JSON). In that case the
-    marker is not created, so the migration can run again on a later
-    boot once options.json is readable and expose the user's real
-    stored value.
+    The marker was created by the previous version's
+    ``migrate_skills_as_tools_default`` (removed in #1133). It is now
+    unused on every install; cleaning it up prevents permanent ``/data``
+    litter for users who upgraded across the toggle removal. ``unlink``
+    is best-effort — a stale dotfile is harmless if removal fails.
     """
-    marker = data_dir / SKILLS_AS_TOOLS_MIGRATION_MARKER
-    if marker.exists():
-        return stored_value
-
-    # First run after this update. Force-on + persist only if the user is
-    # currently on False, then create the marker so the migration does
-    # not loop — but skip marker creation when the caller could not
-    # verify the stored value (see config_read_ok in the docstring).
-    if not stored_value:
-        log_info(
-            "One-time migration: forcing enable_skills_as_tools=true. "
-            "The Pydantic default was set to True in #806 but the add-on's "
-            "config.yaml was not updated alongside it, so this value stayed "
-            "False for existing add-on installs. Future user-initiated "
-            "changes to this setting will be respected."
+    marker = data_dir / _STALE_MIGRATION_MARKER
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(
+            f"Failed to remove stale migration marker {marker}: {e}. "
+            "Safe to ignore — the file is unused."
         )
-        if config_file.exists():
-            try:
-                with open(config_file, encoding="utf-8") as f:
-                    opts = json.load(f)
-                if isinstance(opts, dict):
-                    opts["enable_skills_as_tools"] = True
-                    with open(config_file, "w", encoding="utf-8") as f:
-                        json.dump(opts, f, indent=2)
-                        f.write("\n")
-                    log_info("Persisted enable_skills_as_tools=true to options.json")
-                else:
-                    log_error(
-                        "Cannot persist migration to options.json: top-level "
-                        f"is {type(opts).__name__}, expected dict. Runtime "
-                        "override still applied for this session."
-                    )
-            except (OSError, json.JSONDecodeError) as e:
-                log_error(
-                    f"Failed to persist migration to options.json "
-                    f"(operation: persist_skills_as_tools_migration): {e}. "
-                    "Runtime override still applied for this session."
-                )
-        stored_value = True
-
-    if config_read_ok:
-        try:
-            marker.touch()
-        except OSError as e:
-            log_error(
-                f"Failed to create migration marker "
-                f"(operation: create_skills_as_tools_marker): {e}"
-            )
-
-    return stored_value
 
 
 def main() -> int:
@@ -266,21 +208,20 @@ def main() -> int:
     # Read configuration from Supervisor
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
+    cleanup_stale_migration_marker(data_dir)
     config: dict[str, Any] = {}
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
-    enable_skills = True  # default
-    enable_skills_as_tools = True  # default
     enable_tool_search = False  # default
     enable_yaml_config_editing = False  # default
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
+    enable_code_mode = False  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
     verify_ssl = True  # default
     advanced_debug_logging = False  # default
-    config_read_ok = True
 
     if config_file.exists():
         try:
@@ -288,10 +229,6 @@ def main() -> int:
                 config = json.load(f)
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
-            raw_skills = config.get("enable_skills", True)
-            enable_skills = raw_skills if isinstance(raw_skills, bool) else True
-            raw_skills_as_tools = config.get("enable_skills_as_tools", True)
-            enable_skills_as_tools = raw_skills_as_tools if isinstance(raw_skills_as_tools, bool) else True
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
@@ -300,6 +237,8 @@ def main() -> int:
             enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
             raw_custom_component = config.get("enable_custom_component_integration", False)
             enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
+            raw_code_mode = config.get("enable_code_mode", False)
+            enable_code_mode = raw_code_mode if isinstance(raw_code_mode, bool) else False
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
             raw_disabled = config.get("disabled_tools", "")
@@ -310,16 +249,6 @@ def main() -> int:
             advanced_debug_logging = resolve_bool_option(config, "advanced_debug_logging", False)
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
-            config_read_ok = False
-
-    # One-time migration: add-on users whose stored value is False predate
-    # this release's config.yaml default flip. See migrate_skills_as_tools_default.
-    enable_skills_as_tools = migrate_skills_as_tools_default(
-        data_dir=data_dir,
-        config_file=config_file,
-        stored_value=enable_skills_as_tools,
-        config_read_ok=config_read_ok,
-    )
 
     # Validate Supervisor token (needed for both ha-mcp auth below and the
     # options-persist call right after secret path resolution)
@@ -344,12 +273,22 @@ def main() -> int:
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
     os.environ["BACKUP_HINT"] = backup_hint
-    os.environ["ENABLE_SKILLS"] = str(enable_skills).lower()
-    os.environ["ENABLE_SKILLS_AS_TOOLS"] = str(enable_skills_as_tools).lower()
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
+    os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
+    # Persist saved custom tools across addon restarts. /data is the
+    # per-addon writable directory mapped by Supervisor and survives
+    # add-on updates (but not uninstall/reinstall — users should copy
+    # this file out before reinstalling if they want to migrate).
+    # Setting this unconditionally is safe: on the stable add-on the
+    # tool isn't registered anyway, so the file is never read or
+    # written. Operators can override by setting CODE_MODE_SAVED_TOOLS_PATH
+    # in the add-on's environment if they want a different location.
+    os.environ.setdefault(
+        "CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json"
+    )
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
     os.environ["PINNED_TOOLS"] = pinned_tools_raw

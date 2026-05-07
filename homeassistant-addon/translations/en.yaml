@@ -22,10 +22,15 @@ configuration:
     name: Enable tool search
     description: >-
       Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~5K tokens. Use this if using an LLM without
-      deferred tools or with smaller context windows. Tools are found via
-      ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.
+      idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you
+      use Claude in Sonnet or Opus modes — those models have their own
+      built-in tool search / deferred tools, which conflicts with ours.
+      To use ha-mcp's tool search with Claude, disable Claude's built-in
+      tool search first; otherwise leave this off. Use this only with
+      LLMs that lack native deferred tools (e.g. Claude Haiku, local
+      OpenAI-compatible models) or with smaller context windows. Tools
+      are found via ha_search_tools and executed via categorized proxies
+      (read/write/delete). Requires restart to take effect.
   verify_ssl:
     name: Verify TLS certificate
     description: >-

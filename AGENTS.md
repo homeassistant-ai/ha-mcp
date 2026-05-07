@@ -21,13 +21,13 @@ This repository uses a worktree-based development workflow.
 │   ├── issue-42/                      # Feature branch worktree
 │   └── fix-something/                 # Fix branch worktree
 ├── local/                             # Scratch work (gitignored)
-└── .claude/agents/                    # Custom agent workflows
+└── .claude/skills/                    # Slash-command skills
 ```
 
 **Why use `worktree/` subdirectory:**
 - Keeps worktrees organized in one place
 - Gitignored (won't pollute `git status`)
-- All worktrees automatically inherit `.claude/agents/` workflows
+- All worktrees automatically inherit `.claude/skills/` workflows
 - Easy cleanup: `git worktree prune` removes stale references
 
 **Quick command:** Use `/wt <branch-name>` skill to create worktree automatically.
@@ -46,20 +46,24 @@ git worktree add worktree/feat-new-feature -b feat/new-feature
 
 # Wrong - don't create worktrees at repo root
 git worktree add issue-42 -b issue-42          # ❌ Creates orphaned worktree
-git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/agents/
+git worktree add ../issue-42 -b issue-42       # ❌ Outside repo, no .claude/skills/
 ```
 
 **Cleanup:** `git worktree remove worktree/<name>` or `git worktree prune` for stale references.
 
-### Agent Workflows
+### Skills
 
-Custom agent workflows are located in `.claude/agents/`:
+All workflow automation is implemented as skills in `.claude/skills/` and invoked with `/skill-name <args>`:
 
-| Agent | File | Model | Purpose |
-|-------|------|-------|---------|
-| **issue-analysis** | `issue-analysis.md` | Opus | Deep issue analysis - comprehensive codebase exploration, implementation planning, architectural assessment, complexity evaluation. Complements automated Gemini triage with human-directed deep analysis. |
-| **issue-to-pr-resolver** | `issue-to-pr-resolver.md` | Sonnet | End-to-end issue implementation: pre-flight checks → worktree creation → implementation with tests → pre-PR checkpoint → PR creation → iterative CI/review resolution until merge-ready. |
-| **my-pr-checker** | `my-pr-checker.md` | Sonnet | Review and manage YOUR OWN PRs - check comments, CI status, resolve review threads, monitor until all checks pass. Use for your PRs, not external contributions. |
+| Skill | Command | Purpose |
+|-------|---------|---------|
+| **issue-analysis** | `/issue-analysis <number>` | Deep issue analysis — codebase exploration, implementation planning, architectural assessment. Posts structured comment and applies labels. |
+| **issue-to-pr-resolver** | `/issue-to-pr-resolver <number>` | End-to-end issue implementation: worktree creation → implementation with tests → draft PR → iterative CI/review resolution until merge-ready. |
+| **my-pr-checker** | `/my-pr-checker <number>` | Review and manage YOUR OWN PRs — check CI, resolve review threads, fix issues, iterate until all checks pass. |
+| **contrib-pr-review** | `/contrib-pr-review <number>` | Review external contributor PRs for safety, quality, and readiness. |
+| **wt** | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master. |
+| **bat-adhoc** | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing with dynamically generated scenarios. |
+| **bat-story-eval** | `/bat-story-eval --baseline v6.6.1` | Diff-based story evaluation: two-version comparison, regression detection. |
 
 ## Project Overview
 
@@ -98,8 +102,8 @@ When implementing features or debugging, consult these resources:
 
 **Division of Labor:**
 - **Gemini (automatic)**: Code quality, test coverage, generic security, MCP conventions
-- **Claude `contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
-- **Claude `my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
+- **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/), detailed test analysis, PR size assessment, issue linkage
+- **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 | Label | Meaning |
@@ -115,7 +119,7 @@ When implementing features or debugging, consult these resources:
 ### Issue Analysis Workflow
 
 - **Automated Triage (Gemini)**: Runs on new issues via `.github/workflows/gemini-triage.yml`. Adds `triaged` label.
-- **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then launch **parallel** `issue-analysis` agents (one per issue, ALL in a single message). Each agent explores the codebase, posts analysis, and updates labels.
+- **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
 
 ```bash
 gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["issue-analyzed"]) | not) | "#\(.number): \(.title)"'
@@ -212,7 +216,7 @@ cd worktree/<branch-name>
 
 **Never push or create PRs without user permission.**
 
-**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user.
+**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
 
 ### PR Workflow
 
@@ -238,7 +242,8 @@ cd worktree/<branch-name>
    gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
    ```
 7. **Address review comments** if any (prioritize human comments)
-8. **Repeat steps 2-7 until:**
+8. **Update PR description** if the scope changed (only when PR is already marked as ready)
+9. **Repeat steps 2-8 until:**
    - ✅ All CI checks green
    - ✅ All comments addressed
    - ✅ PR ready for merge
@@ -271,9 +276,6 @@ Once the PR is ready (all checks green, comments addressed), provide:
    **Problems Encountered:**
    - [Issues faced and how they were resolved]
    - [Unrelated test failures fixed (if any)]
-
-   **Suggested Improvements:**
-   - [Optional follow-up work or technical debt noted]
    ```
 
 2. **Short summary for user** when returning control:
@@ -281,9 +283,17 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-### Implementing Improvements in Separate PRs
+### Handling Discovered Improvements
 
-Implement long-term improvements (workflow, code quality, docs, tests, CI) in **separate PRs** — never mix with the main feature PR. Branch from master when possible; only branch from the PR branch if the improvement depends on those changes. For `.claude/agents/` changes, always branch from and PR to master. Mention improvement PRs in the main PR's final comment.
+When you notice something that could be improved while working on a PR, use this scale:
+
+| Size | Action |
+|------|--------|
+| **Small** — a few lines, clearly in scope | Fix it inline, no mention needed |
+| **Mid-sized** — meaningful effort, worth doing but out of scope | Pause **before pushing** and ask the user whether to include it |
+| **Large / unrelated** — many files, design decisions, or different domain | Document in the PR description's **Future improvements** section; open a separate PR only if the user asks |
+
+**Never open a separate improvement PR without explicit user approval.** Document it in the PR description first — it may already be covered by an open issue or the user may not want it at all.
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -731,16 +741,17 @@ Manual release: Actions > SemVer Release > Run workflow.
 
 ## Skills
 
-Located in `.claude/skills/`:
+Located in `.claude/skills/`. Invoke with `/<skill-name> <args>` or read `.claude/skills/<name>/SKILL.md` for full docs.
 
 | Skill | Command | Purpose | When to Use |
 |-------|---------|---------|-------------|
-| `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing - validates MCP tools with dynamically generated scenarios | PR validation, quick regression checks, one-off integration verification |
-| `bat-story-eval` | `/bat-story-eval --baseline v6.6.1 [--agents gemini]` | Diff-based story evaluation: triage, pre-built + custom stories, two-version comparison | Version comparison, regression detection, hypothesis-driven testing |
-| `contrib-pr-review` | `/contrib-pr-review <pr-number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user). Checks security, tests, size, intent. |
-| `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches. Pulls master first. |
-
-Invoke any skill with `/<skill-name> --help` for full documentation, or read `.claude/skills/<name>/SKILL.md`.
+| `issue-analysis` | `/issue-analysis <number>` | Deep issue analysis — codebase exploration, implementation planning, structured comment + labels | Analyzing open issues before implementation |
+| `issue-to-pr-resolver` | `/issue-to-pr-resolver <number>` | End-to-end issue implementation: worktree → code + tests → draft PR → CI/review resolution | Implementing a GitHub issue fully |
+| `my-pr-checker` | `/my-pr-checker <number>` | Manage your own PRs — CI status, resolve review threads, fix issues, iterate until green | Checking and resolving issues on your own PRs |
+| `contrib-pr-review` | `/contrib-pr-review <number>` | Review external contributor PRs for safety, quality, and readiness | Reviewing PRs from contributors (not from current user) |
+| `wt` | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master | Quick worktree creation for feature branches |
+| `bat-adhoc` | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing with dynamically generated scenarios | PR validation, quick regression checks |
+| `bat-story-eval` | `/bat-story-eval --baseline v6.6.1 [--agents gemini]` | Diff-based story evaluation: two-version comparison, regression detection | Version comparison, hypothesis-driven testing |
 
 ## Documentation Updates
 

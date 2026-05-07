@@ -38,7 +38,28 @@ def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "aliases": entry.get("aliases", []),
         "labels": entry.get("labels", []),
         "categories": entry.get("categories", {}),
+        "device_class": entry.get("device_class"),
+        "original_device_class": entry.get("original_device_class"),
+        "options": entry.get("options", {}),
     }
+
+
+def _extract_ws_error(result: dict[str, Any]) -> str:
+    """Pull a user-readable message out of a failed WebSocket response.
+
+    Falls back to a static placeholder + warning log when HA returns an
+    empty or malformed error envelope, so the user-facing message never
+    degrades to literal "{}".
+    """
+    error = result.get("error")
+    if isinstance(error, dict):
+        msg = error.get("message")
+        if isinstance(msg, str) and msg:
+            return msg
+    elif isinstance(error, str) and error:
+        return error
+    logger.warning("HA WS response had no usable error detail: %r", result)
+    return "no error detail returned by Home Assistant"
 
 
 def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -52,13 +73,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
         result = await client.send_websocket_message(get_msg)
         if not result.get("success"):
-            error = result.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
-            return None, error_msg
+            return None, _extract_ws_error(result)
         return result.get("result", {}).get("labels", []), None
 
     async def _update_single_entity(
@@ -75,6 +90,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         parsed_expose_to: dict[str, bool] | None,
         new_entity_id: str | None = None,
         new_device_name: str | None = None,
+        device_class: str | None = None,
+        parsed_options: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Returns the response dict."""
         # For add/remove operations, we need to fetch current labels first
@@ -119,6 +136,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if icon is not None:
             message["icon"] = icon if icon else None
             updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
+
+        if device_class is not None:
+            # Treat whitespace-only as the documented "clear" sentinel so
+            # accidental spaces don't reach HA as a literal validation error.
+            normalized_device_class = device_class.strip() or None
+            message["device_class"] = normalized_device_class
+            updates_made.append(
+                f"device_class='{normalized_device_class}'"
+                if normalized_device_class
+                else "device_class cleared"
+            )
 
         if enabled is not None:
             try:
@@ -203,13 +231,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if new_device_name is not None:
             updates_made.append(f"device_name -> {new_device_name}")
 
-        if not updates_made:
+        # parsed_options entries are appended to updates_made AFTER each per-domain
+        # WS call succeeds, so the response never falsely claims an unwritten domain
+        # was updated. Empty-input check below treats them as "pending" updates.
+        if not updates_made and not parsed_options:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "No updates specified",
                     suggestions=[
-                        "Provide at least one of: area_id, name, icon, enabled, hidden, aliases, categories, labels, expose_to, new_entity_id, or new_device_name"
+                        "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
                     ],
                 )
             )
@@ -231,25 +262,24 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             result = await client.send_websocket_message(message)
 
             if not result.get("success"):
-                error = result.get("error", {})
-                error_msg = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
+                error_msg = _extract_ws_error(result)
                 suggestions = [
                     "Verify the entity_id exists using ha_search_entities()",
                 ]
                 if new_entity_id is not None:
-                    suggestions.extend([
-                        "Check that the new entity_id doesn't already exist",
-                        "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
-                    ])
+                    suggestions.extend(
+                        [
+                            "Check that the new entity_id doesn't already exist",
+                            "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
+                        ]
+                    )
                 else:
-                    suggestions.extend([
-                        "Check that area_id exists if specified",
-                        "Some entities may not support all update options",
-                    ])
+                    suggestions.extend(
+                        [
+                            "Check that area_id exists if specified",
+                            "Some entities may not support all update options",
+                        ]
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
@@ -264,6 +294,64 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # If entity was renamed, update entity_id for subsequent operations
             if new_entity_id:
                 entity_id = new_entity_id
+
+        # Per-domain options updates: HA's WS schema requires `options_domain`
+        # and `options` to be sent paired one domain per call (the API takes a
+        # single domain's sub-dict). An agent-supplied {domain: {...}, ...} is
+        # therefore split into one registry update per domain.
+        options_succeeded: dict[str, dict[str, Any]] = {}
+        if parsed_options:
+            for opts_domain, opts_sub in parsed_options.items():
+                opts_msg: dict[str, Any] = {
+                    "type": "config/entity_registry/update",
+                    "entity_id": entity_id,
+                    "options_domain": opts_domain,
+                    "options": opts_sub,
+                }
+                opts_result = await client.send_websocket_message(opts_msg)
+                if not opts_result.get("success"):
+                    err_msg = _extract_ws_error(opts_result)
+                    partial = bool(options_succeeded) or has_registry_updates
+                    msg_prefix = (
+                        "Partially updated entity; failed updating options for"
+                        if partial
+                        else "Failed to update options for"
+                    )
+                    # `options_succeeded` is the structured retriable form
+                    # (agent can re-feed it minus the failing domain).
+                    # `updates_applied` is the human-readable prose list
+                    # including non-options updates (name=, icon=, etc.).
+                    # Both are surfaced — they serve different consumers.
+                    options_failure_context: dict[str, Any] = {
+                        "entity_id": entity_id,
+                        "options_domain": opts_domain,
+                        "partial": partial,
+                        "options_succeeded": options_succeeded,
+                        "updates_applied": list(updates_made),
+                    }
+                    # Only include entity_entry when something actually mutated;
+                    # _format_entity_entry({}) returns an all-None stub that's
+                    # indistinguishable from "entity has nothing set". Mirrors
+                    # the expose_to failure path below.
+                    if partial:
+                        options_failure_context["entity_entry"] = _format_entity_entry(
+                            entity_entry
+                        )
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"{msg_prefix} domain '{opts_domain}': {err_msg}",
+                            context=options_failure_context,
+                        )
+                    )
+                # HA returns the cumulative entity_entry on each per-domain
+                # call, so last-call-wins reassignment leaves the final loop
+                # iteration carrying the full state.
+                entity_entry = opts_result.get("result", {}).get(
+                    "entity_entry", entity_entry
+                )
+                options_succeeded[opts_domain] = opts_sub
+                updates_made.append(f"options[{opts_domain}]={opts_sub}")
 
         # Handle new_device_name — rename the associated device
         # Normalize empty string to None (no-op, don't clear device name)
@@ -281,12 +369,18 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if get_result.get("success"):
                     entity_entry = get_result.get("result", {})
                 else:
-                    logger.warning(f"Entity registry lookup failed for {entity_id}: {get_result.get('error')}")
+                    logger.warning(
+                        "Entity registry lookup failed for %s: %s",
+                        entity_id,
+                        _extract_ws_error(get_result),
+                    )
                     device_rename_result = {
                         "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
                     }
 
-            device_id = entity_entry.get("device_id") if not device_rename_result else None
+            device_id = (
+                entity_entry.get("device_id") if not device_rename_result else None
+            )
             if not device_id:
                 device_rename_result = {
                     "warning": "Entity has no associated device — device rename skipped",
@@ -302,7 +396,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_rename_result = {"success": True, "device_id": device_id}
                 else:
                     device_rename_result = {
-                        "warning": f"Entity updated but device rename failed: {device_result.get('error', 'Unknown error')}",
+                        "warning": f"Entity updated but device rename failed: {_extract_ws_error(device_result)}",
                         "device_id": device_id,
                     }
 
@@ -336,27 +430,43 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 expose_result = await client.send_websocket_message(expose_msg)
 
                 if not expose_result.get("success"):
-                    error = expose_result.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
-                    )
+                    error_msg = _extract_ws_error(expose_result)
                     failed = dict.fromkeys(assistants, should_expose)
+                    # `partial` must reflect every prior mutation in the function:
+                    # main registry update, per-domain options, device rename, and
+                    # any expose_to batch (e.g. expose_true) that ran before this
+                    # one (expose_false) failed. Anything truthy in those means
+                    # the registry already moved.
+                    prior_mutation = (
+                        has_registry_updates
+                        or bool(options_succeeded)
+                        or bool(succeeded)
+                        or bool(
+                            device_rename_result and device_rename_result.get("success")
+                        )
+                    )
                     context: dict[str, Any] = {
                         "entity_id": entity_id,
                         "exposure_succeeded": succeeded,
                         "exposure_failed": failed,
                     }
-                    if has_registry_updates:
+                    if prior_mutation:
                         context["partial"] = True
                         context["entity_entry"] = _format_entity_entry(entity_entry)
-                    raise_tool_error(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Exposure failed: {error_msg}",
-                        context=context,
-                        suggestions=["Check Home Assistant connection and entity availability"],
-                    ))
+                        if options_succeeded:
+                            context["options_succeeded"] = options_succeeded
+                        if device_rename_result and device_rename_result.get("success"):
+                            context["device_rename_succeeded"] = True
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Exposure failed: {error_msg}",
+                            context=context,
+                            suggestions=[
+                                "Check Home Assistant connection and entity availability"
+                            ],
+                        )
+                    )
 
                 # Track successful exposures
                 for a in assistants:
@@ -374,15 +484,20 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if get_result.get("success"):
                 entity_entry = get_result.get("result", {})
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Entity '{entity_id}' not found in registry after applying exposure changes",
-                    context={"entity_id": entity_id, "exposure_succeeded": exposure_result},
-                    suggestions=[
-                        "Verify the entity_id exists using ha_search_entities()",
-                        "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                        context={
+                            "entity_id": entity_id,
+                            "exposure_succeeded": exposure_result,
+                        },
+                        suggestions=[
+                            "Verify the entity_id exists using ha_search_entities()",
+                            "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
+                        ],
+                    )
+                )
 
         response_data: dict[str, Any] = {
             "success": True,
@@ -427,7 +542,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         entity_id: Annotated[
             str | list[str],
             Field(
-                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels and expose_to parameters."
+                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters."
             ),
         ],
         area_id: Annotated[
@@ -448,6 +563,37 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. Single entity only.",
+                default=None,
+            ),
+        ] = None,
+        device_class: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Override the entity's display device class — what the HA UI's "
+                    "'Show As' dropdown writes. Use empty string '' to clear the "
+                    "override and fall back to the integration default. None (the "
+                    "default) means 'no change' — pass an explicit '' to clear. "
+                    "Single entity only. Examples: 'window', 'door', 'motion' for "
+                    "binary_sensor; 'temperature', 'humidity' for sensor."
+                ),
+                default=None,
+            ),
+        ] = None,
+        options: Annotated[
+            str | dict[str, dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Per-domain entity registry options (e.g. sensor 'display_precision', "
+                    "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
+                    'e.g. {"sensor": {"display_precision": 2}}. JSON-string form also accepted. '
+                    "Multiple domains are sent as separate registry updates. "
+                    "For 'Show As' use the dedicated `device_class` parameter — that is "
+                    "what the HA UI Show As dropdown writes. Voice-assistant exposure is "
+                    "stored under `options.<assistant>.should_expose` but must be managed "
+                    "via the dedicated `expose_to` parameter, not this options dict. "
+                    "Single entity only."
+                ),
                 default=None,
             ),
         ] = None,
@@ -540,17 +686,29 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """Update entity properties in the entity registry.
 
         Allows modifying entity metadata such as area assignment, display name,
-        icon, enabled/disabled state, visibility, aliases, labels, voice
-        assistant exposure, and entity_id rename in a single call.
+        icon, "Show As" device class override, per-domain registry options,
+        enabled/disabled state, visibility, aliases, labels, voice assistant
+        exposure, and entity_id rename in a single call.
 
         BULK OPERATIONS:
         When entity_id is a list, only labels, expose_to, and categories parameters are supported.
-        Other parameters (area_id, name, icon, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
+        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
 
         LABEL OPERATIONS:
         - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
         - label_operation="add": Add labels to existing ones without removing any.
         - label_operation="remove": Remove specified labels from the entity.
+
+        SHOW AS / DEVICE CLASS:
+        device_class overrides the entity's display device class — equivalent to the
+        HA UI's "Show As" dropdown. Use empty string '' to clear. Applies instantly,
+        no reload needed.
+
+        REGISTRY OPTIONS:
+        options carries per-domain registry options (sensor display_precision,
+        weather forecast_type, etc). Pass {domain: {key: value}}; multi-domain
+        dicts are sent as separate registry updates because HA's WS schema
+        requires options_domain + options to be paired one domain at a time.
 
         ENTITY ID RENAME:
         Use new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).
@@ -576,6 +734,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Single entity:
         - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
         - Rename display name: ha_set_entity("sensor.temp", name="Living Room Temperature")
+        - Set Show As: ha_set_entity("binary_sensor.zone_10", device_class="window")
+        - Clear Show As: ha_set_entity("binary_sensor.zone_10", device_class="")
+        - Set sensor precision: ha_set_entity("sensor.power", options={"sensor": {"display_precision": 2}})
         - Rename entity_id: ha_set_entity("light.old_name", new_entity_id="light.new_name")
         - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
         - Rename entity_id with friendly name: ha_set_entity("sensor.old", new_entity_id="sensor.new", name="New Name")
@@ -638,6 +799,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "area_id": area_id,
                 "name": name,
                 "icon": icon,
+                "device_class": device_class,
+                "options": options,
                 "enabled": enabled,
                 "hidden": hidden,
                 "aliases": aliases,
@@ -655,7 +818,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         f"Bulk operations (multiple entity_ids) only support categories, labels, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, icon, enabled, hidden, or aliases",
+                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, or aliases",
                             "Or remove single-entity parameters to use bulk categories/labels/expose_to",
                         ],
                     )
@@ -747,6 +910,51 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     )
 
+            parsed_options: dict[str, dict[str, Any]] | None = None
+            if options is not None:
+                try:
+                    parsed_opts = parse_json_param(options, "options")
+                except ValueError as e:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Invalid options parameter: {e}",
+                        )
+                    )
+
+                if not isinstance(parsed_opts, dict):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"options must be a dict mapping domain to a sub-dict "
+                            f"(got {type(parsed_opts).__name__}), "
+                            'e.g. {"sensor": {"display_precision": 2}}',
+                        )
+                    )
+                if not parsed_opts:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options cannot be an empty dict — pass at least one "
+                            'domain entry, e.g. {"sensor": {"display_precision": 2}}, '
+                            "or omit the parameter entirely.",
+                        )
+                    )
+                bad_subs = [
+                    f"{k!r}: {type(v).__name__}"
+                    for k, v in parsed_opts.items()
+                    if not isinstance(v, dict)
+                ]
+                if bad_subs:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "options sub-values must be dicts, got non-dict for: "
+                            f"{', '.join(bad_subs)}",
+                        )
+                    )
+                parsed_options = parsed_opts
+
             # Parse and validate expose_to parameter
             parsed_expose_to: dict[str, bool] | None = None
             if expose_to is not None:
@@ -819,6 +1027,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parsed_expose_to,
                     new_entity_id=new_entity_id,
                     new_device_name=new_device_name,
+                    device_class=device_class,
+                    parsed_options=parsed_options,
                 )
 
             # Bulk case - process each entity
@@ -856,19 +1066,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "error": str(result),
                         }
                     )
-                elif result.get("success"):
+                else:
+                    # _update_single_entity always returns success-shape or
+                    # raises ToolError (caught above as BaseException), so the
+                    # `result.get("success") is False` branch is unreachable.
                     succeeded.append(
                         {
                             "entity_id": eid,
                             "entity_entry": result.get("entity_entry"),
                             "updates": result.get("updates"),
-                        }
-                    )
-                else:
-                    failed.append(
-                        {
-                            "entity_id": eid,
-                            "error": result.get("error", "Unknown error"),
                         }
                     )
 
@@ -937,6 +1143,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - aliases: Voice assistant aliases
         - labels: Assigned label IDs
         - categories: Category assignments (dict mapping scope to category_id)
+        - device_class: User "Show As" override (null = use original_device_class)
+        - original_device_class: Default device class from the integration
+        - options: Per-domain registry options (e.g. sensor display_precision).
+          Voice-assistant exposure is also stored here but should be set/cleared
+          via the ha_set_entity(expose_to=...) parameter, not the options dict.
         - platform: Integration platform (e.g., "hue", "zwave_js")
         - device_id: Associated device ID (null if standalone)
         - unique_id: Integration's unique identifier
@@ -983,13 +1194,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result = await client.send_websocket_message(message)
 
                 if not result.get("success"):
-                    error = result.get("error", {})
-                    error_msg = (
-                        error.get("message", str(error))
-                        if isinstance(error, dict)
-                        else str(error)
-                    )
-                    raise ValueError(error_msg)
+                    raise ValueError(_extract_ws_error(result))
 
                 entry = result.get("result", {})
                 return {
@@ -1005,6 +1210,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "aliases": entry.get("aliases", []),
                     "labels": entry.get("labels", []),
                     "categories": entry.get("categories", {}),
+                    "device_class": entry.get("device_class"),
+                    "original_device_class": entry.get("original_device_class"),
+                    "options": entry.get("options", {}),
                     "platform": entry.get("platform"),
                     "device_id": entry.get("device_id"),
                     "unique_id": entry.get("unique_id"),
@@ -1131,12 +1339,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             if not result.get("success"):
-                error = result.get("error", {})
-                error_msg = (
-                    error.get("message", str(error))
-                    if isinstance(error, dict)
-                    else str(error)
-                )
+                error_msg = _extract_ws_error(result)
                 if "not found" in error_msg.lower():
                     raise_tool_error(
                         create_error_response(

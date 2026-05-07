@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-84-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-85-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -151,7 +151,7 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (84 tools)</b></summary>
+<summary><b>Complete Tool List (85 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -175,7 +175,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_search_entities` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_manage_custom_tool` *(beta)*, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools` *(beta)*, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
@@ -225,12 +225,9 @@ An MCP server can create automations, helpers, and dashboards, but it has no opi
 
 ### Bundled Skills (built-in)
 
-Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed.
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients, the same skills are also exposed as `ha_list_resources` / `ha_read_resource` tools. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
-| `ENABLE_SKILLS_AS_TOOLS` | `true` | Expose skills and doc resources via `list_resources`/`read_resource` tools. Resource-capable clients can set to `false` to reduce tool count. |
+If you want to hide either tool from the catalog, disable it from the web settings UI like any other tool.
 
 Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
 
@@ -315,6 +312,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@gcormier](https://github.com/gcormier)** — Windows installer improvements: removed unused variable and fixed terminal closing after install.
 - **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
 - **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
+- **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` proxy mode on addon installs.
 
 ---
 

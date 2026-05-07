@@ -22,9 +22,6 @@ from ..utils.python_sandbox import (
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
-from .best_practice_checker import (
-    get_skill_prefix as _get_skill_prefix,
-)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -476,9 +473,7 @@ class ConfigScriptTools:
                             context={"action": "python_transform", "script_id": script_id},
                         )
                     )
-                bp_warnings = _check_best_practices(
-                    transformed_config, skill_prefix=_get_skill_prefix()
-                )
+                bp_warnings = _check_best_practices(transformed_config)
 
                 # Save transformed config
                 result = await self._client.upsert_script_config(
@@ -524,9 +519,7 @@ class ConfigScriptTools:
                 await self._fetch_and_verify_hash(script_id, config_hash, "set")
 
             # Pre-check for best-practice issues.
-            bp_warnings = _check_best_practices(
-                config_dict, skill_prefix=_get_skill_prefix()
-            )
+            bp_warnings = _check_best_practices(config_dict)
 
             # Cross-check literal service and entity references against
             # the live registries. Soft warnings only — the write still
