@@ -590,6 +590,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         )
         pinned.extend(getattr(self, "_skill_tool_names", []))
 
+        # Pin code mode tool so it gets individual permission gating
+        # rather than being hidden behind the BM25 search proxy.
+        if self.settings.enable_code_mode:
+            pinned.append("ha_manage_custom_tool")
+
         # The client may not support resources or server instructions — add
         # skills hint to the search tool description (the one place the LLM
         # is guaranteed to see).
@@ -609,12 +614,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                     max_results=self.settings.tool_search_max_results,
                     always_visible=pinned,
                     search_tool_description=description,
+                    # Pinned tools must be excluded from the proxy's
+                    # category sets when code mode is on; otherwise sandbox
+                    # code can launder a recursive ``ha_manage_custom_tool``
+                    # invocation through ``ha_call_write_tool``. See the
+                    # docstring on ``_rebuild_category_cache``.
+                    enable_code_mode=self.settings.enable_code_mode,
                 )
             )
             logger.info(
-                "Tool search transform applied (%d pinned tools, max_results=%d)",
+                "Tool search transform applied (%d pinned tools, max_results=%d, code_mode=%s)",
                 len(pinned),
                 self.settings.tool_search_max_results,
+                self.settings.enable_code_mode,
             )
         except Exception:
             logger.exception("Failed to apply tool search transform")

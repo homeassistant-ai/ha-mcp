@@ -113,6 +113,37 @@ class Settings(BaseSettings):
     # supervisor UI rejects out-of-range values before they reach env vars.
     tool_search_max_results: int = Field(5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS")
 
+    # Code Mode — sandboxed Python execution via pydantic-monty.
+    # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
+    # custom one-off Python code when no existing tool covers the request.
+    # Disabled by default due to the inherent risk of LLM-generated code.
+    # Range bounds reject zero/negative values that would silently break the
+    # tool and clamp upper bounds at sane safety margins (5 min wall-clock,
+    # 256 MB memory, 10k recursion, 10k API/tool calls per execution).
+    enable_code_mode: bool = Field(False, alias="ENABLE_CODE_MODE")
+    code_mode_max_duration: float = Field(
+        30.0, ge=1.0, le=300.0, alias="CODE_MODE_MAX_DURATION"
+    )
+    code_mode_max_memory: int = Field(
+        10_485_760, ge=1_048_576, le=268_435_456, alias="CODE_MODE_MAX_MEMORY"
+    )  # 10 MB default; 1 MB floor, 256 MB ceiling
+    code_mode_max_recursion: int = Field(
+        100, ge=1, le=10_000, alias="CODE_MODE_MAX_RECURSION"
+    )
+    code_mode_max_invocations: int = Field(
+        100, ge=1, le=10_000, alias="CODE_MODE_MAX_INVOCATIONS"
+    )
+    # Path to a JSON file for persisting saved custom tools across restarts.
+    # Empty string disables persistence (saved tools live in process memory
+    # and are lost on restart). The addon sets this to /data/saved_tools.json
+    # by default so saved tools survive addon restarts (the /data directory
+    # is mapped per-addon by Supervisor and is preserved across addon
+    # updates).
+    code_mode_saved_tools_path: str = Field(
+        "", alias="CODE_MODE_SAVED_TOOLS_PATH"
+    )
+
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""

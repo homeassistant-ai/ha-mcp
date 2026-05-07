@@ -25,6 +25,7 @@ options:
   backup_hint: "normal"
   enable_tool_search: false
   enable_yaml_config_editing: false
+  enable_code_mode: false
   tool_search_max_results: 5
   disabled_tools: ""
   pinned_tools: ""
@@ -34,6 +35,7 @@ schema:
   secret_path: str?
   enable_tool_search: bool?
   enable_yaml_config_editing: bool?
+  enable_code_mode: bool?
   enable_filesystem_tools: bool?
   enable_custom_component_integration: bool?
   tool_search_max_results: int(2,10)?

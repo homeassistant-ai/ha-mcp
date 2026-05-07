@@ -81,6 +81,14 @@ class ErrorCode(StrEnum):
     # Component errors
     COMPONENT_NOT_INSTALLED = "COMPONENT_NOT_INSTALLED"
 
+    # Code-mode sandbox errors. The sandbox is a separate execution
+    # context; runtime failures inside it map cleanly to one of these
+    # three buckets so the LLM can self-recover instead of seeing every
+    # failure as INTERNAL_ERROR.
+    SANDBOX_LIMIT_EXCEEDED = "SANDBOX_LIMIT_EXCEEDED"
+    SANDBOX_SYNTAX_UNSUPPORTED = "SANDBOX_SYNTAX_UNSUPPORTED"
+    SANDBOX_RUNTIME_ERROR = "SANDBOX_RUNTIME_ERROR"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
