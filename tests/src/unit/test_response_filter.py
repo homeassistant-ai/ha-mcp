@@ -1,13 +1,16 @@
 """Unit tests for JMESPath response-filter middleware (_apply_jmespath)."""
 
+import copy
 import json
+import threading
+from unittest.mock import AsyncMock, MagicMock
 
 import mcp.types as mt
 import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.base import ToolResult
 
-from ha_mcp.middleware.response_filter import _apply_jmespath
+from ha_mcp.middleware.response_filter import JMESPathFilterMiddleware, _PARAM_NAME, _apply_jmespath
 
 
 def _make_result(data: dict) -> ToolResult:
@@ -97,3 +100,40 @@ class TestApplyJmesPath:
         out = _apply_jmespath(result, "items[0]")
         parsed = json.loads(out.content[0].text)
         assert parsed == {"result": None}
+
+
+class _ToolStub:
+    """Minimal stand-in for a FastMCP Tool that holds a threading.RLock."""
+
+    def __init__(self):
+        self.parameters = {"type": "object", "properties": {}}
+        self._lock = threading.RLock()
+
+
+class TestOnListToolsDeepCopy:
+    """Regression: deepcopy of FastMCP Tool raises 'cannot pickle _thread.RLock'."""
+
+    def test_deepcopy_of_rlock_object_raises(self):
+        with pytest.raises(TypeError, match="cannot pickle"):
+            copy.deepcopy(_ToolStub())
+
+    @pytest.mark.asyncio
+    async def test_on_list_tools_succeeds_when_tool_has_rlock(self):
+        context = MagicMock()
+        call_next = AsyncMock(return_value=[_ToolStub()])
+        middleware = JMESPathFilterMiddleware()
+
+        result = await middleware.on_list_tools(context, call_next)
+
+        assert _PARAM_NAME in result[0].parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_on_list_tools_does_not_mutate_original_parameters(self):
+        stub = _ToolStub()
+        context = MagicMock()
+        call_next = AsyncMock(return_value=[stub])
+        middleware = JMESPathFilterMiddleware()
+
+        await middleware.on_list_tools(context, call_next)
+
+        assert _PARAM_NAME not in stub.parameters["properties"]

@@ -21,7 +21,7 @@ _PARAM_NAME = "_jmespath"
 _PARAM_SCHEMA: dict[str, Any] = {
     "type": "string",
     "description": (
-        "Optional JMESPath filter applied server-side before returning (see jmespath.org). "
+        "Optional JMESPath filter for results - see jmespath.org"
         "Examples: 'state', '{id: entity_id, state: state}', 'entities[?domain==`light`]'."
     ),
 }
@@ -42,10 +42,17 @@ class JMESPathFilterMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
         tools = await call_next(context)
-        tools_copy = copy.deepcopy(list(tools))
-        for tool in tools_copy:
-            tool.parameters.setdefault("properties", {})[_PARAM_NAME] = _PARAM_SCHEMA
-        return tools_copy
+        result = []
+        for tool in tools:
+            # Shallow-copy the Tool to avoid mutating the registry.
+            # Full deepcopy raises "cannot pickle '_thread.RLock' object" because
+            # FastMCP Tool objects hold threading locks internally; only the
+            # parameters dict (plain JSON Schema) needs to be copied.
+            tool_copy = copy.copy(tool)
+            tool_copy.parameters = copy.deepcopy(tool.parameters)
+            tool_copy.parameters.setdefault("properties", {})[_PARAM_NAME] = _PARAM_SCHEMA
+            result.append(tool_copy)
+        return result
 
     async def on_call_tool(
         self,
