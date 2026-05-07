@@ -4,6 +4,9 @@ import pytest
 
 from ha_mcp.utils.python_sandbox import (
     PythonSandboxError,
+    PythonSandboxExecutionError,
+    PythonSandboxValidationError,
+    format_sandbox_error,
     safe_execute,
     safe_execute_expression,
     validate_expression,
@@ -105,41 +108,94 @@ for view in config['views']:
         valid, error = validate_expression(expr)
         assert valid is True, error
 
-    def test_generator_expression(self):
-        """`sum(x for x in ...)` and similar generator-arg patterns must validate."""
+    def test_generator_expression_executes(self):
+        """`sum(x for x in ...)` validates AND runs."""
+        config = {"views": [{"cards": [{"type": "tile"}, {"type": "btn"}, {"type": "tile"}]}]}
         expr = "config['count'] = sum(1 for c in config['views'][0]['cards'] if c.get('type') == 'tile')"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+        result = safe_execute(expr, config)
+        assert result["count"] == 2
 
-    def test_ternary_expression(self):
-        """`x if c else y` — fundamental Python idiom."""
+    def test_ternary_expression_executes(self):
+        """`x if c else y` validates AND runs."""
+        config = {"state": "on"}
         expr = "config['icon'] = 'mdi:on' if config.get('state') == 'on' else 'mdi:off'"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+        result = safe_execute(expr, config)
+        assert result["icon"] == "mdi:on"
 
-    def test_keyword_argument_in_call(self):
-        """`func(key=value)` — kwargs in calls must validate."""
-        expr = "config['views'] = sorted(config['views'], key=len, reverse=True)"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+    def test_keyword_argument_in_call_executes(self):
+        """`sorted(..., key=len, reverse=True)` validates AND runs (sorted/len are safe builtins)."""
+        config = {"items": ["aaa", "b", "cc"]}
+        expr = "config['items'] = sorted(config['items'], key=len, reverse=True)"
+        result = safe_execute(expr, config)
+        assert result["items"] == ["aaa", "cc", "b"]
 
-    def test_starred_unpacking_in_list(self):
-        """`[*existing, new]` — list spread is a common merge idiom."""
-        expr = "config['views'][0]['cards'] = [*config['views'][0]['cards'], {'type': 'button'}]"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+    def test_starred_unpacking_in_list_executes(self):
+        """`[*existing, new]` validates AND runs."""
+        config = {"cards": [{"type": "a"}, {"type": "b"}]}
+        expr = "config['cards'] = [*config['cards'], {'type': 'c'}]"
+        result = safe_execute(expr, config)
+        assert [c["type"] for c in result["cards"]] == ["a", "b", "c"]
 
-    def test_dict_double_star_unpacking(self):
-        """`{**existing, 'k': v}` — dict spread is a common merge idiom."""
-        expr = "config['views'][0] = {**config['views'][0], 'icon': 'mdi:home'}"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+    def test_dict_double_star_unpacking_executes(self):
+        """`{**existing, 'k': v}` validates AND runs (Dict node, not Starred)."""
+        config = {"view": {"icon": "old", "title": "Home"}}
+        expr = "config['view'] = {**config['view'], 'icon': 'mdi:home'}"
+        result = safe_execute(expr, config)
+        assert result["view"] == {"icon": "mdi:home", "title": "Home"}
 
-    def test_slice_expression(self):
-        """`list[1:3]` — slicing must validate."""
-        expr = "config['views'][0]['cards'] = config['views'][0]['cards'][:5]"
-        valid, error = validate_expression(expr)
-        assert valid is True, error
+    def test_slice_expression_executes(self):
+        """`list[:N]` validates AND runs."""
+        config = {"cards": list(range(10))}
+        expr = "config['cards'] = config['cards'][:5]"
+        result = safe_execute(expr, config)
+        assert result["cards"] == [0, 1, 2, 3, 4]
+
+    def test_slice_with_step_executes(self):
+        """`list[::2]` — slice with step (uses ast.Slice with step field)."""
+        config = {"cards": list(range(10))}
+        expr = "config['cards'] = config['cards'][::2]"
+        result = safe_execute(expr, config)
+        assert result["cards"] == [0, 2, 4, 6, 8]
+
+    def test_lambda_as_kwarg_executes(self):
+        """`sorted(..., key=lambda x: ...)` — the canonical lambda use case.
+
+        Previously broken: ast.Lambda was whitelisted but the ast.arguments
+        / ast.arg structure nodes inside it were not, so any lambda failed
+        validation despite the comment "Lambda (for comprehensions)" claiming
+        otherwise.
+        """
+        config = {"items": [{"n": 3}, {"n": 1}, {"n": 2}]}
+        expr = "config['items'] = sorted(config['items'], key=lambda x: x['n'])"
+        result = safe_execute(expr, config)
+        assert [i["n"] for i in result["items"]] == [1, 2, 3]
+
+    def test_compositional_pattern_executes(self):
+        """Realistic agent code: ternary inside a comprehension, kwarg call,
+        starred unpacking — all in one transform."""
+        config = {
+            "cards": [
+                {"name": "a", "score": 3},
+                {"name": "b", "score": 1},
+                {"name": "c", "score": 2},
+            ],
+            "extras": [{"name": "z", "score": 99}],
+        }
+        # Sort by score (kwarg call), pick top 2 (slice), tag each (ternary
+        # inside comprehension), then unpack with extras (starred).
+        expr = """
+top = sorted(config['cards'], key=lambda c: c['score'], reverse=True)[:2]
+config['cards'] = [
+    {**c, 'tier': 'gold' if c['score'] >= 3 else 'silver'}
+    for c in top
+]
+config['cards'] = [*config['cards'], *config['extras']]
+"""
+        result = safe_execute(expr, config)
+        names = [c["name"] for c in result["cards"]]
+        assert names == ["a", "c", "z"]
+        tiers = [c.get("tier") for c in result["cards"]]
+        assert tiers == ["gold", "silver", None]
 
     def test_reporter_pattern_executes(self):
         """End-to-end: reconstruct cards list with conditional skip via `pass`.
@@ -177,29 +233,48 @@ class TestErrorSuggestions1159:
     """Issue #1159 — node-rejection errors should hint at the right alternative."""
 
     def test_try_block_includes_hint(self):
-        """try/except is rejected with a hint pointing at validation alternatives."""
+        """try/except is rejected with the exact mapped hint."""
         expr = "try:\n    config['x'] = 1\nexcept Exception:\n    config['x'] = 0"
         valid, error = validate_expression(expr)
         assert valid is False
-        assert "Try" in error
-        assert "isinstance" in error or "validate" in error.lower()
+        assert error == (
+            "Forbidden node type: Try — "
+            "validate inputs with isinstance/in/.get() instead of try/except"
+        )
 
     def test_function_def_includes_hint(self):
-        """Function definitions are rejected with a hint pointing at comprehensions."""
+        """Function definitions are rejected with the exact mapped hint."""
         expr = "def helper():\n    return 1"
         valid, error = validate_expression(expr)
         assert valid is False
-        assert "FunctionDef" in error
-        assert "comprehension" in error.lower() or "inline" in error.lower()
+        assert error == (
+            "Forbidden node type: FunctionDef — "
+            "use a list comprehension or inline the logic"
+        )
 
-    def test_unmapped_node_falls_back_to_generic(self):
-        """Nodes without a mapped suggestion produce a bare 'Forbidden node type: X'."""
-        # match statements (3.10+) — Match isn't in SAFE_NODES and we don't
-        # map a hint for it, so the message is the legacy format with no hint.
+    def test_match_statement_includes_hint(self):
+        """match/case (3.10+) is rejected with the mapped hint."""
         expr = "match config:\n    case _:\n        config['x'] = 1"
         valid, error = validate_expression(expr)
         assert valid is False
-        assert error == "Forbidden node type: Match"
+        assert error == (
+            "Forbidden node type: Match — "
+            "use if/elif/else or a dict lookup instead of match/case"
+        )
+
+    def test_unmapped_node_falls_back_to_generic(self):
+        """Nodes without a mapped suggestion produce a bare 'Forbidden node type: X'.
+
+        ``raise`` is a deliberately unmapped node — it isn't in SAFE_NODES
+        and intentionally has no recovery hint (raising in transforms is
+        nonsense; the right fix is to not raise at all). Picking a node
+        that's structurally unfit for any hint keeps the test stable as
+        new hints get added.
+        """
+        expr = "raise ValueError('nope')"
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert error == "Forbidden node type: Raise"
 
 
 class TestBlockedOperations:
@@ -346,17 +421,17 @@ for card in config['views'][0]['cards']:
         assert result["views"][0]["cards"][2]["icon"] == "old"  # Not a light
 
     def test_blocked_expression_raises(self):
-        """Test that blocked expressions raise PythonSandboxError."""
+        """Test that blocked expressions raise PythonSandboxValidationError."""
         config = {}
         expr = "import os"
-        with pytest.raises(PythonSandboxError, match="validation failed"):
+        with pytest.raises(PythonSandboxValidationError):
             safe_execute(expr, config)
 
     def test_execution_error_raises(self):
         """Test that execution errors are caught."""
         config = {}
         expr = "config['nonexistent']['key'] = 'value'"
-        with pytest.raises(PythonSandboxError, match="Execution error"):
+        with pytest.raises(PythonSandboxExecutionError):
             safe_execute(expr, config)
 
 
@@ -389,20 +464,20 @@ class TestSafeExecuteExpression:
         assert original == [1, 2, 3, 4]  # same reference, mutated
 
     def test_missing_result_key_raises(self):
-        """If result_key is not in variables, raise PythonSandboxError up front."""
-        with pytest.raises(PythonSandboxError, match="result_key"):
+        """If result_key is not in variables, raise PythonSandboxValidationError up front."""
+        with pytest.raises(PythonSandboxValidationError, match="result_key"):
             safe_execute_expression(
                 "response = 1", {"other": 1}, "response"
             )
 
     def test_validation_failure_raises(self):
-        """Invalid expressions raise with 'validation failed' prefix."""
-        with pytest.raises(PythonSandboxError, match="validation failed"):
+        """Invalid expressions raise PythonSandboxValidationError."""
+        with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression("import os", {"response": None}, "response")
 
     def test_execution_error_raises(self):
-        """Runtime errors in the expression raise with 'Execution error' prefix."""
-        with pytest.raises(PythonSandboxError, match="Execution error"):
+        """Runtime errors raise PythonSandboxExecutionError."""
+        with pytest.raises(PythonSandboxExecutionError):
             safe_execute_expression(
                 "response['missing']['key'] = 1",
                 {"response": {}},
@@ -443,14 +518,14 @@ class TestSafeExecuteExpression:
 
     def test_builtins_do_not_include_open(self):
         """Dangerous builtins like open remain blocked at AST validation."""
-        with pytest.raises(PythonSandboxError, match="validation failed"):
+        with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression(
                 "open('/etc/passwd')", {"response": None}, "response"
             )
 
     def test_builtins_do_not_include_getattr(self):
         """getattr remains blocked at AST validation."""
-        with pytest.raises(PythonSandboxError, match="validation failed"):
+        with pytest.raises(PythonSandboxValidationError):
             safe_execute_expression(
                 "getattr(response, '__class__')",
                 {"response": []},
@@ -462,3 +537,95 @@ class TestSafeExecuteExpression:
         config = {"views": [{"icon": "old"}]}
         result = safe_execute("config['views'][0]['icon'] = 'new'", config)
         assert result["views"][0]["icon"] == "new"
+
+
+class TestSandboxErrorSubclasses1159:
+    """Issue #1159 — distinguish validation-time vs runtime sandbox failures.
+
+    Both subclasses inherit ``PythonSandboxError`` so any pre-existing
+    ``except PythonSandboxError`` block still catches them; but new code
+    can branch on the subclass to give the user the right suggestion.
+    """
+
+    def test_subclasses_inherit_base(self):
+        """Backward compat: callers catching the base class still work."""
+        assert issubclass(PythonSandboxValidationError, PythonSandboxError)
+        assert issubclass(PythonSandboxExecutionError, PythonSandboxError)
+
+    def test_validation_error_is_distinct_from_execution_error(self):
+        """A validation failure should not match an execution-error catcher."""
+        with pytest.raises(PythonSandboxValidationError):
+            safe_execute("import os", {})
+        # And the execution-error class shouldn't catch a validation failure.
+        try:
+            safe_execute("import os", {})
+        except PythonSandboxExecutionError:
+            pytest.fail("validation error matched PythonSandboxExecutionError")
+        except PythonSandboxValidationError:
+            pass
+
+    def test_execution_error_is_distinct_from_validation_error(self):
+        """A runtime failure should not match a validation-error catcher."""
+        with pytest.raises(PythonSandboxExecutionError):
+            safe_execute("config['nope']['x'] = 1", {})
+        try:
+            safe_execute("config['nope']['x'] = 1", {})
+        except PythonSandboxValidationError:
+            pytest.fail("execution error matched PythonSandboxValidationError")
+        except PythonSandboxExecutionError:
+            pass
+
+    def test_execution_error_truncates_long_exception_text(self):
+        """Runtime exception text is capped so embedded config/data isn't pasted whole.
+
+        HA dashboards/automations may carry tokens or device IDs that get
+        reflected back in KeyError messages; without truncation those would
+        reach the caller verbatim.
+        """
+        long_key = "x" * 1000
+        # KeyError on a missing key embeds the key (repr'd) in its str().
+        expr = f"config[{long_key!r}]"
+        with pytest.raises(PythonSandboxExecutionError) as exc_info:
+            safe_execute(expr, {})
+        text = str(exc_info.value)
+        assert len(text) <= 240, f"runtime error text not truncated: {len(text)} chars"
+        assert text.endswith("...")
+
+
+class TestFormatSandboxError1159:
+    """Issue #1159 — caller-facing helper that picks message + suggestions
+    based on the exception subclass."""
+
+    def test_validation_error_suggestions_point_at_syntax(self):
+        err = PythonSandboxValidationError("Forbidden node type: Try")
+        message, suggestions = format_sandbox_error(err, "try: pass\nexcept: pass")
+        assert message.startswith("Expression validation failed:")
+        assert any("syntax" in s.lower() for s in suggestions)
+        assert any("allowed operations" in s.lower() for s in suggestions)
+
+    def test_execution_error_suggestions_point_at_data(self):
+        err = PythonSandboxExecutionError("KeyError: 'foo'")
+        message, suggestions = format_sandbox_error(err, "config['foo']['bar'] = 1")
+        assert message.startswith("Expression raised at runtime:")
+        # Should NOT advise the user to fix syntax — the syntax was fine.
+        assert not any("syntax" in s.lower() for s in suggestions)
+        assert any(
+            "key" in s.lower() or ".get" in s.lower() or "type" in s.lower()
+            for s in suggestions
+        )
+
+    def test_expression_preview_truncates_long_input(self):
+        long_expr = "config['x'] = " + ("'a' + " * 50) + "'end'"
+        err = PythonSandboxExecutionError("boom")
+        _, suggestions = format_sandbox_error(err, long_expr)
+        preview = next(s for s in suggestions if s.startswith("Expression:"))
+        assert preview.endswith("...")
+        # Body of the preview (after "Expression: ") is exactly 100 chars + "..."
+        assert len(preview) <= len("Expression: ") + 103
+
+    def test_plain_base_error_falls_back_to_validation_form(self):
+        """A bare PythonSandboxError (no subclass) should not look like a runtime failure."""
+        err = PythonSandboxError("legacy")
+        message, suggestions = format_sandbox_error(err, "x = 1")
+        assert message.startswith("Expression validation failed:")
+        assert any("syntax" in s.lower() for s in suggestions)

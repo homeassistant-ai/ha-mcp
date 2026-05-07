@@ -28,7 +28,11 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
-from ..utils.python_sandbox import PythonSandboxError, safe_execute_expression
+from ..utils.python_sandbox import (
+    PythonSandboxError,
+    format_sandbox_error,
+    safe_execute_expression,
+)
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -179,16 +183,19 @@ def _apply_response_transform(response: Any, expr: str) -> Any:
     try:
         return safe_execute_expression(expr, {"response": response}, "response")
     except PythonSandboxError as e:
+        message, suggestions = format_sandbox_error(e, expr)
+        # Addon helpers operate on a `response` variable, not `config` —
+        # prepend a one-liner so agents know which name to mutate.
+        suggestions = [
+            "Operate on the `response` variable (in-place or reassign)",
+            *suggestions,
+        ]
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,
-                f"python_transform failed: {e!s}",
+                message,
                 context={"expression_preview": expr[:200]},
-                suggestions=[
-                    "Operate on the `response` variable (in-place or reassign)",
-                    "Allowed: dict/list access, assignment, loops, "
-                    "comprehensions, whitelisted str/list/dict methods",
-                ],
+                suggestions=suggestions,
             )
         )
 
