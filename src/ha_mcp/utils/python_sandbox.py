@@ -50,7 +50,6 @@ def _truncate_for_error(text: str, limit: int = _EXECUTION_ERROR_TEXT_LIMIT) -> 
     return text[: limit - 3] + "..."
 
 
-
 # Whitelist of safe AST node types
 SAFE_NODES = {
     # Structural
@@ -365,6 +364,12 @@ def safe_execute_expression(
 
     try:
         exec(expr, safe_globals, safe_locals)
+    except (MemoryError, RecursionError):
+        # Resource exhaustion — let the host decide. Reframing
+        # "ran out of memory" as "your transform was bad" would
+        # mislead the agent into rewriting an expression that
+        # was structurally fine.
+        raise
     except Exception as e:
         # Truncate so embedded reprs of input data (config dicts, tokens,
         # etc.) don't reach the caller verbatim.

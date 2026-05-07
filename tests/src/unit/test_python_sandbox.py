@@ -3,6 +3,7 @@
 import pytest
 
 from ha_mcp.utils.python_sandbox import (
+    _EXECUTION_ERROR_TEXT_LIMIT,
     PythonSandboxError,
     PythonSandboxExecutionError,
     PythonSandboxValidationError,
@@ -539,7 +540,7 @@ class TestSafeExecuteExpression:
         assert result["views"][0]["icon"] == "new"
 
 
-class TestSandboxErrorSubclasses1159:
+class TestSandboxErrorSubclasses:
     """Issue #1159 — distinguish validation-time vs runtime sandbox failures.
 
     Both subclasses inherit ``PythonSandboxError`` so any pre-existing
@@ -580,7 +581,8 @@ class TestSandboxErrorSubclasses1159:
 
         HA dashboards/automations may carry tokens or device IDs that get
         reflected back in KeyError messages; without truncation those would
-        reach the caller verbatim.
+        reach the caller verbatim. Asserts on the constant + cap rather than
+        the literal sentinel so the test survives a sentinel change.
         """
         long_key = "x" * 1000
         # KeyError on a missing key embeds the key (repr'd) in its str().
@@ -588,11 +590,39 @@ class TestSandboxErrorSubclasses1159:
         with pytest.raises(PythonSandboxExecutionError) as exc_info:
             safe_execute(expr, {})
         text = str(exc_info.value)
-        assert len(text) <= 240, f"runtime error text not truncated: {len(text)} chars"
-        assert text.endswith("...")
+        assert len(text) <= _EXECUTION_ERROR_TEXT_LIMIT, (
+            f"runtime error text not truncated: {len(text)} chars"
+        )
+        # Without truncation the message would include the full 1000-char key
+        # plus the KeyError/repr framing — we want strict evidence that
+        # nothing close to that survived.
+        assert len(text) < len(long_key)
+
+    def test_memory_error_propagates(self):
+        """Resource-exhaustion errors must not be reframed as user-input failures.
+
+        MemoryError / RecursionError from exec() aren't transform-syntax
+        issues the agent can fix by trying again — they're infrastructure
+        signals the host needs to handle. Wrapping them in
+        PythonSandboxExecutionError with "verify keys/types" suggestions
+        would mislead.
+        """
+        from unittest.mock import patch
+
+        for infra_exc in (MemoryError("oom"), RecursionError("too deep")):
+            with (
+                patch(
+                    "ha_mcp.utils.python_sandbox.exec",
+                    side_effect=infra_exc,
+                ),
+                pytest.raises(type(infra_exc)),
+            ):
+                safe_execute_expression(
+                    "response = 1", {"response": 0}, "response"
+                )
 
 
-class TestFormatSandboxError1159:
+class TestFormatSandboxError:
     """Issue #1159 — caller-facing helper that picks message + suggestions
     based on the exception subclass."""
 
