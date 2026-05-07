@@ -259,11 +259,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                         all_area_entities.extend(domain_entities)
                             else:  # flat list
                                 if domain_filter:
+                                    prefix = f"{domain_filter}."
                                     all_area_entities.extend(
                                         e
                                         for e in entities
-                                        if e.get("entity_id", "").split(".", 1)[0]
-                                        == domain_filter
+                                        if e.get("entity_id", "").startswith(prefix)
                                     )
                                 else:
                                     all_area_entities.extend(entities)
@@ -335,11 +335,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         entities_data = first_area.get("entities")
 
                         # Build a flat results list, applying domain_filter and
-                        # handling both dict (grouped-by-domain) and flat-list
-                        # shapes from get_entities_by_area for defensive
-                        # symmetry with the with-query branch above. Using
-                        # `{**entity, "domain": domain}` avoids mutating the
-                        # caller's dicts.
+                        # tagging each entity with its `domain` so the optional
+                        # by_domain rebuild below can group without re-parsing
+                        # entity_id. Both dict and flat shapes from
+                        # get_entities_by_area are handled to mirror its two
+                        # return shapes. Using `{**entity, "domain": domain}`
+                        # avoids mutating dicts owned by the helper.
                         all_results: list[dict[str, Any]] = []
                         if isinstance(entities_data, dict):
                             for domain, entities in entities_data.items():
@@ -349,18 +350,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     {**entity, "domain": domain} for entity in entities
                                 )
                         elif entities_data:  # flat list
-                            all_results.extend(
-                                {
-                                    **entity,
-                                    "domain": entity.get("entity_id", "").split(".", 1)[
-                                        0
-                                    ],
-                                }
-                                for entity in entities_data
-                                if not domain_filter
-                                or entity.get("entity_id", "").split(".", 1)[0]
-                                == domain_filter
-                            )
+                            for entity in entities_data:
+                                domain = entity.get("entity_id", "").split(".", 1)[0]
+                                if domain_filter and domain != domain_filter:
+                                    continue
+                                all_results.append({**entity, "domain": domain})
 
                         paginated = all_results[offset : offset + limit]
 
@@ -377,8 +371,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
                         if group_by_domain_bool:
-                            # Build by_domain from the paginated subset so the
-                            # grouped view matches the flat results.
+                            # Group the paginated slice (not all_results) so
+                            # by_domain and results stay in sync.
                             paginated_by_domain: dict[str, list[dict[str, Any]]] = {}
                             for entity in paginated:
                                 paginated_by_domain.setdefault(

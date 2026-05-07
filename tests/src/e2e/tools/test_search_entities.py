@@ -674,9 +674,7 @@ async def test_area_filter_with_domain_filter_no_query(
 ):
     """area_filter + domain_filter (no query) returns only domain matches.
 
-    Before the fix, the area_only branch ignored domain_filter and returned every
-    entity in the area regardless of domain. by_domain must be absent when
-    group_by_domain is not requested (response-shape consistency).
+    by_domain must be absent when group_by_domain is not requested.
     """
     fixture = area_with_mixed_domains
 
@@ -769,6 +767,11 @@ async def test_area_filter_with_domain_filter_and_query(
         f"input_number leaked through domain_filter on area+query branch: {entity_ids}"
     )
     assert all(eid.startswith("input_boolean.") for eid in entity_ids)
+    # Fixture has one input_boolean in the area; domain_filter must drop the
+    # input_number before fuzzy search, so total_matches == 1.
+    assert data["total_matches"] == 1, (
+        f"Expected exactly 1 match after domain_filter pre-filtered: {data}"
+    )
 
 
 @pytest.mark.asyncio
@@ -807,12 +810,7 @@ async def test_area_filter_query_with_domain_filter_group_by_domain(
 
 @pytest.mark.asyncio
 async def test_area_filter_only_paginates(mcp_client, area_with_mixed_domains):
-    """area_only branch respects limit/offset and emits full pagination metadata.
-
-    Before the fix, the area_only branch returned every entity and omitted
-    has_more / next_offset / count, breaking response-shape consistency with
-    the rest of the search responses.
-    """
+    """area_only branch respects limit/offset and emits full pagination metadata."""
     fixture = area_with_mixed_domains
 
     page = await mcp_client.call_tool(
@@ -890,8 +888,9 @@ async def test_area_filter_empty_area_response_shape(mcp_client):
 async def two_areas_fuzzy_match(mcp_client):
     """Two areas sharing a name prefix, each with one input_boolean helper.
 
-    Used to exercise fuzzy area-name resolution: a single shared prefix
-    should resolve to both areas in get_entities_by_area, and downstream
+    Used to exercise fuzzy area-name resolution: a query that fuzzy-matches
+    multiple registered areas (`partial_ratio >= 80` in
+    `get_entities_by_area`) should yield all of them, and downstream
     domain_filter logic must continue to work in that multi-area shape.
     """
     suffix = uuid.uuid4().hex[:8]
@@ -983,9 +982,14 @@ async def test_area_filter_fuzzy_multi_area_with_query(
 
     assert data["search_type"] == "area_filtered_query"
     assert data.get("domain_filter") == "input_boolean"
+    for field in PAGINATION_FIELDS:
+        assert field in data, f"Missing pagination field {field}: {data}"
     entity_ids = {r["entity_id"] for r in data["results"]}
     expected = {h["boolean_id"] for h in fixture["helpers"]}
     assert expected.issubset(entity_ids), (
         f"Both fuzzy-matched areas' helpers should appear: missing {expected - entity_ids}"
     )
     assert all(eid.startswith("input_boolean.") for eid in entity_ids)
+    assert data["total_matches"] == 2, (
+        f"Both fuzzy-matched areas contribute one input_boolean each: {data}"
+    )
