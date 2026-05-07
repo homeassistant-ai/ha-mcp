@@ -580,7 +580,7 @@ async def _check_name_collision(
                 "type": "config_entries/get",
                 "domain": helper_type,
             })
-        except (HomeAssistantAPIError, ConnectionError, asyncio.TimeoutError):
+        except (HomeAssistantAPIError, ConnectionError, TimeoutError):
             # Connectivity issue — skip the check; HA will still suffix on its
             # own and we'll fail open rather than block legit creates.
             return
@@ -602,7 +602,7 @@ async def _check_name_collision(
         # caught by the name-slug fallback at line 623.
         try:
             result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-        except (HomeAssistantAPIError, ConnectionError, asyncio.TimeoutError):
+        except (HomeAssistantAPIError, ConnectionError, TimeoutError):
             # Connectivity issue — skip the check; HA will still suffix on its
             # own and we'll fail open rather than block legit creates.
             return
@@ -1619,6 +1619,24 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 },
             )
 
+            # Simple helper types use explicit parameters (name, options, min_value, ...).
+            # The `config` parameter only applies to flow-based types; silently ignoring
+            # it here would let the caller believe the payload took effect. Done before
+            # the collision check so we fail fast on bad inputs without a wasted WS call.
+            if helper_type not in FLOW_HELPER_TYPES and config not in (None, {}, ""):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"The 'config' parameter is only valid for flow-based helper types. "
+                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
+                        context={"helper_type": helper_type},
+                        suggestions=[
+                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
+                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
+                        ],
+                    )
+                )
+
             # Bug 12: HA auto-suffixes duplicate names with `_2`/`_3`/...
             # Detect the slug collision before sending so a caller intending
             # to update an existing helper isn't silently given a duplicate.
@@ -1639,23 +1657,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     category=category,
                     wait=wait,
                     action=action,
-                )
-
-            # Simple helper types use explicit parameters (name, options, min_value, ...).
-            # The `config` parameter only applies to flow-based types; silently ignoring
-            # it here would let the caller believe the payload took effect.
-            if config not in (None, {}, ""):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"The 'config' parameter is only valid for flow-based helper types. "
-                        f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
-                        context={"helper_type": helper_type},
-                        suggestions=[
-                            f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
-                            "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
-                        ],
-                    )
                 )
 
             # Parse JSON list parameters if provided as strings
