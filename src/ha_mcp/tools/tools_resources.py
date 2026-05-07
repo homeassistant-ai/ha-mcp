@@ -36,6 +36,66 @@ MAX_ENCODED_LENGTH = 32000
 # Base64 encoding increases size by ~33%, so 24KB * 1.33 ≈ 32KB
 MAX_CONTENT_SIZE = 24000
 
+# Top-level HA-config YAML keys that LLMs sometimes emit when they pick this
+# tool (`ha_config_set_dashboard_resource`) to "create a scene/automation/...".
+# This tool only stores Lovelace JS/CSS resources — the YAML payload would land
+# as a Lovelace module, creating orphaned, unreachable HA entities (see #1072).
+# Map: top-level key → suggested replacement tool (None where no direct tool
+# exists yet — e.g. scenes are tracked in #995).
+_HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
+    "automation": "ha_config_set_automation",
+    "script": "ha_config_set_script",
+    "scene": None,  # Tracked in #995 — scene CRUD tools not yet shipped
+    "group": "ha_config_set_group",
+    "input_boolean": "ha_config_set_helper(helper_type='input_boolean', ...)",
+    "input_number": "ha_config_set_helper(helper_type='input_number', ...)",
+    "input_select": "ha_config_set_helper(helper_type='input_select', ...)",
+    "input_text": "ha_config_set_helper(helper_type='input_text', ...)",
+    "input_datetime": "ha_config_set_helper(helper_type='input_datetime', ...)",
+    "input_button": "ha_config_set_helper(helper_type='input_button', ...)",
+    "template": None,
+    "homeassistant": None,
+    "sensor": None,
+    "binary_sensor": None,
+    "light": None,
+    "switch": None,
+    "cover": None,
+    "climate": None,
+    "media_player": None,
+    "notify": None,
+}
+
+
+def _detect_ha_config_yaml(content: str) -> str | None:
+    """Detect HA-config YAML at the start of inline-resource content.
+
+    Returns the matching top-level key (without the colon) when content's
+    first non-empty line opens an HA-config block, else None. Plain JS/CSS
+    never starts with ``<word>:`` followed by whitespace/EOL/YAML-marker —
+    JS opens with ``import``/``export``/``const``/``//``/``/*``/``function``
+    or similar, CSS with selectors/at-rules/``/*``. False-positive surface
+    is therefore narrow.
+
+    See #1072 for the misroute pattern this guards against.
+    """
+    first_line = content.strip().split("\n", 1)[0].rstrip()
+    if not first_line:
+        return None
+    for domain in _HA_CONFIG_YAML_MARKERS:
+        prefix = f"{domain}:"
+        if first_line == prefix:
+            # Block-form `automation:` exactly — unambiguous.
+            return domain
+        if first_line.startswith(prefix):
+            # `automation: <something>` — only count it as YAML if the char
+            # after the colon is whitespace, EOL, or a YAML marker. CSS
+            # selectors like `automation:hover` (hypothetical) would have
+            # an alpha char after the colon and not match.
+            sep = first_line[len(prefix)]
+            if sep in (" ", "\t", "|", ">", "-", "[", "{", "#"):
+                return domain
+    return None
+
 
 def _encode_content(content: str) -> tuple[str, int, int]:
     """Encode content to URL-safe base64. Returns (encoded, content_size, encoded_size)."""
@@ -113,7 +173,9 @@ class ResourceTools:
         management through the UI, but API access works regardless.
         """
         try:
-            result = await self._client.send_websocket_message({"type": "lovelace/resources"})
+            result = await self._client.send_websocket_message(
+                {"type": "lovelace/resources"}
+            )
 
             # Handle WebSocket response format
             if isinstance(result, dict) and "result" in result:
@@ -270,24 +332,28 @@ class ResourceTools:
         """
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message="Provide either 'content' (inline code) or 'url' (external), not both",
-                suggestions=[
-                    "Use content= for inline JavaScript/CSS code",
-                    "Use url= for /local/, /hacsfiles/, or https:// resources",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Provide either 'content' (inline code) or 'url' (external), not both",
+                    suggestions=[
+                        "Use content= for inline JavaScript/CSS code",
+                        "Use url= for /local/, /hacsfiles/, or https:// resources",
+                    ],
+                )
+            )
 
         if content is None and url is None:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message="Either 'content' (inline code) or 'url' (external) is required",
-                suggestions=[
-                    "Use content= for inline JavaScript/CSS code",
-                    "Use url= for /local/, /hacsfiles/, or https:// resources",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Either 'content' (inline code) or 'url' (external) is required",
+                    suggestions=[
+                        "Use content= for inline JavaScript/CSS code",
+                        "Use url= for /local/, /hacsfiles/, or https:// resources",
+                    ],
+                )
+            )
 
         if content is not None:
             return await self._set_inline_resource(content, resource_type, resource_id)
@@ -301,57 +367,111 @@ class ResourceTools:
     ) -> dict[str, Any]:
         """Create or update an inline dashboard resource."""
         if not content.strip():
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message="Content cannot be empty",
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Content cannot be empty",
+                )
+            )
 
         if resource_type == "js":
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message="Inline content does not support resource_type='js'",
-                suggestions=[
-                    "Use resource_type='module' for ES6 JavaScript (recommended)",
-                    "Use url= mode with resource_type='js' for legacy files",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message="Inline content does not support resource_type='js'",
+                    suggestions=[
+                        "Use resource_type='module' for ES6 JavaScript (recommended)",
+                        "Use url= mode with resource_type='js' for legacy files",
+                    ],
+                )
+            )
+
+        # Catch the misroute where LLMs pick this tool to create a scene /
+        # automation / helper / ... by passing HA-config YAML as `content`.
+        # The tool only stores Lovelace JS/CSS — YAML lands as a Lovelace
+        # module, creating orphaned, unreachable entities. See #1072.
+        detected_yaml = _detect_ha_config_yaml(content)
+        if detected_yaml is not None:
+            right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
+            suggestions = ["This tool stores Lovelace JavaScript/CSS resources only"]
+            if right_tool:
+                suggestions.insert(
+                    0,
+                    f"For `{detected_yaml}:` configuration, use {right_tool} instead",
+                )
+            elif detected_yaml == "scene":
+                suggestions.insert(
+                    0,
+                    "Scene configuration tools are tracked in #995; "
+                    "until they ship, scenes can only be created via the HA UI",
+                )
+            else:
+                suggestions.insert(
+                    0,
+                    f"No direct tool exists for `{detected_yaml}:` config; "
+                    "configure it via the HA UI or YAML packages",
+                )
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        f"Content starts with HA-configuration YAML "
+                        f"(`{detected_yaml}:`) — this tool only accepts Lovelace "
+                        f"JavaScript or CSS resources, not Home Assistant config "
+                        f"(see issue #1072)."
+                    ),
+                    context={
+                        "detected_marker": f"{detected_yaml}:",
+                        "resource_type": resource_type,
+                    },
+                    suggestions=suggestions,
+                )
+            )
 
         content_bytes = content.encode("utf-8")
         content_size = len(content_bytes)
 
         if content_size > MAX_CONTENT_SIZE:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
-                context={"size": content_size},
-                suggestions=[
-                    "Minify the code to reduce size",
-                    "Split into multiple smaller modules",
-                    "Use url= with a /local/ path for larger files",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=f"Content too large: {content_size:,} bytes (max {MAX_CONTENT_SIZE:,})",
+                    context={"size": content_size},
+                    suggestions=[
+                        "Minify the code to reduce size",
+                        "Split into multiple smaller modules",
+                        "Use url= with a /local/ path for larger files",
+                    ],
+                )
+            )
 
         encoded, _, encoded_size = _encode_content(content)
 
         if encoded_size > MAX_ENCODED_LENGTH:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
-                context={"size": content_size},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=f"Encoded content too large: {encoded_size:,} chars (max {MAX_ENCODED_LENGTH:,})",
+                    context={"size": content_size},
+                )
+            )
 
         resource_url = f"{WORKER_BASE_URL}/{encoded}?type={resource_type}"
 
         try:
-            result, action = await self._upsert_resource(resource_id, resource_url, resource_type)
+            result, action = await self._upsert_resource(
+                resource_id, resource_url, resource_type
+            )
 
             error_msg = _check_ws_error(result)
             if error_msg:
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.SERVICE_CALL_FAILED,
-                    message=str(error_msg),
-                    context={"action": action},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.SERVICE_CALL_FAILED,
+                        message=str(error_msg),
+                        context={"action": action},
+                    )
+                )
 
             new_resource_id = _extract_resource_id(result, resource_id)
 
@@ -374,7 +494,10 @@ class ResourceTools:
             logger.error(f"Error setting inline dashboard resource: {e}")
             exception_to_structured_error(
                 e,
-                context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create"},
+                context={
+                    "tool": "ha_config_set_dashboard_resource",
+                    "action": "update" if resource_id else "create",
+                },
                 suggestions=[
                     "Ensure Home Assistant is running and accessible",
                     "Check that you have admin permissions",
@@ -389,26 +512,32 @@ class ResourceTools:
     ) -> dict[str, Any]:
         """Create or update an external URL dashboard resource."""
         try:
-            result, action = await self._upsert_resource(resource_id, url, resource_type)
+            result, action = await self._upsert_resource(
+                resource_id, url, resource_type
+            )
 
             error_msg = _check_ws_error(result)
             if error_msg:
                 error_str = str(error_msg).lower()
                 if "already exists" in error_str or "duplicate" in error_str:
-                    raise_tool_error(create_error_response(
+                    raise_tool_error(
+                        create_error_response(
+                            code=ErrorCode.SERVICE_CALL_FAILED,
+                            message="Resource with this URL already exists",
+                            context={"action": action, "url": url},
+                            suggestions=[
+                                "Use ha_config_list_dashboard_resources() to find existing resource",
+                                "Provide resource_id to update the existing resource",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
                         code=ErrorCode.SERVICE_CALL_FAILED,
-                        message="Resource with this URL already exists",
+                        message=str(error_msg),
                         context={"action": action, "url": url},
-                        suggestions=[
-                            "Use ha_config_list_dashboard_resources() to find existing resource",
-                            "Provide resource_id to update the existing resource",
-                        ],
-                    ))
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.SERVICE_CALL_FAILED,
-                    message=str(error_msg),
-                    context={"action": action, "url": url},
-                ))
+                    )
+                )
 
             new_resource_id = _extract_resource_id(result, resource_id)
 
@@ -431,7 +560,11 @@ class ResourceTools:
             logger.error(f"Error setting dashboard resource: {e}")
             exception_to_structured_error(
                 e,
-                context={"tool": "ha_config_set_dashboard_resource", "action": "update" if resource_id else "create", "url": url},
+                context={
+                    "tool": "ha_config_set_dashboard_resource",
+                    "action": "update" if resource_id else "create",
+                    "url": url,
+                },
                 suggestions=[
                     "Ensure Home Assistant is running and accessible",
                     "Check that you have admin permissions",
@@ -512,24 +645,28 @@ class ResourceTools:
             if error_msg:
                 error_str = str(error_msg).lower()
                 if "not found" in error_str or "unable to find" in error_str:
-                    raise_tool_error(create_resource_not_found_error(
-                        "Dashboard resource",
-                        resource_id,
-                        details=(
-                            f"Resource '{resource_id}' not found. "
-                            "Use ha_config_list_dashboard_resources() to see available resources."
-                        ),
-                    ))
+                    raise_tool_error(
+                        create_resource_not_found_error(
+                            "Dashboard resource",
+                            resource_id,
+                            details=(
+                                f"Resource '{resource_id}' not found. "
+                                "Use ha_config_list_dashboard_resources() to see available resources."
+                            ),
+                        )
+                    )
 
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.SERVICE_CALL_FAILED,
-                    message=f"Failed to delete dashboard resource: {error_msg}",
-                    context={"action": "delete", "resource_id": resource_id},
-                    suggestions=[
-                        "Verify resource ID using ha_config_list_dashboard_resources()",
-                        "Check that you have admin permissions",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.SERVICE_CALL_FAILED,
+                        message=f"Failed to delete dashboard resource: {error_msg}",
+                        context={"action": "delete", "resource_id": resource_id},
+                        suggestions=[
+                            "Verify resource ID using ha_config_list_dashboard_resources()",
+                            "Check that you have admin permissions",
+                        ],
+                    )
+                )
 
             logger.info(f"Dashboard resource deleted: id={resource_id}")
 
