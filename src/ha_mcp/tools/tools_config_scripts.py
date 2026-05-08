@@ -285,6 +285,19 @@ class ConfigScriptTools:
         """
         Create or update a Home Assistant script.
 
+        PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
+        Native actions are validated at config load, fail loudly, and do not bypass HA's
+        schema. Templates in logic positions fail silently and obscure intent.
+        - `choose` / `if/then/else` instead of template-based service names
+        - `wait_for_trigger` instead of `wait_template`
+        - `repeat` with `for_each` instead of template loops
+        - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
+        Templates are appropriate ONLY in `data.*` fields, notification message/title,
+        `event_data`, and `variables`. The reactive best-practice checker on this tool
+        will surface anything in a logic position that should be native; consult the
+        `best_practice_warnings` field on the response and fix before re-submitting.
+        For comprehensive guidance, call `ha_get_skill_home_assistant_best_practices`.
+
         Supports two modes: full config replacement OR Python transformation.
 
         WHEN TO USE WHICH MODE:
@@ -392,16 +405,6 @@ class ConfigScriptTools:
                 }
             }
         })
-
-        PREFER NATIVE ACTIONS OVER TEMPLATES:
-        Before using template-based logic in scripts, check if native actions exist:
-        - Use `choose` action instead of template-based service names
-        - Use `if/then/else` action instead of template conditions
-        - Use `repeat` action with `for_each` instead of template loops
-        - Use `wait_for_trigger` instead of `wait_template` when waiting for state changes
-        - Use native action variables instead of complex template calculations
-
-        For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
 
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.

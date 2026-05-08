@@ -58,6 +58,43 @@ class HaResourcesAsTools(ResourcesAsTools):
         "list_resources": LIST_TOOL_NAME,
         "read_resource": READ_TOOL_NAME,
     }
+    # Action-phrased descriptions for BM25 retrieval. FastMCP's defaults are
+    # terse ("List MCP resources") and don't surface on task-phrased
+    # tool_search queries that agents make when reaching for config-write
+    # tools. See issue #1011, Gap 1 — same treatment as the per-skill
+    # ha_get_skill_* tools below.
+    _DESCRIPTIONS: ClassVar[dict[str, str]] = {
+        LIST_TOOL_NAME: (
+            "List all available MCP resources, including bundled skill reference "
+            "files (automation-patterns.md, helper-selection.md, "
+            "template-guidelines.md, device-control.md, dashboard-guide.md, "
+            "safe-refactoring.md, examples.yaml). Use BEFORE: creating or editing "
+            "automations, scripts, scenes, helpers, or dashboards; writing "
+            "triggers, conditions, actions, or wait_template; renaming entities "
+            "or migrating device_id to entity_id; calling ha_config_set_*. "
+            "Pair with ha_read_resource to load a specific guide."
+        ),
+        READ_TOOL_NAME: (
+            "Read the contents of an MCP resource by URI. Use this to load skill "
+            "reference files (e.g., skill://home-assistant-best-practices/"
+            "references/automation-patterns.md) BEFORE creating or editing "
+            "automations, scripts, scenes, helpers, or dashboards; writing "
+            "triggers, conditions, actions, or wait_template; renaming entities; "
+            "or calling ha_config_set_*. The skill files cover native conditions "
+            "and triggers, helper selection, automation modes, template "
+            "guidelines, device control, and safe refactoring. Use "
+            "ha_list_resources to discover available URIs."
+        ),
+    }
+
+    @classmethod
+    def _rewrite(cls, tool: Tool, new_name: str) -> Tool:
+        """Return a copy of ``tool`` renamed and re-described for ha-mcp."""
+        update: dict[str, Any] = {"name": new_name}
+        description = cls._DESCRIPTIONS.get(new_name)
+        if description is not None:
+            update["description"] = description
+        return tool.model_copy(update=update)
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         # Scan the entire result rather than slicing the tail so a future
@@ -72,7 +109,7 @@ class HaResourcesAsTools(ResourcesAsTools):
             if new_name is None:
                 renamed.append(tool)
                 continue
-            renamed.append(tool.model_copy(update={"name": new_name}))
+            renamed.append(self._rewrite(tool, new_name))
             matches += 1
         if matches != len(self._RENAMES):
             logger.warning(
@@ -93,13 +130,9 @@ class HaResourcesAsTools(ResourcesAsTools):
         version: VersionSpec | None = None,
     ) -> Tool | None:
         if name == self.LIST_TOOL_NAME:
-            return self._make_list_resources_tool().model_copy(
-                update={"name": self.LIST_TOOL_NAME}
-            )
+            return self._rewrite(self._make_list_resources_tool(), self.LIST_TOOL_NAME)
         if name == self.READ_TOOL_NAME:
-            return self._make_read_resource_tool().model_copy(
-                update={"name": self.READ_TOOL_NAME}
-            )
+            return self._rewrite(self._make_read_resource_tool(), self.READ_TOOL_NAME)
         return await call_next(name, version=version)
 
 # Server icon configuration using GitHub-hosted images
@@ -772,9 +805,24 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
             uri = f"skill://{skill_name}/SKILL.md"
 
+            # Action-phrased keyword block for BM25 retrieval. The upstream
+            # SKILL.md description is symptom-framed ("Agent uses Jinja2
+            # templates where..."), which doesn't match the task-phrased
+            # tool_search queries agents make when reaching for config-write
+            # tools. This block ensures queries like "create automation" /
+            # "set automation config" / "writing trigger" surface the skill.
+            # See issue #1011, Gap 1.
             tool_description = (
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
+                f"Use BEFORE: creating or editing automations, scripts, scenes, "
+                f"helpers, or dashboards; writing triggers, conditions, actions, "
+                f"wait_template, or service calls; renaming entities or migrating "
+                f"device_id to entity_id; calling ha_config_set_automation, "
+                f"ha_config_set_script, ha_config_set_scene, ha_config_set_helper, "
+                f"ha_config_set_dashboard, or ha_set_entity. The reference files "
+                f"below cover automation patterns, helper selection, template "
+                f"guidelines, device control, dashboards, and safe refactoring.\n\n"
                 f"Returns available reference files. Read each file via "
                 f"resources/read (or ha_read_resource as a fallback) using "
                 f"the file URI to load specific guides as needed."
