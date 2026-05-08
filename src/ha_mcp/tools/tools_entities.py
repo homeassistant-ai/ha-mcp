@@ -1373,3 +1373,50 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"entity_id": entity_id},
             )
+
+    @mcp.tool(
+        tags={"Entity Registry"},
+        annotations={
+            "destructiveHint": True,
+            "title": "Fire State",
+        },
+    )
+    @log_tool_usage
+    async def ha_fire_state(
+        entity_id: Annotated[
+            str,
+            Field(
+                description="Entity ID to set the state for (e.g., 'sensor.test_value').",
+            ),
+        ],
+        state: Annotated[
+            str,
+            Field(
+                description="New state value to write directly via the HA states API.",
+            ),
+        ],
+        attributes: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description="Optional attributes to set alongside the state.",
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Fire a state for an entity directly via the Home Assistant states API.
+
+        Bypasses the service layer and writes the state to /api/states/<entity_id>.
+        Useful for testing automation triggers or seeding sensor states from
+        external data without going through a domain-specific service call.
+        """
+        try:
+            result = await client.set_entity_state(entity_id, state, attributes)
+            return {"success": True, "data": result}
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Error firing state for '{entity_id}': {e}")
+            exception_to_structured_error(
+                e,
+                context={"entity_id": entity_id},
+            )
