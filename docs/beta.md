@@ -12,6 +12,7 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 | `ha_write_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_delete_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on) / `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` (env var) | Installs the `ha_mcp_tools` custom component via HACS. |
+| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on) / `ENABLE_CODE_MODE=true` (env var) | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
 
 ## How to enable
 
@@ -23,7 +24,7 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 4. Enable the desired toggle (e.g., `enable_yaml_config_editing`, `enable_filesystem_tools`).
 5. Restart the add-on.
 
-`enable_yaml_config_editing`, `enable_filesystem_tools`, and `enable_custom_component_integration` are only available in the dev channel add-on. The stable add-on does not expose these beta toggles.
+`enable_yaml_config_editing`, `enable_filesystem_tools`, `enable_custom_component_integration`, and `enable_code_mode` are only available in the dev channel add-on. The stable add-on does not expose these beta toggles.
 
 ### Option 2: Environment variable (non-add-on installs)
 
@@ -54,7 +55,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **Recommended prerequisites:**
 - Comfort with editing `configuration.yaml` via SSH or File Editor when things go wrong
-- Understanding that dedicated tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_set_script`, `ha_config_set_scene`, etc.) should be preferred for anything they support
+- Understanding that dedicated tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_set_script`, etc.) should be preferred for anything they support
 
 ### `ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`
 
@@ -67,3 +68,45 @@ These tools provide direct file access to your Home Assistant filesystem and req
 **No undo.** `ha_delete_file` and `ha_write_file` (with `overwrite=True`) are irreversible. There is no recycle bin or automatic backup for file operations.
 
 **Requires the custom component.** If `ha_mcp_tools` is not installed and active, all file tools will return an error with installation instructions.
+
+### `ha_manage_custom_tool`
+
+This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as an escape hatch for operations no built-in tool covers. It also lets the AI save tools for reuse via `save_as` / `run_saved` / `list_saved`, and delete them from inside the sandbox via `delete_saved_tool(name)`. Sandbox code can hit the HA REST API directly (`api_get`/`api_post`), send HA WebSocket commands (`ws_send`), or call other registered MCP tools (`call_tool`). The sandbox blocks filesystem and arbitrary network I/O, but operators should still be aware of the following:
+
+**The AI gets to write and run code on your HA instance.** Even though the sandbox prevents it from touching the filesystem or the public network, code can still call any tool the MCP server has registered, including write/destructive tools, and can hit any endpoint reachable via the HA REST or WebSocket API. The WebSocket surface in particular covers most registry CRUD (areas, devices, entities, automations) and template rendering — so this is effectively "do whatever HA's own UI can do, in any combination." Treat this like giving the AI a generic "do whatever existing tools allow you to do, in any combination" capability — not a tightly scoped per-feature tool.
+
+**Saved tools persist by default in the dev add-on.** Tools the AI saves via `save_as` are written to `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the add-on) and re-loaded on the next start. The cap is 256 saved tools per instance. Operators who want a clean slate can stop the add-on and delete the file. Operators migrating between environments can copy that JSON file to the new instance — it survives add-on updates, but **not** add-on uninstall/reinstall (the `/data` volume is recreated). Outside the add-on (pip / uvx / Docker direct), persistence is opt-in: set `CODE_MODE_SAVED_TOOLS_PATH=/path/to/tools.json` to enable.
+
+**Recursive self-call is blocked, but composition is not.** The sandbox refuses to invoke `ha_manage_custom_tool` from inside itself, so it can't directly recurse, but it can chain together every other tool the server registers. A buggy or adversarial prompt can still cause unexpected fan-out across destructive tools.
+
+**Resource limits are best-effort.** 30s wall-clock, 10 MB memory, recursion depth 100, and 100 API/tool calls per execution are enforced by the sandbox runtime; the per-execution call cap is enforced by ha-mcp itself. All four are configurable via the `CODE_MODE_MAX_*` env vars within the bounds defined in `src/ha_mcp/config.py`. They protect against runaway loops, not against intentionally crafted abuse — keep `ENABLE_CODE_MODE=false` in any environment where untrusted prompts can reach the server.
+
+**Outbound HTTP is restricted to your HA instance.** `api_get` / `api_post` reject absolute URLs (`http://...`, `https://...`), protocol-relative URLs (`//host/...`), and userinfo (`user@host/...`). This stops a prompt-injected LLM from redirecting the request elsewhere and exfiltrating the HA bearer token via the still-attached `Authorization` header. Only HA-relative paths reach the underlying httpx client.
+
+**Safer-path enforcement on REST and WebSocket.** Several endpoints have wrapping MCP tools that perform validation, lint, hash-locking, or invariant checks; raw `api_post` / `ws_send` would skip those. The sandbox blocks a small denylist on each surface:
+
+- `api_post`: writes to `/api/states/<entity_id>` (which can conjure ghost entities), `/api/events/<HA-internal-event-name>` (Core internal events that can fan out into user automations), and `/api/config/{automation,script}/config/*` (forced through `ha_config_set_automation` / `ha_config_set_script`). `config/scene/config/*` is intentionally not blocked because no `ha_config_set_scene` wrapping tool exists yet — the block would just remove capability with no validated alternative path.
+- `ws_send`: `config/core/update` (rewrites HA's location/timezone/currency in `.storage/core.config`), `lovelace/config/save` and `lovelace/dashboards/{create,delete,update}` (forced through `ha_config_set_dashboard`), and `config/{area,device,entity}_registry/{delete,disable,update}` (forced through `ha_set_area_or_floor` / `ha_update_device` / `ha_set_entity` etc.).
+- Service calls (`POST /api/services/<domain>/<service>`), webhook firing (`POST /api/webhook/<id>`), custom event types (`POST /api/events/my_event_name`), and registry **read** queries (e.g. `config/area_registry/list`) all stay allowed.
+
+**Sandbox failures are classified.** When sandboxed code raises, the error response now uses one of three codes — `SANDBOX_LIMIT_EXCEEDED` (memory / time / recursion / invocation cap), `SANDBOX_SYNTAX_UNSUPPORTED` (imports, classes, `with`, `match`, hard syntax errors) or `SANDBOX_RUNTIME_ERROR` (everything else) — with suggestions tailored to the category. Previously every Monty failure surfaced as `INTERNAL_ERROR` with "check the Python code for syntax errors" advice, which actively misled callers when the real cause was a memory cap or a missing module import.
+
+**Sandbox actions are auditable.** Every state-changing sandbox call (`POST /api/...`, every `ws_send`) logs a structured `sandbox.api_post` / `sandbox.ws_send` line at DEBUG level. Blocked attempts (e.g. a refused `POST /api/states/...` or a refused `config/core/update`) log a `sandbox.api_post.blocked` / `sandbox.ws_send.blocked` line at INFO level so they're visible in default operator logs.
+
+To get a full forensic trail of allowed calls, escalate the `ha_mcp.tools.tools_code` logger to DEBUG. This is HA's [`logger:` integration](https://www.home-assistant.io/integrations/logger/) and goes in **`configuration.yaml`** (not the add-on options):
+
+```yaml
+# configuration.yaml
+logger:
+  default: warning
+  logs:
+    ha_mcp.tools.tools_code: debug
+```
+
+Reload the `Logger` integration (or restart HA) to apply.
+
+**ARM platforms require the async sandbox path.** On systems where `Monty.run_async` is unavailable, the tool fails fast with a clear error rather than falling back silently.
+
+**Recommended prerequisites:**
+- You're comfortable with the AI authoring small Python snippets that wrap existing tools or HA REST endpoints
+- You have `destructiveHint=True` confirmation enabled on the MCP client and you actually read the prompts

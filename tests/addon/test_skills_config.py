@@ -4,40 +4,19 @@ from pathlib import Path
 
 
 class TestSkillsConfig:
-    """Verify skills configuration settings have correct defaults."""
+    """Verify skills configuration is unconditional (toggles removed in #1133)."""
 
-    def test_enable_skills_default_true(self):
-        """Check that enable_skills defaults to True."""
+    def test_enable_skills_field_removed(self):
+        """The enable_skills field is gone; skills always register."""
         from ha_mcp.config import Settings
 
-        settings = Settings()  # type: ignore[call-arg]
-        assert settings.enable_skills is True
+        assert "enable_skills" not in Settings.model_fields
 
-    def test_enable_skills_as_tools_default_true(self):
-        """Check that enable_skills_as_tools defaults to True.
-
-        This is intentional: skills-as-tools replaces several removed
-        documentation tools, so it must be on by default to preserve
-        documentation access for all clients.
-        """
+    def test_enable_skills_as_tools_field_removed(self):
+        """The enable_skills_as_tools field is gone; skills are always exposed as tools."""
         from ha_mcp.config import Settings
 
-        settings = Settings()  # type: ignore[call-arg]
-        assert settings.enable_skills_as_tools is True
-
-    def test_enable_skills_alias(self):
-        """Check that ENABLE_SKILLS environment variable alias is set."""
-        from ha_mcp.config import Settings
-
-        field = Settings.model_fields["enable_skills"]
-        assert field.alias == "ENABLE_SKILLS"
-
-    def test_enable_skills_as_tools_alias(self):
-        """Check that ENABLE_SKILLS_AS_TOOLS environment variable alias is set."""
-        from ha_mcp.config import Settings
-
-        field = Settings.model_fields["enable_skills_as_tools"]
-        assert field.alias == "ENABLE_SKILLS_AS_TOOLS"
+        assert "enable_skills_as_tools" not in Settings.model_fields
 
 
 class TestBundledSkillFiles:

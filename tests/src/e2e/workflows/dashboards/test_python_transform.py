@@ -306,3 +306,55 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
     # Verify error message mentions conflict
     error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_config_hash_stable_across_reads(mcp_client, ha_client):
+    """Test that two consecutive reads of a dashboard return the same config_hash.
+
+    Dashboards (unlike automations) hash the raw HA Lovelace response without
+    a normalize-for-roundtrip step, so stability across reads depends on HA
+    returning byte-identical responses. This test pins that contract; if HA
+    ever introduces non-determinism in the response shape (computed fields,
+    ordered-set semantics, etc.), the optimistic-locking surface would
+    silently degrade. Mirror of `test_config_hash_stable_across_reads` in
+    `automation/test_python_transform.py` and `scripts/test_python_transform.py`.
+    See issue #980 for the contract analysis.
+    """
+    mcp = MCPAssertions(mcp_client)
+
+    # Non-trivial config — multiple views, mixed card types — to exercise
+    # any HA-side ordering or normalization differences.
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-hash-stability",
+            "config": {
+                "views": [
+                    {
+                        "title": "View 1",
+                        "cards": [
+                            {"type": "button", "entity": "light.test_a", "icon": "mdi:lamp"},
+                            {"type": "entities", "entities": ["light.test_b", "switch.test_c"]},
+                        ],
+                    },
+                    {
+                        "title": "View 2",
+                        "cards": [
+                            {"type": "markdown", "content": "## Hello"},
+                        ],
+                    },
+                ],
+            },
+        },
+    )
+
+    read1 = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-hash-stability"}
+    )
+    read2 = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-hash-stability"}
+    )
+
+    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
+    assert read1["config_hash"] == read2["config_hash"]

@@ -87,6 +87,19 @@ const withBase = (path: string) => {
         </div>
       </section>
 
+      <!-- Optional: Quick Test -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number optional-badge">&#x2713;</span>
+          <h2 class="text-xl font-semibold text-white">Optional: Quick Test</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Before setting up Claude Desktop, you can smoke-test that <code class="bg-slate-800 px-1 rounded">uvx</code> and <code class="bg-slate-800 px-1 rounded">ha-mcp</code> work from a bare terminal using the public demo server:</p>
+          <pre class="code-block"><code>HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If it starts without errors and waits for input, everything is working. Press <kbd class="bg-slate-700 border border-slate-600 px-1 rounded text-xs">Ctrl+C</kbd> to exit and continue with the steps below.</p>
+        </div>
+      </section>
+
       <!-- Step 3 -->
       <section class="guide-step">
         <div class="step-header">
@@ -247,6 +260,9 @@ uvx --refresh ha-mcp@latest</code></pre>
   }
   .step-number {
     @apply w-8 h-8 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
+  }
+  .optional-badge {
+    @apply w-8 h-8 rounded-full bg-slate-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
   }
   .step-content {
     @apply pl-11;

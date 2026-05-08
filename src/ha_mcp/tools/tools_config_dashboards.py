@@ -16,6 +16,7 @@ from ..errors import ErrorCode, create_error_response, create_resource_not_found
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    format_sandbox_error,
     get_security_documentation,
     safe_execute,
 )
@@ -482,6 +483,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         MODE 3 — Get: Active when list_only=False and no search parameters are provided.
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
+
+        Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
@@ -1067,16 +1070,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 try:
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
+                    message, suggestions = format_sandbox_error(e, python_transform)
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
-                            str(e),
-                            suggestions=[
-                                "Check expression syntax",
-                                "Ensure only allowed operations are used",
-                                "See tool description for allowed operations",
-                                f"Expression: {python_transform[:100]}...",
-                            ],
+                            message,
+                            suggestions=suggestions,
                             context={
                                 "action": "python_transform",
                                 "url_path": url_path,

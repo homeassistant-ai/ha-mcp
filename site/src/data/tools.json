@@ -161,128 +161,6 @@
     "source_file": "tools_areas.py"
   },
   {
-    "name": "ha_config_remove_area",
-    "title": "Remove Area",
-    "description": "Delete a Home Assistant area.\n\nEntities and devices in the area are not deleted, just unassigned.\nMay break automations referencing this area.",
-    "inputSchema": {
-      "properties": {
-        "area_id": {
-          "type": "Annotated[str, Field(description='Area ID to delete (use ha_config_list_areas to find IDs)')]"
-        }
-      },
-      "required": [
-        "area_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": true
-    },
-    "tags": [
-      "Areas & Floors"
-    ],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_remove_floor",
-    "title": "Remove Floor",
-    "description": "Delete a Home Assistant floor.\n\nAreas on this floor are not deleted, just unassigned.\nMay break automations referencing this floor.",
-    "inputSchema": {
-      "properties": {
-        "floor_id": {
-          "type": "Annotated[str, Field(description='Floor ID to delete (use ha_config_list_floors to find IDs)')]"
-        }
-      },
-      "required": [
-        "floor_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": true
-    },
-    "tags": [
-      "Areas & Floors"
-    ],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_set_area",
-    "title": "Create or Update Area",
-    "description": "Create or update a Home Assistant area (room).\n\nAreas organize entities by physical location for room-based control.\n\nCreate: provide name only.\nUpdate: provide area_id (from ha_config_list_areas) plus any fields to change.\n\nEXAMPLES:\nha_config_set_area(name=\"Kitchen\")\nha_config_set_area(name=\"Living Room\", icon=\"mdi:sofa\")\nha_config_set_area(area_id=\"kitchen\", name=\"Kitchen Renamed\", floor_id=\"ground_floor\")",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "type": "Annotated[str | None, Field(description=\"Name for the area (required for create, optional for update, e.g., 'Living Room', 'Kitchen')\", default=None)]",
-          "default": null
-        },
-        "area_id": {
-          "type": "Annotated[str | None, Field(description='Area ID to update (omit to create new area, use ha_config_list_areas to find IDs)', default=None)]",
-          "default": null
-        },
-        "floor_id": {
-          "type": "Annotated[str | None, Field(description='Floor ID to assign this area to (use ha_config_list_floors to find IDs, empty string to remove)', default=None)]",
-          "default": null
-        },
-        "icon": {
-          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:sofa', 'mdi:bed', empty string to remove)\", default=None)]",
-          "default": null
-        },
-        "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge', 'family room'], empty list to clear)\", default=None)]",
-          "default": null
-        },
-        "picture": {
-          "type": "Annotated[str | None, Field(description='URL to a picture representing the area (empty string to remove)', default=None)]",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Areas & Floors"
-    ],
-    "source_file": "tools_areas.py"
-  },
-  {
-    "name": "ha_config_set_floor",
-    "title": "Create or Update Floor",
-    "description": "Create or update a Home Assistant floor.\n\nProvide name only to create a new floor. Provide floor_id to update existing.\nFloors organize areas into vertical levels for building-wide control.",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "type": "Annotated[str | None, Field(description=\"Name for the floor (required for create, optional for update, e.g., 'Ground Floor', 'Basement')\", default=None)]",
-          "default": null
-        },
-        "floor_id": {
-          "type": "Annotated[str | None, Field(description='Floor ID to update (omit to create new floor, use ha_config_list_floors to find IDs)', default=None)]",
-          "default": null
-        },
-        "level": {
-          "type": "Annotated[int | None, Field(description='Numeric level for ordering (0=ground, 1=first, -1=basement, etc.)', default=None)]",
-          "default": null
-        },
-        "icon": {
-          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:home-floor-1', 'mdi:home-floor-b', empty string to remove)\", default=None)]",
-          "default": null
-        },
-        "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['downstairs', 'main level'], empty list to clear)\", default=None)]",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "Areas & Floors"
-    ],
-    "source_file": "tools_areas.py"
-  },
-  {
     "name": "ha_list_floors_areas",
     "title": "List Floors and Areas",
     "description": "List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.\n\nDo not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.\n\nUse for location-based reasoning where floor-to-area relationships matter, such as \"which rooms are on the ground floor\" or operations scoped to a level.\n\nFloors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.",
@@ -297,9 +175,86 @@
     "source_file": "tools_areas.py"
   },
   {
+    "name": "ha_remove_area_or_floor",
+    "title": "Remove Area or Floor",
+    "description": "Remove a Home Assistant area or floor.\n\nRemoving an area unassigns its entities and devices (the entities and\ndevices themselves are not removed). Removing a floor unassigns its\nareas. May break automations referencing the removed area/floor.",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "type": "Annotated[Literal['area', 'floor'], Field(description=\"Which registry to delete from: 'area' or 'floor'\")]"
+        },
+        "id": {
+          "type": "Annotated[str, Field(description='Area ID or floor ID to delete (use ha_list_floors_areas to find IDs)')]"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
+    "name": "ha_set_area_or_floor",
+    "title": "Create or Update Area or Floor",
+    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "type": "Annotated[Literal['area', 'floor'], Field(description=\"Which registry to operate on: 'area' for rooms, 'floor' for building levels\")]"
+        },
+        "name": {
+          "type": "Annotated[str | None, Field(description=\"Name (required when creating; optional when updating, e.g., 'Living Room', 'Ground Floor')\", default=None)]",
+          "default": null
+        },
+        "id": {
+          "type": "Annotated[str | None, Field(description='Existing area_id or floor_id to update (omit to create a new entry; use ha_list_floors_areas to find IDs)', default=None)]",
+          "default": null
+        },
+        "floor_id": {
+          "type": "Annotated[str | None, Field(description=\"Floor assignment when kind='area' (use empty string to clear). Only valid when kind='area'.\", default=None)]",
+          "default": null
+        },
+        "level": {
+          "type": "Annotated[int | None, Field(description=\"Numeric level when kind='floor' (0=ground, 1=first, -1=basement). Only valid when kind='floor'.\", default=None)]",
+          "default": null
+        },
+        "icon": {
+          "type": "Annotated[str | None, Field(description=\"Material Design Icon (e.g., 'mdi:sofa', 'mdi:home-floor-1', empty string to remove)\", default=None)]",
+          "default": null
+        },
+        "aliases": {
+          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge'], empty list to clear)\", default=None)]",
+          "default": null
+        },
+        "picture": {
+          "type": "Annotated[str | None, Field(description=\"Picture URL when kind='area' (empty string to remove). Only valid when kind='area'.\", default=None)]",
+          "default": null
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Areas & Floors"
+    ],
+    "source_file": "tools_areas.py"
+  },
+  {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
-    "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "identifier": {
@@ -623,7 +578,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists all storage-mode dashboards with metadata (url_path, title, icon).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria.\n  Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).\n  Multiple criteria are AND-ed. Always fetches fresh config (force=True).\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n- Find cards by entity: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.living_room\")\n- Find by wildcard: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find by type: ha_config_get_dashboard(url_path=\"my-dash\", card_type=\"tile\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"jq_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
+    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists all storage-mode dashboards with metadata (url_path, title, icon).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria.\n  Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).\n  Multiple criteria are AND-ed. Always fetches fresh config (force=True).\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n\nReturn a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n- Find cards by entity: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.living_room\")\n- Find by wildcard: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find by type: ha_config_get_dashboard(url_path=\"my-dash\", card_type=\"tile\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"jq_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -938,7 +893,7 @@
   {
     "name": "ha_get_entity",
     "title": "Get Entity",
-    "description": "Get entity registry information for one or more entities.\n\nReturns detailed entity registry metadata including area assignment,\ncustom name/icon, enabled/hidden state, aliases, labels, and more.\n\nRELATED TOOLS:\n- ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)\n- ha_get_state(): Get current state/attributes (on/off, temperature, etc.)\n- ha_search_entities(): Find entities by name, domain, or area\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n\nRESPONSE FIELDS:\n- entity_id: Full entity identifier\n- name: Custom display name (null if using original_name)\n- original_name: Default name from integration\n- icon: Custom icon (null if using default)\n- area_id: Assigned area/room ID (null if unassigned)\n- disabled_by: Why disabled (null=enabled, \"user\"/\"integration\"/etc)\n- hidden_by: Why hidden (null=visible, \"user\"/\"integration\"/etc)\n- enabled: Boolean shorthand (True if disabled_by is null)\n- hidden: Boolean shorthand (True if hidden_by is not null)\n- aliases: Voice assistant aliases\n- labels: Assigned label IDs\n- categories: Category assignments (dict mapping scope to category_id)\n- platform: Integration platform (e.g., \"hue\", \"zwave_js\")\n- device_id: Associated device ID (null if standalone)\n- unique_id: Integration's unique identifier",
+    "description": "Get entity registry information for one or more entities.\n\nReturns detailed entity registry metadata including area assignment,\ncustom name/icon, enabled/hidden state, aliases, labels, and more.\n\nRELATED TOOLS:\n- ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)\n- ha_get_state(): Get current state/attributes (on/off, temperature, etc.)\n- ha_search_entities(): Find entities by name, domain, or area\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n\nRESPONSE FIELDS:\n- entity_id: Full entity identifier\n- name: Custom display name (null if using original_name)\n- original_name: Default name from integration\n- icon: Custom icon (null if using default)\n- area_id: Assigned area/room ID (null if unassigned)\n- disabled_by: Why disabled (null=enabled, \"user\"/\"integration\"/etc)\n- hidden_by: Why hidden (null=visible, \"user\"/\"integration\"/etc)\n- enabled: Boolean shorthand (True if disabled_by is null)\n- hidden: Boolean shorthand (True if hidden_by is not null)\n- aliases: Voice assistant aliases\n- labels: Assigned label IDs\n- categories: Category assignments (dict mapping scope to category_id)\n- device_class: User \"Show As\" override (null = use original_device_class)\n- original_device_class: Default device class from the integration\n- options: Per-domain registry options (e.g. sensor display_precision).\n  Voice-assistant exposure is also stored here but should be set/cleared\n  via the ha_set_entity(expose_to=...) parameter, not the options dict.\n- platform: Integration platform (e.g., \"hue\", \"zwave_js\")\n- device_id: Associated device ID (null if standalone)\n- unique_id: Integration's unique identifier",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1009,11 +964,11 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, enabled/disabled state, visibility, aliases, labels, voice\nassistant exposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, icon, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.\n\nLABEL OPERATIONS:\n- label_operation=\"set\" (default): Replace all labels with the provided list. Use [] to clear.\n- label_operation=\"add\": Add labels to existing ones without removing any.\n- label_operation=\"remove\": Remove specified labels from the entity.\n\nENTITY ID RENAME:\nUse new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).\nDomain must match. Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nUse new_device_name to rename the associated device. Can be combined with\nnew_entity_id to rename both in one call. The device is looked up automatically.\n\nUse ha_search_entities() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\nSingle entity:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Rename display name: ha_set_entity(\"sensor.temp\", name=\"Living Room Temperature\")\n- Rename entity_id: ha_set_entity(\"light.old_name\", new_entity_id=\"light.new_name\")\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Rename entity_id with friendly name: ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.new\", name=\"New Name\")\n- Set labels: ha_set_entity(\"light.lamp\", labels=[\"outdoor\", \"smart\"])\n- Add labels: ha_set_entity(\"light.lamp\", labels=[\"new_label\"], label_operation=\"add\")\n- Remove labels: ha_set_entity(\"light.lamp\", labels=[\"old_label\"], label_operation=\"remove\")\n- Clear labels: ha_set_entity(\"light.lamp\", labels=[])\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nBulk operations:\n- Set labels on multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"outdoor\"])\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose multiple to Alexa: ha_set_entity([\"light.a\", \"light.b\"], expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nSetting enabled=False performs a **registry-level disable** — the entity is completely\nremoved from the Home Assistant state machine and hidden from the UI. It will NOT appear\nin state queries, dashboards, or automations until re-enabled AND the integration is\nreloaded. This is NOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. Use these instead:\n- ha_call_service(\"automation\", \"turn_off\", entity_id=\"automation.xxx\")\n- ha_call_service(\"script\", \"turn_off\", entity_id=\"script.xxx\")",
+    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.\n\nLABEL OPERATIONS:\n- label_operation=\"set\" (default): Replace all labels with the provided list. Use [] to clear.\n- label_operation=\"add\": Add labels to existing ones without removing any.\n- label_operation=\"remove\": Remove specified labels from the entity.\n\nSHOW AS / DEVICE CLASS:\ndevice_class overrides the entity's display device class — equivalent to the\nHA UI's \"Show As\" dropdown. Use empty string '' to clear. Applies instantly,\nno reload needed.\n\nREGISTRY OPTIONS:\noptions carries per-domain registry options (sensor display_precision,\nweather forecast_type, etc). Pass {domain: {key: value}}; multi-domain\ndicts are sent as separate registry updates because HA's WS schema\nrequires options_domain + options to be paired one domain at a time.\n\nENTITY ID RENAME:\nUse new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).\nDomain must match. Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nUse new_device_name to rename the associated device. Can be combined with\nnew_entity_id to rename both in one call. The device is looked up automatically.\n\nUse ha_search_entities() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\nSingle entity:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Rename display name: ha_set_entity(\"sensor.temp\", name=\"Living Room Temperature\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Clear Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity_id: ha_set_entity(\"light.old_name\", new_entity_id=\"light.new_name\")\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Rename entity_id with friendly name: ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.new\", name=\"New Name\")\n- Set labels: ha_set_entity(\"light.lamp\", labels=[\"outdoor\", \"smart\"])\n- Add labels: ha_set_entity(\"light.lamp\", labels=[\"new_label\"], label_operation=\"add\")\n- Remove labels: ha_set_entity(\"light.lamp\", labels=[\"old_label\"], label_operation=\"remove\")\n- Clear labels: ha_set_entity(\"light.lamp\", labels=[])\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nBulk operations:\n- Set labels on multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"outdoor\"])\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose multiple to Alexa: ha_set_entity([\"light.a\", \"light.b\"], expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nSetting enabled=False performs a **registry-level disable** — the entity is completely\nremoved from the Home Assistant state machine and hidden from the UI. It will NOT appear\nin state queries, dashboards, or automations until re-enabled AND the integration is\nreloaded. This is NOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. Use these instead:\n- ha_call_service(\"automation\", \"turn_off\", entity_id=\"automation.xxx\")\n- ha_call_service(\"script\", \"turn_off\", entity_id=\"script.xxx\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "Annotated[str | list[str], Field(description='Entity ID or list of entity IDs to update. Bulk operations (list) only support labels and expose_to parameters.')]"
+          "type": "Annotated[str | list[str], Field(description='Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters.')]"
         },
         "area_id": {
           "type": "Annotated[str | None, Field(description=\"Area/room ID to assign the entity to. Use empty string '' to unassign from current area. Single entity only.\", default=None)]",
@@ -1025,6 +980,14 @@
         },
         "icon": {
           "type": "Annotated[str | None, Field(description=\"Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. Single entity only.\", default=None)]",
+          "default": null
+        },
+        "device_class": {
+          "type": "Annotated[str | None, Field(description=\"Override the entity's display device class — what the HA UI's 'Show As' dropdown writes. Use empty string '' to clear the override and fall back to the integration default. None (the default) means 'no change' — pass an explicit '' to clear. Single entity only. Examples: 'window', 'door', 'motion' for binary_sensor; 'temperature', 'humidity' for sensor.\", default=None)]",
+          "default": null
+        },
+        "options": {
+          "type": "Annotated[str | dict[str, dict[str, Any]] | None, Field(description='Per-domain entity registry options (e.g. sensor \\'display_precision\\', weather \\'forecast_type\\'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. JSON-string form also accepted. Multiple domains are sent as separate registry updates. For \\'Show As\\' use the dedicated `device_class` parameter — that is what the HA UI Show As dropdown writes. Voice-assistant exposure is stored under `options.<assistant>.should_expose` but must be managed via the dedicated `expose_to` parameter, not this options dict. Single entity only.', default=None)]",
           "default": null
         },
         "enabled": {
@@ -1422,18 +1385,18 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreates new helper if helper_id is omitted, updates existing if helper_id is provided.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(helper_type=\"tod\", name=\"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
+    "description": "Create or update Home Assistant helper entities (27 types, unified interface).\n\nCreate requires `name`; update requires `helper_id`.\n\nSIMPLE types (structured params, WebSocket API): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types (pass `config` dict, Config Entry Flow API): template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics, trend,\nrandom, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.\nNote: `tod` is the purpose-built \"is-current-time-in-range\" indicator\n(supports cross-midnight ranges, unlike `schedule`).\n\nFor flow-type updates, pass the existing entry_id as `helper_id`. Options flows\nreject the `name` key on update — to rename a flow helper, delete and recreate.\n\nBehavior notes:\n- UPDATE preserves type-specific fields not re-passed (rename never wipes\n  initial/icon/etc. for any simple helper).\n- Pass `action=\"create\"` or `action=\"update\"` to disambiguate intent —\n  without it the tool falls back to the implicit `helper_id`-presence\n  discriminator.\n- For flow-based helpers, config keys not declared by any step's\n  data_schema are silently ignored by HA; verify field names with\n  `ha_get_helper_schema` before relying on them.\n\nEXAMPLES (menu-based types + tod, where first-call payload is non-obvious):\n- template sensor:\n    ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\",\n        config={\"next_step_id\": \"sensor\",\n                \"state\": \"{{ states('sensor.x')|float }}\",\n                \"unit_of_measurement\": \"°C\"})\n- group (light):\n    ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\",\n        config={\"group_type\": \"light\",\n                \"entities\": [\"light.a\", \"light.b\"]})\n- tod (time-of-day indicator, cross-midnight OK):\n    ha_config_set_helper(helper_type=\"tod\", name=\"Quiet Hours\",\n        config={\"after_time\": \"22:00:00\", \"before_time\": \"07:00:00\"})\n\nFor complex schemas and per-type parameter details, use ha_get_helper_schema.",
     "inputSchema": {
       "properties": {
         "helper_type": {
           "type": "Annotated[Literal['counter', 'derivative', 'filter', 'generic_hygrostat', 'generic_thermostat', 'group', 'input_boolean', 'input_button', 'input_datetime', 'input_number', 'input_select', 'input_text', 'integration', 'min_max', 'person', 'random', 'schedule', 'statistics', 'switch_as_x', 'tag', 'template', 'threshold', 'timer', 'tod', 'trend', 'utility_meter', 'zone'], Field(description='Type of helper entity to create or update')]"
         },
         "name": {
-          "type": "Annotated[str | None, Field(description=\"Display name for the helper. Required on create; optional on update (pass helper_id to skip). For flow-based helper types on update (template, group, utility_meter, ...), this is typically ignored — options flows don't expose renaming. Rename a flow helper by deleting and recreating instead.\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"REQUIRED when creating (no helper_id provided). Display name for the helper. Optional on update — pass helper_id instead. For flow-based helper types on update (template, group, utility_meter, ...), this is typically ignored — options flows don't expose renaming. Rename a flow helper by deleting and recreating instead.\", default=None)]",
           "default": null
         },
         "helper_id": {
-          "type": "Annotated[str | None, Field(description=\"Helper ID for updates (e.g., 'my_button' or 'input_button.my_button'). If not provided, creates a new helper.\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"REQUIRED when updating an existing helper. Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.\", default=None)]",
           "default": null
         },
         "icon": {
@@ -1449,11 +1412,11 @@
           "default": null
         },
         "min_value": {
-          "type": "Annotated[float | None, Field(description='Minimum value (input_number/counter) or minimum length (input_text)', default=None)]",
+          "type": "Annotated[float | None, Field(description=\"Minimum value (input_number/counter) or minimum length (input_text). Also accepts shorthand 'min'.\", default=None, validation_alias=AliasChoices('min_value', 'min'))]",
           "default": null
         },
         "max_value": {
-          "type": "Annotated[float | None, Field(description='Maximum value (input_number/counter) or maximum length (input_text)', default=None)]",
+          "type": "Annotated[float | None, Field(description=\"Maximum value (input_number/counter) or maximum length (input_text). Also accepts shorthand 'max'.\", default=None, validation_alias=AliasChoices('max_value', 'max'))]",
           "default": null
         },
         "step": {
@@ -1461,7 +1424,7 @@
           "default": null
         },
         "unit_of_measurement": {
-          "type": "Annotated[str | None, Field(description=\"Unit of measurement for input_number (e.g., '°C', '%', 'W')\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Unit of measurement for input_number (e.g., '°C', '%', 'W'). Also accepts shorthand 'unit'.\", default=None, validation_alias=AliasChoices('unit_of_measurement', 'unit'))]",
           "default": null
         },
         "options": {
@@ -1549,7 +1512,7 @@
           "default": null
         },
         "tag_id": {
-          "type": "Annotated[str | None, Field(description='Tag ID for tag (auto-generated if not provided)', default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Tag ID for tag. On create, omit to auto-generate a unique uuid4 hex (HA's tag/create requires this field; the tool fills it in for you). On update, the tag's existing tag_id is required (passed via helper_id).\", default=None)]",
           "default": null
         },
         "description": {
@@ -1567,6 +1530,10 @@
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
+        },
+        "action": {
+          "type": "Annotated[Literal['create', 'update'] | None, Field(description=\"Explicit intent: 'create' a new helper or 'update' an existing one. When omitted, falls back to the implicit discriminator: presence of helper_id => update, absence => create. Pass 'create' or 'update' to disambiguate (e.g. so a typo in helper_id surfaces as a clear 'helper not found' error instead of being mistaken for a create call).\", default=None)]",
+          "default": null
         }
       },
       "required": [
@@ -1747,11 +1714,11 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug parameter)\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug (add-on slug, e.g. \"core_mosquitto\")",
+    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug = add-on slug)\n- \"system_service\": HA-Supervisor-managed system service logs (requires\n  slug ∈ {supervisor, host, core, dns, audio, multicast, observer})\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug = add-on slug, e.g. \"core_mosquitto\" (use\n    ha_get_addon() to list installed slugs)\n**System-service params:** slug = service name. The slug \"supervisor\"\n    here means the Supervisor service's own logs, NOT an add-on with\n    that name — the source param disambiguates.",
     "inputSchema": {
       "properties": {
         "source": {
-          "type": "Literal['logbook', 'system', 'error_log', 'supervisor', 'logger']",
+          "type": "Literal['logbook', 'system', 'error_log', 'supervisor', 'system_service', 'logger']",
           "default": "logbook"
         },
         "limit": {
@@ -2049,7 +2016,7 @@
   {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
-    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_home_assistant_best_practices.",
+    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_home_assistant_best_practices.",
     "inputSchema": {
       "properties": {
         "script_id": {
@@ -2581,6 +2548,45 @@
       "System"
     ],
     "source_file": "tools_updates.py"
+  },
+  {
+    "name": "ha_manage_custom_tool",
+    "title": "Custom Tool",
+    "description": "Create and run a custom tool in a sandbox, or manage saved custom tools.\n\n⚠️  **LAST RESORT** — search for existing tools first.\n\n**Modes** (mutually exclusive):\n- Provide ``code`` + ``justification`` to execute custom code\n- Set ``run_saved`` to re-run a previously saved tool by name\n- Set ``list_saved=True`` to list all saved tools\n\n**Available functions in sandbox:**\n- ``api_get(endpoint)`` — GET request to HA REST API\n- ``api_post(endpoint, data)`` — POST request to HA REST API\n- ``ws_send(message)`` — send a HA WebSocket command (e.g. registry\n  lookups, ``render_template``, dashboard ops). ``message`` must include\n  a ``\"type\"`` field; the MCP server adds ``id`` and handles auth.\n- ``call_tool(name, args)`` — call a registered MCP tool\n- ``delete_saved_tool(name)`` — remove a previously saved custom\n  tool by name. Returns ``{\"deleted\": True, \"name\": name}`` or\n  ``{\"error\": ...}``.\n\nUse ``api_get``/``api_post`` for REST operations not covered by existing\ntools.  Use ``ws_send`` when the operation is only available over the\nHome Assistant WebSocket API (most registry CRUD, template rendering,\nand Lovelace operations).  Use ``call_tool`` when an existing tool\nalready does what you need. Use ``delete_saved_tool`` to clean up\nsaved tools you no longer need.\n\nSaved tools persist across server restarts when\n``CODE_MODE_SAVED_TOOLS_PATH`` is set (the addon sets this by\ndefault to ``/data/saved_tools.json``).\n\nExample — check repairs (no built-in tool for this):\n```python\nrepairs = await api_get(\"/repairs/issues\")\nrepairs\n```\n\nExample — list areas via WebSocket:\n```python\nresult = await ws_send({\"type\": \"config/area_registry/list\"})\nresult.get(\"result\", [])\n```\n\nExample — chain existing tools:\n```python\nresult = await call_tool(\"ha_search_entities\", {\"query\": \"light\", \"limit\": 5})\ndata = result.get(\"data\", result)\nlights = data.get(\"results\", [])\nfor e in lights:\n    await call_tool(\"ha_call_service\", {\n        \"domain\": \"light\", \"service\": \"turn_off\",\n        \"entity_id\": e[\"entity_id\"]})\n{\"turned_off\": len(lights)}\n```\n\nExample — delete an obsolete saved tool:\n```python\ndelete_saved_tool(\"old_movie_mode\")\n```\n\nArgs:\n    code: Python code to execute.  Last expression is the return value.\n    justification: Why no existing tool works (required with code).\n    save_as: Save the tool under this name for reuse (alphanumeric/underscores, max 64 chars).\n    run_saved: Name of a previously saved tool to re-run.\n    list_saved: Set True to list all saved tools.",
+    "inputSchema": {
+      "properties": {
+        "code": {
+          "type": "str | None",
+          "default": null
+        },
+        "justification": {
+          "type": "str | None",
+          "default": null
+        },
+        "save_as": {
+          "type": "str | None",
+          "default": null
+        },
+        "run_saved": {
+          "type": "str | None",
+          "default": null
+        },
+        "list_saved": {
+          "type": "bool",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false
+    },
+    "tags": [
+      "System",
+      "beta"
+    ],
+    "source_file": "tools_code.py"
   },
   {
     "name": "ha_reload_core",

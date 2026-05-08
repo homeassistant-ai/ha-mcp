@@ -185,6 +185,8 @@ def generate_docs_section(tools: list[dict]) -> str:
         "",
         f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
         "",
+        "> **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an \"unknown tool\" error until the next stable release.",
+        "",
     ]
     if any("beta" in t["tags"] for t in tools):
         lines.extend([

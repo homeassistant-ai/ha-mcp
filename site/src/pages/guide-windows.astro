@@ -142,6 +142,9 @@ const withBase = (path: string) => {
         </div>
         <div class="step-content">
           <p class="text-slate-300 mb-4">Ready to use your own Home Assistant? Edit the config file:</p>
+          <p class="text-slate-400 text-sm mb-2">If you installed Claude Desktop from the <strong>Microsoft Store</strong>, run this in PowerShell to find your config path:</p>
+          <pre class="code-block"><code>{`$pkg = Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pkg) { "$env:LOCALAPPDATA\\Packages\\$($pkg.PackageFamilyName)\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json" } else { "$env:APPDATA\\Claude\\claude_desktop_config.json" }`}</code></pre>
+          <p class="text-slate-400 text-sm mb-2 mt-3">Or open it directly (works for the <strong>traditional installer</strong>):</p>
           <pre class="code-block"><code>notepad "$env:APPDATA\Claude\claude_desktop_config.json"</code></pre>
 
           <p class="text-slate-300 mt-4 mb-4">Replace the demo values:</p>

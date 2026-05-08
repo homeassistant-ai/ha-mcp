@@ -17,14 +17,17 @@ Protection against accidental real-HA usage is instead ensured by:
 """
 
 import asyncio
+import http.server
 import json
 import logging
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import AsyncGenerator
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -184,8 +187,77 @@ async def test_settings():
     return settings
 
 
+def _detect_docker_host() -> dict:
+    """Detect the correct host address and extra_hosts config for the Docker environment.
+
+    Docker Desktop (WSL2 / Mac / Windows) embeds a DNS server that resolves
+    ``host.docker.internal`` inside containers automatically.  On plain Linux
+    Docker (GitHub Actions CI) that DNS is absent, so we must inject the
+    mapping via ``--add-host host.docker.internal:host-gateway``.
+
+    Strategy: run a minimal probe container and ask it to resolve
+    ``host.docker.internal``.  If it resolves, Docker Desktop DNS is active and
+    we must NOT override the entry (doing so breaks the internal routing).  If
+    it does not resolve, we are on plain Linux Docker and must add extra_hosts.
+
+    Returns a dict with:
+    - ``hostname`` - hostname that Docker containers use to reach the host
+    - ``extra_hosts`` - dict passed to ``container.with_kwargs`` (may be empty)
+    """
+    try:
+        import docker as docker_sdk
+
+        client = docker_sdk.from_env()
+        output = client.containers.run(
+            "alpine",
+            ["sh", "-c", "getent hosts host.docker.internal 2>/dev/null | awk '{print $1}'"],
+            remove=True,
+        )
+        if output.strip():
+            # Docker Desktop DNS resolved the name — use hostname, no override needed
+            logger.info("🔍 Docker Desktop DNS detected — using host.docker.internal as-is")
+            return {"hostname": "host.docker.internal", "extra_hosts": {}}
+    except Exception as exc:
+        logger.debug(f"Docker Desktop DNS probe failed: {exc}")
+
+    # Plain Linux Docker — inject the mapping so the hostname resolves in the container
+    logger.info("🔍 Plain Linux Docker detected — injecting host.docker.internal via extra_hosts")
+    return {
+        "hostname": "host.docker.internal",
+        "extra_hosts": {"host.docker.internal": "host-gateway"},
+    }
+
+
 @pytest.fixture(scope="session")
-def ha_container_with_fresh_config():
+def _blueprint_http_server():
+    """Start a local HTTP server for blueprint files before the HA container launches.
+
+    Must start before the container so the port is known when ``extra_hosts``
+    is configured in ``ha_container_with_fresh_config``.
+    """
+    env = _detect_docker_host()
+
+    assets_dir = Path(__file__).parent.parent.parent / "assets" / "blueprints"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(assets_dir))
+    handler.log_message = lambda *args: None  # type: ignore[method-assign]
+    srv = http.server.HTTPServer(("0.0.0.0", 0), handler)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+
+    base_url = f"http://{env['hostname']}:{port}"
+    logger.info(f"🌐 Blueprint HTTP server on :{port}, container URL: {base_url}")
+
+    try:
+        yield {"base_url": base_url, "port": port, "extra_hosts": env["extra_hosts"]}
+    finally:
+        srv.shutdown()
+
+
+@pytest.fixture(scope="session")
+def ha_container_with_fresh_config(_blueprint_http_server):
     """Create Home Assistant container with fresh config using testcontainers."""
     # --- Safety guard 1: ensure Docker is available before doing anything else ---
     try:
@@ -280,8 +352,15 @@ def ha_container_with_fresh_config():
         str(config_path), "/config", "rw"
     )  # Ensure read-write mount
     container = container.with_env("TZ", "UTC")
-    # Add privileged mode for Home Assistant hardware access
-    container = container.with_kwargs(privileged=True)
+    # Add privileged mode for Home Assistant hardware access.
+    # On plain Linux Docker (CI) also inject the host.docker.internal mapping so
+    # the blueprint HTTP server is reachable from within the container.
+    # On Docker Desktop the mapping is provided by Docker's embedded DNS and must
+    # NOT be overridden here.
+    container_kwargs: dict = {"privileged": True}
+    if _blueprint_http_server.get("extra_hosts"):
+        container_kwargs["extra_hosts"] = _blueprint_http_server["extra_hosts"]
+    container = container.with_kwargs(**container_kwargs)
 
     # Remove any .HA_RESTORE file that might cause issues
     restore_file = config_path / ".HA_RESTORE"
@@ -444,12 +523,100 @@ def ha_container_with_fresh_config():
                 f"(minimum: {MIN_ENTITIES}). Check Docker logs."
             )
 
+        # Wait for key HA service domains to register.  Components loaded and
+        # entities present does not guarantee services are ready — individual
+        # integrations (input_boolean, sun) register their services
+        # asynchronously after their entities appear.
+        REQUIRED_SERVICES = {"input_boolean", "sun"}
+        SERVICE_WAIT = 30
+        logger.info("⏳ Waiting for required service domains to register...")
+        for svc_attempt in range(SERVICE_WAIT):
+            try:
+                svc_resp = requests.get(
+                    f"{base_url}/api/services", timeout=5, headers=headers
+                )
+                if svc_resp.status_code == 200:
+                    registered = {s.get("domain") for s in svc_resp.json()}
+                    missing = REQUIRED_SERVICES - registered
+                    if not missing:
+                        logger.info(
+                            f"✅ Required service domains ready after {svc_attempt + 1}s"
+                        )
+                        break
+                    if svc_attempt % 5 == 0:
+                        logger.info(
+                            f"⏳ Waiting for service domains: {missing}"
+                        )
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                logger.debug(f"Service check failed: {exc}")
+            time.sleep(1)
+        else:
+            logger.warning(
+                f"⚠️ Service domain wait timed out after {SERVICE_WAIT}s "
+                f"— some tests may be flaky"
+            )
+
+        # Wait for ha_mcp_tools custom component services (installed above).
+        # The component is loaded after core services, so it needs its own check.
+        HA_MCP_TOOLS_WAIT = 30
+        ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
+        if ha_mcp_tools_src.exists():
+            logger.info("⏳ Waiting for ha_mcp_tools services to register...")
+            for mcp_attempt in range(HA_MCP_TOOLS_WAIT):
+                try:
+                    svc_resp = requests.get(
+                        f"{base_url}/api/services", timeout=5, headers=headers
+                    )
+                    if svc_resp.status_code == 200:
+                        domains = {s.get("domain") for s in svc_resp.json()}
+                        if "ha_mcp_tools" in domains:
+                            logger.info(
+                                f"✅ ha_mcp_tools services ready after {mcp_attempt + 1}s"
+                            )
+                            break
+                except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                    logger.debug(f"ha_mcp_tools service check failed: {exc}")
+                time.sleep(1)
+            else:
+                logger.warning(
+                    f"⚠️ ha_mcp_tools services not registered after {HA_MCP_TOOLS_WAIT}s "
+                    f"— yaml config tests may fail"
+                )
+
+        # Wait for sun.sun to leave the 'unknown' state.  During HA startup the
+        # sun integration reports 'unknown' until it computes the first position.
+        # Template tests that assert above/below_horizon will fail if we proceed
+        # before the sun integration finishes its first calculation.
+        SUN_WAIT = 30
+        logger.info("⏳ Waiting for sun.sun to reach a known state...")
+        for sun_attempt in range(SUN_WAIT):
+            try:
+                sun_resp = requests.get(
+                    f"{base_url}/api/states/sun.sun", timeout=5, headers=headers
+                )
+                if sun_resp.status_code == 200:
+                    sun_state = sun_resp.json().get("state", "unknown")
+                    if sun_state != "unknown":
+                        logger.info(
+                            f"✅ sun.sun is '{sun_state}' after {sun_attempt + 1}s"
+                        )
+                        break
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                logger.debug(f"sun.sun check failed: {exc}")
+            time.sleep(1)
+        else:
+            logger.warning(
+                f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s "
+                f"— template tests may fail"
+            )
+
         # Store connection info for other fixtures
         container_info = {
             "container": container,
             "port": host_port,
             "base_url": base_url,
             "config_path": str(config_path),
+            "blueprint_server": _blueprint_http_server,
         }
 
         try:
@@ -759,3 +926,16 @@ async def wait_for_state_change():
         return False
 
     return _wait_for_state
+
+
+@pytest.fixture(scope="session")
+def local_blueprint_server(ha_container_with_fresh_config):
+    """Return blueprint HTTP server info for tests that need to import blueprints.
+
+    The server is started by ``_blueprint_http_server`` before the HA container
+    and stored in ``ha_container_with_fresh_config``; this fixture simply exposes
+    it so tests don't need to depend on ``ha_container_with_fresh_config`` directly.
+    """
+    server = ha_container_with_fresh_config["blueprint_server"]
+    logger.info(f"🌐 Blueprint server at {server['base_url']}")
+    yield server

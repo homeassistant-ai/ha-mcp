@@ -74,7 +74,28 @@ jobs:
               return;
             }
 
-            // Don't run if bot commented
+            // Circuit breaker: if a previous triage attempt posted the
+            // generic "temporarily unavailable" notice, the failure path
+            // applied `triage-failed`. Stop auto-retriggering on every
+            // subsequent comment — without this gate, large issues that
+            // exceed maxSessionTurns or otherwise consistently fail end
+            // up with a stack of identical "temporarily unavailable"
+            // notices, one per author comment. Maintainers can use
+            // workflow_dispatch to retry manually once the underlying
+            // cause is fixed; the success path also removes this label.
+            const hasTriageFailedLabel = issue.labels.some(l => l.name === 'triage-failed');
+            if (hasTriageFailedLabel && context.eventName !== 'workflow_dispatch') {
+              core.info('Skipping: Previous triage failed (has triage-failed label). Use workflow_dispatch to retry.');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Don't run if bot commented. Broad `type === 'Bot'` (not just
+            // `github-actions[bot]`) is intentional here — we want to ignore
+            // retriggers from any bot, including Dependabot/Renovate update
+            // comments. The orphan-cleanup logic uses the narrower
+            // `login === 'github-actions[bot]'` check because *that* code
+            // deletes comments and must avoid hijacking other bots' work.
             if (comment && comment.user.type === 'Bot') {
               core.info('Skipping: Comment is from a bot');
               core.setOutput('should_run', 'false');
@@ -147,14 +168,100 @@ jobs:
         with:
           script: |
             const issueNumber = ${{ steps.issue_number.outputs.number }};
-            const comment = await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body: '🤖 **Issue Triage Bot is analyzing this issue...**\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.'
-            });
-            core.setOutput('comment_id', comment.data.id);
-            return comment.data.id;
+            const PLACEHOLDER_PREFIX = '🤖 **Issue Triage Bot is analyzing this issue...**';
+            const PLACEHOLDER_BODY = `${PLACEHOLDER_PREFIX}\n\nThis may take a minute. I\'m:\n- Fetching the full issue thread\n- Searching for related issues\n- Researching relevant code and documentation\n\nI\'ll update this comment when complete.`;
+
+            // Match strictly on `github-actions[bot]` (not just user.type === 'Bot')
+            // so a Dependabot/Renovate/etc. comment that happens to share the
+            // prefix can never be hijacked.
+            const isOurOrphan = (c) =>
+              c.user && c.user.login === 'github-actions[bot]' &&
+              c.body && c.body.startsWith(PLACEHOLDER_PREFIX);
+
+            // Reuse / clean up orphan placeholders from prior cancelled runs.
+            // The `Update comment` step is gated on `!cancelled()`, so a run
+            // that gets cancelled (concurrency cancel-in-progress, job
+            // timeout) never touches its own placeholder again — without
+            // this cleanup, the placeholder stays as orphan text on the
+            // issue forever and every retriggering comment piles up a new one.
+            let existing;
+            try {
+              existing = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+            } catch (err) {
+              // Bail rather than create a duplicate. If we can't see existing
+              // comments we can't tell whether an orphan is already there;
+              // creating a new placeholder anyway would leave the issue with
+              // two visible "🤖 analyzing..." comments and no way to clean
+              // them up. Failing the step is the lesser evil — Update comment
+              // skips (no comment_id), no user-facing artifact, red Actions
+              // run for the maintainer.
+              core.setFailed(`listComments failed during orphan check (${err.message}); refusing to create a duplicate placeholder.`);
+              return;
+            }
+            const orphans = existing.data.filter(isOurOrphan);
+
+            let commentId;
+            if (orphans.length > 0) {
+              const mostRecent = orphans[orphans.length - 1];
+              commentId = mostRecent.id;
+              core.info(`Reusing orphaned placeholder ${commentId} from a prior cancelled run; cleaning up ${orphans.length - 1} older orphan(s).`);
+              for (const old of orphans.slice(0, -1)) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: old.id,
+                  });
+                } catch (err) {
+                  core.error(`Failed to delete older orphan placeholder ${old.id}: ${err.message}`);
+                }
+              }
+            } else {
+              const created = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: PLACEHOLDER_BODY,
+              });
+              commentId = created.data.id;
+            }
+
+            // Defensive re-list AFTER our action: if a concurrent run lost
+            // the cancel race and was mid-createComment when we listed
+            // earlier, its orphan landed after our snapshot. Find and delete
+            // any other matching placeholders so the issue is left with
+            // exactly one (ours).
+            try {
+              const recheck = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              const stragglers = recheck.data.filter(c => isOurOrphan(c) && c.id !== commentId);
+              for (const stale of stragglers) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: stale.id,
+                  });
+                  core.info(`Cleaned up straggler placeholder ${stale.id} from a concurrent run.`);
+                } catch (err) {
+                  core.error(`Failed to delete straggler placeholder ${stale.id}: ${err.message}`);
+                }
+              }
+            } catch (err) {
+              core.error(`Defensive re-list for straggler cleanup failed: ${err.message}`);
+            }
+
+            core.setOutput('comment_id', commentId);
+            return commentId;
 
       - name: Fetch full issue thread
         id: issue_data
@@ -200,7 +307,6 @@ jobs:
             core.setOutput('issue_author', issueAuthor);
             core.setOutput('issue_labels', labels.join(','));
             core.setOutput('issue_type', issueType);
-            core.setOutput('comments_json', JSON.stringify(comments.data));
             core.setOutput('comment_count', comments.data.length);
             core.setOutput('author_comments', authorComments || 'No additional comments from author');
 
@@ -293,11 +399,15 @@ jobs:
       - name: Evaluate completeness and generate response
         id: evaluate
         if: needs.should_run.outputs.skip_preanalysis != 'true'
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
         with:
           gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          # Preview alias — review when gemini-3-flash GAs (or when a
+          # gemini-3.1-flash-preview lands, mirroring the 3-pro → 3.1-pro move).
           gemini_model: 'gemini-3-flash-preview'
           settings: |
             {
@@ -314,15 +424,16 @@ jobs:
       - name: Full analysis (if COMPLETE or author commented)
         id: gemini_analysis
         if: contains(steps.evaluate.outputs.summary, 'COMPLETE') || needs.should_run.outputs.skip_preanalysis == 'true'
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
           ISSUE_NUMBER: '${{ steps.issue_number.outputs.number }}'
           ISSUE_TITLE: '${{ steps.issue_data.outputs.issue_title }}'
           ISSUE_BODY: '${{ steps.issue_data.outputs.issue_body }}'
           ISSUE_AUTHOR: '${{ steps.issue_data.outputs.issue_author }}'
           ISSUE_LABELS: '${{ steps.issue_data.outputs.issue_labels }}'
-          COMMENTS_JSON: '${{ steps.issue_data.outputs.comments_json }}'
           COMMENT_COUNT: '${{ steps.issue_data.outputs.comment_count }}'
           REPO_OWNER: '${{ github.repository_owner }}'
           REPO_NAME: '${{ github.event.repository.name }}'
@@ -332,7 +443,7 @@ jobs:
           settings: |
             {
               "model": {
-                "maxSessionTurns": 20
+                "maxSessionTurns": 50
               },
               "tools": {
                 "core": [
@@ -417,7 +528,7 @@ jobs:
             - `google_web_search <query>` - Search web for error messages or external docs
 
             **Critical Rules:**
-            - **TIME BUDGET**: You have ~8 minutes. Limit yourself to ~10 tool calls total. If you can't find something after 2 searches, move on. Focus on the single most likely root cause.
+            - **TIME BUDGET**: You have ~8 minutes. Aim for ~10 tool calls; if you genuinely need more (long issue, multiple files), the harness allows up to 50 turns total — use them sparingly. If you can't find something after 2 searches, move on. Focus on the single most likely root cause.
             - **YOU ARE READ-ONLY**: You cannot modify files, create PRs, or make code changes
             - If you identify a fix, provide it as a diff in the Technical Analysis section
             - ONLY reference file paths you actually found with `grep` or `find`
@@ -531,32 +642,64 @@ jobs:
 
             </details>
 
+      # Skip on cancellation. concurrency.cancel-in-progress means every
+      # superseded run (user posts a follow-up comment that retriggers triage)
+      # would otherwise land here and overwrite the in-flight placeholder with
+      # a "bot unavailable" notice — that's noise, not a failure. The
+      # replacement run will post the real analysis.
+      #
+      # Trade-off: GitHub Actions also surfaces job timeout (timeout-minutes:
+      # 12 above) as `cancelled()`, so a real timeout exits the run green
+      # with the placeholder still on the issue. The next user comment will
+      # retrigger triage and the orphan-cleanup in `Post initial` will pick
+      # up the stale placeholder. Acceptable: the user-visible artifact
+      # eventually gets repaired and timeouts are rare relative to
+      # superseded runs (which are common per issue).
       - name: Update comment and labels
-        if: always() && steps.initial_comment.outputs.comment_id
+        if: ${{ !cancelled() && steps.initial_comment.outputs.comment_id }}
         uses: actions/github-script@v9
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
-          EVALUATE_ERROR: ${{ steps.evaluate.outputs.error }}
+          EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
           GEMINI_SUMMARY: ${{ steps.gemini_analysis.outputs.summary }}
-          GEMINI_ERROR: ${{ steps.gemini_analysis.outputs.error }}
+          GEMINI_OUTCOME: ${{ steps.gemini_analysis.outcome }}
           COMMENT_ID: ${{ steps.initial_comment.outputs.comment_id }}
-          SKIP_PREANALYSIS: ${{ needs.should_run.outputs.skip_preanalysis }}
         with:
           script: |
             const commentId = process.env.COMMENT_ID;
             const evaluateResult = process.env.EVALUATE_RESULT || '';
-            const evaluateError = process.env.EVALUATE_ERROR || '';
+            const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
             const geminiSummary = process.env.GEMINI_SUMMARY || '';
-            const geminiError = process.env.GEMINI_ERROR || '';
-            const skipPreanalysis = process.env.SKIP_PREANALYSIS === 'true';
+            const geminiOutcome = process.env.GEMINI_OUTCOME || '';
+
+            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nThe automated triage hit an internal error. Your issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
             let analysisBody;
             let shouldAddTriagedLabel = false;
+            // Set on every path that posts GENERIC_FAILURE_BODY. Drives the
+            // `triage-failed` circuit-breaker label so the next comment from
+            // the issue author doesn't auto-retrigger another doomed run.
+            let shouldAddFailedLabel = false;
             let extraLabels = [];
 
-            if (geminiSummary) {
-              // Full analysis completed
-              // Extract TRIAGE_LABELS from the hidden comment before displaying
+            // CLI step failures must NEVER expose raw stderr to issue authors.
+            // Match anything that isn't `success` or `skipped` — that includes
+            // step-level `failure`, step-level `cancelled` (e.g. step-timeout,
+            // rare), and any future outcome value the action may emit. We
+            // explicitly do NOT include `skipped`: the evaluate step is
+            // skipped via `skip_preanalysis`, and the analysis step is
+            // skipped on the missing-info path; both are normal flow, not
+            // failures. Job-level cancellation is filtered by the step's
+            // `if: !cancelled()` guard above and never reaches this script.
+            const stepHadNonSuccess = (
+              (evaluateOutcome && evaluateOutcome !== 'success' && evaluateOutcome !== 'skipped') ||
+              (geminiOutcome && geminiOutcome !== 'success' && geminiOutcome !== 'skipped')
+            );
+            if (stepHadNonSuccess) {
+              core.error(`Gemini triage step did not succeed (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}); posting generic notice to issue.`);
+              analysisBody = GENERIC_FAILURE_BODY;
+              shouldAddFailedLabel = true;
+            } else if (geminiSummary) {
               const labelMatch = geminiSummary.match(/<!--\s*TRIAGE_LABELS:\s*([\w,\s-]+?)\s*-->/);
               if (labelMatch) {
                 const validLabels = ['bug', 'enhancement', 'question', 'documentation', 'duplicate', 'invalid'];
@@ -566,43 +709,216 @@ jobs:
                 if (rejected.length > 0) {
                   core.warning(`Ignoring unrecognized labels from LLM: ${rejected.join(', ')}`);
                 }
+              } else {
+                core.warning('LLM did not emit a TRIAGE_LABELS comment; issue will only get the "triaged" label.');
               }
-              // Strip the hidden comment from the displayed body
               analysisBody = geminiSummary.replace(/\n?<!--\s*TRIAGE_LABELS:.*?-->\n?/g, '').trimEnd();
               shouldAddTriagedLabel = true;
-            } else if (evaluateResult && !evaluateResult.includes('COMPLETE')) {
-              // Missing info - use evaluation's generated message
-              analysisBody = `## ℹ️ Information Needed\n\n`;
-              analysisBody += `To provide a helpful analysis, I need some additional information:\n\n`;
-              analysisBody += evaluateResult + '\n\n';
-              analysisBody += `---\n\n`;
-              analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
-              analysisBody += `*🤖 Automated triage by Issue Bot*`;
-            } else if (geminiError) {
-              analysisBody = `❌ **Analysis failed**\n\nAn error occurred:\n\n\`\`\`\n${geminiError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
-            } else if (evaluateError) {
-              analysisBody = `❌ **Evaluation failed**\n\nAn error occurred:\n\n\`\`\`\n${evaluateError}\n\`\`\`\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+            } else if (evaluateResult && evaluateResult.trim() !== 'COMPLETE') {
+              // Missing-info path. The evaluate step said the issue isn't
+              // ready for full analysis (its output isn't the literal
+              // "COMPLETE" sentinel), so the output is a question for the
+              // user. Trust the prose — but guard against two ways it can
+              // go wrong:
+              //
+              //   1. The model refused or errored ("I cannot help with that",
+              //      "Error: rate limit"). Posting that under "Information
+              //      Needed" puts words in the bot's mouth that contradict
+              //      the prose. Divert to the generic notice instead.
+              //   2. The model monologued (>4000 chars). Posting that on
+              //      every issue is a comment bomb. Divert.
+              //
+              // Anything else — bullet list, numbered list, prose
+              // question — gets posted verbatim. Shape mismatch (no list
+              // markers) is logged as a warning so prompt drift is visible
+              // in run logs, but doesn't gate the post; a coherent prose
+              // question is just as useful to the user as a bullet list.
+              //
+              // The 4000-char cap is a "looks like an LLM monologue, not a
+              // missing-info checklist" heuristic; unrelated to GitHub's
+              // 65536-char comment limit. Strict trim()==='COMPLETE' (not
+              // includes) so "INCOMPLETE" / "MARKED_COMPLETE" / etc. don't
+              // collide with the sentinel if a future prompt rewrite drifts.
+              const trimmed = evaluateResult.trim();
+              // Refusal patterns. The first-person verbs are anchored to the
+              // start AND paired with a help-action object so that legitimate
+              // missing-info prose like "I cannot find the version in the
+              // issue body" or "I cannot determine which addon is affected"
+              // doesn't false-positive — those are info requests, not
+              // refusals. Genuine Gemini refusals always pair the verb with
+              // help/assist/comply/etc. and lead the response.
+              const REFUSAL_PATTERNS = [
+                // Common refusal lead-ins
+                /^(unfortunately|sorry|i'?m sorry|i apologize|my apologies|error:)/i,
+                /^as an? (ai|language model|assistant|llm)\b/i,
+                // First-person refusal verb + help-action pairing
+                /^i (cannot|can'?t|won'?t)\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|provide that|provide this|provide assistance|continue|process this)/i,
+                /^i am (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
+                /^i'?m (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
+                /^we (cannot|can'?t|are unable)\s+(help|assist|comply|fulfill)/i,
+                /^i refuse to\b/i,
+                // Additional Gemini refusal lead-ins flagged in PR #1122 review.
+                // "I am afraid..." / "I'm afraid..." paired with a refusal verb
+                // (cannot/can't/won't) covers the polite-decline phrasing without
+                // false-positiving on standalone "I'm afraid the version isn't
+                // mentioned" info-request prose.
+                /^i('?m| am) afraid (i )?(cannot|can'?t|won'?t)/i,
+                // Bare "Unable to help..." (no leading "I'm") — Gemini sometimes
+                // drops the pronoun entirely. Narrow help-action set so prose
+                // like "Unable to determine the version" doesn't false-positive.
+                /^unable to (help|assist|comply)/i,
+                // Policy / guideline refusals — narrow noun-phrases that don't
+                // realistically appear in non-refusal prose. Earlier revisions
+                // included bare `\bcannot assist\b` and `\bi refuse\b` here;
+                // both are removed because they false-positive on legitimate
+                // missing-info phrasing like "The user can run X; without it,
+                // I refuse to guess". `cannot assist` as a refusal lead-in is
+                // already covered by the anchored verb-pairing pattern above
+                // (`^i cannot ... (assist|...)`), and `i refuse to` is covered
+                // by its own anchored pattern.
+                /\b(safety policy|content policy|won'?t help)\b/i,
+                /\bviolates? (my|our|the) (guidelines|policies|terms)\b/i,
+              ];
+              const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
+              const tooLong = trimmed.length > 4000;
+              const matchesMissingInfoShape = trimmed.split('\n').some(line => {
+                const l = line.trimStart();
+                return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
+                       l.startsWith('**') || /^\d+\.\s/.test(l);
+              });
+
+              if (looksLikeRefusal || tooLong) {
+                core.error(`evaluate output diverted to generic notice (looksLikeRefusal=${looksLikeRefusal}, length=${trimmed.length}); raw output: ${trimmed.slice(0, 200)}`);
+                analysisBody = GENERIC_FAILURE_BODY;
+                shouldAddFailedLabel = true;
+              } else {
+                if (!matchesMissingInfoShape) {
+                  core.warning(`evaluate output didn't match expected bullet/numbered/bold list shape (length=${trimmed.length}); posting LLM prose verbatim.`);
+                }
+                analysisBody = `## ℹ️ Information Needed\n\n`;
+                analysisBody += trimmed + '\n\n';
+                analysisBody += `---\n\n`;
+                analysisBody += `💡 **Please reply to this issue** with the requested information.\n\n`;
+                analysisBody += `*🤖 Automated triage by Issue Bot*`;
+              }
             } else {
-              analysisBody = `⚠️ **No output generated.**\n\nPlease check the [workflow logs](${context.payload.repository.html_url}/actions/runs/${context.runId}).`;
+              core.error(`Triage produced no usable output (evaluateOutcome=${evaluateOutcome}, geminiOutcome=${geminiOutcome}); posting generic notice.`);
+              analysisBody = GENERIC_FAILURE_BODY;
+              shouldAddFailedLabel = true;
             }
 
-            // Update comment
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: commentId,
-              body: analysisBody
-            });
-
-            // Add triaged label (and any extra classification labels) when analysis is done
-            if (shouldAddTriagedLabel) {
-              const issueNumber = ${{ steps.issue_number.outputs.number }};
-              const labelsToAdd = ['triaged', ...extraLabels];
-              core.info(`Adding labels: ${labelsToAdd.join(', ')}`);
-              await github.rest.issues.addLabels({
+            try {
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issueNumber,
-                labels: labelsToAdd
+                comment_id: commentId,
+                body: analysisBody
               });
+            } catch (err) {
+              // Failed to update the placeholder. Surface it loudly — the
+              // user is staring at "🤖 analyzing..." and we owe them at
+              // least a red Actions run so a maintainer notices.
+              core.setFailed(`updateComment failed for placeholder ${commentId}: ${err.message}`);
+              return;
             }
+
+            const issueNumber = ${{ steps.issue_number.outputs.number }};
+
+            if (shouldAddTriagedLabel) {
+              const labelsToAdd = ['triaged', ...extraLabels];
+              core.info(`Adding labels: ${labelsToAdd.join(', ')}`);
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  labels: labelsToAdd
+                });
+              } catch (err) {
+                // If `triaged` doesn't get applied, the should_run gate at
+                // the top of this workflow will re-trigger triage on every
+                // future comment, piling up placeholders. Fail loudly so a
+                // maintainer adds the label by hand.
+                core.setFailed(`addLabels failed for issue #${issueNumber} (${labelsToAdd.join(',')}): ${err.message}. Issue will re-trigger triage on next comment until 'triaged' is applied manually.`);
+              }
+
+              // Successful triage clears any prior `triage-failed` circuit-breaker
+              // so the issue's label state reflects the final outcome (this matters
+              // when a maintainer recovers a stuck issue via workflow_dispatch).
+              // 404 = label wasn't there to begin with; that's fine and not an error.
+              // For other failures (5xx, network, auth) we only warn rather than
+              // setFailed: the should_run gate at the top of this workflow checks
+              // `triaged` BEFORE `triage-failed`, so a stale `triage-failed` label
+              // alongside `triaged` doesn't actually block re-triage — the issue's
+              // label set looks inconsistent until a maintainer cleans it up, but
+              // no behavior breaks.
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: 'triage-failed'
+                });
+                core.info(`Removed stale 'triage-failed' label from issue #${issueNumber}`);
+              } catch (err) {
+                if (err.status !== 404) {
+                  core.warning(`Failed to remove 'triage-failed' label from issue #${issueNumber}: ${err.message}`);
+                }
+              }
+            }
+
+            if (shouldAddFailedLabel) {
+              // Circuit breaker: applying `triage-failed` blocks the
+              // should_run gate from auto-retriggering on every subsequent
+              // author comment. Without it, a consistently-failing issue
+              // (e.g. one that exceeds maxSessionTurns) accumulates one
+              // "temporarily unavailable" notice per comment. Maintainers
+              // can clear the label or use workflow_dispatch to retry.
+              core.info(`Adding 'triage-failed' label to issue #${issueNumber} to break retrigger loop`);
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  labels: ['triage-failed']
+                });
+              } catch (err) {
+                // Warn instead of setFailed — the run is already going red
+                // either via the trailing "Fail job if Gemini steps failed"
+                // step (when a CLI step had a non-success outcome) or via
+                // the explicit setFailed below (when divert paths fired
+                // without any step failure). The label itself is a circuit
+                // breaker not a correctness gate, so a missed addLabels
+                // here only reverts to pre-#1131 behavior; the warning
+                // surfaces in the Actions log so a maintainer can apply
+                // the label by hand if needed.
+                core.warning(`addLabels failed for 'triage-failed' on issue #${issueNumber}: ${err.message}. Triage may retrigger on next comment until label is applied manually.`);
+              }
+
+              // Divert paths (refusal/too-long/no-output at lines 767/783)
+              // set `shouldAddFailedLabel = true` even though both Gemini
+              // steps returned `success`. The trailing "Fail job if Gemini
+              // steps failed" step won't fire in those cases, so without
+              // this `setFailed` the run exits green even though the user
+              // got a "temporarily unavailable" notice — exactly the silent
+              // failure pattern this PR is meant to eliminate. Skip when a
+              // step already had a non-success outcome to avoid stacking
+              // redundant failure messages.
+              if (!stepHadNonSuccess) {
+                core.setFailed(`Triage diverted to generic notice with no Gemini step failure (evaluate=${evaluateOutcome}, analysis=${geminiOutcome}). See "Update comment and labels" log above for the divert reason (refusal pattern, too-long output, or no usable output).`);
+              }
+            }
+
+      # Surface Gemini step failures as a red X. Fires on any non-success/
+      # non-skipped outcome (`failure`, step-level `cancelled` from a step
+      # timeout, or any future outcome value). Job-level cancellation from
+      # concurrency `cancel-in-progress` is filtered by the `!cancelled()`
+      # guard so superseded runs don't paint red. Divert paths (refusal/
+      # too-long/no-output) where both steps returned `success` are surfaced
+      # by `core.setFailed` inside the "Update comment and labels" script,
+      # not here.
+      - name: Fail job if Gemini steps failed
+        if: ${{ !cancelled() && ((steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped') || (steps.gemini_analysis.outcome != 'success' && steps.gemini_analysis.outcome != 'skipped')) }}
+        run: |
+          echo "::error::Gemini triage step did not succeed (evaluate=${{ steps.evaluate.outcome }}, analysis=${{ steps.gemini_analysis.outcome }}). The issue received a generic 'temporarily unavailable' notice; check the step logs above for the underlying CLI error."
+          exit 1

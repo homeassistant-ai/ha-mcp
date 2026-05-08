@@ -3,10 +3,10 @@
 Stateless payload inspection — returns warnings pointing to skill reference
 files. Zero overhead on clean calls (returns empty list).
 
-When skills are enabled (ENABLE_SKILLS=true), warnings include skill:// URIs
-so the LLM can read the relevant reference file. When skills are disabled,
-callers should pass a fallback prefix (e.g. GitHub URLs) or None to omit
-references entirely.
+Warnings include skill:// URIs so the LLM can read the relevant reference
+file via the bundled SkillsDirectoryProvider. The ``skill_prefix`` kwarg
+lets callers pass any URL prefix (e.g., a GitHub mirror) when skill://
+isn't reachable, or ``None`` to omit references entirely.
 
 Anti-patterns sourced from:
   https://github.com/homeassistant-ai/skills
@@ -19,24 +19,7 @@ import re
 from typing import Any
 
 _SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"
-_GITHUB_URL_PREFIX = (
-    "https://github.com/homeassistant-ai/skills/blob/main"
-    "/skills/home-assistant-best-practices/references"
-)
 _DEFAULT_SKILL_PREFIX = _SKILL_URI_PREFIX
-
-
-def get_skill_prefix() -> str:
-    """Return the appropriate skill prefix based on global settings.
-
-    When skills are enabled (ENABLE_SKILLS=true), returns skill:// URIs.
-    Otherwise falls back to GitHub URLs for the reference files.
-    """
-    from ..config import get_global_settings
-
-    if get_global_settings().enable_skills:
-        return _SKILL_URI_PREFIX
-    return _GITHUB_URL_PREFIX
 
 # ---------------------------------------------------------------------------
 # Regex patterns for template anti-patterns

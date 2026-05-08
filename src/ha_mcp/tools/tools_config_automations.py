@@ -22,14 +22,12 @@ from ..errors import (
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    format_sandbox_error,
     get_security_documentation,
     safe_execute,
 )
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
-)
-from .best_practice_checker import (
-    get_skill_prefix as _get_skill_prefix,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -247,6 +245,8 @@ class AutomationConfigTools:
         Retrieve Home Assistant automation configuration.
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
+
+        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
@@ -553,16 +553,12 @@ class AutomationConfigTools:
                 try:
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
+                    message, suggestions = format_sandbox_error(e, python_transform)
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
-                            str(e),
-                            suggestions=[
-                                "Check expression syntax",
-                                "Ensure only allowed operations are used",
-                                "See tool description for allowed operations",
-                                f"Expression: {python_transform[:100]}{'...' if len(python_transform) > 100 else ''}",
-                            ],
+                            message,
+                            suggestions=suggestions,
                             context={"action": "python_transform", "identifier": identifier},
                         )
                     )
@@ -573,9 +569,7 @@ class AutomationConfigTools:
                 # Normalize and validate the transformed config
                 transformed_config = _normalize_automation_config(transformed_config)
                 self._validate_required_fields(transformed_config, identifier)
-                bp_warnings = _check_best_practices(
-                    transformed_config, skill_prefix=_get_skill_prefix()
-                )
+                bp_warnings = _check_best_practices(transformed_config)
 
                 # Save transformed config
                 result = await self._client.upsert_automation_config(
@@ -640,9 +634,7 @@ class AutomationConfigTools:
             self._validate_required_fields(config_dict, identifier)
 
             # Pre-check for best-practice issues.
-            bp_warnings = _check_best_practices(
-                config_dict, skill_prefix=_get_skill_prefix()
-            )
+            bp_warnings = _check_best_practices(config_dict)
 
             # Cross-check literal service and entity references against
             # the live registries. Soft warnings only — the write still

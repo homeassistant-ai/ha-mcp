@@ -2,20 +2,8 @@
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
 import PlatformIcon from '../components/PlatformIcon.astro';
-import { getCollection } from 'astro:content';
 
 const base = import.meta.env.BASE_URL;
-
-const clients = await getCollection('clients');
-const platforms = await getCollection('platforms');
-const connections = await getCollection('connections');
-const deployment = await getCollection('deployment');
-
-// Sort by order
-const sortedClients = clients.sort((a, b) => a.data.order - b.data.order);
-const sortedPlatforms = platforms.sort((a, b) => a.data.order - b.data.order);
-const sortedConnections = connections.sort((a, b) => a.data.order - b.data.order);
-const sortedDeployment = deployment.sort((a, b) => a.data.order - b.data.order);
 
 // Helper to add base URL (ensure path keeps leading slash)
 const withBase = (path: string) => {
@@ -23,24 +11,254 @@ const withBase = (path: string) => {
   return `${base}${cleanPath}`;
 };
 
-// Create serializable data for client-side JS
-const clientsData = sortedClients.map(c => ({
-  id: c.id,
-  ...c.data,
-  logo: withBase(c.data.logo),
-}));
-const platformsData = sortedPlatforms.map(p => ({
-  id: p.id,
-  ...p.data,
-}));
-const connectionsData = sortedConnections.map(c => ({
-  id: c.id,
-  ...c.data,
-}));
-const deploymentData = sortedDeployment.map(d => ({
-  id: d.id,
-  ...d.data,
-}));
+// Wizard data — inlined here so the wizard has a single source of truth.
+// Add a new client / platform / connection / deployment by adding an entry
+// to the appropriate array (pre-sorted by `order`), then add a wizard branch
+// below in the <script> block keyed off the entry's `id`.
+
+const clientsData = [
+  {
+    "id": "claude-desktop",
+    "name": "Claude Desktop",
+    "company": "Anthropic",
+    "logo": "/logos/claude.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\nWindows (traditional installer): %APPDATA%\\Claude\\claude_desktop_config.json\nWindows (Microsoft Store): path varies by package — see the Windows setup guide for a detection snippet\n",
+    "accuracy": 5,
+    "order": 1,
+    "httpNote": "Use mcp-proxy for HTTP connections (see Network/Remote setup)",
+  },
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "company": "Anthropic",
+    "logo": "/logos/claude-code.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "cli",
+    "accuracy": 5,
+    "order": 2,
+    "clientNote": "Config changes don't require an OS-level restart — but newly-added servers may not appear in an active session. If they don't show up, run /mcp inside Claude Code or start a new session.",
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "company": "Anysphere",
+    "logo": "/logos/cursor.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Settings → Cursor Settings → MCP",
+    "accuracy": 5,
+    "order": 3,
+    "clientNote": "Restart Cursor after config changes",
+  },
+  {
+    "id": "vscode",
+    "name": "VS Code",
+    "company": "Microsoft",
+    "logo": "/logos/vscode.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Settings → Extensions → GitHub Copilot → MCP",
+    "accuracy": 5,
+    "order": 4,
+    "clientNote": "Requires GitHub Copilot extension. Reload VS Code after config changes.",
+  },
+  {
+    "id": "github-copilot-agents",
+    "name": "GitHub Copilot Agents",
+    "company": "GitHub",
+    "logo": "/logos/github.svg",
+    "transports": ["stdio", "sse"],
+    "configFormat": "json",
+    "configLocation": "Repository: .vscode/mcp.json (in repo root)\nVS Code: Settings → Extensions → GitHub Copilot → MCP\n",
+    "accuracy": 4,
+    "order": 5,
+    "clientNote": "Requires GitHub Copilot extension and coding agent mode",
+  },
+  {
+    "id": "windsurf",
+    "name": "Windsurf",
+    "company": "Codeium",
+    "logo": "/logos/windsurf.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "~/.codeium/windsurf/mcp_config.json",
+    "accuracy": 4,
+    "order": 6,
+    "clientNote": "Restart Windsurf after config changes",
+  },
+  {
+    "id": "cline",
+    "name": "Cline",
+    "company": "Cline",
+    "logo": "/logos/cline.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "VS Code Settings → Cline → MCP Servers",
+    "accuracy": 4,
+    "order": 7,
+  },
+  {
+    "id": "copilot-cli",
+    "name": "Copilot CLI",
+    "company": "GitHub",
+    "logo": "/logos/copilot-cli.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "ui",
+    "configLocation": "~/.copilot/mcp-config.json",
+    "accuracy": 5,
+    "order": 8,
+  },
+  {"id": "chatgpt", "name": "ChatGPT", "company": "OpenAI", "logo": "/logos/openai.svg", "transports": ["sse", "streamable-http"], "configFormat": "ui", "accuracy": 4, "order": 9, "beta": true},
+  {
+    "id": "claude-ai",
+    "name": "Claude.ai",
+    "company": "Anthropic",
+    "logo": "/logos/claude.svg",
+    "transports": ["sse", "streamable-http"],
+    "configFormat": "ui",
+    "accuracy": 4,
+    "order": 10,
+    "httpNote": "Requires HTTPS - Remote deployment required",
+    "clientNote": "Requires a Claude Pro, Max, Team, or Enterprise subscription. Use the 'Search and tools' button in the chat composer to enable/disable individual tools per conversation.",
+  },
+  {
+    "id": "gemini-cli",
+    "name": "Gemini CLI",
+    "company": "Google",
+    "logo": "/logos/gemini.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "cli",
+    "configLocation": "~/.gemini/settings.json",
+    "accuracy": 4,
+    "order": 11,
+  },
+  {
+    "id": "jetbrains",
+    "name": "JetBrains IDEs",
+    "company": "JetBrains",
+    "logo": "/logos/jetbrains.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "Settings → Tools → AI Assistant → Model Context Protocol (MCP)",
+    "accuracy": 4,
+    "order": 12,
+    "httpNote": "stdio only - use mcp-remote for HTTP servers",
+    "clientNote": "Requires IDE 2025.1+ with the AI Assistant plugin (251.26094.80.5+). Restart IDE after config changes. Migrating from Claude Desktop? The MCP Servers panel has an 'Import from Claude' button to auto-import existing servers.",
+  },
+  {
+    "id": "zed",
+    "name": "Zed",
+    "company": "Zed Industries",
+    "logo": "/logos/zed.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "macOS/Linux: ~/.config/zed/settings.json\nWindows: %APPDATA%\\Zed\\settings.json\nProject-specific: .zed/settings.json (overrides global)",
+    "accuracy": 4,
+    "order": 13,
+    "httpNote": "stdio only - limited HTTP support",
+    "clientNote": "Settings file supports JSON with // comments.",
+  },
+  {
+    "id": "continue",
+    "name": "Continue",
+    "company": "Continue.dev",
+    "logo": "/logos/continue.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "yaml",
+    "configLocation": ".continue/mcpServers/",
+    "accuracy": 4,
+    "order": 14,
+    "clientNote": "MCP servers are only available in Continue's Agent Mode — switch to Agent Mode using the agent selector near the chat input.",
+  },
+  {
+    "id": "raycast",
+    "name": "Raycast",
+    "company": "Raycast",
+    "logo": "/logos/raycast.svg",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "Manage MCP Servers → Show Config File in Finder",
+    "accuracy": 4,
+    "order": 15,
+    "httpNote": "HTTP transport is experimental (requires v1.100.0+)",
+    "clientNote": "Requires Raycast v1.98.0+ for MCP, v1.100.0+ for HTTP transport. Pro subscription or BYOK required.",
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "company": "OpenAI",
+    "logo": "/logos/codex.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "cli",
+    "configLocation": "~/.codex/config.toml",
+    "accuracy": 4,
+    "order": 16,
+  },
+  {
+    "id": "open-webui",
+    "name": "Open WebUI",
+    "company": "Open WebUI",
+    "logo": "/logos/open-webui.svg",
+    "transports": ["streamable-http"],
+    "configFormat": "ui",
+    "accuracy": 4,
+    "order": 17,
+    "httpNote": "Requires Streamable HTTP - local or remote server",
+    "clientNote": "Requires Open WebUI v0.6.31+ for MCP support.",
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode",
+    "company": "Anomaly",
+    "logo": "/logos/opencode.svg",
+    "transports": ["stdio", "streamable-http"],
+    "configFormat": "json",
+    "configLocation": "~/.config/opencode/opencode.json (global) or opencode.json (project)",
+    "accuracy": 5,
+    "order": 18,
+  },
+  {
+    "id": "antigravity",
+    "name": "Antigravity",
+    "company": "Google",
+    "logo": "/logos/antigravity.svg",
+    "transports": ["stdio"],
+    "configFormat": "json",
+    "configLocation": "mcp_config.json (in Antigravity UI)",
+    "accuracy": 3,
+    "order": 19,
+  },
+].map(c => ({ ...c, logo: withBase(c.logo) }));
+
+const platformsData = [
+  {"id": "macos", "name": "macOS", "icon": "apple", "order": 1},
+  {"id": "linux", "name": "Linux", "icon": "linux", "order": 2},
+  {"id": "windows", "name": "Windows", "icon": "windows", "order": 3},
+  {"id": "docker", "name": "Docker", "icon": "docker", "order": 4},
+];
+
+const connectionsData = [
+  {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on the same computer as your AI client", "icon": "computer", "order": 1},
+  {"id": "network", "name": "Local Network", "transport": "http", "description": "Run ha-mcp as an HTTP server accessible on your LAN", "icon": "network", "order": 2},
+  {"id": "remote", "name": "Remote (Internet)", "transport": "https", "description": "Access ha-mcp from anywhere via secure HTTPS", "icon": "globe", "order": 3},
+];
+
+const deploymentData = [
+  {"id": "uvx", "name": "uvx (Python)", "description": "Run ha-mcp directly via Python package manager", "icon": "python", "forConnections": ["local", "network"], "order": 1},
+  {"id": "docker", "name": "Docker", "description": "Run ha-mcp in a container", "icon": "docker", "forConnections": ["local", "network", "remote"], "order": 2},
+  {"id": "ha-addon", "name": "Home Assistant Add-on", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},
+  {"id": "cloudflared", "name": "Cloudflare Tunnel", "description": "Expose ha-mcp to the internet securely", "icon": "cloudflare", "forConnections": ["remote"], "order": 4},
+  {
+    "id": "webhook-proxy",
+    "name": "Webhook Proxy Add-on",
+    "description": "Remote access via existing reverse proxy (Nabu Casa, Cloudflare, etc.)",
+    "icon": "webhook",
+    "forConnections": ["remote"],
+    "order": 5,
+  },
+];
 
 // Client transport capabilities for filtering
 // stdio-only: clients that need mcp-proxy for HTTP connections
@@ -102,27 +320,27 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           Select Your AI Client
         </h2>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="client-grid">
-          {sortedClients.map((client) => (
+          {clientsData.map((client) => (
             <button
               data-client={client.id}
-              data-transports={JSON.stringify(client.data.transports)}
+              data-transports={JSON.stringify(client.transports)}
               class="option-card group"
             >
               <div class="flex items-center gap-2 mb-1">
-                <img src={withBase(client.data.logo)} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
+                <img src={client.logo} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
                 <div class="min-w-0">
-                  <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.data.name}</h3>
-                  <p class="text-xs text-slate-500">{client.data.company}</p>
+                  <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.name}</h3>
+                  <p class="text-xs text-slate-500">{client.company}</p>
                 </div>
               </div>
               <div class="flex items-center gap-1.5 mt-2">
-                {client.data.transports.includes('stdio') && (
+                {client.transports.includes('stdio') && (
                   <span class="transport-badge bg-green-900/50 text-green-400">stdio</span>
                 )}
-                {(client.data.transports.includes('sse') || client.data.transports.includes('streamable-http')) && (
+                {(client.transports.includes('sse') || client.transports.includes('streamable-http')) && (
                   <span class="transport-badge bg-blue-900/50 text-blue-400">HTTP</span>
                 )}
-                {client.data.beta && (
+                {client.beta && (
                   <span class="transport-badge bg-amber-900/50 text-amber-400">BETA</span>
                 )}
               </div>
@@ -139,25 +357,25 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="selected-badge" id="selected-client"></span>
         </h2>
         <div class="grid md:grid-cols-3 gap-4" id="connection-grid">
-          {sortedConnections.map((conn) => (
+          {connectionsData.map((conn) => (
             <button
               data-connection={conn.id}
-              data-transport={conn.data.transport}
+              data-transport={conn.transport}
               class="option-card-large connection-option"
             >
               <div class="flex items-center gap-2 mb-2">
-                <PlatformIcon icon={conn.data.icon} size={22} class="text-[var(--text-secondary)]" />
+                <PlatformIcon icon={conn.icon} size={22} class="text-[var(--text-secondary)]" />
                 <span class="complexity-badge" data-complexity={conn.id === 'local' ? 'quick' : conn.id === 'network' ? 'complex' : 'advanced'}>
                   {conn.id === 'local' && 'Quick'}
                   {conn.id === 'network' && 'Complex'}
                   {conn.id === 'remote' && 'Advanced'}
                 </span>
               </div>
-              <h3 class="font-semibold text-white mb-1">{conn.data.name}</h3>
-              <p class="text-sm text-slate-400">{conn.data.description}</p>
+              <h3 class="font-semibold text-white mb-1">{conn.name}</h3>
+              <p class="text-sm text-slate-400">{conn.description}</p>
               <div class="mt-3">
                 <span class="px-2 py-1 text-xs rounded bg-slate-700 text-slate-300">
-                  {conn.data.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
+                  {conn.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
                 </span>
               </div>
             </button>
@@ -295,15 +513,15 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </h2>
         <p class="text-slate-400 text-sm mb-4">Choose how to run ha-mcp on your machine</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="platform-grid">
-          {sortedPlatforms.map((platform) => (
+          {platformsData.map((platform) => (
             <button
               data-platform={platform.id}
               class="option-card-large"
             >
               <div class="mb-2 text-[var(--text-secondary)]">
-                <PlatformIcon icon={platform.data.icon} size={28} />
+                <PlatformIcon icon={platform.icon} size={28} />
               </div>
-              <h3 class="font-semibold text-white">{platform.data.name}</h3>
+              <h3 class="font-semibold text-white">{platform.name}</h3>
             </button>
           ))}
         </div>
@@ -1059,6 +1277,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         uvInstall = `<div class="instruction-block">
           <h4 class="instruction-title">Install uv (Linux)</h4>
           <pre class="code-block"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+          <p class="text-xs text-slate-400 mt-2">Or via your package manager: <code>pacman -S uv</code> (Arch), <code>apk add uv</code> (Alpine)</p>
         </div>`;
       } else if (platformId === 'windows') {
         uvInstall = `<div class="instruction-block">
@@ -1106,7 +1325,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         }
       } else if (derivedDeployment === 'docker') {
         const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
-        const secretPathEnv = useSecretPath ? `  -e MCP_SECRET_PATH=/private_{{RANDOM_STRING}} \\\n` : '';
+        const secretPathEnv = useSecretPath ? `-e MCP_SECRET_PATH=/private_{{RANDOM_STRING}}` : '';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
         const composeSecretPathLine = useSecretPath
@@ -1114,7 +1333,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           : '';
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Start Docker Container</h4>
-          <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv.trim() : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
+          <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
           <details class="mt-3">
             <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Production hardening (docker compose)</summary>
@@ -1144,16 +1363,29 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           memory: 256M</code></pre>
             <p class="text-slate-400 text-xs mt-2"><code>read_only: true</code> pairs with <code>tmpfs: /tmp</code> because the Python runtime writes temporary files there; <code>cap_drop: [ALL]</code> drops every Linux kernel capability the container would otherwise inherit; <code>no-new-privileges:true</code> blocks privilege escalation via setuid binaries. See Docker Compose's <a href="https://docs.docker.com/reference/compose-file/services/" target="_blank" class="text-blue-400 hover:underline">services reference</a> for the full schema.</p>
           </details>
+          <details class="mt-2">
+            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Container management</summary>
+            <div class="text-sm text-slate-300 space-y-1 mt-3">
+              <div><code class="bg-slate-800 px-1 rounded">docker logs ha-mcp -f</code> <span class="text-slate-400">— follow server logs</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker stop ha-mcp</code> <span class="text-slate-400">— stop the container</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker rm ha-mcp</code> <span class="text-slate-400">— remove the stopped container</span></div>
+              <div><code class="bg-slate-800 px-1 rounded">docker pull ghcr.io/homeassistant-ai/ha-mcp:latest</code> <span class="text-slate-400">— pull latest image, then re-create the container to update</span></div>
+            </div>
+          </details>
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Home Assistant Add-on</h4>
+          <p class="text-slate-300 text-sm mb-3">The add-on auto-discovers the HA connection, generates a secure secret path, and configures the token — no manual setup needed.</p>
           <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
           </a>
           <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the add-on store</p>
-          <p class="text-slate-300">3. Start and check the logs for your MCP URL</p>
+          <p class="text-slate-300 mb-2">3. Start the add-on, then open <strong>Settings → Add-ons → Home Assistant MCP Server → Logs</strong> tab (these are the add-on logs, not the main HA logs)</p>
+          <p class="text-slate-300 mb-2">4. Copy the MCP server URL from the log line — it looks like:</p>
+          <pre class="code-block text-xs"><code>MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw</code></pre>
+          <p class="text-xs text-slate-500 mt-2">Defaults: port <code>9583</code>, 128-bit random secret path, persisted across restarts.</p>
         </div>`;
       }
       instructions.push(deployInstr);
@@ -1165,6 +1397,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
       if (state.proxy === 'cloudflared') {
         proxyInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Cloudflare Tunnel</h4>
+          <p class="text-slate-400 text-xs mb-3">No port forwarding required, free tier available, works behind CGNAT. Optional: layer Cloudflare Access on top of the tunnel for SSO/policy-based authentication.</p>
           <p class="text-slate-300 mb-3">Install cloudflared:</p>
           <pre class="code-block"><code># macOS
 brew install cloudflared
@@ -1195,7 +1428,27 @@ cloudflared tunnel route dns ha-mcp mcp.yourdomain.com
 
 # Run with permanent URL
 cloudflared tunnel run ha-mcp</code></pre>
+            <p class="text-blue-200/80 text-xs mt-3">Persistent tunnels also need a config file at <code class="bg-slate-800 px-1 rounded">~/.cloudflared/config.yml</code> mapping the hostname to the local port:</p>
+            <pre class="code-block mt-2 text-xs"><code>tunnel: ha-mcp
+credentials-file: /path/to/.cloudflared/&lt;tunnel-id&gt;.json
+
+ingress:
+  - hostname: ha-mcp.yourdomain.com
+    service: http://localhost:8086
+  - service: http_status:404</code></pre>
           </div>
+          <details class="mt-4">
+            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Running on Home Assistant OS? Use the Cloudflared add-on</summary>
+            <p class="text-slate-300 text-sm mt-3 mb-2">If your ha-mcp is the HA add-on, install the Cloudflared add-on alongside it and route the tunnel to the MCP add-on's port:</p>
+            <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared" target="_blank" class="inline-block mt-1 mb-2">
+              <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Cloudflared Add-on" />
+            </a>
+            <p class="text-slate-300 text-sm mb-2">In the Cloudflared add-on configuration:</p>
+            <pre class="code-block text-xs"><code>additional_hosts:
+  - hostname: ha-mcp.yourdomain.com
+    service: http://homeassistant.local:9583</code></pre>
+            <p class="text-xs text-slate-400 mt-2">Replace <code>homeassistant.local</code> with your HA host's IP or hostname — match the IP from the MCP add-on's log line (e.g. <code>http://192.168.1.100:9583/...</code>). The Cloudflared add-on tunnels from inside its own container, so <code>localhost</code> won't reach the MCP add-on.</p>
+          </details>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
             <p class="text-amber-200/80 text-xs mt-1">This is the <strong>most common connection issue</strong> for Cloudflare users. If your LLM can't connect but the URL works in your browser, this setting is almost certainly the cause.</p>
@@ -1214,6 +1467,11 @@ cloudflared tunnel run ha-mcp</code></pre>
         proxyInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Webhook Proxy Add-on</h4>
           <p class="text-slate-300 mb-3">The Webhook Proxy add-on routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
+          <div class="mb-4 text-sm text-slate-400">
+            <p class="font-medium text-slate-300 mb-1">How It Works</p>
+            <p class="font-mono text-xs bg-slate-800/60 rounded p-2 mb-2">AI Client → HTTPS → Your Reverse Proxy → HA (port 8123) → Webhook (<code>/api/webhook/&lt;id&gt;</code>) → MCP Add-on</p>
+            <p><strong class="text-slate-300">Prerequisite:</strong> Requires a Nabu Casa subscription with Remote UI enabled, <em>or</em> another reverse proxy already pointing at your HA URL.</p>
+          </div>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li><strong>Install the MCP Server add-on</strong> first (if not already installed):
               <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mt-2 mb-2">
@@ -1227,6 +1485,22 @@ cloudflared tunnel run ha-mcp</code></pre>
               <pre class="code-block mt-2"><code>MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx</code></pre>
             </li>
           </ol>
+          <div class="mt-4 overflow-x-auto">
+            <p class="text-sm font-medium text-slate-300 mb-2">Webhook Proxy vs Cloudflare Tunnel</p>
+            <table class="w-full text-xs text-slate-400">
+              <thead><tr class="border-b border-slate-700">
+                <th class="text-left py-1 pr-4"></th>
+                <th class="text-left py-1 pr-4 text-slate-300">Webhook Proxy</th>
+                <th class="text-left py-1 text-slate-300">Cloudflare Tunnel</th>
+              </tr></thead>
+              <tbody>
+                <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Setup</td><td class="py-1 pr-4">Install add-on, restart HA</td><td class="py-1">Install cloudflared, configure tunnel</td></tr>
+                <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Cost</td><td class="py-1 pr-4">Existing reverse proxy / Nabu Casa (paid)</td><td class="py-1">Cloudflare account (free)</td></tr>
+                <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Routing</td><td class="py-1 pr-4">Through HA port 8123 (webhook)</td><td class="py-1">Direct to MCP port (9583)</td></tr>
+                <tr><td class="py-1 pr-4 font-medium text-slate-300">Best for</td><td class="py-1 pr-4">Already have Nabu Casa / reverse proxy</td><td class="py-1">No existing proxy, want direct connection</td></tr>
+              </tbody>
+            </table>
+          </div>
           <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 mt-4">
             <p class="text-blue-300 text-sm font-medium">When to use this method</p>
             <p class="text-blue-200/80 text-xs mt-1">If you already have <strong>Nabu Casa</strong> or another reverse proxy pointing at your Home Assistant instance, the Webhook Proxy is the simplest remote setup — no Cloudflare account, no tunnel configuration, no extra ports.</p>
@@ -1245,6 +1519,10 @@ cloudflared tunnel run ha-mcp</code></pre>
             <li>Enable HTTPS with a valid certificate</li>
             <li>Pass through WebSocket connections</li>
           </ul>
+          <div class="mt-3 text-xs text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Caddy</strong> — automatic HTTPS via Let's Encrypt out of the box; requires a public IP or dynamic DNS for the ACME challenge.</p>
+            <p><strong class="text-slate-300">Nginx + Let's Encrypt</strong> — traditional setup with full control; pair with <a href="https://certbot.eff.org/" target="_blank" class="text-blue-400 hover:underline">certbot</a> for cert issuance and renewal.</p>
+          </div>
         </div>`;
       }
       instructions.push(proxyInstr);
@@ -1260,10 +1538,13 @@ cloudflared tunnel run ha-mcp</code></pre>
 
     // mcp-proxy instructions for stdio-only clients
     if (needsMcpProxy) {
+      const brewNote = platformId === 'macos'
+        ? `<p class="text-xs text-slate-400 mt-2">Or install ahead of time with Homebrew: <code>brew install mcp-proxy</code></p>`
+        : '';
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
         <h4 class="instruction-title text-yellow-300">mcp-proxy Required</h4>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
-        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
+        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>${brewNote}
       </div>`;
       instructions.push(mcpProxyInstr);
     }
@@ -1333,9 +1614,7 @@ cloudflared tunnel run ha-mcp</code></pre>
             }
           }, null, 2);
         } else if (isOpenCode) {
-          // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env"
-          // The uvx-stdio shape (type, command, enabled, environment) is mirrored in
-          // site/src/content/clients/opencode.md — keep aligned.
+          // OpenCode-specific stdio shape: type:"local", single command array, "environment" not "env".
           // The Docker branch below intentionally omits the top-level `environment` key (env vars are
           // inlined as `-e KEY=VAL` in the command array), so the asymmetry is deliberate.
           const opencodeStdio = isDocker
@@ -1370,6 +1649,33 @@ cloudflared tunnel run ha-mcp</code></pre>
           config = JSON.stringify({
             servers: {
               "home-assistant": stdioConfig
+            }
+          }, null, 2);
+        } else if (state.client.id === 'antigravity') {
+          // Antigravity: add FASTMCP_SHOW_SERVER_BANNER=false to suppress the startup banner
+          // that triggers "Unexpected server output" errors in Antigravity.
+          let antigravityStdio;
+          if (isDocker) {
+            antigravityStdio = {
+              ...dockerConfig,
+              args: [
+                ...dockerConfig.args.slice(0, -1),
+                "-e", "FASTMCP_SHOW_SERVER_BANNER=false",
+                dockerConfig.args[dockerConfig.args.length - 1]
+              ]
+            };
+          } else {
+            antigravityStdio = {
+              ...uvxConfig,
+              env: {
+                ...uvxConfig.env,
+                FASTMCP_SHOW_SERVER_BANNER: "false"
+              }
+            };
+          }
+          config = JSON.stringify({
+            mcpServers: {
+              "home-assistant": antigravityStdio
             }
           }, null, 2);
         } else {
@@ -1481,6 +1787,133 @@ cloudflared tunnel run ha-mcp</code></pre>
           }, null, 2);
         }
       }
+
+      // VS Code: alternative secure-input-prompts config (stdio path only — HTTP path uses a different shape)
+      if (state.client.id === 'vscode' && isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">VS Code can prompt you for credentials at first use instead of storing them in the config file. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "mcp": {
+    "inputs": [
+      {
+        "type": "promptString",
+        "id": "ha-url",
+        "description": "Home Assistant URL",
+        "default": "http://homeassistant.local:8123"
+      },
+      {
+        "type": "promptString",
+        "id": "ha-token",
+        "description": "Long-lived access token",
+        "password": true
+      }
+    ],
+    "servers": {
+      "home-assistant": {
+        "command": "uvx",
+        "args": ["ha-mcp@latest"],
+        "env": {
+          "HOMEASSISTANT_URL": "\${input:ha-url}",
+          "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
+        }
+      }
+    }
+  }
+}</pre>
+            <p class="text-slate-400">VS Code will prompt for the URL and token on first use and store them securely.</p>
+            <p class="text-slate-400 mt-2">VS Code also accepts a one-click install deep-link of the form <code class="bg-slate-800 px-1 rounded">vscode:mcp/install?&lt;url-encoded-config-json&gt;</code> — useful for sharing configs in docs.</p>
+          </div>
+        </div>`);
+      }
+
+      // GitHub Copilot Agents: alternative secure-input-prompts config — only the stdio shape uses inputs[]
+      // (HTTP/SSE config is a url + transport pair with no command/env to substitute into).
+      if (state.client.id === 'github-copilot-agents' && isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: Secure Input Prompts</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">GitHub Copilot Agents supports an <code class="bg-slate-800 px-1 rounded">inputs</code> array that prompts for credentials at first use instead of storing them in the file. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "ha-url",
+      "description": "Home Assistant URL",
+      "default": "http://homeassistant.local:8123"
+    },
+    {
+      "type": "promptString",
+      "id": "ha-token",
+      "description": "Long-lived access token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "home-assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "\${input:ha-url}",
+        "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
+      }
+    }
+  }
+}</pre>
+            <p class="text-slate-400"><strong>Note:</strong> The wizard above emits the <code class="bg-slate-800 px-1 rounded">.vscode/mcp.json</code> (repository) shape with a bare top-level <code class="bg-slate-800 px-1 rounded">servers</code> key. If you prefer to configure this in your personal VS Code <code class="bg-slate-800 px-1 rounded">settings.json</code> instead, wrap the entire object in an additional <code class="bg-slate-800 px-1 rounded">"mcp": { ... }</code> key.</p>
+          </div>
+        </div>`);
+      }
+
+      // GitHub Copilot Agents: organization-deployment notes (apply to any transport)
+      if (state.client.id === 'github-copilot-agents') {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Org &amp; Repository Deployment</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400"><strong class="text-slate-300">Repository-wide config:</strong> on GitHub, navigate to <strong>Settings → Copilot → Coding agent → MCP configuration</strong> (the menu node is sometimes labeled <em>Cloud agent</em> depending on UI version). The MCP config you set there applies to all users who have access to the repo, instead of (or in addition to) the per-user <code class="bg-slate-800 px-1 rounded">.vscode/mcp.json</code> shown above.</p>
+            <p class="text-slate-400"><strong class="text-slate-300">Org / enterprise prerequisite:</strong> the <em>"MCP servers in Copilot"</em> policy must be enabled for your organization or enterprise. If config changes don't take effect for some users, check the org-level Copilot policy first — your admin may have it scoped or disabled.</p>
+          </div>
+        </div>`);
+      }
+
+      // Antigravity: UI nav steps + HTTP caveat
+      if (state.client.id === 'antigravity') {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Accessing the MCP Config Editor</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">To open the raw config editor in Antigravity:</p>
+            <ol class="list-decimal list-inside space-y-1 text-slate-300">
+              <li>Click the <strong>...</strong> menu in the Agent pane</li>
+              <li>Select <strong>MCP Servers</strong> to open the MCP Store</li>
+              <li>Click <strong>Manage MCP Servers</strong> at the top</li>
+              <li>Click <strong>View raw config</strong> to edit <code class="bg-slate-800 px-1 rounded">mcp_config.json</code></li>
+            </ol>
+            ${!isStdio ? `<p class="mt-2 text-amber-400"><strong>Note:</strong> HTTP transport in Antigravity can experience "connection closed" or "SSE stream failed to reconnect" errors — if you hit those, switch to stdio.</p>` : ''}
+          </div>
+        </div>`);
+      }
+
+      // OpenCode: management commands + corrective notes for users coming from other clients
+      if (state.client.id === 'opencode') {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands &amp; Quirks</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp list</code> <span class="text-slate-400">— list configured servers and their auth status</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp auth home-assistant</code> <span class="text-slate-400">— trigger or refresh authentication</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp logout home-assistant</code> <span class="text-slate-400">— clear stored credentials</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">opencode mcp debug home-assistant</code> <span class="text-slate-400">— diagnose connection issues</span></div>
+            <div class="mt-2 text-slate-400"><strong>OpenCode config quirks:</strong> The top-level key is <code class="bg-slate-800 px-1 rounded">mcp</code> (not <code class="bg-slate-800 px-1 rounded">mcpServers</code>). Local servers use a single <code class="bg-slate-800 px-1 rounded">command</code> array — there is no separate <code class="bg-slate-800 px-1 rounded">args</code> field. Environment variables go under <code class="bg-slate-800 px-1 rounded">environment</code> (not <code class="bg-slate-800 px-1 rounded">env</code>).</div>
+            <div class="mt-2 text-slate-400"><strong>Config file path override:</strong> Set <code class="bg-slate-800 px-1 rounded">OPENCODE_CONFIG=/path/to/file.json</code> to load a custom config file location.</div>
+            <div class="mt-2 text-slate-400"><strong>Config precedence:</strong> A project-level <code class="bg-slate-800 px-1 rounded">opencode.json</code> overrides the global <code class="bg-slate-800 px-1 rounded">~/.config/opencode/opencode.json</code>. See the <a href="https://opencode.ai/docs/config/#precedence-order" class="text-blue-400 hover:underline" target="_blank" rel="noopener">OpenCode precedence docs</a> for full details.</div>
+            <div class="mt-2 text-slate-400"><strong>Custom headers &amp; secret interpolation:</strong> Use <code class="bg-slate-800 px-1 rounded">{env:VAR}</code> in header values — OpenCode reads the env var at runtime without storing it in the file. Example: <code class="bg-slate-800 px-1 rounded">"Authorization": "Bearer {env:HA_TOKEN}"</code>.</div>
+            <div class="mt-2 text-slate-400"><strong>Suppressing auto-OAuth:</strong> OpenCode handles OAuth via Dynamic Client Registration automatically on remote endpoints. Add <code class="bg-slate-800 px-1 rounded">"oauth": false</code> to the server entry to opt out.</div>
+            <div class="mt-2 text-slate-400"><strong>Tool namespacing:</strong> ha-mcp tools appear as <code class="bg-slate-800 px-1 rounded">home-assistant_*</code> in OpenCode. You can enable or disable the namespace per-agent via OpenCode's per-agent namespace toggles.</div>
+            <div class="mt-2 text-slate-400"><strong>Context size:</strong> ha-mcp adds 92+ tools to the prompt context, which is non-trivial. Consider using a dedicated OpenCode agent for HA-heavy workflows to keep other agents lean.</div>
+          </div>
+        </div>`);
+      }
+
     } else if (state.client.configFormat === 'yaml') {
       // Continue uses YAML format
       if (isStdio) {
@@ -1519,6 +1952,22 @@ mcpServers:
     type: streamable-http
     url: "${mcpUrl}"`;
       }
+      // Continue: auth-headers alternative for authenticated remote servers
+      if (!isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">If your MCP server requires a Bearer token, add a <code class="bg-slate-800 px-1 rounded">requestOptions.headers</code> block. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">mcpServers:
+  - name: home-assistant
+    type: streamable-http
+    url: "${mcpUrl}"
+    requestOptions:
+      headers:
+        Authorization: "Bearer YOUR_TOKEN"</pre>
+          </div>
+        </div>`);
+      }
     } else if (state.client.configFormat === 'cli') {
       if (state.client.id === 'gemini-cli') {
         // Gemini CLI
@@ -1537,6 +1986,35 @@ mcpServers:
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
+        // Gemini CLI management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            ${!isStdio ? `<div><code class="bg-slate-800 px-1 rounded block mb-1">gemini mcp add --transport sse home-assistant ${mcpUrl}</code><span class="text-slate-400">Alternative: SSE transport instead of HTTP streaming</span></div>` : ''}
+            <div><code class="bg-slate-800 px-1 rounded">gemini mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">gemini mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Inside an interactive Gemini session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows status, <code class="bg-slate-800 px-1 rounded">/mcp refresh</code> reconnects after config changes.</div>
+          </div>
+        </div>`);
+        // Gemini CLI: auth-headers alternative — manual settings.json edit
+        if (!isStdio) {
+          instructions.push(`<div class="instruction-block">
+            <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+            <div class="text-sm text-slate-300 space-y-2">
+              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.gemini/settings.json</code> (or project-level <code class="bg-slate-800 px-1 rounded">.gemini/settings.json</code>) directly:</p>
+              <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">{
+  "mcpServers": {
+    "home-assistant": {
+      "httpUrl": "${mcpUrl}",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}</pre>
+            </div>
+          </div>`);
+        }
       } else if (state.client.id === 'codex') {
         // Codex CLI
         if (isStdio) {
@@ -1547,6 +2025,31 @@ mcpServers:
           }
         } else {
           config = `codex mcp add home-assistant --url ${mcpUrl}`;
+        }
+        // Codex CLI management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp get home-assistant</code> <span class="text-slate-400">— show server config</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Codex stores config in TOML at <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> — shared between the CLI and the Codex Desktop app.</div>
+            <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex Desktop UI:</strong> Go to <strong>Settings</strong> → <strong>MCP</strong> → <strong>Add Server</strong>, then choose type <strong>STDIO</strong> for local setup (or <strong>HTTP</strong> for remote). Fill in Name (<code class="bg-slate-800 px-1 rounded">home-assistant</code>), Command (<code class="bg-slate-800 px-1 rounded">uvx</code>), Args (<code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code>), and Env vars (<code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>) — or paste the URL for HTTP. The desktop UI writes the same TOML as the CLI.</div>
+            ${!isStdio ? `<div class="mt-2 text-slate-400">OAuth 2.0 authentication is available for remote (HTTP) servers.</div>` : ''}
+          </div>
+        </div>`);
+        // Codex: auth-headers TOML alternative for authenticated remote servers
+        if (!isStdio) {
+          instructions.push(`<div class="instruction-block">
+            <h4 class="instruction-title">Alternative: With Authentication Headers</h4>
+            <div class="text-sm text-slate-300 space-y-2">
+              <p class="text-slate-400">For Bearer-token auth, edit <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> directly:</p>
+              <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">[mcp_servers.home-assistant]
+url = "${mcpUrl}"
+[mcp_servers.home-assistant.headers]
+Authorization = "Bearer YOUR_TOKEN"</pre>
+            </div>
+          </div>`);
         }
       } else {
         // Claude Code
@@ -1566,6 +2069,16 @@ mcpServers:
         } else {
           config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
         }
+        // Claude Code management commands
+        instructions.push(`<div class="instruction-block">
+          <h4 class="instruction-title">Management Commands</h4>
+          <div class="text-sm text-slate-300 space-y-2">
+            ${!isStdio ? `<div><code class="bg-slate-800 px-1 rounded">claude mcp add --transport sse home-assistant ${mcpUrl}</code> <span class="text-slate-400">— alternative SSE transport</span></div>` : ''}
+            <div><code class="bg-slate-800 px-1 rounded">claude mcp list</code> <span class="text-slate-400">— list all configured MCP servers</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">claude mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div class="mt-2 text-slate-400">Use <code class="bg-slate-800 px-1 rounded">--scope user</code> to share the server across all projects (default scope is local/project-only).</div>
+          </div>
+        </div>`);
       }
     } else if (state.client.configFormat === 'ui') {
       // UI-based clients get formatted instruction blocks instead of a code box
@@ -1581,6 +2094,13 @@ mcpServers:
                 <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
                 <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
                 <li>Auth: None</li>
+              </ul>
+            </li>
+            <li>To use in a conversation: click <strong>+</strong> → <strong>More</strong> → <strong>Developer Mode</strong> → enable your connector
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>The connector must be enabled each new conversation (current UX limitation)</li>
+                <li>MCP endpoint must be at the root path <code class="bg-slate-800 px-1 rounded">/</code></li>
+                <li>Server must accept UUID-format client IDs</li>
               </ul>
             </li>
           </ol>
@@ -1622,14 +2142,23 @@ mcpServers:
               </ul>
             </li>
           </ol>
+          <div class="mt-3 text-sm text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Usage:</strong> In Quick AI and AI Chat, type <code class="bg-slate-800 px-1 rounded">@home-assistant</code> to invoke the server.</p>
+            <p><strong class="text-slate-300">Deeplink install:</strong> You can also install via <code class="bg-slate-800 px-1 rounded">raycast://mcp/install?&lt;config-json-percent-encoded&gt;</code> as an alternative to the UI.</p>
+            ${!isStdio ? '<p><strong class="text-slate-300">HTTP transport:</strong> Enable HTTP in AI Settings. Use <code class="bg-slate-800 px-1 rounded">httpHeaders: { Authorization: "Bearer &lt;token&gt;" }</code> for authenticated servers.</p>' : ''}
+            <p><a href="https://manual.raycast.com/model-context-protocol" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Raycast MCP docs →</a></p>
+          </div>
         </div>`;
       } else if (state.client.id === 'open-webui') {
         uiSteps = `<div class="instruction-block">
           <h4 class="instruction-title">Open WebUI Configuration</h4>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Open <strong>Admin Settings</strong> → <strong>External Tools</strong></li>
+            <li>Navigate to <strong>Admin Panel</strong> → <strong>Settings</strong> → <strong>Tools</strong> → <strong>Manage Tool Servers</strong>
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Note: There is also "External Tools" in user settings — use the <strong>Admin</strong> one here</li>
+              </ul>
+            </li>
             <li>Click <strong>+ (Add Server)</strong></li>
-            <li>Set Type: <strong>MCP (Streamable HTTP)</strong></li>
             <li>Enter:
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                 <li>Server URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
@@ -1638,6 +2167,16 @@ mcpServers:
             </li>
             <li>Click <strong>Save</strong></li>
           </ol>
+          <div class="mt-3 text-sm text-slate-400 space-y-1">
+            <p><strong class="text-slate-300">Finding your URL:</strong> Common patterns:</p>
+            <ul class="ml-4 list-disc list-inside space-y-1">
+              <li>Docker HA on same host: <code class="bg-slate-800 px-1 rounded">http://host.docker.internal:8086/mcp</code></li>
+              <li>Local network: <code class="bg-slate-800 px-1 rounded">http://192.168.1.100:8086/mcp</code></li>
+              <li>Cloudflare tunnel: <code class="bg-slate-800 px-1 rounded">https://your-tunnel.trycloudflare.com/secret_abc123</code></li>
+            </ul>
+            <p class="mt-1">For stdio-based servers, use <a href="https://github.com/open-webui/mcpo" class="text-blue-400 hover:underline" target="_blank" rel="noopener">mcpo</a> proxy to bridge stdio to HTTP.</p>
+            <p><a href="https://docs.openwebui.com/features/mcp/" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Open WebUI MCP docs →</a></p>
+          </div>
         </div>`;
       } else if (state.client.id === 'copilot-cli') {
         if (isStdio) {
@@ -1656,6 +2195,17 @@ mcpServers:
                 </ul>
               </li>
             </ol>
+            <div class="mt-4 text-sm text-slate-400 space-y-1">
+              <p><strong class="text-slate-300">Notes &amp; extras:</strong></p>
+              <ul class="ml-4 list-disc list-inside space-y-1">
+                <li>Server Type legend: <strong>1</strong> = Local cmd, <strong>2</strong> = STDIO, <strong>3</strong> = HTTP, <strong>4</strong> = SSE</li>
+                <li>Environment variables format: <code class="bg-slate-800 px-1 rounded">KEY=VALUE</code> pairs separated by spaces</li>
+                <li>Tools field: use <code class="bg-slate-800 px-1 rounded">*</code> for all tools, or a comma-separated list</li>
+                <li>Set <code class="bg-slate-800 px-1 rounded">COPILOT_HOME</code> to change the config directory (default: <code class="bg-slate-800 px-1 rounded">~/.copilot/</code>)</li>
+                <li>Inside an interactive <code class="bg-slate-800 px-1 rounded">copilot</code> session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows server status</li>
+                <li>The GitHub MCP server is included by default — you don't need to configure it</li>
+              </ul>
+            </div>
           </div>`;
         } else {
           uiSteps = `<div class="instruction-block">
@@ -1666,12 +2216,22 @@ mcpServers:
               <li>Fill in the form (use <strong>Tab</strong> to navigate, <strong>Ctrl+S</strong> to save):
                 <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                   <li>Server Name: <code class="bg-slate-800 px-1 rounded">home-assistant</code></li>
-                  <li>Server Type: Press <strong>3</strong> for HTTP</li>
+                  <li>Server Type: Press <strong>3</strong> for HTTP (or <strong>4</strong> for SSE)</li>
                   <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
                   <li>Tools: <code class="bg-slate-800 px-1 rounded">*</code></li>
                 </ul>
               </li>
             </ol>
+            <div class="mt-4 text-sm text-slate-400 space-y-1">
+              <p><strong class="text-slate-300">Notes &amp; extras:</strong></p>
+              <ul class="ml-4 list-disc list-inside space-y-1">
+                <li>Server Type legend: <strong>1</strong> = Local cmd, <strong>2</strong> = STDIO, <strong>3</strong> = HTTP, <strong>4</strong> = SSE</li>
+                <li>Tools field: use <code class="bg-slate-800 px-1 rounded">*</code> for all tools, or a comma-separated list</li>
+                <li>Set <code class="bg-slate-800 px-1 rounded">COPILOT_HOME</code> to change the config directory (default: <code class="bg-slate-800 px-1 rounded">~/.copilot/</code>)</li>
+                <li>Inside an interactive <code class="bg-slate-800 px-1 rounded">copilot</code> session: <code class="bg-slate-800 px-1 rounded">/mcp</code> shows server status</li>
+                <li>The GitHub MCP server is included by default — you don't need to configure it</li>
+              </ul>
+            </div>
           </div>`;
         }
       }
@@ -1715,7 +2275,16 @@ mcpServers:
 
     // Notes
     if (state.client.configLocation) {
-      notes += `<p class="text-slate-400 mb-2"><strong>Config location:</strong> <code class="bg-slate-800 px-1 rounded">${state.client.configLocation}</code></p>`;
+      const locations = state.client.configLocation.split('\n').map(l => l.trim()).filter(Boolean);
+      if (locations.length === 1) {
+        notes += `<p class="text-slate-400 mb-2"><strong>Config location:</strong> <code class="bg-slate-800 px-1 rounded">${locations[0]}</code></p>`;
+      } else {
+        const items = locations.map(l => `<li><code class="bg-slate-800 px-1 rounded">${l}</code></li>`).join('');
+        notes += `<div class="text-slate-400 mb-2"><strong>Config location:</strong><ul class="ml-4 mt-1 list-disc">${items}</ul></div>`;
+      }
+    }
+    if (state.client.clientNote) {
+      notes += `<p class="text-amber-400 mb-2">${state.client.clientNote}</p>`;
     }
     if (state.client.httpNote && !isStdio) {
       notes += `<p class="text-amber-400">${state.client.httpNote}</p>`;

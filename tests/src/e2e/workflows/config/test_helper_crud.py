@@ -1708,8 +1708,8 @@ class TestHelperRegistryClear:
 
         # Create a dedicated area
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
-            {"name": "E2E Helper Clear Area"},
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": "E2E Helper Clear Area"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
         area_id = area_data.get("area_id")
@@ -1849,8 +1849,8 @@ class TestHelperRegistryClear:
 
         # Create a dedicated area
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
-            {"name": "E2E Flow Clear Area"},
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": "E2E Flow Clear Area"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
         area_id = area_data.get("area_id")
@@ -1954,7 +1954,8 @@ class TestHelperRegistryClear:
 
         # Create area + label
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area", {"name": "E2E Combined Clear Area"}
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": "E2E Combined Clear Area"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
         area_id = area_data.get("area_id")
@@ -2142,8 +2143,8 @@ class TestMultiEntityFlowHelper:
 
         # Create a dedicated area + label
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
-            {"name": "E2E UM Multi-Entity Area"},
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": "E2E UM Multi-Entity Area"},
         )
         area_data = assert_mcp_success(area_result, "Create test area")
         area_id = area_data.get("area_id")
@@ -2227,6 +2228,6 @@ class TestMultiEntityFlowHelper:
             )
             await safe_call_tool(
                 mcp_client,
-                "ha_config_remove_area",
-                {"area_id": area_id},
+                "ha_remove_area_or_floor",
+                {"kind": "area", "id": area_id},
             )

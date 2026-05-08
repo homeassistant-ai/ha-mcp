@@ -7,25 +7,19 @@ configuration:
     name: Secret path override
     description: |
       Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
-  enable_skills:
-    name: Enable skills
-    description: >-
-      Serve bundled Home Assistant best-practice skills as MCP resources.
-      Skills provide automation patterns, helper selection guides, and device
-      control best practices. Clients must explicitly request them.
-  enable_skills_as_tools:
-    name: Enable skills as tools
-    description: >-
-      Expose skills via list_resources/read_resource tools for MCP clients
-      that don't support resources natively. Adds 3 extra tools.
   enable_tool_search:
     name: Enable tool search
     description: >-
       Replace the full tool catalog with search-based discovery. Reduces
-      idle context from ~46K to ~5K tokens. Use this if using an LLM without
-      deferred tools or with smaller context windows. Tools are found via
-      ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.
+      idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you
+      use Claude in Sonnet or Opus modes — those models have their own
+      built-in tool search / deferred tools, which conflicts with ours.
+      To use ha-mcp's tool search with Claude, disable Claude's built-in
+      tool search first; otherwise leave this off. Use this only with
+      LLMs that lack native deferred tools (e.g. Claude Haiku, local
+      OpenAI-compatible models) or with smaller context windows. Tools
+      are found via ha_search_tools and executed via categorized proxies
+      (read/write/delete). Requires restart to take effect.
   enable_yaml_config_editing:
     name: Enable YAML config editing (beta)
     description: >-
@@ -38,6 +32,19 @@ configuration:
       require a full HA restart to take effect. See docs/beta.md for known
       limitations. Dedicated tools (automations, scripts, scenes, helpers,
       template sensors) should be preferred when available.
+  enable_code_mode:
+    name: Enable custom tool sandbox (beta)
+    description: >-
+      Beta feature — disabled by default. Enables the ha_manage_custom_tool
+      tool, which lets AI assistants create, run, save, and delete custom
+      Python code in a secure sandbox when no built-in tool can handle the
+      request. Code runs in an isolated interpreter with no filesystem or
+      arbitrary network access. Sandbox code can hit the HA REST API
+      (api_get/api_post), send WebSocket commands (ws_send), call existing
+      MCP tools (call_tool), or remove a saved tool (delete_saved_tool).
+      Saved tools persist to /data/saved_tools.json by default so they
+      survive add-on restarts. See docs/beta.md for known limitations.
+      Requires restart to take effect.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: >-
