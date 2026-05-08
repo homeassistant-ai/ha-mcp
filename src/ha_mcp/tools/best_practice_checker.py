@@ -182,15 +182,16 @@ def _check_template_string(
 ) -> None:
     """Check a single template string for known anti-patterns.
 
-    ``position`` is "condition" or "trigger" — used by the generic fallback
-    when none of the specific detectors match, so the message can name the
-    position concretely.
+    ``position`` is "condition" or "trigger" — used in every warning so the
+    function stays accurate if reused from a non-condition caller in the
+    future. The generic catch-all also names the position concretely.
     """
     initial_count = len(warnings)
+    label = position.capitalize()
 
     if _RE_NUMERIC_CMP.search(template):
         warnings.append(
-            "Condition uses template with float/int comparison — use native "
+            f"{label} uses template with float/int comparison — use native "
             "`numeric_state` condition instead "
             "(e.g., `condition: numeric_state, entity_id: sensor.temp, above: 25`). "
             "Native conditions are validated at config load and don't bypass HA's schema."
@@ -198,7 +199,7 @@ def _check_template_string(
         )
     if _RE_SUN.search(template):
         warnings.append(
-            "Condition uses template referencing `sun.sun` — use native "
+            f"{label} uses template referencing `sun.sun` — use native "
             "`sun` condition instead "
             "(e.g., `condition: sun, after: sunset` or `before: sunrise`)."
             + _ref(skill_prefix, "automation-patterns.md#native-conditions")
@@ -206,28 +207,28 @@ def _check_template_string(
     elif _RE_IS_STATE.search(template):
         # Only flag if not already flagged as sun pattern
         warnings.append(
-            "Condition uses template with `is_state()` — use native "
+            f"{label} uses template with `is_state()` — use native "
             "`state` condition instead "
             "(e.g., `condition: state, entity_id: light.bedroom, state: 'on'`)."
             + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_NOW_TIME.search(template):
         warnings.append(
-            "Condition uses template with `now().hour/minute` — use native "
+            f"{label} uses template with `now().hour/minute` — use native "
             "`time` condition instead "
             "(e.g., `condition: time, after: '09:00:00', before: '17:00:00'`)."
             + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_WEEKDAY.search(template):
         warnings.append(
-            "Condition uses template for day-of-week check — use native "
+            f"{label} uses template for day-of-week check — use native "
             "`time` condition with `weekday:` list instead "
             "(e.g., `condition: time, weekday: ['mon', 'tue', 'wed']`)."
             + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_NOW_DATE.search(template):
         warnings.append(
-            "Condition uses date-based check (`now().date()` / `now().year/month/day`) — "
+            f"{label} uses date-based check (`now().date()` / `now().year/month/day`) — "
             "for one-shot date-specific firing, use a `time` trigger and self-disable via "
             "`automation.turn_off` with a hardcoded `entity_id` (the next `00:01` fire IS the "
             "target date on creation day). For recurring date logic, expose a `sensor.date` via "
@@ -236,14 +237,14 @@ def _check_template_string(
         )
     if _RE_STATE_IN.search(template):
         warnings.append(
-            "Condition uses template with `states(...) in [...]` — use native "
+            f"{label} uses template with `states(...) in [...]` — use native "
             "`state` condition with `state:` list instead "
             "(e.g., `condition: state, entity_id: climate.living_room, state: ['heat', 'cool']`)."
             + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
     if _RE_DIRECT_STATE.search(template):
         warnings.append(
-            "Template uses `states.domain.entity.state` direct access which "
+            f"{label} template uses `states.domain.entity.state` direct access which "
             "errors if entity doesn't exist — use the `states('entity_id')` "
             "function instead (returns 'unknown' if missing rather than raising)."
             + _ref(skill_prefix, "template-guidelines.md#common-patterns")

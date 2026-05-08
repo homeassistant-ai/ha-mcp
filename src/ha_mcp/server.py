@@ -75,7 +75,7 @@ class HaResourcesAsTools(ResourcesAsTools):
             "Pair with ha_read_resource to load a specific guide."
         ),
         READ_TOOL_NAME: (
-            "Read the contents of an MCP resource by URI. Use this to load skill "
+            "Get the contents of an MCP resource by URI. Use this to load skill "
             "reference files (e.g., skill://home-assistant-best-practices/"
             "references/automation-patterns.md) BEFORE creating or editing "
             "automations, scripts, scenes, helpers, or dashboards; writing "
@@ -813,6 +813,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # "set automation config" / "writing trigger" surface the skill.
             # See issue #1011, Gap 1.
             tool_description = (
+                f"Get available reference files for the {skill_name} skill. "
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
                 f"Use BEFORE: creating or editing automations, scripts, scenes, "
@@ -823,9 +824,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 f"ha_config_set_dashboard, or ha_set_entity. The reference files "
                 f"below cover automation patterns, helper selection, template "
                 f"guidelines, device control, dashboards, and safe refactoring.\n\n"
-                f"Returns available reference files. Read each file via "
-                f"resources/read (or ha_read_resource as a fallback) using "
-                f"the file URI to load specific guides as needed."
+                f"Read each reference file via resources/read (or ha_read_resource "
+                f"as a fallback) using the file URI to load specific guides as "
+                f"needed."
             )
 
             ref_files = self._collect_skill_ref_files(skill_dir, skill_name)
