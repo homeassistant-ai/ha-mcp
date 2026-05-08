@@ -301,6 +301,89 @@ class TestScenePythonTransform:
         assert error_data["success"] is False
         assert "entities" in error_data["error"]["message"].lower()
 
+    async def test_transform_disallowed_import_surfaces_tool_error(
+        self, tools, mock_client
+    ):
+        """Imports are not in ``SAFE_NODES`` → PythonSandboxError → ToolError.
+
+        Mirrors ``test_python_transform_blocked_import`` in the script
+        suite. Locks the contract that import-attempts (the canonical
+        sandbox-bypass attempt) surface as VALIDATION_FAILED with a
+        message naming the offending node, not as a stack trace or
+        SERVICE_CALL_FAILED.
+        """
+        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                python_transform="import os; os.system('echo pwned')",
+                config_hash=seed_hash,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+        # Message should name the failure mode somewhere — the python_sandbox
+        # surfaces "Import" as the forbidden node type.
+        msg_lower = error_data["error"]["message"].lower()
+        assert "import" in msg_lower or "forbidden" in msg_lower
+
+    async def test_transform_syntax_error_surfaces_tool_error(self, tools, mock_client):
+        """A python_transform that fails to compile (syntax error) surfaces
+        as ToolError VALIDATION_FAILED, not an unhandled SyntaxError leaking
+        a stack trace through the tool boundary.
+        """
+        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                # Unmatched bracket — clean syntax error in expression.
+                python_transform="config['entities']['light.kitchen'",
+                config_hash=seed_hash,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+
+    async def test_transform_runtime_keyerror_surfaces_tool_error(
+        self, tools, mock_client
+    ):
+        """Runtime exceptions (KeyError, NameError, ZeroDivisionError, …)
+        raised by valid-but-failing transform expressions surface as
+        ToolError VALIDATION_FAILED rather than propagating raw.
+        """
+        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                # Valid syntax, valid AST — but the key doesn't exist at runtime.
+                python_transform="del config['entities']['light.nonexistent']",
+                config_hash=seed_hash,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+
 
 class TestResolveSceneEntityId:
     """Coverage for _resolve_scene_entity_id — the BAT-discovered fix.
@@ -517,6 +600,13 @@ class TestSceneRestClientErrorMapping:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
+        # The helper maps HTTP 400 → ErrorCode.VALIDATION_FAILED via
+        # create_validation_error (errors.py:334). Assert the code
+        # explicitly so a regression remapping 400 to a generic code
+        # (e.g. INTERNAL_ERROR) is caught loud.
+        assert error_data["error"]["code"] == "VALIDATION_FAILED", (
+            f"400 must map to VALIDATION_FAILED, got: {error_data['error'].get('code')}"
+        )
         assert error_data.get("scene_id") == "bad_scene"
         suggestions = error_data["error"].get("suggestions") or []
         # The helper-doc mentions both shape and ha_search hint; either

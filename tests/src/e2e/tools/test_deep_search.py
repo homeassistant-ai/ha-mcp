@@ -399,6 +399,73 @@ async def test_deep_search_default_includes_scenes(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_deep_search_default_surfaces_created_scene(mcp_client):
+    """Population-verifying sibling to ``test_deep_search_default_includes_scenes``.
+
+    The contract-only test asserts the bucket is present and listy — that
+    passes even if the scene-search pipeline regresses to always-empty.
+    This sibling creates a scene with a distinctive query token and asserts
+    the default-call (no ``search_types``) response surfaces it in the
+    scenes bucket. Catches regressions in:
+      - default ``search_types`` dropping ``"scene"``
+      - the response builder gating ``scenes`` behind a conditional
+      - the scene-branch fetch pipeline silently failing on all scenes
+    """
+    logger.info("🔍 Testing deep search default surfaces a created scene")
+
+    scene_id = "deep_search_default_scene"
+    scene_query_token = "deep_search_default_scene_marker"
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_scene",
+        {
+            "scene_id": scene_id,
+            "config": {
+                "name": scene_query_token,
+                "entities": {
+                    "light.bed_light": {"state": "on", "brightness": 50},
+                },
+            },
+            "wait": True,
+        },
+    )
+    create_data = assert_mcp_success(create_result, "Create test scene")
+    logger.info(f"✅ Created scene: {create_data}")
+
+    try:
+        # Default call — no search_types, exercising the default path
+        # that includes 'scene' implicitly.
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={"query": scene_query_token, "limit": 10},
+            predicate=lambda d: any(
+                scene_query_token in (s.get("friendly_name") or "")
+                for s in d.get("scenes", [])
+            ),
+            description="default deep search finds the created scene",
+        )
+
+        assert_deep_search_keys(data)
+        scenes = data["scenes"]
+        assert any(
+            scene_query_token in (s.get("friendly_name") or "") for s in scenes
+        ), (
+            f"Default deep_search must surface the just-created scene in "
+            f"the scenes bucket, got: {scenes}"
+        )
+        logger.info(
+            f"✅ Default deep_search surfaced the created scene ({len(scenes)} total)"
+        )
+    finally:
+        await mcp_client.call_tool(
+            "ha_config_remove_scene",
+            {"scene_id": scene_id, "wait": False},
+        )
+        logger.info("🧹 Cleaned up test scene")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params,description",
     [

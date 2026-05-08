@@ -1654,13 +1654,15 @@ class SmartSearchTools:
                 "next_offset": offset + limit if has_more else None,
                 "automations": final_results["automations"],
                 "scripts": final_results["scripts"],
+                "scenes": final_results["scenes"],
                 "helpers": final_results["helpers"],
                 "search_types": search_types,
             }
 
-            # Only include scenes/dashboards keys when those searches were requested
-            if "scene" in search_types:
-                response["scenes"] = final_results["scenes"]
+            # Only include the dashboards key when dashboard search was requested.
+            # ``scenes`` is in the default ``search_types`` so the bucket is
+            # always-present alongside automations/scripts/helpers; gating it
+            # would break test helpers that iterate the standard tuple.
             if "dashboard" in search_types:
                 response["dashboards"] = final_results["dashboards"]
 
