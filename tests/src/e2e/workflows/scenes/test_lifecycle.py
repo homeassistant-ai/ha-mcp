@@ -228,8 +228,7 @@ class TestSceneLifecycle:
         )
         body = _extract_scene_config(verify_data)
         assert (
-            body.get("entities", {}).get("light.bed_light", {}).get("brightness")
-            == 220
+            body.get("entities", {}).get("light.bed_light", {}).get("brightness") == 220
         )
 
         # Cleanup
@@ -293,9 +292,7 @@ class TestSceneLifecycle:
                 "config": {
                     "name": "Wrong shape",
                     # Looks like an automation action list — must be rejected.
-                    "entities": [
-                        {"entity_id": "light.bed_light", "state": "on"}
-                    ],
+                    "entities": [{"entity_id": "light.bed_light", "state": "on"}],
                 },
             },
         )
@@ -303,3 +300,95 @@ class TestSceneLifecycle:
         err = data.get("error") or {}
         msg = (err.get("message") or "").lower()
         assert "dict" in msg and "entities" in msg
+
+    async def test_scene_rename_decouples_entity_id_from_storage_key(
+        self, mcp_client, cleanup_tracker
+    ):
+        """End-to-end coverage for the ``_resolve_scene_entity_id`` flow.
+
+        HA derives a scene's ``entity_id`` from the ``name`` slug rather than
+        the storage key. A scene upserted with
+        ``scene_id='night_light_led_desk_strip'`` and
+        ``name='LED Desk Strip Night Light'`` lands at
+        ``scene.led_desk_strip_night_light`` while the registry's
+        ``unique_id`` stays ``night_light_led_desk_strip``. This test:
+
+        1. Creates the scene with the diverging shape.
+        2. Re-fetches via the storage scene_id and confirms the get works
+           (the resolver resolves the entity_id under the hood for category
+           lookup; a wrong resolver would surface as a missing/blank
+           ``category`` field rather than a 404, but the smoke is the
+           same).
+        3. Verifies python_transform with config_hash works against the
+           storage scene_id even though the entity_id differs — locks the
+           wait-and-category path in the python_transform branch that
+           BAT validation surfaced as broken before ``_resolve_scene_entity_id``
+           landed.
+        """
+        scene_id = "night_light_led_desk_strip"
+        # entity_id below is what HA actually derives from this name
+        expected_entity_id = "scene.led_desk_strip_night_light"
+        cleanup_tracker.track("scene", expected_entity_id)
+        cleanup_tracker.track("scene", f"scene.{scene_id}")  # belt-and-suspenders
+
+        # 1. Create with diverging name vs scene_id
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_scene",
+            {
+                "scene_id": scene_id,
+                "config": {
+                    "name": "LED Desk Strip Night Light",
+                    "icon": "mdi:weather-night",
+                    "entities": {
+                        "light.bed_light": {"state": "on", "brightness": 30},
+                    },
+                },
+                "wait": True,
+            },
+        )
+        assert create_data.get("success") is True, f"Scene create failed: {create_data}"
+        # No 'not yet queryable' warning means the resolver picked up the
+        # real entity_id correctly — the regression KP13 surfaced via BAT.
+        assert "not yet queryable" not in str(create_data.get("warning", "")).lower(), (
+            f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
+        )
+
+        # 2. Get via the storage scene_id — this drives the resolver to
+        # find the actual entity_id under the hood for category fetch.
+        get_data = await safe_call_tool(
+            mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
+        )
+        assert get_data.get("success") is True, f"Get failed: {get_data}"
+        config_hash = get_data.get("config_hash")
+        assert config_hash, "Get must return a config_hash"
+
+        # 3. python_transform with the storage scene_id must succeed —
+        # this exercises the wait-and-category branch in the transform
+        # path, which uses _resolve_scene_entity_id internally.
+        transform_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_scene",
+            {
+                "scene_id": scene_id,
+                "python_transform": (
+                    "config['entities']['light.bed_light']['brightness'] = 60"
+                ),
+                "config_hash": config_hash,
+                "wait": True,
+            },
+        )
+        assert transform_data.get("success") is True, (
+            f"Transform failed: {transform_data}"
+        )
+        assert (
+            "not yet queryable" not in str(transform_data.get("warning", "")).lower()
+        ), f"Resolver fell back on transform path; transform_data={transform_data}"
+
+        # Cleanup via remove uses the same resolver under the hood.
+        remove_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_scene",
+            {"scene_id": scene_id, "wait": False},
+        )
+        assert remove_data.get("success") is True, f"Remove failed: {remove_data}"

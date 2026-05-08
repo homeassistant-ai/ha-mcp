@@ -441,3 +441,87 @@ class TestResolveSceneEntityId:
         result = await tools._resolve_scene_entity_id("scene.movie_night")
 
         assert result == "scene.movie_night"
+
+
+@pytest.mark.asyncio
+class TestSceneRestClientErrorMapping:
+    """Tool-level mapping of rest_client errors to structured ToolError responses.
+
+    Locks the contract that 404 from the REST client surfaces as
+    ``ENTITY_NOT_FOUND`` (so agents can branch on missing-scene cleanly), and
+    that other API errors (notably 400 for malformed configs) surface with
+    enough context to act on. The rest_client layer's own `raise` paths are
+    exercised in test_rest_client_scenes; these tests cover the tool-side
+    `exception_to_structured_error` mapping.
+    """
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigSceneTools(mock_client)
+
+    async def test_get_scene_404_surfaces_as_entity_not_found(self, tools, mock_client):
+        """get_scene_config raising 404 → tool ToolError with code
+        ENTITY_NOT_FOUND, entity_id surfaced as ``scene.<id>``.
+
+        The tool's catch site passes ``entity_id`` alongside ``scene_id``
+        in context; the helper's classifier branches on ``entity_id``-
+        presence to pick ENTITY_NOT_FOUND over the generic
+        RESOURCE_NOT_FOUND. Without the entity_id passthrough the agent
+        loses the scenes-are-entities signal and retries via the wrong
+        lookup path.
+        """
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "Scene not found: missing_scene", status_code=404
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_scene(scene_id="missing_scene")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "ENTITY_NOT_FOUND"
+        # entity_id must be in the flattened context so the agent's
+        # retry/lookup logic has a clean handle on what was missing.
+        assert error_data.get("entity_id") == "scene.missing_scene"
+
+    async def test_set_scene_400_surfaces_with_scene_id_context(
+        self, tools, mock_client
+    ):
+        """upsert_scene_config raising 400 (malformed config) surfaces as
+        a structured tool error with scene_id in context — the highest-
+        likelihood scene failure mode (LLM submits invalid entity state).
+
+        Also asserts the entities-shape suggestion is present so a small
+        model has the actionable hint without re-reading the docstring.
+        """
+        mock_client.get_scene_config = AsyncMock(
+            return_value={"name": "X", "entities": {"light.kitchen": {"state": "on"}}}
+        )
+        mock_client.upsert_scene_config = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "Invalid entity state: 'bogus_state' for light.kitchen",
+                status_code=400,
+            )
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="bad_scene",
+                config={
+                    "name": "Bad Scene",
+                    "entities": {"light.kitchen": {"state": "bogus_state"}},
+                },
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data.get("scene_id") == "bad_scene"
+        suggestions = error_data["error"].get("suggestions") or []
+        # The helper-doc mentions both shape and ha_search hint; either
+        # signal that the agent has actionable guidance.
+        assert any(
+            "entities" in (s or "").lower() or "scene shape" in (s or "").lower()
+            for s in suggestions
+        ), f"Expected entities-shape hint in suggestions, got: {suggestions}"

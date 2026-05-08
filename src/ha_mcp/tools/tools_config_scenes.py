@@ -152,9 +152,17 @@ class ConfigSceneTools:
         except ToolError:
             raise
         except Exception as e:
+            # Pass `entity_id` so a 404 from rest_client surfaces as
+            # ENTITY_NOT_FOUND (not the generic RESOURCE_NOT_FOUND fallback).
+            # The naive ``scene.{scene_id}`` form is good enough at error
+            # time — registry resolution happens inside the try block and
+            # may not have run when an exception escapes to here.
             exception_to_structured_error(
                 e,
-                context={"scene_id": scene_id},
+                context={
+                    "scene_id": scene_id,
+                    "entity_id": f"scene.{scene_id}",
+                },
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
                     "Check Home Assistant connection",

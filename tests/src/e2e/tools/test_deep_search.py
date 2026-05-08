@@ -11,7 +11,7 @@ from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
-DEEP_SEARCH_KEYS = ("automations", "scripts", "helpers")
+DEEP_SEARCH_KEYS = ("automations", "scripts", "scenes", "helpers")
 
 
 def assert_deep_search_keys(data: dict) -> None:
@@ -94,7 +94,9 @@ async def test_deep_search_automation(mcp_client):
         data2 = assert_mcp_success(result2, "Deep search for service in automation")
 
         automations2 = data2.get("automations", [])
-        assert len(automations2) > 0, "Should find automation with light.turn_on service"
+        assert len(automations2) > 0, (
+            "Should find automation with light.turn_on service"
+        )
         logger.info(f"✅ Found {len(automations2)} automations using light.turn_on")
 
     finally:
@@ -188,7 +190,9 @@ async def test_deep_search_script(mcp_client):
             )
             logger.info("🧹 Cleaned up test script")
         except Exception:
-            logger.warning("⚠️ Cleanup of test script failed (may not have been created)")
+            logger.warning(
+                "⚠️ Cleanup of test script failed (may not have been created)"
+            )
 
 
 @pytest.mark.asyncio
@@ -282,13 +286,14 @@ async def test_deep_search_all_types(mcp_client):
 
     automations = data["automations"]
     scripts = data["scripts"]
+    scenes = data["scenes"]
     helpers = data["helpers"]
 
-    total_results = len(automations) + len(scripts) + len(helpers)
+    total_results = len(automations) + len(scripts) + len(scenes) + len(helpers)
     logger.info(
         f"✅ Found {total_results} total results: "
         f"{len(automations)} automations, {len(scripts)} scripts, "
-        f"{len(helpers)} helpers"
+        f"{len(scenes)} scenes, {len(helpers)} helpers"
     )
 
     # Each result should have the expected structure
@@ -317,7 +322,7 @@ async def test_deep_search_limit(mcp_client):
 
     assert_deep_search_keys(data)
 
-    total_results = len(data["automations"]) + len(data["scripts"]) + len(data["helpers"])
+    total_results = sum(len(data[key]) for key in DEEP_SEARCH_KEYS)
 
     assert total_results <= 5, f"Should respect limit of 5, got {total_results}"
     logger.info(f"✅ Correctly limited results to {total_results} (limit was 5)")
@@ -347,18 +352,50 @@ async def test_deep_search_no_results(mcp_client):
         """Check if entity_id appears to be from a test."""
         # Extract object_id (part after domain) to avoid false positives
         # e.g., "input_text.concurrent_test_3" -> "concurrent_test_3"
-        object_id = entity_id.lower().split('.')[-1]
+        object_id = entity_id.lower().split(".")[-1]
         return object_id.startswith(test_prefixes)
 
-    automations = [a for a in data["automations"] if not is_test_entity(a.get("entity_id", ""))]
+    automations = [
+        a for a in data["automations"] if not is_test_entity(a.get("entity_id", ""))
+    ]
     scripts = [s for s in data["scripts"] if not is_test_entity(s.get("entity_id", ""))]
+    scenes = [s for s in data["scenes"] if not is_test_entity(s.get("entity_id", ""))]
     helpers = [h for h in data["helpers"] if not is_test_entity(h.get("entity_id", ""))]
 
     assert len(automations) == 0, "Should have no automation matches"
     assert len(scripts) == 0, "Should have no script matches"
+    assert len(scenes) == 0, f"Should have no scene matches, but found: {scenes}"
     assert len(helpers) == 0, f"Should have no helper matches, but found: {helpers}"
 
     logger.info("✅ Correctly returned empty results for non-matching query")
+
+
+@pytest.mark.asyncio
+async def test_deep_search_default_includes_scenes(mcp_client):
+    """Default-call (no search_types) deep_search must include the 'scenes'
+    bucket in the response.
+
+    Regression test for the gap KP13 surfaced on PR #1168: when 'scene' was
+    added to the default search_types list, the test infrastructure tuple
+    (DEEP_SEARCH_KEYS) didn't follow, so every default-call test silently
+    skipped scenes. Locks the bucket presence at the contract layer so any
+    future drop of 'scene' from the default trips this test loudly.
+    """
+    logger.info("🔍 Testing deep search default includes scenes bucket")
+
+    result = await mcp_client.call_tool(
+        "ha_deep_search",
+        {"query": "xyzabc123_nonexistent_default_scene_check"},
+    )
+    data = assert_mcp_success(result, "Default-call deep search")
+
+    assert "scenes" in data, "Default deep_search response must contain 'scenes' bucket"
+    assert isinstance(data["scenes"], list), "'scenes' must be a list"
+    # Empty is fine — the assertion is about bucket presence under default
+    # search_types, not about matching anything specific.
+    logger.info(
+        f"✅ Default deep_search includes scenes bucket (count={len(data['scenes'])})"
+    )
 
 
 @pytest.mark.asyncio
@@ -370,7 +407,9 @@ async def test_deep_search_no_results(mcp_client):
         pytest.param({"offset": -1}, "negative offset", id="offset_negative"),
     ],
 )
-async def test_deep_search_invalid_params_returns_error(mcp_client, params, description):
+async def test_deep_search_invalid_params_returns_error(
+    mcp_client, params, description
+):
     """Test that ha_deep_search rejects invalid limit and offset values.
 
     Before the fix, invalid values caused silent data corruption:
@@ -383,7 +422,9 @@ async def test_deep_search_invalid_params_returns_error(mcp_client, params, desc
         "ha_deep_search",
         {"query": "light", **params},
     )
-    assert result["success"] is False, f"Expected failure for {description}, got success=True"
+    assert result["success"] is False, (
+        f"Expected failure for {description}, got success=True"
+    )
     assert result["error"]["code"] == "VALIDATION_FAILED", (
         f"Expected VALIDATION_FAILED for {description}, "
         f"got {result.get('error', {}).get('code')}"
