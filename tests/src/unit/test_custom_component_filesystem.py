@@ -458,9 +458,9 @@ class TestMigrateLegacyBackupDir:
     """Test _migrate_legacy_backup_dir helper (GHSA-g39v-cvjh-8fpf)."""
 
     def test_no_legacy_dir_is_noop(self, tmp_path):
-        """Returns 0 and creates nothing when legacy dir is absent."""
-        moved = _migrate_legacy_backup_dir(tmp_path)
-        assert moved == 0
+        """Returns (0, 0) and creates nothing when legacy dir is absent."""
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
+        assert (moved, failed) == (0, 0)
         assert not (tmp_path / ".ha_mcp_tools_backups").exists()
         assert not (tmp_path / "www" / "yaml_backups").exists()
 
@@ -471,9 +471,9 @@ class TestMigrateLegacyBackupDir:
         (legacy / "configuration.yaml.20260101_120000.bak").write_text("a: 1")
         (legacy / "packages_test.yaml.20260102_120000.bak").write_text("b: 2")
 
-        moved = _migrate_legacy_backup_dir(tmp_path)
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
 
-        assert moved == 2
+        assert (moved, failed) == (2, 0)
         new_dir = tmp_path / ".ha_mcp_tools_backups"
         assert new_dir.is_dir()
         moved_names = sorted(p.name for p in new_dir.iterdir())
@@ -494,12 +494,32 @@ class TestMigrateLegacyBackupDir:
         (legacy / "x.bak").write_text("from legacy")
         (new_dir / "x.bak").write_text("already here")
 
-        moved = _migrate_legacy_backup_dir(tmp_path)
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
 
-        assert moved == 1
+        assert (moved, failed) == (1, 0)
         assert (new_dir / "x.bak").read_text() == "already here"
         # Legacy file is renamed during migration so it isn't lost.
         assert (new_dir / "x.legacy.bak").read_text() == "from legacy"
+
+    def test_collision_counter_when_legacy_suffix_taken(self, tmp_path):
+        """If <name>.bak AND <name>.legacy.bak both exist, use .legacy1.bak."""
+        legacy = tmp_path / "www" / "yaml_backups"
+        legacy.mkdir(parents=True)
+        new_dir = tmp_path / ".ha_mcp_tools_backups"
+        new_dir.mkdir()
+
+        (legacy / "x.bak").write_text("incoming")
+        (new_dir / "x.bak").write_text("already here")
+        (new_dir / "x.legacy.bak").write_text("older legacy")
+
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
+
+        assert (moved, failed) == (1, 0)
+        # Both pre-existing files preserved.
+        assert (new_dir / "x.bak").read_text() == "already here"
+        assert (new_dir / "x.legacy.bak").read_text() == "older legacy"
+        # New file lands at next free .legacyN suffix.
+        assert (new_dir / "x.legacy1.bak").read_text() == "incoming"
 
     def test_leaves_legacy_dir_when_other_files_present(self, tmp_path):
         """Doesn't remove legacy dir if user dropped non-.bak files in it."""
@@ -507,10 +527,30 @@ class TestMigrateLegacyBackupDir:
         legacy.mkdir(parents=True)
         (legacy / "stray_subdir").mkdir()
         (legacy / "config.bak").write_text("data")
+        (legacy / "notes.txt").write_text("user dropped this")
 
-        moved = _migrate_legacy_backup_dir(tmp_path)
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
 
-        assert moved == 1
-        # Subdirectory left in place; rmdir() fails silently.
+        assert (moved, failed) == (1, 0)
+        # Subdirectory and stray non-.bak file left in place.
         assert legacy.exists()
         assert (legacy / "stray_subdir").is_dir()
+        assert (legacy / "notes.txt").read_text() == "user dropped this"
+
+    def test_skips_symlinks(self, tmp_path):
+        """Symlinks in legacy dir are not migrated (avoids surprise dereferencing)."""
+        legacy = tmp_path / "www" / "yaml_backups"
+        legacy.mkdir(parents=True)
+        target = tmp_path / "elsewhere.bak"
+        target.write_text("target content")
+        (legacy / "link.bak").symlink_to(target)
+        (legacy / "real.bak").write_text("real content")
+
+        moved, failed = _migrate_legacy_backup_dir(tmp_path)
+
+        assert (moved, failed) == (1, 0)
+        new_dir = tmp_path / ".ha_mcp_tools_backups"
+        assert (new_dir / "real.bak").read_text() == "real content"
+        # Symlink left in place; legacy dir not removed because non-empty.
+        assert (legacy / "link.bak").is_symlink()
+        assert legacy.exists()

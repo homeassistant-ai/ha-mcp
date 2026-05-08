@@ -51,7 +51,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **Recovery requires filesystem access.** If an edit causes HA to enter recovery mode (e.g., a bad `!include` reference), `ha_config_set_yaml` cannot fix its own damage since the custom component doesn't load in recovery mode. Recovery requires SSH, the File Editor add-on, or `docker exec`.
 
-**Backups are filesystem-only.** Per-edit backups are written to `www/yaml_backups/` but no ha-mcp tool can restore them. They are a safety net for manual recovery.
+**Backups are filesystem-only.** Per-edit backups are written to `.ha_mcp_tools_backups/` (at the Home Assistant config root) but no ha-mcp tool can restore them. They are a safety net for manual recovery.
 
 **Recommended prerequisites:**
 - Comfort with editing `configuration.yaml` via SSH or File Editor when things go wrong

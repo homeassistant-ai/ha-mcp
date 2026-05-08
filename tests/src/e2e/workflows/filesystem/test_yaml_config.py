@@ -447,13 +447,13 @@ class TestYamlConfigSafeguards:
             assert inner.get("success") is True, f"Replace should succeed: {data}"
             backup_path = inner.get("backup_path", "")
             assert backup_path, f"Backup path should be present: {data}"
-            # Backups must NOT be under www/ (HA serves www/ unauthenticated
-            # at /local/) — see GHSA-g39v-cvjh-8fpf.
-            assert not backup_path.startswith("www/"), (
-                f"Backup path must not be under www/ (publicly served): {backup_path}"
-            )
-            assert ".ha_mcp_tools_backups" in backup_path, (
-                f"Backup path should be under .ha_mcp_tools_backups/: {backup_path}"
+            # Backups must live directly under .ha_mcp_tools_backups/ (config
+            # root, not served by HA's /local/ static handler). Anything else
+            # — including a www/.ha_mcp_tools_backups/ variant or any other
+            # publicly-served prefix — is a regression of GHSA-g39v-cvjh-8fpf.
+            assert backup_path.startswith(".ha_mcp_tools_backups/"), (
+                f"Backup path must start with .ha_mcp_tools_backups/ "
+                f"(not under www/ or any served path): {backup_path}"
             )
             logger.info(f"Backup created at: {backup_path}")
 
