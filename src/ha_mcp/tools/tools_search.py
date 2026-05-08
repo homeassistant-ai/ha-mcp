@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Annotated, Any, Literal, cast
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -823,6 +824,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
 
@@ -865,6 +867,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 offset,
                 include_config_bool,
                 exact_match=exact_match_bool,
+                ctx=ctx,
             )
             return cast(dict[str, Any], result)
         except ToolError:

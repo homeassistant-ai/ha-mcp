@@ -9,6 +9,8 @@ import random
 import time
 from typing import Any
 
+from fastmcp import Context
+
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
 from ..utils.fuzzy_search import (
@@ -802,6 +804,7 @@ class SmartSearchTools:
         include_config: bool = False,
         concurrency_limit: int = DEFAULT_CONCURRENCY_LIMIT,
         exact_match: bool = True,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Deep search across automation, script, helper, and dashboard definitions.
@@ -834,8 +837,26 @@ class SmartSearchTools:
 
             query_lower = query.lower().strip()
 
+            total_phases = len(search_types) + 1  # +1 for initial state fetch
+            if ctx is not None:
+                await ctx.info(
+                    f"deep_search starting: query={query!r} types={search_types}"
+                )
+                await ctx.report_progress(
+                    progress=0,
+                    total=total_phases,
+                    message="fetching entity states",
+                )
+
             # Fetch all entities once at the beginning to avoid repeated calls
             all_entities = await self.client.get_states()
+            phase_done = 1
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=phase_done,
+                    total=total_phases,
+                    message=f"fetched {len(all_entities)} entity states",
+                )
 
             # Pre-resolve unique_ids from cached entity states to avoid redundant API calls
             automation_unique_id_map = {}
@@ -1009,6 +1030,14 @@ class SmartSearchTools:
                             }
                         )
 
+                phase_done += 1
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=phase_done,
+                        total=total_phases,
+                        message=f"automations searched ({len(results['automations'])} matches)",
+                    )
+
             # ================================================================
             # SCRIPT SEARCH (same 3-tier strategy: REST bulk -> WS bulk -> individual)
             # ================================================================
@@ -1165,6 +1194,14 @@ class SmartSearchTools:
                             }
                         )
 
+                phase_done += 1
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=phase_done,
+                        total=total_phases,
+                        message=f"scripts searched ({len(results['scripts'])} matches)",
+                    )
+
             # Search helpers with parallel WebSocket calls
             if "helper" in search_types:
                 helper_types = [
@@ -1247,6 +1284,14 @@ class SmartSearchTools:
                         results["helpers"].extend(result)
                     elif isinstance(result, Exception):
                         logger.debug(f"Helper list fetch failed: {result}")
+
+                phase_done += 1
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=phase_done,
+                        total=total_phases,
+                        message=f"helpers searched ({len(results['helpers'])} matches)",
+                    )
 
             # ================================================================
             # DASHBOARD SEARCH
@@ -1339,6 +1384,14 @@ class SmartSearchTools:
                 except Exception as e:
                     logger.error(f"Dashboard search error: {e}")
                     raise
+
+                phase_done += 1
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=phase_done,
+                        total=total_phases,
+                        message=f"dashboards searched ({len(results['dashboards'])} matches)",
+                    )
 
             # Merge all results with their category, sort by score, and paginate
             tagged_results: list[tuple[str, dict[str, Any]]] = []

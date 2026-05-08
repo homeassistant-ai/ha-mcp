@@ -8,6 +8,7 @@ to discover custom integrations, Lovelace cards, themes, and more.
 import logging
 from typing import Annotated, Any, Literal
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -137,6 +138,7 @@ class HacsTools:
                 description="Number of results to skip for pagination (default: 0)",
             ),
         ] = 0,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search HACS store for repositories, or list installed repositories.
 
@@ -181,6 +183,17 @@ class HacsTools:
                 min_value=0,
             )
 
+            if ctx is not None:
+                await ctx.info(
+                    f"ha_hacs_search starting: query={query!r} "
+                    f"category={category} installed_only={installed_only_bool}"
+                )
+                await ctx.report_progress(
+                    progress=0,
+                    total=3,
+                    message="checking HACS availability",
+                )
+
             # Check if HACS is available
             await _assert_hacs_available()
 
@@ -194,6 +207,13 @@ class HacsTools:
             if category:
                 hacs_category = CATEGORY_MAP.get(category, category)
                 kwargs_cmd["categories"] = [hacs_category]
+
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=1,
+                    total=3,
+                    message="fetching HACS repository list",
+                )
 
             response = await ws_client.send_command(
                 "hacs/repositories/list", **kwargs_cmd
@@ -211,9 +231,21 @@ class HacsTools:
                 )
 
             all_repositories = response.get("result", [])
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=2,
+                    total=3,
+                    message=f"filtering {len(all_repositories)} repositories",
+                )
             matches = _filter_and_score_repos(
                 all_repositories, query, installed_only_bool
             )
+            if ctx is not None:
+                await ctx.report_progress(
+                    progress=3,
+                    total=3,
+                    message=f"matched {len(matches)} repositories",
+                )
 
             limited_matches = matches[offset_int : offset_int + max_results_int]
             has_more = (offset_int + len(limited_matches)) < len(matches)
