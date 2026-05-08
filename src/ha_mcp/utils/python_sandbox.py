@@ -82,6 +82,8 @@ SAFE_NODES = {
     ast.Tuple,
     ast.Set,
     ast.Starred,  # *iterable in calls/literals: f(*xs), [*xs, y]
+    ast.JoinedStr,  # f"…" — outer node holding parts
+    ast.FormattedValue,  # the {expr} part inside an f-string
     # Operations
     ast.Delete,
     ast.BinOp,
@@ -150,6 +152,16 @@ _NODE_SUGGESTIONS: dict[str, str] = {
     "Import": "imports aren't available; built-ins like isinstance/len/range are exposed",
     "ImportFrom": "imports aren't available; built-ins like isinstance/len/range are exposed",
     "Match": "use if/elif/else or a dict lookup instead of match/case",
+    # If Match ever enters SAFE_NODES, the sub-pattern nodes shouldn't
+    # silently slip through with a generic message.
+    "MatchAs": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchValue": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchClass": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchSingleton": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchSequence": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchMapping": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchOr": "use if/elif/else or a dict lookup instead of match/case",
+    "MatchStar": "use if/elif/else or a dict lookup instead of match/case",
 }
 
 # Whitelist of safe methods that can be called
@@ -369,6 +381,13 @@ def safe_execute_expression(
         # "ran out of memory" as "your transform was bad" would
         # mislead the agent into rewriting an expression that
         # was structurally fine.
+        #
+        # FastMCP's tool dispatch (server.py call_tool) catches
+        # `except Exception` and wraps in
+        # ``ToolError(f"Error calling tool {name!r}: {e}") from e`` —
+        # so the original exception's class name and text reach the
+        # agent, with the raw exception preserved as ``__cause__``.
+        # That's an acceptable surfacing (not opaque INTERNAL_ERROR).
         raise
     except Exception as e:
         # Truncate so embedded reprs of input data (config dicts, tokens,

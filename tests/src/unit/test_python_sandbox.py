@@ -171,6 +171,62 @@ for view in config['views']:
         result = safe_execute(expr, config)
         assert [i["n"] for i in result["items"]] == [1, 2, 3]
 
+    def test_fstring_executes(self):
+        """f-strings (`ast.JoinedStr` / `ast.FormattedValue`) — common in
+        transform expressions like setting `name = f"{prefix}_thing"`."""
+        config = {"prefix": "lr", "card": {}}
+        expr = "config['card']['entity'] = f\"light.{config['prefix']}_main\""
+        result = safe_execute(expr, config)
+        assert result["card"]["entity"] == "light.lr_main"
+
+    def test_fstring_with_format_spec_executes(self):
+        """f-strings with format specifiers exercise the FormattedValue node fully."""
+        config = {"score": 7.5, "card": {}}
+        expr = "config['card']['label'] = f\"{config['score']:.1f}/10\""
+        result = safe_execute(expr, config)
+        assert result["card"]["label"] == "7.5/10"
+
+    def test_match_family_includes_hint(self):
+        """Sub-pattern Match nodes get the same hint as Match itself.
+
+        These nodes are unreachable today (Match itself is rejected at the
+        SAFE_NODES check first), but if Match ever enters SAFE_NODES the
+        sub-patterns shouldn't silently slip through with a generic message.
+        Test by validating each sub-pattern node directly.
+        """
+        import ast
+
+        for node_name in (
+            "MatchAs",
+            "MatchValue",
+            "MatchClass",
+            "MatchSingleton",
+            "MatchSequence",
+            "MatchMapping",
+            "MatchOr",
+            "MatchStar",
+        ):
+            assert hasattr(ast, node_name), f"ast.{node_name} not present"
+        # Indirectly verify via _NODE_SUGGESTIONS — every Match* family
+        # member is mapped to a recovery hint.
+        from ha_mcp.utils.python_sandbox import _NODE_SUGGESTIONS
+
+        for node_name in (
+            "Match",
+            "MatchAs",
+            "MatchValue",
+            "MatchClass",
+            "MatchSingleton",
+            "MatchSequence",
+            "MatchMapping",
+            "MatchOr",
+            "MatchStar",
+        ):
+            assert node_name in _NODE_SUGGESTIONS, (
+                f"{node_name} missing from _NODE_SUGGESTIONS"
+            )
+            assert "if/elif/else" in _NODE_SUGGESTIONS[node_name]
+
     def test_compositional_pattern_executes(self):
         """Realistic agent code: ternary inside a comprehension, kwarg call,
         starred unpacking — all in one transform."""
