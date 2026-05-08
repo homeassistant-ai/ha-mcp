@@ -6,16 +6,19 @@ enabling AI assistants to perform advanced operations like file management.
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import logging
 import os
 import re
+import shutil
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -399,9 +402,12 @@ def _build_edit_yaml_config_handler(hass):
                 data = {}
                 raw_content = ""
 
-            # Create backup before editing (from already-read content, not disk)
+            # Create backup before editing (from already-read content, not disk).
+            # Backups go under .ha_mcp_tools_backups/ at the config root — NOT
+            # under www/, which Home Assistant serves unauthenticated at /local/
+            # (GHSA-g39v-cvjh-8fpf).
             if do_backup and raw_content:
-                backup_dir = config_dir / "www" / "yaml_backups"
+                backup_dir = config_dir / ".ha_mcp_tools_backups"
                 await hass.async_add_executor_job(
                     lambda: backup_dir.mkdir(parents=True, exist_ok=True)
                 )
@@ -677,9 +683,139 @@ def _parse_and_validate_yaml_path(
     return "lovelace_dashboard", parts, None
 
 
+def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
+    """Move pre-fix backups out of www/ (GHSA-g39v-cvjh-8fpf).
+
+    Pre-fix versions wrote backups under www/yaml_backups/, which HA serves
+    unauthenticated at /local/. Move .bak files into the new
+    .ha_mcp_tools_backups/ directory and remove the old directory if empty.
+    Returns (moved, failed) — counts of files successfully relocated and
+    files that could not be moved (left in legacy_dir, still exposed).
+    """
+    legacy_dir = config_dir / "www" / "yaml_backups"
+    if not legacy_dir.is_dir():
+        return 0, 0
+
+    new_dir = config_dir / ".ha_mcp_tools_backups"
+    new_dir.mkdir(parents=True, exist_ok=True)
+
+    moved = 0
+    failed = 0
+    for src in legacy_dir.iterdir():
+        # Only migrate regular .bak files. Skip directories, symlinks,
+        # sockets/fifos, and any user-deposited stray files.
+        if not src.is_file() or src.is_symlink() or src.suffix != ".bak":
+            continue
+
+        # Pick a non-colliding destination name. If <name>.bak exists, try
+        # <name>.legacy.bak, then .legacy1.bak, .legacy2.bak, etc. Required
+        # because Path.rename / shutil.move overwrite the destination
+        # silently on POSIX, which would lose data.
+        dest = new_dir / src.name
+        if dest.exists():
+            dest = new_dir / f"{src.stem}.legacy{src.suffix}"
+            counter = 1
+            while dest.exists():
+                dest = new_dir / f"{src.stem}.legacy{counter}{src.suffix}"
+                counter += 1
+
+        try:
+            # shutil.move falls back to copy+unlink on EXDEV (cross-device),
+            # which Path.rename does not handle — required for setups where
+            # /config/www is a separate mount (Docker bind, LXC, NFS).
+            shutil.move(str(src), str(dest))
+            moved += 1
+        except OSError as err:
+            failed += 1
+            _LOGGER.error(
+                "Failed to migrate %s out of www/: %s. File remains "
+                "exposed via /local/yaml_backups/.",
+                src.name,
+                err,
+            )
+
+    # Remove the legacy dir if we emptied it. Narrow the swallowed errno
+    # to ENOTEMPTY (user-dropped non-.bak files block removal — fine);
+    # surface anything else (permissions, read-only FS, etc.).
+    try:
+        legacy_dir.rmdir()
+    except OSError as err:
+        # ENOTEMPTY on Linux/APFS; EEXIST on some pre-APFS macOS filesystems.
+        if err.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            _LOGGER.warning(
+                "Could not remove legacy backup dir %s: [%s] %s",
+                legacy_dir,
+                type(err).__name__,
+                err,
+            )
+
+    return moved, failed
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA MCP Tools from a config entry."""
     config_dir = Path(hass.config.config_dir)
+
+    # One-time migration of pre-fix YAML backups out of the publicly-served
+    # www/ directory (GHSA-g39v-cvjh-8fpf). Wrapped so a migration failure
+    # cannot prevent the integration from loading — the integration's
+    # normal value (file ops, edit_yaml_config) is unaffected by this.
+    try:
+        moved, failed = await hass.async_add_executor_job(
+            _migrate_legacy_backup_dir, config_dir
+        )
+    except Exception as err:
+        # Defensive: a migration failure must not block setup_entry, since
+        # the integration's normal value (file ops, edit_yaml_config) is
+        # unaffected by whether old backups got relocated.
+        _LOGGER.error(
+            "GHSA-g39v-cvjh-8fpf migration failed: %s. Pre-fix backups "
+            "may still be present in www/yaml_backups/ and reachable "
+            "via /local/yaml_backups/ — manual cleanup required.",
+            err,
+        )
+        moved, failed = 0, 0
+
+    if moved or failed:
+        if failed:
+            heading = (
+                f"Migrated {moved} YAML backup file(s); **{failed} could "
+                "not be moved** and remain in `www/yaml_backups/`, still "
+                "reachable without authentication via `/local/yaml_backups/`. "
+                "Move or delete them manually before continuing."
+            )
+        else:
+            heading = (
+                f"Moved {moved} YAML backup file(s) from `www/yaml_backups/` "
+                "to `.ha_mcp_tools_backups/`. The previous location was "
+                "reachable without authentication via `/local/yaml_backups/`."
+            )
+        message = (
+            f"{heading} See "
+            "[GHSA-g39v-cvjh-8fpf](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-g39v-cvjh-8fpf). "
+            "**Rotate any secrets** that appeared in those YAML files "
+            "(MQTT/REST credentials, webhook IDs, `shell_command` "
+            "definitions, geofence coordinates). If you version-control "
+            "your Home Assistant config, also add `.ha_mcp_tools_backups/` "
+            "to your `.gitignore` so future backups are not committed."
+        )
+        _LOGGER.error(message)
+        try:
+            persistent_notification.async_create(
+                hass,
+                message,
+                title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
+                notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
+            )
+        except Exception as err:
+            # Defensive: log line above is the source of truth; the
+            # notification is best-effort UX and must not block setup.
+            _LOGGER.warning(
+                "Could not create persistent notification for "
+                "GHSA-g39v-cvjh-8fpf migration: [%s] %s",
+                type(err).__name__,
+                err,
+            )
 
     async def handle_list_files(call: ServiceCall) -> ServiceResponse:
         """Handle the list_files service call."""

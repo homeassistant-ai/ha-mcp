@@ -445,9 +445,17 @@ class TestYamlConfigSafeguards:
             )
             inner = data
             assert inner.get("success") is True, f"Replace should succeed: {data}"
-            assert inner.get("backup_path"), f"Backup path should be present: {data}"
-            assert "yaml_backups" in inner.get("backup_path", "")
-            logger.info(f"Backup created at: {inner.get('backup_path')}")
+            backup_path = inner.get("backup_path", "")
+            assert backup_path, f"Backup path should be present: {data}"
+            # Backups must live directly under .ha_mcp_tools_backups/ (config
+            # root, not served by HA's /local/ static handler). Anything else
+            # — including a www/.ha_mcp_tools_backups/ variant or any other
+            # publicly-served prefix — is a regression of GHSA-g39v-cvjh-8fpf.
+            assert backup_path.startswith(".ha_mcp_tools_backups/"), (
+                f"Backup path must start with .ha_mcp_tools_backups/ "
+                f"(not under www/ or any served path): {backup_path}"
+            )
+            logger.info(f"Backup created at: {backup_path}")
 
     async def test_config_check_included_in_response(self, mcp_client_with_yaml_config):
         """Config check result should be included in the response."""
