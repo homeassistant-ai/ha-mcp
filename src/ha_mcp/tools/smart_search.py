@@ -1200,32 +1200,6 @@ class SmartSearchTools:
                 all_scene_configs: dict[str, dict[str, Any]] = {}
                 scene_bulk_fetched = False
 
-                def _index_scene_item(
-                    item: dict[str, Any], target: dict[str, dict[str, Any]]
-                ) -> None:
-                    """Index a bulk-response scene item under both its storage
-                    key AND a name-derived slug.
-
-                    HA derives the scene entity_id from the ``name`` field, not
-                    from the storage key — so Phase 3, which iterates entries
-                    keyed by entity_id slug, would miss bulk-fetched configs
-                    that are only keyed by storage key when the two diverge
-                    (verified live during BAT validation of #1168). Indexing
-                    by both keys closes the lookup gap without an extra
-                    registry round-trip.
-                    """
-                    name_slug = (
-                        (item.get("name") or "")
-                        .lower()
-                        .replace(" ", "_")
-                        .replace("-", "")
-                    )
-                    storage_key = item.get("id")
-                    if storage_key:
-                        target[storage_key] = item
-                    if name_slug and name_slug != storage_key:
-                        target[name_slug] = item
-
                 # Attempt A: REST bulk endpoint
                 try:
                     resp = await asyncio.wait_for(
@@ -1234,7 +1208,11 @@ class SmartSearchTools:
                     )
                     if isinstance(resp, list):
                         for item in resp:
-                            _index_scene_item(item, all_scene_configs)
+                            sid = item.get("id") or item.get(
+                                "name", ""
+                            ).lower().replace(" ", "_")
+                            if sid:
+                                all_scene_configs[sid] = item
                         scene_bulk_fetched = True
                 except Exception as e:
                     logger.debug(f"Scene REST bulk fetch failed: {e}")
@@ -1254,12 +1232,54 @@ class SmartSearchTools:
                             )
                             if isinstance(ws_resp, dict) and ws_resp.get("success"):
                                 for item in ws_resp.get("result", []):
-                                    _index_scene_item(item, all_scene_configs)
+                                    sid = item.get("id") or item.get(
+                                        "name", ""
+                                    ).lower().replace(" ", "_")
+                                    if sid:
+                                        all_scene_configs[sid] = item
                                 scene_bulk_fetched = True
                         except Exception as e:
                             logger.debug(
                                 f"Scene WebSocket bulk fetch ({ws_type}) failed: {e}"
                             )
+
+                # Phase 2.5: Augment with entity_id-slug keys via the
+                # entity registry. HA derives a scene's entity_id from the
+                # ``name`` field via its own slugify (collapsing runs of
+                # underscores, replacing all non-alnum with underscores,
+                # etc.); approximating that with `.replace()` chains
+                # produces near-misses (e.g. "LED Desk Strip - Night Light"
+                # slugifies to ``led_desk_strip_night_light`` in HA, not
+                # ``led_desk_strip_-_night_light`` or
+                # ``led_desk_strip__night_light`` from naive replacement).
+                # The registry holds the authoritative ``unique_id`` →
+                # ``entity_id`` mapping, so we use that to add slug-keyed
+                # aliases pointing at the same config.
+                if all_scene_configs:
+                    try:
+                        reg_resp = await asyncio.wait_for(
+                            self.client.send_websocket_message(
+                                {"type": "config/entity_registry/list"}
+                            ),
+                            timeout=BULK_WEBSOCKET_TIMEOUT,
+                        )
+                        if isinstance(reg_resp, dict) and reg_resp.get("success"):
+                            for entry in reg_resp.get("result") or []:
+                                ent_id = entry.get("entity_id") or ""
+                                uid = entry.get("unique_id")
+                                if (
+                                    ent_id.startswith("scene.")
+                                    and uid in all_scene_configs
+                                ):
+                                    slug = ent_id.removeprefix("scene.")
+                                    if slug and slug != uid:
+                                        all_scene_configs[slug] = (
+                                            all_scene_configs[uid]
+                                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"Scene entity-registry augmentation failed: {e}"
+                        )
 
                 # Attempt C: Parallel individual fetch with budget (see #879)
                 if not scene_bulk_fetched:
