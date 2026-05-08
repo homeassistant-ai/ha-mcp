@@ -22,6 +22,19 @@ def test_transform_generated_tool_names_match_class_constants():
     )
 
 
+def test_descriptions_keys_match_rename_targets():
+    """_DESCRIPTIONS must have exactly one entry per rename target so a
+    future rename can't drift to a tool name with no override (silent
+    fallback to FastMCP default) or an orphan description (typo'd key
+    that's never applied)."""
+    rename_targets = set(HaResourcesAsTools._RENAMES.values())
+    description_keys = set(HaResourcesAsTools._DESCRIPTIONS.keys())
+    assert description_keys == rename_targets, (
+        f"_DESCRIPTIONS keys {description_keys} must equal "
+        f"_RENAMES.values() {rename_targets}"
+    )
+
+
 @pytest.fixture
 def transform():
     """A real HaResourcesAsTools wired to a fresh FastMCP server."""

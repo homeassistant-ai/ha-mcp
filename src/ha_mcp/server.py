@@ -58,32 +58,37 @@ class HaResourcesAsTools(ResourcesAsTools):
         "list_resources": LIST_TOOL_NAME,
         "read_resource": READ_TOOL_NAME,
     }
-    # Action-phrased descriptions for BM25 retrieval. FastMCP's defaults are
-    # terse ("List MCP resources") and don't surface on task-phrased
-    # tool_search queries that agents make when reaching for config-write
-    # tools. See issue #1011, Gap 1 — same treatment as the per-skill
-    # ha_get_skill_* tools below.
+    # Shared action-phrased keyword block for retrieval. Some MCP clients
+    # (Claude Code, others) rank candidate tools by token-overlap between
+    # the user's natural-language query and each tool's `description`
+    # field; FastMCP's terse defaults ("List MCP resources") never overlap
+    # with task-phrased queries like "create automation" or "writing
+    # trigger". This block lists the workflow positions where consulting
+    # the bundled skill reference files matters, so retrieval surfaces
+    # this tool when an agent is about to write config.
+    _USE_BEFORE_KEYWORDS = (
+        "Use BEFORE: creating or editing automations, scripts, scenes, "
+        "helpers, or dashboards; writing triggers, conditions, actions, "
+        "wait_template, or service calls; renaming entities or migrating "
+        "device_id to entity_id; calling ha_config_set_automation, "
+        "ha_config_set_script, ha_config_set_helper, ha_config_set_dashboard, "
+        "or ha_set_entity."
+    )
     _DESCRIPTIONS: ClassVar[dict[str, str]] = {
         LIST_TOOL_NAME: (
-            "List all available MCP resources, including bundled skill reference "
-            "files (automation-patterns.md, helper-selection.md, "
-            "template-guidelines.md, device-control.md, dashboard-guide.md, "
-            "safe-refactoring.md, examples.yaml). Use BEFORE: creating or editing "
-            "automations, scripts, scenes, helpers, or dashboards; writing "
-            "triggers, conditions, actions, or wait_template; renaming entities "
-            "or migrating device_id to entity_id; calling ha_config_set_*. "
-            "Pair with ha_read_resource to load a specific guide."
+            "List all available MCP resources, including bundled skill "
+            "reference files. " + _USE_BEFORE_KEYWORDS + " Pair with "
+            "ha_read_resource to load a specific guide."
         ),
         READ_TOOL_NAME: (
-            "Get the contents of an MCP resource by URI. Use this to load skill "
-            "reference files (e.g., skill://home-assistant-best-practices/"
-            "references/automation-patterns.md) BEFORE creating or editing "
-            "automations, scripts, scenes, helpers, or dashboards; writing "
-            "triggers, conditions, actions, or wait_template; renaming entities; "
-            "or calling ha_config_set_*. The skill files cover native conditions "
-            "and triggers, helper selection, automation modes, template "
-            "guidelines, device control, and safe refactoring. Use "
-            "ha_list_resources to discover available URIs."
+            "Get the contents of an MCP resource by URI. Use this to load "
+            "skill reference files (e.g., "
+            "skill://home-assistant-best-practices/references/"
+            "automation-patterns.md) for guidance on native conditions and "
+            "triggers, helper selection, automation modes, template "
+            "guidelines, device control, and safe refactoring. "
+            + _USE_BEFORE_KEYWORDS
+            + " Use ha_list_resources to discover available URIs."
         ),
     }
 
@@ -805,28 +810,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
             uri = f"skill://{skill_name}/SKILL.md"
 
-            # Action-phrased keyword block for BM25 retrieval. The upstream
-            # SKILL.md description is symptom-framed ("Agent uses Jinja2
-            # templates where..."), which doesn't match the task-phrased
-            # tool_search queries agents make when reaching for config-write
-            # tools. This block ensures queries like "create automation" /
-            # "set automation config" / "writing trigger" surface the skill.
-            # See issue #1011, Gap 1.
+            # Action-phrased keyword block for retrieval. Some MCP clients
+            # rank candidate tools by token-overlap between the user's
+            # query and each tool's `description`; the upstream SKILL.md
+            # description is symptom-framed ("Agent uses Jinja2 templates
+            # where..."), which doesn't overlap with task-phrased queries
+            # like "create automation" / "set automation config" / "writing
+            # trigger". This block re-anchors the description in those
+            # task verbs so it surfaces when an agent is about to write
+            # config. Same shared keyword block as
+            # HaResourcesAsTools._USE_BEFORE_KEYWORDS above.
             tool_description = (
                 f"Get available reference files for the {skill_name} skill. "
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
-                f"Use BEFORE: creating or editing automations, scripts, scenes, "
-                f"helpers, or dashboards; writing triggers, conditions, actions, "
-                f"wait_template, or service calls; renaming entities or migrating "
-                f"device_id to entity_id; calling ha_config_set_automation, "
-                f"ha_config_set_script, ha_config_set_scene, ha_config_set_helper, "
-                f"ha_config_set_dashboard, or ha_set_entity. The reference files "
-                f"below cover automation patterns, helper selection, template "
-                f"guidelines, device control, dashboards, and safe refactoring.\n\n"
-                f"Read each reference file via resources/read (or ha_read_resource "
-                f"as a fallback) using the file URI to load specific guides as "
-                f"needed."
+                f"{HaResourcesAsTools._USE_BEFORE_KEYWORDS} The reference "
+                f"files below cover automation patterns, helper selection, "
+                f"template guidelines, device control, dashboards, and safe "
+                f"refactoring.\n\n"
+                f"Read each reference file via resources/read (or "
+                f"ha_read_resource as a fallback) using the file URI to load "
+                f"specific guides as needed."
             )
 
             ref_files = self._collect_skill_ref_files(skill_dir, skill_name)
