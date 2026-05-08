@@ -38,7 +38,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_config_set_area
+    - ha_set_area_or_floor
     - ha_search_entities
     - ha_config_list_areas
   description: >

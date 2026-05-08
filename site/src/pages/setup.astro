@@ -1538,10 +1538,13 @@ ingress:
 
     // mcp-proxy instructions for stdio-only clients
     if (needsMcpProxy) {
+      const brewNote = platformId === 'macos'
+        ? `<p class="text-xs text-slate-400 mt-2">Or install ahead of time with Homebrew: <code>brew install mcp-proxy</code></p>`
+        : '';
       const mcpProxyInstr = `<div class="instruction-block border-yellow-700/50 bg-yellow-900/10">
         <h4 class="instruction-title text-yellow-300">mcp-proxy Required</h4>
         <p class="text-slate-300 mb-2">${state.client.name} only supports stdio. Use mcp-proxy to connect to HTTP servers:</p>
-        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>
+        <pre class="code-block"><code># mcp-proxy is run automatically via uvx in the config below</code></pre>${brewNote}
       </div>`;
       instructions.push(mcpProxyInstr);
     }

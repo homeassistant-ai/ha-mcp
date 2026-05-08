@@ -2058,22 +2058,24 @@ class TestApplyResponseTransform:
         assert {"level": "ERROR", "msg": "boom"} in result
 
     def test_invalid_expression_raises_tool_error(self):
-        """Forbidden operations raise ToolError with VALIDATION_FAILED."""
+        """Forbidden operations raise ToolError with the validation-error
+        message produced by ``format_sandbox_error``."""
         with pytest.raises(ToolError) as exc_info:
             _apply_response_transform([1, 2, 3], "import os")
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert "python_transform failed" in result["error"]["message"]
+        assert "Expression validation failed" in result["error"]["message"]
 
     def test_runtime_error_raises_tool_error(self):
-        """Runtime execution errors surface as ToolError with preview."""
+        """Runtime execution errors surface as ToolError with the
+        runtime-error message (distinct from validation failures)."""
         with pytest.raises(ToolError) as exc_info:
             _apply_response_transform(
                 {}, "response['missing']['key'] = 1"
             )
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert "python_transform failed" in result["error"]["message"]
+        assert "Expression raised at runtime" in result["error"]["message"]
 
 
 class TestCallAddonWsNewParams:
@@ -2343,7 +2345,7 @@ class TestCallAddonWsNewParams:
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert "python_transform failed" in result["error"]["message"]
+        assert "Expression validation failed" in result["error"]["message"]
 
 
 class TestCallAddonApiPythonTransform:
@@ -2447,7 +2449,7 @@ class TestCallAddonApiPythonTransform:
 
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
-        assert "python_transform failed" in result["error"]["message"]
+        assert "Expression validation failed" in result["error"]["message"]
 
 
 # Mock Supervisor API responses for list_addons tests

@@ -183,7 +183,7 @@ _BLOCKED_WS_COMMANDS: frozenset[str] = frozenset({
     "config/entity_registry/remove",
     # Floor / label / category registries follow the same rationale as
     # area / device / entity above: each has a wrapping MCP tool
-    # (``ha_config_set_floor``, ``ha_config_set_label``,
+    # (``ha_set_area_or_floor``, ``ha_config_set_label``,
     # ``ha_config_set_category``) that performs invariant checks the
     # raw WS command skips.
     "config/floor_registry/create",
@@ -813,7 +813,7 @@ async def _run_sandboxed_code(
                     f"WebSocket command {msg_type!r} is blocked from the "
                     "sandbox. Use the corresponding wrapping tool via "
                     "call_tool (e.g. ha_config_set_dashboard, "
-                    "ha_config_set_area, ha_update_device, ha_set_entity) "
+                    "ha_set_area_or_floor, ha_update_device, ha_set_entity) "
                     "so validation runs."
                 )
             }
