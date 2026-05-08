@@ -78,6 +78,113 @@ class TestFormatTraceList:
         assert result["trace_count"] == 3
         assert result["total_available"] == 5
 
+    def test_returns_newest_traces_when_total_exceeds_limit(self):
+        """When traces exceed limit, return the newest N (not the oldest).
+
+        HA's trace/list returns traces in chronological order (oldest first).
+        Slicing [:limit] would return the oldest N, leaving recent traces
+        unreachable when stored_traces > limit. See issue #1177.
+        """
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 2)
+
+        assert result["trace_count"] == 2
+        run_ids = [t["run_id"] for t in result["traces"]]
+        assert "run_4" in run_ids
+        assert "run_3" in run_ids
+        assert "run_0" not in run_ids
+        assert "run_1" not in run_ids
+
+    def test_returned_traces_are_newest_first(self):
+        """Returned traces are ordered newest-first for user convenience."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 3)
+
+        run_ids = [t["run_id"] for t in result["traces"]]
+        assert run_ids == ["run_4", "run_3", "run_2"]
+
+    def test_order_oldest_returns_oldest_first(self):
+        """order='oldest' returns the oldest N traces in chronological order."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 3, order="oldest")
+
+        run_ids = [t["run_id"] for t in result["traces"]]
+        assert run_ids == ["run_0", "run_1", "run_2"]
+        assert result["order"] == "oldest"
+
+    def test_offset_pages_through_newest_first(self):
+        """offset skips past the most-recent traces when order='newest'."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 2, offset=2)
+
+        run_ids = [t["run_id"] for t in result["traces"]]
+        assert run_ids == ["run_2", "run_1"]
+        assert result["offset"] == 2
+
+    def test_offset_pages_through_oldest_first(self):
+        """offset skips past the earliest traces when order='oldest'."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 2, offset=2, order="oldest")
+
+        run_ids = [t["run_id"] for t in result["traces"]]
+        assert run_ids == ["run_2", "run_3"]
+
+    def test_has_more_true_when_more_traces_remain(self):
+        """has_more is True when the requested page does not cover the buffer."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(5)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 2)
+
+        assert result["has_more"] is True
+
+    def test_has_more_false_when_buffer_exhausted(self):
+        """has_more is False when offset+returned reaches total."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(3)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 10)
+
+        assert result["has_more"] is False
+
+    def test_offset_beyond_total_returns_empty(self):
+        """offset >= total returns no traces and has_more=False."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(3)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 10, offset=10)
+
+        assert result["traces"] == []
+        assert result["trace_count"] == 0
+        assert result["total_available"] == 3
+        assert result["has_more"] is False
+
     def test_trace_with_error_included(self):
         """Traces with errors include the error field."""
         traces = [
