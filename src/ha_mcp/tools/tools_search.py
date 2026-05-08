@@ -32,20 +32,13 @@ def _build_pagination_metadata(
     """Build standardized pagination metadata for search responses.
 
     Thin wrapper around the shared ``build_pagination_metadata`` helper that
-    keeps the existing call-site signature (accepts a *results* list and uses
-    ``total_matches`` as the key name expected by search tools).
+    keeps the existing call-site signature (accepts a *results* list) and
+    renames ``total_count`` → ``total_matches`` to match the search tools'
+    response shape.
     """
     meta = build_pagination_metadata(total_matches, offset, limit, len(results))
-    # Search tools use "total_matches" instead of "total_count" —
-    # construct explicitly to avoid fragile dependency on shared helper's key names
-    return {
-        "total_matches": meta["total_count"],
-        "offset": meta["offset"],
-        "limit": meta["limit"],
-        "count": meta["count"],
-        "has_more": meta["has_more"],
-        "next_offset": meta["next_offset"],
-    }
+    meta["total_matches"] = meta.pop("total_count")
+    return meta
 
 
 async def _exact_match_search(
