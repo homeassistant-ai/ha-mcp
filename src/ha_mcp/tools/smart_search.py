@@ -1200,6 +1200,32 @@ class SmartSearchTools:
                 all_scene_configs: dict[str, dict[str, Any]] = {}
                 scene_bulk_fetched = False
 
+                def _index_scene_item(
+                    item: dict[str, Any], target: dict[str, dict[str, Any]]
+                ) -> None:
+                    """Index a bulk-response scene item under both its storage
+                    key AND a name-derived slug.
+
+                    HA derives the scene entity_id from the ``name`` field, not
+                    from the storage key — so Phase 3, which iterates entries
+                    keyed by entity_id slug, would miss bulk-fetched configs
+                    that are only keyed by storage key when the two diverge
+                    (verified live during BAT validation of #1168). Indexing
+                    by both keys closes the lookup gap without an extra
+                    registry round-trip.
+                    """
+                    name_slug = (
+                        (item.get("name") or "")
+                        .lower()
+                        .replace(" ", "_")
+                        .replace("-", "")
+                    )
+                    storage_key = item.get("id")
+                    if storage_key:
+                        target[storage_key] = item
+                    if name_slug and name_slug != storage_key:
+                        target[name_slug] = item
+
                 # Attempt A: REST bulk endpoint
                 try:
                     resp = await asyncio.wait_for(
@@ -1208,11 +1234,7 @@ class SmartSearchTools:
                     )
                     if isinstance(resp, list):
                         for item in resp:
-                            sid = item.get("id") or item.get(
-                                "name", ""
-                            ).lower().replace(" ", "_")
-                            if sid:
-                                all_scene_configs[sid] = item
+                            _index_scene_item(item, all_scene_configs)
                         scene_bulk_fetched = True
                 except Exception as e:
                     logger.debug(f"Scene REST bulk fetch failed: {e}")
@@ -1232,11 +1254,7 @@ class SmartSearchTools:
                             )
                             if isinstance(ws_resp, dict) and ws_resp.get("success"):
                                 for item in ws_resp.get("result", []):
-                                    sid = item.get("id") or item.get(
-                                        "name", ""
-                                    ).lower().replace(" ", "_")
-                                    if sid:
-                                        all_scene_configs[sid] = item
+                                    _index_scene_item(item, all_scene_configs)
                                 scene_bulk_fetched = True
                         except Exception as e:
                             logger.debug(

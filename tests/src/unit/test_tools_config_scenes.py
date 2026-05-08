@@ -212,6 +212,68 @@ class TestScenePythonTransform:
         assert error_data["success"] is False
         assert "modified" in error_data["error"]["message"].lower()
 
+    async def test_transform_threads_category_through_to_apply(
+        self, tools, mock_client, monkeypatch
+    ):
+        """G2 regression: python_transform branch must apply category, not silently
+        drop it. Previously the branch returned early after upsert, bypassing
+        apply_entity_category — surfaced in the PR #1168 Gemini review.
+        """
+        seed = {
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed_hash = compute_config_hash(seed)
+
+        # Stub the resolver so we don't depend on registry plumbing here.
+        async def _stub_resolve(scene_id):
+            return f"scene.{scene_id}"
+
+        monkeypatch.setattr(tools, "_resolve_scene_entity_id", _stub_resolve)
+
+        # Capture apply_entity_category invocations from the tools module.
+        calls: list[tuple] = []
+
+        async def _capture_category(*args, **kwargs):
+            calls.append((args, kwargs))
+            return None
+
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+
+        monkeypatch.setattr(scene_mod, "apply_entity_category", _capture_category)
+
+        # Also stub wait_for_entity_registered so we don't sleep in tests.
+        async def _stub_wait(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _stub_wait)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform=(
+                "config['entities']['light.kitchen']['brightness'] = 100"
+            ),
+            config_hash=seed_hash,
+            category="my_category",
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        # apply_entity_category must have been invoked with the category
+        # passed to the tool, not silently dropped.
+        assert len(calls) == 1, (
+            f"apply_entity_category should be invoked once on python_transform "
+            f"branch when category is set; calls={calls}"
+        )
+        invoked_args = calls[0][0]
+        assert "my_category" in invoked_args, (
+            f"category arg should be threaded through; got args={invoked_args}"
+        )
+
     async def test_transform_must_keep_entities_dict_shape(self, tools, mock_client):
         """A transform that drops the entities key fails the post-transform check."""
         seed = {

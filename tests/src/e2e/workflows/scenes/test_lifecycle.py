@@ -16,7 +16,6 @@ entity_id, not a list of actions.
 """
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
@@ -27,34 +26,6 @@ from ...utilities.assertions import safe_call_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _parse_mcp_result(result) -> dict[str, Any]:
-    """Parse an MCP tool-call result into a dict, with Python-literal fallback."""
-    try:
-        if hasattr(result, "content") and result.content:
-            response_text = str(result.content[0].text)
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                try:
-                    fixed_text = (
-                        response_text.replace("true", "True")
-                        .replace("false", "False")
-                        .replace("null", "None")
-                    )
-                    return eval(fixed_text)
-                except (SyntaxError, NameError, ValueError):
-                    return {"raw_response": response_text, "parse_error": True}
-
-        return {
-            "content": (
-                str(result.content[0]) if hasattr(result, "content") else str(result)
-            )
-        }
-    except Exception as e:
-        logger.warning(f"Failed to parse MCP result: {e}")
-        return {"error": "Failed to parse result", "exception": str(e)}
 
 
 def _extract_scene_config(get_data: dict[str, Any]) -> dict[str, Any]:
@@ -77,17 +48,15 @@ async def _wait_for_scene_registered(
     scene_entity = f"scene.{scene_id}"
     while time.time() - start_time < timeout:
         try:
-            get_result = await mcp_client.call_tool(
-                "ha_config_get_scene", {"scene_id": scene_id}
+            get_data = await safe_call_tool(
+                mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
             )
-            get_data = _parse_mcp_result(get_result)
             if get_data.get("success") and get_data.get("config"):
                 return True
 
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": scene_entity}
+            state_data = await safe_call_tool(
+                mcp_client, "ha_get_state", {"entity_id": scene_entity}
             )
-            state_data = _parse_mcp_result(state_result)
             if state_data.get("success"):
                 return True
         except Exception as e:
@@ -106,10 +75,9 @@ async def _wait_for_scene_removed(
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            get_result = await mcp_client.call_tool(
-                "ha_config_get_scene", {"scene_id": scene_id}
+            get_data = await safe_call_tool(
+                mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
             )
-            get_data = _parse_mcp_result(get_result)
             # Either success=False OR an empty/missing config means it's gone.
             if not get_data.get("success") or not get_data.get("config"):
                 return True
@@ -142,7 +110,7 @@ class TestSceneLifecycle:
         cleanup_tracker.track("scene", f"scene.{scene_id}")
 
         # 1. Create
-        create_result = await safe_call_tool(
+        create_data = await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
             {
@@ -151,17 +119,15 @@ class TestSceneLifecycle:
                 "wait": True,
             },
         )
-        create_data = _parse_mcp_result(create_result)
         assert create_data.get("success") is True, f"Create failed: {create_data}"
 
         registered = await _wait_for_scene_registered(mcp_client, scene_id)
         assert registered, f"Scene {scene_id} not registered after create"
 
         # 2. Get + verify config_hash stability
-        get_result_1 = await safe_call_tool(
+        get_data_1 = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        get_data_1 = _parse_mcp_result(get_result_1)
         assert get_data_1.get("success") is True
         body_1 = _extract_scene_config(get_data_1)
         assert "entities" in body_1
@@ -169,10 +135,9 @@ class TestSceneLifecycle:
         hash_1 = get_data_1.get("config_hash")
         assert hash_1, "config_hash missing on first get"
 
-        get_result_2 = await safe_call_tool(
+        get_data_2 = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        get_data_2 = _parse_mcp_result(get_result_2)
         assert get_data_2.get("config_hash") == hash_1, (
             "config_hash should be stable across reads of an unchanged scene"
         )
@@ -185,7 +150,7 @@ class TestSceneLifecycle:
                 "light.kitchen_lights": {"state": "off"},
             },
         )
-        update_result = await safe_call_tool(
+        update_data = await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
             {
@@ -195,21 +160,18 @@ class TestSceneLifecycle:
                 "wait": True,
             },
         )
-        update_data = _parse_mcp_result(update_result)
         assert update_data.get("success") is True
 
-        get_result_3 = await safe_call_tool(
+        get_data_3 = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        get_data_3 = _parse_mcp_result(get_result_3)
         body_3 = _extract_scene_config(get_data_3)
         assert "light.kitchen_lights" in body_3.get("entities", {})
 
         # 4. Delete
-        delete_result = await safe_call_tool(
+        delete_data = await safe_call_tool(
             mcp_client, "ha_config_remove_scene", {"scene_id": scene_id, "wait": True}
         )
-        delete_data = _parse_mcp_result(delete_result)
         # 405 on add-on / YAML-mode is an acceptable outcome — tested separately.
         if delete_data.get("success"):
             removed = await _wait_for_scene_removed(mcp_client, scene_id)
@@ -239,15 +201,14 @@ class TestSceneLifecycle:
         )
         await _wait_for_scene_registered(mcp_client, scene_id)
 
-        get_result = await safe_call_tool(
+        get_data = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        get_data = _parse_mcp_result(get_result)
         scene_hash = get_data.get("config_hash")
         assert scene_hash
 
         # Surgical edit: bump brightness
-        transform_result = await safe_call_tool(
+        transform_data = await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
             {
@@ -258,15 +219,13 @@ class TestSceneLifecycle:
                 "config_hash": scene_hash,
             },
         )
-        transform_data = _parse_mcp_result(transform_result)
         assert transform_data.get("success") is True
         assert transform_data.get("action") == "python_transform"
 
         # Verify the change landed
-        verify_result = await safe_call_tool(
+        verify_data = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        verify_data = _parse_mcp_result(verify_result)
         body = _extract_scene_config(verify_data)
         assert (
             body.get("entities", {}).get("light.bed_light", {}).get("brightness")
@@ -296,7 +255,7 @@ class TestSceneLifecycle:
         )
         await _wait_for_scene_registered(mcp_client, scene_id)
 
-        result = await safe_call_tool(
+        data = await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
             {
@@ -307,7 +266,6 @@ class TestSceneLifecycle:
                 "config_hash": "stale-hash-that-doesnt-match",
             },
         )
-        data = _parse_mcp_result(result)
         # The tool surfaces the conflict as a structured error.
         assert data.get("success") is False
         err = data.get("error") or {}
@@ -327,7 +285,7 @@ class TestSceneLifecycle:
         scene_id = "test_wrong_shape_e2e_scene"
         cleanup_tracker.track("scene", f"scene.{scene_id}")
 
-        result = await safe_call_tool(
+        data = await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
             {
@@ -341,7 +299,6 @@ class TestSceneLifecycle:
                 },
             },
         )
-        data = _parse_mcp_result(result)
         assert data.get("success") is False
         err = data.get("error") or {}
         msg = (err.get("message") or "").lower()

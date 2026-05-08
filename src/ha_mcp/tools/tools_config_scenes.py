@@ -453,6 +453,36 @@ class ConfigSceneTools:
                 # Re-fetch to get authoritative hash (HA may normalise after save).
                 _, new_config_hash = await self._get_scene_config_internal(scene_id)
 
+                # Resolve actual entity_id and apply wait + category — same
+                # post-upsert finalisation the full-config branch runs. Without
+                # these, ``wait`` and ``category`` are silently dropped on
+                # python_transform calls.
+                wait_bool = coerce_bool_param(wait, "wait", default=True)
+                entity_id = await self._resolve_scene_entity_id(scene_id)
+                if wait_bool:
+                    try:
+                        registered = await wait_for_entity_registered(
+                            self._client, entity_id
+                        )
+                        if not registered:
+                            result["warning"] = (
+                                f"Scene updated but {entity_id} not yet queryable. "
+                                "It may take a moment to become available."
+                            )
+                    except Exception as e:
+                        result["warning"] = (
+                            f"Scene updated but verification failed: {e}"
+                        )
+                if category and entity_id:
+                    await apply_entity_category(
+                        self._client,
+                        entity_id,
+                        category,
+                        "scene",
+                        result,
+                        "scene",
+                    )
+
                 response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
