@@ -19,6 +19,8 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    safe_info,
+    safe_progress,
 )
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
@@ -183,16 +185,17 @@ class HacsTools:
                 min_value=0,
             )
 
-            if ctx is not None:
-                await ctx.info(
-                    f"ha_hacs_search starting: query={query!r} "
-                    f"category={category} installed_only={installed_only_bool}"
-                )
-                await ctx.report_progress(
-                    progress=0,
-                    total=3,
-                    message="checking HACS availability",
-                )
+            await safe_info(
+                ctx,
+                f"ha_hacs_search starting: query={query!r} "
+                f"category={category} installed_only={installed_only_bool}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=3,
+                message="checking HACS availability",
+            )
 
             # Check if HACS is available
             await _assert_hacs_available()
@@ -208,12 +211,12 @@ class HacsTools:
                 hacs_category = CATEGORY_MAP.get(category, category)
                 kwargs_cmd["categories"] = [hacs_category]
 
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=1,
-                    total=3,
-                    message="fetching HACS repository list",
-                )
+            await safe_progress(
+                ctx,
+                progress=1,
+                total=3,
+                message="fetching HACS repository list",
+            )
 
             response = await ws_client.send_command(
                 "hacs/repositories/list", **kwargs_cmd
@@ -231,21 +234,21 @@ class HacsTools:
                 )
 
             all_repositories = response.get("result", [])
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=2,
-                    total=3,
-                    message=f"filtering {len(all_repositories)} repositories",
-                )
+            await safe_progress(
+                ctx,
+                progress=2,
+                total=3,
+                message=f"filtering {len(all_repositories)} repositories",
+            )
             matches = _filter_and_score_repos(
                 all_repositories, query, installed_only_bool
             )
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=3,
-                    total=3,
-                    message=f"matched {len(matches)} repositories",
-                )
+            await safe_progress(
+                ctx,
+                progress=3,
+                total=3,
+                message=f"matched {len(matches)} repositories",
+            )
 
             limited_matches = matches[offset_int : offset_int + max_results_int]
             has_more = (offset_int + len(limited_matches)) < len(matches)

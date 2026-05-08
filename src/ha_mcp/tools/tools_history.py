@@ -26,6 +26,8 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    safe_info,
+    safe_progress,
 )
 from .util_helpers import (
     add_timezone_metadata,
@@ -290,17 +292,18 @@ class HistoryTools:
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
 
-            if ctx is not None:
-                await ctx.info(
-                    f"ha_get_history starting: source={source} "
-                    f"entities={len(entity_id_list)} "
-                    f"window={start_dt.isoformat()}..{end_dt.isoformat()}"
-                )
-                await ctx.report_progress(
-                    progress=0,
-                    total=3,
-                    message="connecting to Home Assistant WebSocket",
-                )
+            await safe_info(
+                ctx,
+                f"ha_get_history starting: source={source} "
+                f"entities={len(entity_id_list)} "
+                f"window={start_dt.isoformat()}..{end_dt.isoformat()}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=3,
+                message="connecting to Home Assistant WebSocket",
+            )
 
             # Connect to WebSocket (shared by both sources)
             ws_client, error = await get_connected_ws_client(
@@ -314,12 +317,12 @@ class HistoryTools:
                     "Failed to connect to Home Assistant WebSocket",
                 ))
 
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=1,
-                    total=3,
-                    message=f"querying recorder ({source})",
-                )
+            await safe_progress(
+                ctx,
+                progress=1,
+                total=3,
+                message=f"querying recorder ({source})",
+            )
 
             try:
                 if source == "statistics":
@@ -335,12 +338,12 @@ class HistoryTools:
                         significant_changes_only, limit, offset,
                         _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
                     )
-                if ctx is not None:
-                    await ctx.report_progress(
-                        progress=3,
-                        total=3,
-                        message="recorder query complete",
-                    )
+                await safe_progress(
+                    ctx,
+                    progress=3,
+                    total=3,
+                    message="recorder query complete",
+                )
                 return result
             finally:
                 if ws_client:

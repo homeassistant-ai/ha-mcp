@@ -8,6 +8,7 @@ and async operation verification through WebSocket monitoring.
 import asyncio
 import json
 import logging
+import time
 from typing import Any, ClassVar
 
 from fastmcp import Context
@@ -19,7 +20,12 @@ from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
-from .helpers import exception_to_structured_error, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    raise_tool_error,
+    safe_info,
+    safe_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -394,18 +400,13 @@ class DeviceControlTools:
     async def get_device_operation_status(
         self, operation_id: str, timeout_seconds: int = 10
     ) -> dict[str, Any]:
-        """
-        Check status of device operation with async verification.
+        """Check status of a device operation, waiting up to ``timeout_seconds`` for completion.
 
-        This tool checks the status of operations initiated by control_device_smart.
-        Results come from real-time WebSocket monitoring of Home Assistant state changes.
-
-        Args:
-            operation_id: Operation ID returned by control_device_smart
-            timeout_seconds: Maximum time to wait for completion
-
-        Returns:
-            Operation status with completion details or timeout info
+        Polls the in-memory operation registry (mutated by the WebSocket
+        listener as state changes arrive) every 0.2s while the operation is
+        pending, up to ``timeout_seconds``. Returns the final structured status
+        — completed/failed/timeout/pending — produced by
+        ``control_device_smart``.
         """
         operation = get_operation_from_memory(operation_id)
 
@@ -420,6 +421,30 @@ class DeviceControlTools:
                 ],
                 context={"operation_id": operation_id},
             ))
+
+        # Wait up to timeout_seconds for the operation to leave the pending state.
+        # The WebSocket listener mutates operation.status as state changes arrive,
+        # so polling memory is sufficient — no need to subscribe again. Uses
+        # time.monotonic() so the deadline can be cleanly patched in tests.
+        if operation.status.value == "pending" and timeout_seconds > 0:
+            deadline = time.monotonic() + timeout_seconds
+            while operation.status.value == "pending":
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.2)
+                refreshed = get_operation_from_memory(operation_id)
+                if refreshed is None:
+                    raise_tool_error(create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        "Operation cleaned up during status poll",
+                        suggestions=[
+                            "Operation may have completed and been purged before "
+                            "verification finished",
+                            "Use control_device_smart to start new operation",
+                        ],
+                        context={"operation_id": operation_id},
+                    ))
+                operation = refreshed
 
         # Check operation status
         if operation.status.value == "completed":
@@ -546,7 +571,6 @@ class DeviceControlTools:
         Args:
             operations: List of device control operations
             parallel: Whether to execute operations in parallel
-            ctx: Optional FastMCP Context for progress reporting
 
         Returns:
             Bulk operation results
@@ -568,17 +592,18 @@ class DeviceControlTools:
                 operations, skipped_operations
             )
 
-            if ctx is not None:
-                await ctx.info(
-                    f"bulk_device_control: {len(valid_operations)} valid op(s), "
-                    f"{len(skipped_operations)} skipped, "
-                    f"mode={'parallel' if parallel else 'sequential'}"
-                )
-                await ctx.report_progress(
-                    progress=0,
-                    total=len(valid_operations),
-                    message="dispatching operations",
-                )
+            await safe_info(
+                ctx,
+                f"bulk_device_control: {len(valid_operations)} valid op(s), "
+                f"{len(skipped_operations)} skipped, "
+                f"mode={'parallel' if parallel else 'sequential'}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=len(valid_operations),
+                message="dispatching operations",
+            )
 
             # Execute only valid operations
             if parallel:
@@ -588,15 +613,15 @@ class DeviceControlTools:
                     valid_operations, results, operation_ids, ctx=ctx
                 )
 
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=len(valid_operations),
-                    total=len(valid_operations),
-                    message=(
-                        f"dispatched {len(operation_ids)} op(s); "
-                        "use get_bulk_operation_status to verify completion"
-                    ),
-                )
+            await safe_progress(
+                ctx,
+                progress=len(valid_operations),
+                total=len(valid_operations),
+                message=(
+                    f"dispatched {len(operation_ids)} op(s); "
+                    "use get_bulk_operation_status to verify completion"
+                ),
+            )
 
             return self._build_bulk_response(
                 operations, results, operation_ids, skipped_operations, parallel
@@ -682,12 +707,12 @@ class DeviceControlTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     f"Exception during execution: {e!s}",
                 ))
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=i + 1,
-                    total=total,
-                    message=f"{entity_id} {action} dispatched",
-                )
+            await safe_progress(
+                ctx,
+                progress=i + 1,
+                total=total,
+                message=f"{entity_id} {action} dispatched",
+            )
 
     def _build_bulk_response(
         self,
