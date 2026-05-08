@@ -70,15 +70,28 @@ def _detect_ha_config_yaml(content: str) -> str | None:
     """Detect HA-config YAML at the start of inline-resource content.
 
     Returns the matching top-level key (without the colon) when content's
-    first non-empty line opens an HA-config block, else None. Plain JS/CSS
+    first significant line opens an HA-config block, else None. Plain JS/CSS
     never starts with ``<word>:`` followed by whitespace/EOL/YAML-marker —
     JS opens with ``import``/``export``/``const``/``//``/``/*``/``function``
     or similar, CSS with selectors/at-rules/``/*``. False-positive surface
     is therefore narrow.
 
+    Skips a leading BOM (``\\ufeff``), blank lines, full-line ``#`` comments,
+    and YAML doc-start markers (``---``) before reading the first content
+    line — these decorations are common in real-world HA YAML files and
+    would otherwise let misrouted content slip past the first-line check.
+
     See #1072 for the misroute pattern this guards against.
     """
-    first_line = content.strip().split("\n", 1)[0].rstrip()
+    # `str.strip()` does not remove U+FEFF (BOM) — it is not Unicode-whitespace.
+    stripped = content.lstrip("\ufeff")
+    first_line = ""
+    for raw_line in stripped.splitlines():
+        bare = raw_line.strip()
+        if not bare or bare == "---" or bare.startswith("#"):
+            continue
+        first_line = bare
+        break
     if not first_line:
         return None
     for domain in _HA_CONFIG_YAML_MARKERS:
