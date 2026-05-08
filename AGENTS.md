@@ -478,13 +478,25 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 ### Naming Convention
 `ha_<verb>_<noun>`:
 - `get` — single item (`ha_get_state`)
-- `list` — collections (`ha_list_areas`)
+- `list` — collections (`ha_list_services`)
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
 - `call` — execute (`ha_call_service`)
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
+
+**Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
+- `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
+
+**Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
+- `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
+- `ha_report_issue`, `ha_import_blueprint`, `ha_update_device`
+- `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
+- `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
+- `ha_hacs_*` family (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`, `ha_hacs_repository_info`) — grandfathered; pre-dates this convention
+
+**Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
 
 ### Tool Structure
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.

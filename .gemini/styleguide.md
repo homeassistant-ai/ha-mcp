@@ -63,17 +63,9 @@ Flag HIGH severity if annotation contradicts actual behavior in the implementati
 
 ## Tool Naming Convention
 
-All MCP tools MUST follow `ha_<verb>_<noun>` pattern:
+The canonical tool naming rules — approved verbs, the optional `ha_<namespace>_<verb>_<noun>` shape, and the list of accepted exceptions — are defined in [`AGENTS.md` → Writing MCP Tools → Naming Convention](../AGENTS.md#naming-convention). Treat that section as the single source of truth and consult it when reviewing.
 
-- `ha_get_*` — single item retrieval
-- `ha_list_*` — collections
-- `ha_search_*` — filtered queries
-- `ha_set_*` — create/update operations
-- `ha_delete_*` — remove operations
-- `ha_call_*` — execute operations
-- `ha_manage_*` — multi-modal tools combining several operations behind one interface
-
-Flag MEDIUM severity if tools don't follow this pattern.
+Flag MEDIUM severity if a tool name violates the rules defined there.
 
 ## Tool File Organization
 
