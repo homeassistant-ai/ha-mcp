@@ -482,7 +482,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 - `search` — filtered queries (`ha_search_entities`)
 - `set` — create/update (`ha_config_set_helper`)
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
-- `remove` — remove registry items (`ha_remove_entity`, `ha_config_remove_area`)
+- `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
 - `call` — execute (`ha_call_service`)
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
 
