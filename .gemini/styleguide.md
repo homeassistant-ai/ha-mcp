@@ -69,11 +69,24 @@ All MCP tools MUST follow `ha_<verb>_<noun>` pattern:
 - `ha_list_*` — collections
 - `ha_search_*` — filtered queries
 - `ha_set_*` — create/update operations
-- `ha_delete_*` — remove operations
+- `ha_delete_*` — delete dashboards, config entries, or files
+- `ha_remove_*` — remove registry items (areas, floors, entities, devices)
 - `ha_call_*` — execute operations
 - `ha_manage_*` — multi-modal tools combining several operations behind one interface
 
-Flag MEDIUM severity if tools don't follow this pattern.
+**Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
+- `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
+- `ha_hacs_<verb>_<noun>` — HACS integration tools (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`)
+
+**Accepted exceptions**: The following tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and MUST NOT be flagged:
+- `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
+- `ha_report_issue`, `ha_import_blueprint`, `ha_update_device`
+- `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
+- `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
+
+**Adding new verbs**: When no existing verb fits a new tool's purpose, the PR should add the verb to this list and to `AGENTS.md` together. Keep both files in sync.
+
+Flag MEDIUM severity if tools don't follow this pattern, the namespace-prefix shape, or the accepted-exceptions list above.
 
 ## Tool File Organization
 

@@ -486,6 +486,18 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 - `call` — execute (`ha_call_service`)
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
 
+**Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
+- `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
+- `ha_hacs_<verb>_<noun>` — HACS integration tools (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`)
+
+**Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
+- `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
+- `ha_report_issue`, `ha_import_blueprint`, `ha_update_device`
+- `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
+- `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
+
+**Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to this list and to `.gemini/styleguide.md` as part of the same PR rather than forcing a poor fit. Keep both files in sync.
+
 ### Tool Structure
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
 
