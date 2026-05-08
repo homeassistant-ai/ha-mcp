@@ -183,13 +183,9 @@ def _apply_response_transform(response: Any, expr: str) -> Any:
     try:
         return safe_execute_expression(expr, {"response": response}, "response")
     except PythonSandboxError as e:
-        message, suggestions = format_sandbox_error(e, expr)
-        # Addon helpers operate on a `response` variable, not `config` —
-        # prepend a one-liner so agents know which name to mutate.
-        suggestions = [
-            "Operate on the `response` variable (in-place or reassign)",
-            *suggestions,
-        ]
+        message, suggestions = format_sandbox_error(
+            e, expr, variable_name="response"
+        )
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,

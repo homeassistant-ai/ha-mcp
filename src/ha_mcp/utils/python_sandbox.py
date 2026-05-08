@@ -414,7 +414,9 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def format_sandbox_error(
-    error: PythonSandboxError, expr: str
+    error: PythonSandboxError,
+    expr: str,
+    variable_name: str = "config",
 ) -> tuple[str, list[str]]:
     """Build a (message, suggestions) pair appropriate for the error subclass.
 
@@ -424,6 +426,12 @@ def format_sandbox_error(
     but raised at runtime — suggestions point at keys/types/values.
     Plain ``PythonSandboxError`` (no subclass) falls back to the
     validation form.
+
+    ``variable_name`` is the name of the mutable target the expression
+    operates on. The default ``"config"`` matches the dashboard /
+    automation / script callers; addon helpers pass ``"response"`` and
+    a one-liner about that name is prepended to the suggestions so
+    agents know which variable to mutate.
 
     Used by ``ha_config_set_*`` and addon helpers so each caller emits
     the same shape of MCP error without duplicating the boilerplate.
@@ -444,6 +452,11 @@ def format_sandbox_error(
             "Ensure only allowed operations are used",
             "See tool description for allowed operations",
             f"Expression: {preview}",
+        ]
+    if variable_name != "config":
+        suggestions = [
+            f"Operate on the `{variable_name}` variable (in-place or reassign)",
+            *suggestions,
         ]
     return message, suggestions
 

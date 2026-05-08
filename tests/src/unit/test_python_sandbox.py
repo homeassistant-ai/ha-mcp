@@ -659,3 +659,23 @@ class TestFormatSandboxError:
         message, suggestions = format_sandbox_error(err, "x = 1")
         assert message.startswith("Expression validation failed:")
         assert any("syntax" in s.lower() for s in suggestions)
+
+    def test_default_variable_name_omits_target_hint(self):
+        """The default `config` callers don't get a redundant variable-name hint."""
+        err = PythonSandboxValidationError("Forbidden node type: Try")
+        _, suggestions = format_sandbox_error(err, "try: pass\nexcept: pass")
+        assert not any(
+            "Operate on the" in s and "variable" in s for s in suggestions
+        )
+
+    def test_non_default_variable_name_prepends_hint(self):
+        """A non-`config` caller (e.g. addons with `response`) gets a leading
+        'Operate on the `<name>` variable' suggestion so the agent knows what
+        to mutate."""
+        err = PythonSandboxExecutionError("KeyError: 'foo'")
+        _, suggestions = format_sandbox_error(
+            err, "response['foo']", variable_name="response"
+        )
+        assert suggestions[0] == (
+            "Operate on the `response` variable (in-place or reassign)"
+        )
