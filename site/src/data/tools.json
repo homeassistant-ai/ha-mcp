@@ -2477,7 +2477,7 @@
           "default": "configuration.yaml"
         },
         "backup": {
-          "type": "Annotated[bool | str, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to www/yaml_backups/.')]",
+          "type": "Annotated[bool | str, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to .ha_mcp_tools_backups/.')]",
           "default": true
         }
       },
