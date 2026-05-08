@@ -554,3 +554,23 @@ class TestMigrateLegacyBackupDir:
         # Symlink left in place; legacy dir not removed because non-empty.
         assert (legacy / "link.bak").is_symlink()
         assert legacy.exists()
+
+    def test_async_setup_entry_wires_migration_and_notification(self):
+        """Source-level guard: async_setup_entry must call the migration helper
+        and create a persistent notification referencing the GHSA. Brittle on
+        purpose — this is a security regression guard, not a behavioral test.
+        """
+        import inspect
+
+        from custom_components.ha_mcp_tools import async_setup_entry
+
+        src = inspect.getsource(async_setup_entry)
+        assert "_migrate_legacy_backup_dir" in src, (
+            "async_setup_entry must invoke the legacy-backup migration"
+        )
+        assert "persistent_notification.async_create" in src, (
+            "async_setup_entry must surface migration via persistent_notification"
+        )
+        assert "GHSA-g39v-cvjh-8fpf" in src, (
+            "persistent notification must reference the security advisory"
+        )

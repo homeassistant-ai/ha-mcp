@@ -740,7 +740,8 @@ def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
     try:
         legacy_dir.rmdir()
     except OSError as err:
-        if err.errno != errno.ENOTEMPTY:
+        # ENOTEMPTY on Linux/APFS; EEXIST on some pre-APFS macOS filesystems.
+        if err.errno not in (errno.ENOTEMPTY, errno.EEXIST):
             _LOGGER.warning(
                 "Could not remove legacy backup dir %s: [%s] %s",
                 legacy_dir,
