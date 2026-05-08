@@ -379,7 +379,7 @@ async def safe_progress(
     total: float | None = None,
     message: str | None = None,
 ) -> None:
-    """Best-effort wrapper around ``ctx.report_progress``.
+    """Report progress via ``ctx.report_progress`` with best-effort error handling.
 
     A transport hiccup on a progress notification must never convert a
     successful tool result into a ``ToolError``. Transport errors are logged
@@ -392,21 +392,26 @@ async def safe_progress(
     try:
         await ctx.report_progress(progress=progress, total=total, message=message)
     except (TypeError, AttributeError) as e:
-        logger.warning("ctx.report_progress signature error: %s", e)
+        logger.warning(
+            "ctx.report_progress signature error (%s): %s", type(e).__name__, e
+        )
     except Exception as e:
-        logger.debug("ctx.report_progress failed: %s", e)
+        logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
 async def safe_info(ctx: Context | None, message: str) -> None:
-    """Best-effort wrapper around ``ctx.info`` — same rationale as ``safe_progress``."""
+    """Emit an info message via ``ctx.info`` with best-effort error handling.
+
+    Shares the rationale and exception-handling contract of ``safe_progress``.
+    """
     if ctx is None:
         return
     try:
         await ctx.info(message)
     except (TypeError, AttributeError) as e:
-        logger.warning("ctx.info signature error: %s", e)
+        logger.warning("ctx.info signature error (%s): %s", type(e).__name__, e)
     except Exception as e:
-        logger.debug("ctx.info failed: %s", e)
+        logger.debug("ctx.info failed (%s): %s", type(e).__name__, e)
 
 
 def register_tool_methods(mcp: Any, instance: Any) -> None:

@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from fastmcp import Context
+from fastmcp.exceptions import ToolError
 
 from ..client.rest_client import HomeAssistantClient
 from ..config import get_global_settings
@@ -1438,6 +1439,8 @@ class SmartSearchTools:
 
             return response
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in deep_search: {e}")
             exception_to_structured_error(
