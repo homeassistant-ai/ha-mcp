@@ -426,6 +426,20 @@ class DeviceControlTools:
                 context={"operation_id": operation_id},
             ))
 
+        # Wait up to timeout_seconds for the operation to leave the pending state.
+        # The WebSocket listener mutates operation.status as state changes arrive,
+        # so polling memory is sufficient — no need to subscribe again.
+        if operation.status.value == "pending" and timeout_seconds > 0:
+            deadline = asyncio.get_event_loop().time() + timeout_seconds
+            while operation.status.value == "pending":
+                if asyncio.get_event_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.2)
+                refreshed = get_operation_from_memory(operation_id)
+                if refreshed is None:
+                    break  # cleaned up between polls
+                operation = refreshed
+
         # Check operation status
         if operation.status.value == "completed":
             return {
