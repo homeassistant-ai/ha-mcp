@@ -166,7 +166,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=True,
                 description=(
                     "Create a backup before editing. Defaults to True. "
-                    "Backups are saved to www/yaml_backups/."
+                    "Backups are saved to .ha_mcp_tools_backups/."
                 ),
             ),
         ] = True,

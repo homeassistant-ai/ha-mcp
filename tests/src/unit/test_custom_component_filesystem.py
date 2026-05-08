@@ -15,6 +15,8 @@ import pytest
 # Mock the Home Assistant imports before importing the module
 sys.modules['voluptuous'] = MagicMock()
 sys.modules['homeassistant'] = MagicMock()
+sys.modules['homeassistant.components'] = MagicMock()
+sys.modules['homeassistant.components.persistent_notification'] = MagicMock()
 sys.modules['homeassistant.config_entries'] = MagicMock()
 sys.modules['homeassistant.core'] = MagicMock()
 sys.modules['homeassistant.helpers'] = MagicMock()
@@ -28,6 +30,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _is_path_allowed_for_read,
     _list_files_sync,
     _mask_secrets_content,
+    _migrate_legacy_backup_dir,
     _read_file_sync,
     _write_file_sync,
 )
@@ -449,3 +452,65 @@ class TestDeleteFileSync:
         result = _delete_file_sync(tmp_path)
         assert result == {"_error": "not_a_file"}
         assert tmp_path.exists()
+
+
+class TestMigrateLegacyBackupDir:
+    """Test _migrate_legacy_backup_dir helper (GHSA-g39v-cvjh-8fpf)."""
+
+    def test_no_legacy_dir_is_noop(self, tmp_path):
+        """Returns 0 and creates nothing when legacy dir is absent."""
+        moved = _migrate_legacy_backup_dir(tmp_path)
+        assert moved == 0
+        assert not (tmp_path / ".ha_mcp_tools_backups").exists()
+        assert not (tmp_path / "www" / "yaml_backups").exists()
+
+    def test_moves_files_and_removes_legacy_dir(self, tmp_path):
+        """Moves .bak files out of www/yaml_backups/ and removes the empty dir."""
+        legacy = tmp_path / "www" / "yaml_backups"
+        legacy.mkdir(parents=True)
+        (legacy / "configuration.yaml.20260101_120000.bak").write_text("a: 1")
+        (legacy / "packages_test.yaml.20260102_120000.bak").write_text("b: 2")
+
+        moved = _migrate_legacy_backup_dir(tmp_path)
+
+        assert moved == 2
+        new_dir = tmp_path / ".ha_mcp_tools_backups"
+        assert new_dir.is_dir()
+        moved_names = sorted(p.name for p in new_dir.iterdir())
+        assert moved_names == [
+            "configuration.yaml.20260101_120000.bak",
+            "packages_test.yaml.20260102_120000.bak",
+        ]
+        # Legacy dir should be removed once empty.
+        assert not legacy.exists()
+
+    def test_does_not_clobber_existing_backups(self, tmp_path):
+        """Preserves an existing same-named file in the new dir."""
+        legacy = tmp_path / "www" / "yaml_backups"
+        legacy.mkdir(parents=True)
+        new_dir = tmp_path / ".ha_mcp_tools_backups"
+        new_dir.mkdir()
+
+        (legacy / "x.bak").write_text("from legacy")
+        (new_dir / "x.bak").write_text("already here")
+
+        moved = _migrate_legacy_backup_dir(tmp_path)
+
+        assert moved == 1
+        assert (new_dir / "x.bak").read_text() == "already here"
+        # Legacy file is renamed during migration so it isn't lost.
+        assert (new_dir / "x.legacy.bak").read_text() == "from legacy"
+
+    def test_leaves_legacy_dir_when_other_files_present(self, tmp_path):
+        """Doesn't remove legacy dir if user dropped non-.bak files in it."""
+        legacy = tmp_path / "www" / "yaml_backups"
+        legacy.mkdir(parents=True)
+        (legacy / "stray_subdir").mkdir()
+        (legacy / "config.bak").write_text("data")
+
+        moved = _migrate_legacy_backup_dir(tmp_path)
+
+        assert moved == 1
+        # Subdirectory left in place; rmdir() fails silently.
+        assert legacy.exists()
+        assert (legacy / "stray_subdir").is_dir()

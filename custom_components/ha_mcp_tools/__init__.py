@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -399,9 +400,12 @@ def _build_edit_yaml_config_handler(hass):
                 data = {}
                 raw_content = ""
 
-            # Create backup before editing (from already-read content, not disk)
+            # Create backup before editing (from already-read content, not disk).
+            # Backups go under .ha_mcp_tools_backups/ at the config root — NOT
+            # under www/, which Home Assistant serves unauthenticated at /local/
+            # (GHSA-g39v-cvjh-8fpf).
             if do_backup and raw_content:
-                backup_dir = config_dir / "www" / "yaml_backups"
+                backup_dir = config_dir / ".ha_mcp_tools_backups"
                 await hass.async_add_executor_job(
                     lambda: backup_dir.mkdir(parents=True, exist_ok=True)
                 )
@@ -677,9 +681,70 @@ def _parse_and_validate_yaml_path(
     return "lovelace_dashboard", parts, None
 
 
+def _migrate_legacy_backup_dir(config_dir: Path) -> int:
+    """Move pre-fix backups out of www/ (GHSA-g39v-cvjh-8fpf).
+
+    Pre-fix versions wrote backups under www/yaml_backups/, which HA serves
+    unauthenticated at /local/. Move any leftover .bak files into the new
+    .ha_mcp_tools_backups/ directory and remove the old directory if empty.
+    Returns the number of files moved.
+    """
+    legacy_dir = config_dir / "www" / "yaml_backups"
+    if not legacy_dir.is_dir():
+        return 0
+
+    new_dir = config_dir / ".ha_mcp_tools_backups"
+    new_dir.mkdir(parents=True, exist_ok=True)
+
+    moved = 0
+    for src in legacy_dir.iterdir():
+        if not src.is_file():
+            continue
+        dest = new_dir / src.name
+        # Avoid clobbering if a same-named file already exists in the new dir.
+        if dest.exists():
+            dest = new_dir / f"{src.stem}.legacy{src.suffix}"
+        src.rename(dest)
+        moved += 1
+
+    # Remove the legacy dir if we emptied it (leave alone if user dropped
+    # other files in there).
+    try:
+        legacy_dir.rmdir()
+    except OSError:
+        pass
+
+    return moved
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA MCP Tools from a config entry."""
     config_dir = Path(hass.config.config_dir)
+
+    # One-time migration of pre-fix YAML backups out of the publicly-served
+    # www/ directory (GHSA-g39v-cvjh-8fpf).
+    moved = await hass.async_add_executor_job(
+        _migrate_legacy_backup_dir, config_dir
+    )
+    if moved:
+        message = (
+            f"Moved {moved} YAML backup file(s) from `www/yaml_backups/` to "
+            "`.ha_mcp_tools_backups/`. The previous location was reachable "
+            "without authentication via `/local/yaml_backups/` "
+            "([GHSA-g39v-cvjh-8fpf](https://github.com/homeassistant-ai/ha-mcp/security/advisories/GHSA-g39v-cvjh-8fpf)). "
+            "**Rotate any secrets** that appeared in those YAML files "
+            "(MQTT/REST credentials, webhook IDs, `shell_command` "
+            "definitions, geofence coordinates). If you version-control "
+            "your Home Assistant config, also add `.ha_mcp_tools_backups/` "
+            "to your `.gitignore` so future backups are not committed."
+        )
+        _LOGGER.error(message)
+        persistent_notification.async_create(
+            hass,
+            message,
+            title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
+            notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
+        )
 
     async def handle_list_files(call: ServiceCall) -> ServiceResponse:
         """Handle the list_files service call."""
