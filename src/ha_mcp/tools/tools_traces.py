@@ -63,27 +63,12 @@ class TraceTools:
         limit: Annotated[
             int,
             Field(
-                description="Maximum number of traces to return when listing (default: 10, max: 50). Combined with `offset` and `order` to page through stored traces.",
+                description="Maximum number of traces to return when listing (default: 10, max: 50).",
                 default=10,
                 ge=1,
                 le=50,
             ),
         ] = 10,
-        offset: Annotated[
-            int,
-            Field(
-                description="Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.",
-                default=0,
-                ge=0,
-            ),
-        ] = 0,
-        order: Annotated[
-            Literal["newest", "oldest"],
-            Field(
-                description="Order traces are returned in. 'newest' (default) returns most-recent first; 'oldest' returns chronological-first.",
-                default="newest",
-            ),
-        ] = "newest",
         deduplicate: Annotated[
             bool,
             Field(
@@ -109,6 +94,21 @@ class TraceTools:
                 default=None,
             ),
         ] = None,
+        offset: Annotated[
+            int,
+            Field(
+                description="Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.",
+                default=0,
+                ge=0,
+            ),
+        ] = 0,
+        order: Annotated[
+            Literal["newest", "oldest"],
+            Field(
+                description="Order traces are returned in. 'newest' (default) returns most-recent first; 'oldest' returns chronological-first.",
+                default="newest",
+            ),
+        ] = "newest",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
@@ -507,7 +507,7 @@ def _format_trace_list(
     """
     # HA's trace/list returns traces oldest-first. Pick a window from the end
     # for newest-first, or from the start for oldest-first, with offset for
-    # pagination through stored traces beyond `limit` (issue #1177).
+    # pagination through stored traces beyond `limit`.
     if order == "newest":
         end = len(traces) - offset
         start = max(end - limit, 0)

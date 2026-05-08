@@ -83,7 +83,7 @@ class TestFormatTraceList:
 
         HA's trace/list returns traces in chronological order (oldest first).
         Slicing [:limit] would return the oldest N, leaving recent traces
-        unreachable when stored_traces > limit. See issue #1177.
+        unreachable when stored_traces > limit.
         """
         traces = [
             {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
@@ -169,6 +169,19 @@ class TestFormatTraceList:
 
         result = _format_trace_list("automation.test", traces, 10)
 
+        assert result["has_more"] is False
+
+    def test_offset_equal_to_total_returns_empty(self):
+        """offset == total returns no traces and has_more=False (boundary)."""
+        traces = [
+            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            for i in range(3)
+        ]
+
+        result = _format_trace_list("automation.test", traces, 10, offset=3)
+
+        assert result["traces"] == []
+        assert result["trace_count"] == 0
         assert result["has_more"] is False
 
     def test_offset_beyond_total_returns_empty(self):
