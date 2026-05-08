@@ -47,6 +47,44 @@ class ConfigSceneTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    async def _resolve_scene_entity_id(self, scene_id: str) -> str:
+        """Resolve a scene's actual entity_id via the entity registry.
+
+        Unlike scripts (where ``entity_id == 'script.<storage_key>'``), HA
+        derives a scene's entity_id from the ``name`` field. So a scene
+        upserted with ``scene_id='night_light_led_desk_strip'`` and
+        ``name='LED Desk Strip Night Light'`` lands at entity_id
+        ``scene.led_desk_strip_night_light`` while the storage key (and the
+        unique_id) stays ``night_light_led_desk_strip``.
+
+        Naively assuming ``f"scene.{scene_id}"`` for the wait/category
+        callsites surfaces a false-negative warning ("not yet queryable")
+        whenever a name is supplied. This helper finds the actual entity_id
+        by matching the scene_id to ``unique_id`` in the entity registry,
+        and falls back to the naive form if the registry lookup is
+        inconclusive — keeping the previous behaviour intact for the case
+        where the slugs happen to match.
+        """
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+            if result.get("success") is not False:
+                for entry in result.get("result") or []:
+                    entity_id = entry.get("entity_id") or ""
+                    if (
+                        entry.get("unique_id") == scene_id
+                        and entity_id.startswith("scene.")
+                    ):
+                        return entity_id
+        except Exception:
+            logger.debug(
+                f"Entity registry resolve failed for scene_id={scene_id}, "
+                f"falling back to scene.{scene_id}",
+                exc_info=True,
+            )
+        return f"scene.{scene_id}"
+
     @tool(
         name="ha_config_get_scene",
         tags={"Scenes"},
@@ -83,7 +121,10 @@ class ConfigSceneTools:
             actual_config = config_result.get("config", config_result)
             config_hash_value = compute_config_hash(actual_config)
 
-            entity_id = f"scene.{scene_id}"
+            # Resolve real entity_id via registry — see _resolve_scene_entity_id
+            # for the reasoning. Category fetch on the wrong entity_id is a
+            # silent no-op, masking real category assignments.
+            entity_id = await self._resolve_scene_entity_id(scene_id)
             cat_id = await fetch_entity_category(self._client, entity_id, "scene")
             if cat_id:
                 config_result["category"] = cat_id
@@ -452,9 +493,14 @@ class ConfigSceneTools:
 
             result = await self._client.upsert_scene_config(config_dict, scene_id)
 
+            # Resolve actual entity_id via registry — HA derives scene
+            # entity_ids from the 'name' slug, not the scene_id storage key,
+            # so f"scene.{scene_id}" is wrong whenever a name is supplied.
+            # Verified live during BAT validation of this PR.
+            entity_id = await self._resolve_scene_entity_id(scene_id)
+
             # Wait for scene to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
-            entity_id = f"scene.{scene_id}"
             if wait_bool:
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
@@ -534,10 +580,15 @@ class ConfigSceneTools:
         (via ``scene.turn_on``) may cause those to fail.
         """
         try:
+            # Resolve actual entity_id BEFORE delete — once the registry
+            # entry is gone, the unique_id lookup can no longer find it.
+            # Falls back to f"scene.{scene_id}" if the registry has no
+            # matching unique_id (e.g. scene_id-as-entity-id slug case).
+            entity_id = await self._resolve_scene_entity_id(scene_id)
+
             result = await self._client.delete_scene_config(scene_id)
 
             wait_bool = coerce_bool_param(wait, "wait", default=True)
-            entity_id = f"scene.{scene_id}"
             if wait_bool:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)

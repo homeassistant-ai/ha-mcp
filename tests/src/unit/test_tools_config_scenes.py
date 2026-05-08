@@ -39,6 +39,11 @@ def mock_client():
     # validate_config_references reaches for these — keep them empty-but-callable.
     client.get_services = AsyncMock(return_value=[])
     client.get_states = AsyncMock(return_value=[])
+    # Default registry list returns empty — _resolve_scene_entity_id falls
+    # back to f"scene.{scene_id}". Individual tests override as needed.
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": []}
+    )
     return client
 
 
@@ -229,3 +234,91 @@ class TestScenePythonTransform:
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
         assert "entities" in error_data["error"]["message"].lower()
+
+
+class TestResolveSceneEntityId:
+    """Coverage for _resolve_scene_entity_id — the BAT-discovered fix.
+
+    HA derives a scene's entity_id from its ``name`` slug, not from the
+    ``scene_id`` storage key, so a naive ``f"scene.{scene_id}"`` returns
+    a non-existent entity_id whenever the user supplies a name. The
+    resolver must look up the entity registry by ``unique_id`` and
+    return the actual entity_id.
+    """
+
+    async def test_resolver_returns_actual_entity_id_when_name_differs(
+        self, tools, mock_client
+    ):
+        """Registry has a scene with unique_id matching scene_id but a
+        different entity_id slug — resolver returns the registry's slug."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.led_desk_strip_night_light",
+                        "unique_id": "night_light_led_desk_strip",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        result = await tools._resolve_scene_entity_id("night_light_led_desk_strip")
+
+        assert result == "scene.led_desk_strip_night_light"
+
+    async def test_resolver_falls_back_to_naive_when_registry_misses(
+        self, tools, mock_client
+    ):
+        """If no registry entry matches the scene_id, fall back to the
+        naive ``scene.<scene_id>`` form rather than raising."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.unrelated",
+                        "unique_id": "unrelated",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
+
+    async def test_resolver_ignores_non_scene_entity_with_matching_unique_id(
+        self, tools, mock_client
+    ):
+        """A registry entry from a different domain that happens to share
+        the same unique_id must NOT be returned — only entries under the
+        ``scene.*`` domain."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "automation.collision",
+                        "unique_id": "test_scene",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
+
+    async def test_resolver_falls_back_on_websocket_failure(self, tools, mock_client):
+        """WebSocket exception → naive fallback, not propagated."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WS unavailable")
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
