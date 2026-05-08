@@ -30,6 +30,7 @@ BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
 BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
+
 # Time budgets for fallback individual fetching (in seconds).
 # Configurable via env vars for instances with many automations/scripts.
 def _env_float(key: str, default: float) -> float:
@@ -41,6 +42,7 @@ def _env_float(key: str, default: float) -> float:
     except (ValueError, TypeError):
         logger.warning(f"Invalid value for {key}={raw!r}, using default {default}")
         return default
+
 
 AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
 SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
@@ -756,7 +758,10 @@ class SmartSearchTools:
                 "system_summary": system_summary,
                 "domain_stats": formatted_domain_stats,
                 "area_analysis": (
-                    {area: {"count": info["count"]} for area, info in area_stats.items()}
+                    {
+                        area: {"count": info["count"]}
+                        for area, info in area_stats.items()
+                    }
                     if detail_level == "minimal"
                     else area_stats
                 ),
@@ -943,7 +948,9 @@ class SmartSearchTools:
                     fetched_count = 0
                     failed_count = 0
 
-                    async def _fetch_automation_config(uid: str) -> tuple[str, dict[str, Any] | None]:
+                    async def _fetch_automation_config(
+                        uid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
                         try:
                             config = await asyncio.wait_for(
                                 self.client._request(
@@ -1097,7 +1104,9 @@ class SmartSearchTools:
                     fetched_count = 0
                     failed_count = 0
 
-                    async def _fetch_script_config(sid: str) -> tuple[str, dict[str, Any] | None]:
+                    async def _fetch_script_config(
+                        sid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
                         try:
                             config_resp = await asyncio.wait_for(
                                 self.client.get_script_config(sid),
@@ -1171,8 +1180,10 @@ class SmartSearchTools:
 
             # ================================================================
             # SCENE SEARCH (same 3-tier strategy: REST bulk -> WS bulk -> individual)
-            # Mirrors the script branch — scenes have no listing primitive, so
-            # entities are enumerated from get_states() and configs fetched per id.
+            # Scenes have no listing primitive, so entities are enumerated
+            # from get_states() and configs fetched per id. The script branch
+            # uses the same shape today; treat them as parallel implementations
+            # that can diverge if either domain's listing primitive lands later.
             # ================================================================
             if "scene" in search_types:
                 scene_entities = [
@@ -1273,15 +1284,13 @@ class SmartSearchTools:
                                 ):
                                     slug = ent_id.removeprefix("scene.")
                                     if slug and slug != uid:
-                                        all_scene_configs[slug] = (
-                                            all_scene_configs[uid]
-                                        )
+                                        all_scene_configs[slug] = all_scene_configs[uid]
                     except Exception as e:
-                        logger.debug(
-                            f"Scene entity-registry augmentation failed: {e}"
-                        )
+                        logger.debug(f"Scene entity-registry augmentation failed: {e}")
 
-                # Attempt C: Parallel individual fetch with budget (see #879)
+                # Attempt C: parallel per-id fetch with a wall-clock budget so a
+                # few slow scenes don't tank the whole search; remaining ids
+                # bail out via SCENE_CONFIG_TIME_BUDGET below.
                 if not scene_bulk_fetched:
                     budget_start = time.perf_counter()
                     sids_to_fetch = [
@@ -1293,7 +1302,9 @@ class SmartSearchTools:
                     fetched_count = 0
                     failed_count = 0
 
-                    async def _fetch_scene_config(sid: str) -> tuple[str, dict[str, Any] | None]:
+                    async def _fetch_scene_config(
+                        sid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
                         try:
                             config_resp = await asyncio.wait_for(
                                 self.client.get_scene_config(sid),

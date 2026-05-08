@@ -14,6 +14,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -64,7 +68,13 @@ class ConfigSceneTools:
         and falls back to the naive form if the registry lookup is
         inconclusive — keeping the previous behaviour intact for the case
         where the slugs happen to match.
+
+        Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
+        ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
+        stripped so callers don't accidentally produce ``scene.scene.movie_night``
+        on fallback. Mirrors ``rest_client._resolve_scene_id`` ergonomics.
         """
+        scene_id = scene_id.removeprefix("scene.")
         try:
             result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
@@ -72,13 +82,15 @@ class ConfigSceneTools:
             if result.get("success") is not False:
                 for entry in result.get("result") or []:
                     entity_id = entry.get("entity_id") or ""
-                    if (
-                        entry.get("unique_id") == scene_id
-                        and entity_id.startswith("scene.")
+                    if entry.get("unique_id") == scene_id and entity_id.startswith(
+                        "scene."
                     ):
                         return entity_id
-        except Exception:
-            logger.debug(
+        except (TimeoutError, HomeAssistantAPIError, HomeAssistantConnectionError):
+            # Programming bugs (AttributeError, KeyError, …) propagate; only
+            # genuine HA-API failures fall through to the naive form so the
+            # caller still gets a best-effort entity_id rather than a 500.
+            logger.warning(
                 f"Entity registry resolve failed for scene_id={scene_id}, "
                 f"falling back to scene.{scene_id}",
                 exc_info=True,
@@ -107,12 +119,13 @@ class ConfigSceneTools:
         Returns the complete configuration for a scene, including the ``entities``
         dict and other settings (``name``, ``icon``, ``id``).
 
-        The returned ``config_hash`` is stable across consecutive reads of an
-        unchanged config — ``compute_config_hash`` documents the underlying contract.
-
         EXAMPLES:
         - Get scene: ha_config_get_scene("movie_night")
         - Get scene: ha_config_get_scene("bedroom_dim")
+
+        RELATED TOOLS:
+        - ha_config_set_scene — pass the returned ``config_hash`` for
+          ``python_transform`` updates.
 
         For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
         """
@@ -177,10 +190,14 @@ class ConfigSceneTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Scene modified since last read (conflict)",
                     suggestions=[
-                        "Call ha_config_get_scene() again",
-                        "Use the fresh config_hash from that response",
+                        "Retry with the fresh config_hash returned in this error's context",
+                        "Or call ha_config_get_scene() again to fetch a new hash",
                     ],
-                    context={"action": action, "scene_id": scene_id},
+                    context={
+                        "action": action,
+                        "scene_id": scene_id,
+                        "current_config_hash": current_hash,
+                    },
                 )
             )
         return actual_config
@@ -199,18 +216,28 @@ class ConfigSceneTools:
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_JSON,
-                f"Invalid config parameter: {e}",
-                context={"scene_id": scene_id, "provided_config_type": type(config).__name__},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    f"Invalid config parameter: {e}",
+                    context={
+                        "scene_id": scene_id,
+                        "provided_config_type": type(config).__name__,
+                    },
+                )
+            )
 
         if parsed_config is None or not isinstance(parsed_config, dict):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Config parameter must be a JSON object",
-                context={"scene_id": scene_id, "provided_type": type(parsed_config).__name__},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Config parameter must be a JSON object",
+                    context={
+                        "scene_id": scene_id,
+                        "provided_type": type(parsed_config).__name__,
+                    },
+                )
+            )
 
         config_dict = cast(dict[str, Any], parsed_config)
 
@@ -221,25 +248,29 @@ class ConfigSceneTools:
 
         # Required field check. ``entities`` must be a dict keyed by entity_id.
         if "entities" not in config_dict:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "config must include an 'entities' field (a dict keyed by entity_id)",
-                context={"scene_id": scene_id, "required_fields": ["entities"]},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "config must include an 'entities' field (a dict keyed by entity_id)",
+                    context={"scene_id": scene_id, "required_fields": ["entities"]},
+                )
+            )
 
         if not isinstance(config_dict["entities"], dict):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Scene 'entities' must be a dict keyed by entity_id, not a list",
-                suggestions=[
-                    "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
-                    "Automations use a list of actions; scenes do not",
-                ],
-                context={
-                    "scene_id": scene_id,
-                    "provided_type": type(config_dict["entities"]).__name__,
-                },
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Scene 'entities' must be a dict keyed by entity_id, not a list",
+                    suggestions=[
+                        "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
+                        "Automations use a list of actions; scenes do not",
+                    ],
+                    context={
+                        "scene_id": scene_id,
+                        "provided_type": type(config_dict["entities"]).__name__,
+                    },
+                )
+            )
 
         return config_dict, effective_category
 
@@ -319,51 +350,37 @@ class ConfigSceneTools:
         """
         Create or update a Home Assistant scene.
 
-        Supports two modes: full config replacement OR Python transformation.
+        Supports two modes: full config replacement (``config``) or
+        Python transformation of an existing scene (``python_transform``).
+        See the field descriptions for ``python_transform`` examples and
+        the ``config`` shape contract.
 
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits to existing scenes. Surgical updates.
-        - config: Use for creating new scenes or full replacements.
+        WHEN TO USE:
+        - ``python_transform``: surgical edits to an existing scene
+          (add/remove/update a single entity entry). Requires ``config_hash``
+          from ha_config_get_scene() for optimistic locking.
+        - ``config``: creating a new scene, or wholesale replacement.
 
-        IMPORTANT: python_transform requires 'config_hash' from ha_config_get_scene().
+        WHEN NOT TO USE:
+        - To activate a scene at runtime, use ha_call_service(domain="scene",
+          service="turn_on", target=...) — this tool only manages scene
+          *configuration*, not the runtime turn-on/off side.
+        - To list or look up existing scenes, use
+          ha_search_entities(domain_filter="scene") or ha_deep_search.
 
         SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
-        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a list.
-        Automations use a list of actions; scenes capture a snapshot of states
-        as a dict.
+        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
+        list. Automations use a list of actions; scenes capture a snapshot
+        of states as a dict.
 
-        PYTHON TRANSFORM EXAMPLES:
-        - Add an entity: python_transform="config['entities']['light.bed'] = {'state': 'on'}"
-        - Adjust brightness: python_transform="config['entities']['light.kitchen']['brightness'] = 50"
-        - Remove entity: python_transform="del config['entities']['light.kitchen']"
+        EXAMPLE:
 
-        EXAMPLES:
-
-        Create a basic scene:
         ha_config_set_scene(scene_id="movie_night", config={
             "name": "Movie Night",
             "entities": {
                 "light.living_room": {"state": "on", "brightness": 50},
-                "light.tv_backlight": {"state": "on", "rgb_color": [120, 0, 200]}
             },
-            "icon": "mdi:movie"
-        })
-
-        Create a wake-up scene:
-        ha_config_set_scene(scene_id="wake_up", config={
-            "name": "Wake Up",
-            "entities": {
-                "light.bedroom": {"state": "on", "brightness": 255, "color_temp": 250},
-                "cover.bedroom_blinds": {"current_position": 100}
-            }
-        })
-
-        Update an existing scene (full replacement):
-        ha_config_set_scene(scene_id="movie_night", config={
-            "name": "Movie Night (Cool)",
-            "entities": {
-                "light.living_room": {"state": "on", "brightness": 30}
-            }
+            "icon": "mdi:movie",
         })
 
         For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
@@ -395,7 +412,10 @@ class ConfigSceneTools:
                                 "Call ha_config_get_scene() first",
                                 "Use the config_hash from that response",
                             ],
-                            context={"action": "python_transform", "scene_id": scene_id},
+                            context={
+                                "action": "python_transform",
+                                "scene_id": scene_id,
+                            },
                         )
                     )
 
@@ -416,7 +436,10 @@ class ConfigSceneTools:
                                 "See tool description for allowed operations",
                                 f"Expression: {python_transform[:100]}{'...' if len(python_transform) > 100 else ''}",
                             ],
-                            context={"action": "python_transform", "scene_id": scene_id},
+                            context={
+                                "action": "python_transform",
+                                "scene_id": scene_id,
+                            },
                         )
                     )
 
@@ -430,7 +453,10 @@ class ConfigSceneTools:
                                 "The transform may have removed the required field",
                                 "Ensure the config still has an 'entities' key",
                             ],
-                            context={"action": "python_transform", "scene_id": scene_id},
+                            context={
+                                "action": "python_transform",
+                                "scene_id": scene_id,
+                            },
                         )
                     )
                 if not isinstance(transformed_config["entities"], dict):
@@ -441,7 +467,9 @@ class ConfigSceneTools:
                             context={
                                 "action": "python_transform",
                                 "scene_id": scene_id,
-                                "resulting_type": type(transformed_config["entities"]).__name__,
+                                "resulting_type": type(
+                                    transformed_config["entities"]
+                                ).__name__,
                             },
                         )
                     )
@@ -469,7 +497,11 @@ class ConfigSceneTools:
                                 f"Scene updated but {entity_id} not yet queryable. "
                                 "It may take a moment to become available."
                             )
-                    except Exception as e:
+                    except (
+                        TimeoutError,
+                        HomeAssistantAPIError,
+                        HomeAssistantConnectionError,
+                    ) as e:
                         result["warning"] = (
                             f"Scene updated but verification failed: {e}"
                         )
@@ -508,7 +540,9 @@ class ConfigSceneTools:
                 )
 
             config_dict, effective_category = self._validate_scene_config(
-                config, scene_id, category,
+                config,
+                scene_id,
+                category,
             )
 
             # Optional hash check for full config updates
@@ -526,26 +560,36 @@ class ConfigSceneTools:
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
             # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-            # Verified live during BAT validation of this PR.
             entity_id = await self._resolve_scene_entity_id(scene_id)
 
             # Wait for scene to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             if wait_bool:
                 try:
-                    registered = await wait_for_entity_registered(self._client, entity_id)
+                    registered = await wait_for_entity_registered(
+                        self._client, entity_id
+                    )
                     if not registered:
                         result["warning"] = (
                             f"Scene created but {entity_id} not yet queryable. "
                             "It may take a moment to become available."
                         )
-                except Exception as e:
+                except (
+                    TimeoutError,
+                    HomeAssistantAPIError,
+                    HomeAssistantConnectionError,
+                ) as e:
                     result["warning"] = f"Scene created but verification failed: {e}"
 
             # Apply category to entity registry if provided.
             if effective_category and entity_id:
                 await apply_entity_category(
-                    self._client, entity_id, effective_category, "scene", result, "scene"
+                    self._client,
+                    entity_id,
+                    effective_category,
+                    "scene",
+                    result,
+                    "scene",
                 )
 
             merge_validation_meta(result, validation_meta)
@@ -626,8 +670,14 @@ class ConfigSceneTools:
                         result["warning"] = (
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                except (
+                    TimeoutError,
+                    HomeAssistantAPIError,
+                    HomeAssistantConnectionError,
+                ) as e:
+                    result["warning"] = (
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
             return {"success": True, "action": "delete", **result}
         except ToolError:

@@ -11,6 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 
@@ -375,12 +379,65 @@ class TestResolveSceneEntityId:
 
         assert result == "scene.test_scene"
 
-    async def test_resolver_falls_back_on_websocket_failure(self, tools, mock_client):
-        """WebSocket exception → naive fallback, not propagated."""
+    async def test_resolver_falls_back_on_ha_api_failure(self, tools, mock_client):
+        """HA-API connection exception → naive fallback, not propagated.
+
+        The resolver narrows its `except` to HA-API failure types so the
+        caller still gets a best-effort entity_id when the registry
+        lookup itself is the problem. Programming bugs (AttributeError,
+        KeyError, …) are intentionally NOT caught — see the companion
+        ``test_resolver_does_not_swallow_programming_bugs`` test.
+        """
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WS unavailable")
+            side_effect=HomeAssistantConnectionError("WS unavailable")
         )
 
         result = await tools._resolve_scene_entity_id("test_scene")
 
         assert result == "scene.test_scene"
+
+    async def test_resolver_falls_back_on_api_error(self, tools, mock_client):
+        """HomeAssistantAPIError also routes through the narrow fallback path."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantAPIError("registry list failed")
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
+
+    async def test_resolver_falls_back_on_timeout(self, tools, mock_client):
+        """asyncio TimeoutError (== built-in TimeoutError on 3.11+) routes
+        through the narrow fallback path."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=TimeoutError("registry list timed out")
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
+
+    async def test_resolver_does_not_swallow_programming_bugs(self, tools, mock_client):
+        """Generic Exception (e.g. an AttributeError from a misnamed
+        registry-result key) must propagate — the narrow catch was
+        introduced specifically so cosmetic 'not yet queryable' warnings
+        don't mask real bugs further up the call chain."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=AttributeError("dict has no attribute 'foo'")
+        )
+
+        with pytest.raises(AttributeError, match="no attribute 'foo'"):
+            await tools._resolve_scene_entity_id("test_scene")
+
+    async def test_resolver_strips_scene_prefix(self, tools, mock_client):
+        """Passing a fully-qualified ``scene.foo`` must not yield
+        ``scene.scene.foo`` on fallback. Mirrors
+        ``rest_client._resolve_scene_id`` ergonomics."""
+        # Force fallback by making registry list yield no match.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        result = await tools._resolve_scene_entity_id("scene.movie_night")
+
+        assert result == "scene.movie_night"
