@@ -8,6 +8,7 @@ and async operation verification through WebSocket monitoring.
 import asyncio
 import json
 import logging
+import time
 from typing import Any, ClassVar
 
 from fastmcp import Context
@@ -399,18 +400,13 @@ class DeviceControlTools:
     async def get_device_operation_status(
         self, operation_id: str, timeout_seconds: int = 10
     ) -> dict[str, Any]:
-        """
-        Check status of device operation with async verification.
+        """Check status of a device operation, waiting up to ``timeout_seconds`` for completion.
 
-        This tool checks the status of operations initiated by control_device_smart.
-        Results come from real-time WebSocket monitoring of Home Assistant state changes.
-
-        Args:
-            operation_id: Operation ID returned by control_device_smart
-            timeout_seconds: Maximum time to wait for completion
-
-        Returns:
-            Operation status with completion details or timeout info
+        Polls the in-memory operation registry (mutated by the WebSocket
+        listener as state changes arrive) every 0.2s while the operation is
+        pending, up to ``timeout_seconds``. Returns the final structured status
+        — completed/failed/timeout/pending — produced by
+        ``control_device_smart``.
         """
         operation = get_operation_from_memory(operation_id)
 
@@ -428,16 +424,26 @@ class DeviceControlTools:
 
         # Wait up to timeout_seconds for the operation to leave the pending state.
         # The WebSocket listener mutates operation.status as state changes arrive,
-        # so polling memory is sufficient — no need to subscribe again.
+        # so polling memory is sufficient — no need to subscribe again. Uses
+        # time.monotonic() so the deadline can be cleanly patched in tests.
         if operation.status.value == "pending" and timeout_seconds > 0:
-            deadline = asyncio.get_event_loop().time() + timeout_seconds
+            deadline = time.monotonic() + timeout_seconds
             while operation.status.value == "pending":
-                if asyncio.get_event_loop().time() >= deadline:
+                if time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(0.2)
                 refreshed = get_operation_from_memory(operation_id)
                 if refreshed is None:
-                    break  # cleaned up between polls
+                    raise_tool_error(create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        "Operation cleaned up during status poll",
+                        suggestions=[
+                            "Operation may have completed and been purged before "
+                            "verification finished",
+                            "Use control_device_smart to start new operation",
+                        ],
+                        context={"operation_id": operation_id},
+                    ))
                 operation = refreshed
 
         # Check operation status

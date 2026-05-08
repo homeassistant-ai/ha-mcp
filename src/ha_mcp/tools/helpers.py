@@ -384,8 +384,9 @@ async def safe_progress(
     A transport hiccup on a progress notification must never convert a
     successful tool result into a ``ToolError``. Transport errors are logged
     at debug; ``TypeError``/``AttributeError`` are escalated to ``warning``
-    because they signal a signature mismatch (call-site bug), not a flaky
-    client. ``ctx is None`` short-circuits without I/O.
+    because they signal a signature/interface mismatch (call-site bug or
+    Context object missing the expected method), not a flaky client.
+    ``ctx is None`` short-circuits without I/O.
     """
     if ctx is None:
         return
