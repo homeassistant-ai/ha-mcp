@@ -20,6 +20,7 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
+    fetch_helper_data_schema,
     get_user_step_field_names,
     update_flow_helper,
 )
@@ -88,6 +89,259 @@ _TYPE_TYPED_PARAMS: dict[str, frozenset[str]] = {
 _ALL_TYPED_PARAMS: frozenset[str] = frozenset().union(*_TYPE_TYPED_PARAMS.values())
 
 
+# Issue #1149: per-simple-type field schemas, structured to mirror the
+# `data_schema` list-of-dicts shape that Home Assistant returns for flow
+# helpers. The same shape is consumed by:
+#
+#   - ha_get_helper_schema (for simple types it returns this list verbatim
+#     under `data_schema`, so callers can use one parser regardless of kind).
+#   - ha_config_set_helper validation errors (the relevant entry is attached
+#     to `context["data_schema"]` so the LLM sees field shape inline with
+#     the 4xx that just blocked it).
+#
+# Each field-spec dict carries:
+#   - `name`        : str — argument key on ha_config_set_helper.
+#   - `required`    : bool — True iff the tool itself rejects on missing
+#                     (matched against the create-branch raise sites).
+#   - `type`        : str — coarse type ("string", "number", "boolean",
+#                     "list[string]", "list[dict]", "object"). Where HA's
+#                     flow data_schema would carry `selector`, simple types
+#                     describe via this string instead — flow helpers don't
+#                     route through this dict so the divergence is contained.
+#   - `description` : str — short description focused on what the LLM needs
+#                     to send (NOT redundant with the @tool param description,
+#                     which a non-toolsearch caller already sees).
+#
+# Source of truth for `required`: the actual create-branch raises at the
+# bottom of `ha_config_set_helper` (line 1697 name-required, line 1726
+# input_select.options-required, line 1822 input_datetime.has_date|has_time,
+# line 1898 zone.latitude+longitude). HA-side defaults that the tool does
+# not enforce client-side stay `required: False`.
+SIMPLE_HELPER_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "input_button": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "icon", "required": False, "type": "string",
+         "description": "Material Design Icon (e.g. 'mdi:bell')."},
+    ],
+    "input_boolean": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "icon", "required": False, "type": "string",
+         "description": "Material Design Icon."},
+        {"name": "initial", "required": False, "type": "boolean",
+         "description": (
+             "Initial state. Accepts 'true'/'false'/'on'/'off'/'yes'/'no'/'1'/'0'."
+         )},
+    ],
+    "input_select": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "options", "required": True, "type": "list[string]",
+         "description": (
+             "Non-empty list of selectable options. Duplicates rejected."
+         )},
+        {"name": "icon", "required": False, "type": "string"},
+        {"name": "initial", "required": False, "type": "string",
+         "description": "Initial value — must be one of `options`."},
+    ],
+    "input_number": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "min_value", "required": False, "type": "number",
+         "description": (
+             "Minimum value. Also accepts shorthand `min`. HA defaults if "
+             "omitted but supplying both bounds is recommended."
+         )},
+        {"name": "max_value", "required": False, "type": "number",
+         "description": "Maximum value. Also accepts shorthand `max`."},
+        {"name": "step", "required": False, "type": "number",
+         "description": (
+             "Step/increment. Must be > 0 and ≤ (max-min). Default 1.0."
+         )},
+        {"name": "unit_of_measurement", "required": False, "type": "string",
+         "description": "Unit string (e.g. '°C'). Also accepts `unit`."},
+        {"name": "mode", "required": False, "type": "string",
+         "description": "'box' or 'slider'. Default 'slider'."},
+        {"name": "initial", "required": False, "type": "number"},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "input_text": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "min_value", "required": False, "type": "number",
+         "description": "Minimum length (0–255). Also accepts `min`."},
+        {"name": "max_value", "required": False, "type": "number",
+         "description": "Maximum length (0–255). Also accepts `max`."},
+        {"name": "mode", "required": False, "type": "string",
+         "description": "'text' or 'password'. Default 'text'."},
+        {"name": "initial", "required": False, "type": "string"},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "input_datetime": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "has_date", "required": False, "type": "boolean",
+         "description": (
+             "Whether the entity carries a date component. At least one of "
+             "`has_date` or `has_time` must be true (default: both)."
+         )},
+        {"name": "has_time", "required": False, "type": "boolean",
+         "description": (
+             "Whether the entity carries a time component. At least one of "
+             "`has_date` or `has_time` must be true."
+         )},
+        {"name": "initial", "required": False, "type": "string",
+         "description": "Initial value (datetime string)."},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "counter": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "initial", "required": False, "type": "number"},
+        {"name": "min_value", "required": False, "type": "number",
+         "description": "Minimum value. Also accepts `min`."},
+        {"name": "max_value", "required": False, "type": "number",
+         "description": "Maximum value. Also accepts `max`."},
+        {"name": "step", "required": False, "type": "number",
+         "description": "Increment. Must be > 0. Default 1."},
+        {"name": "restore", "required": False, "type": "boolean",
+         "description": "Restore state on restart. Default true."},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "timer": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "duration", "required": False, "type": "string",
+         "description": (
+             "Default duration as 'HH:MM:SS' or seconds. Default '00:00:00' "
+             "(timer must be started with explicit duration)."
+         )},
+        {"name": "restore", "required": False, "type": "boolean",
+         "description": "Restore state on restart. Default false."},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "schedule": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "monday", "required": False, "type": "list[dict]",
+         "description": (
+             "List of {'from': 'HH:MM', 'to': 'HH:MM'} time ranges. At least "
+             "one day across monday–sunday must contain a non-empty range."
+         )},
+        {"name": "tuesday", "required": False, "type": "list[dict]"},
+        {"name": "wednesday", "required": False, "type": "list[dict]"},
+        {"name": "thursday", "required": False, "type": "list[dict]"},
+        {"name": "friday", "required": False, "type": "list[dict]"},
+        {"name": "saturday", "required": False, "type": "list[dict]"},
+        {"name": "sunday", "required": False, "type": "list[dict]"},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "zone": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "latitude", "required": True, "type": "number",
+         "description": "Latitude in decimal degrees."},
+        {"name": "longitude", "required": True, "type": "number",
+         "description": "Longitude in decimal degrees."},
+        {"name": "radius", "required": False, "type": "number",
+         "description": "Radius in meters. Default 100."},
+        {"name": "passive", "required": False, "type": "boolean",
+         "description": "Whether the zone is passive. Default false."},
+        {"name": "icon", "required": False, "type": "string"},
+    ],
+    "person": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name."},
+        {"name": "user_id", "required": False, "type": "string",
+         "description": "HA user account to link to this person."},
+        {"name": "device_trackers", "required": False, "type": "list[string]",
+         "description": (
+             "Entity IDs of device_tracker entities tracking this person."
+         )},
+        {"name": "picture", "required": False, "type": "string",
+         "description": "URL or `/local/...` path to the picture."},
+    ],
+    "tag": [
+        {"name": "name", "required": True, "type": "string",
+         "description": "Display name (stored on the entity registry)."},
+        {"name": "tag_id", "required": False, "type": "string",
+         "description": (
+             "Stable tag identifier. Auto-generated by the tool if omitted "
+             "(HA itself rejects tag/create without one)."
+         )},
+        {"name": "description", "required": False, "type": "string"},
+    ],
+}
+
+# Dev-time invariant: every type listed in SIMPLE_HELPER_TYPES has a schema.
+# This catches drift if a new simple type is added without its schema entry
+# (or vice versa) — fails at import rather than at first failed lookup.
+assert frozenset(SIMPLE_HELPER_SCHEMAS.keys()) == SIMPLE_HELPER_TYPES, (
+    f"SIMPLE_HELPER_TYPES and SIMPLE_HELPER_SCHEMAS are out of sync: "
+    f"missing schemas={SIMPLE_HELPER_TYPES - frozenset(SIMPLE_HELPER_SCHEMAS.keys())}, "
+    f"extra schemas={frozenset(SIMPLE_HELPER_SCHEMAS.keys()) - SIMPLE_HELPER_TYPES}"
+)
+
+
+def get_simple_helper_schema(helper_type: str) -> list[dict[str, Any]] | None:
+    """Return the simple-helper field schema, or None for non-simple types.
+
+    Issue #1149: callers attach the result to validation-error context as
+    `data_schema` so the LLM sees field shape inline with a 4xx response,
+    matching the auto-attach pattern already in use for flow helpers
+    (see `_fetch_data_schema_for_error_context` in tools_config_entry_flow).
+    Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
+    so callers can write a single uniform `if schema is not None: …` branch.
+    """
+    return SIMPLE_HELPER_SCHEMAS.get(helper_type)
+
+
+def _simple_helper_error_context(
+    helper_type: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build a validation-error `context` dict carrying the helper's schema.
+
+    Centralises the schema-attach idiom for the simple-helper raise sites in
+    `ha_config_set_helper` so they stay one-liners. Returns a dict with
+    `helper_type`, `data_schema` (omitted if no schema is registered for the
+    type), and any caller-supplied extra fields.
+    """
+    context: dict[str, Any] = {"helper_type": helper_type}
+    schema = get_simple_helper_schema(helper_type)
+    if schema is not None:
+        context["data_schema"] = schema
+    context.update(extra)
+    return context
+
+
+async def _flow_helper_error_context(
+    client: Any,
+    helper_type: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build a validation-error `context` dict carrying the flow data_schema.
+
+    Issue #1149: complements `_simple_helper_error_context` for the FLOW
+    pre-flow validation gates in `_handle_flow_helper` — those fire before
+    HA itself sees the request, so the auto-attach in `_raise_flow_api_error`
+    never runs. Best-effort fetch (returns `helper_type` only on any failure
+    or for menu-based types where no menu_choice can be inferred yet).
+    """
+    context: dict[str, Any] = {"helper_type": helper_type}
+    try:
+        schema = await fetch_helper_data_schema(
+            client, helper_type, menu_choice=None
+        )
+    except Exception:
+        schema = None
+    if schema is not None:
+        context["data_schema"] = schema
+    context.update(extra)
+    return context
+
+
 # Bug 6 (issue #1150): valid mode values per helper type. The CREATE and
 # UPDATE branches both validate against this; an invalid value is rejected
 # instead of silently coerced to HA's default.
@@ -109,7 +363,7 @@ def _validate_mode(helper_type: str, mode: str | None) -> None:
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"mode={mode!r} is not valid for {helper_type}. Use {options}.",
-            context={"helper_type": helper_type, "mode": mode},
+            context=_simple_helper_error_context(helper_type, mode=mode),
             suggestions=[f"Pass mode={allowed[0]!r} or mode={allowed[1]!r}"],
         )
     )
@@ -221,13 +475,17 @@ def _validate_numeric_range(
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"input_text min_value (length) must be >= 0, got {min_value}.",
-                context={"helper_type": helper_type, "min_value": min_value},
+                context=_simple_helper_error_context(
+                    helper_type, min_value=min_value,
+                ),
             ))
         if max_value is not None and max_value > 255:
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"input_text max_value (length) must be <= 255, got {max_value}.",
-                context={"helper_type": helper_type, "max_value": max_value},
+                context=_simple_helper_error_context(
+                    helper_type, max_value=max_value,
+                ),
             ))
 
     if min_value is not None and max_value is not None:
@@ -235,22 +493,22 @@ def _validate_numeric_range(
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"min_value ({min_value}) cannot be greater than max_value ({max_value}).",
-                context={
-                    "helper_type": helper_type,
-                    "min_value": min_value,
-                    "max_value": max_value,
-                },
+                context=_simple_helper_error_context(
+                    helper_type,
+                    min_value=min_value,
+                    max_value=max_value,
+                ),
             ))
         if min_value == max_value:
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"min_value and max_value must differ (both were {min_value}). "
                 f"Pick a non-empty range so the helper has more than one valid value.",
-                context={
-                    "helper_type": helper_type,
-                    "min_value": min_value,
-                    "max_value": max_value,
-                },
+                context=_simple_helper_error_context(
+                    helper_type,
+                    min_value=min_value,
+                    max_value=max_value,
+                ),
             ))
 
     # Step validation only applies to numeric types (not input_text).
@@ -259,7 +517,7 @@ def _validate_numeric_range(
             raise_tool_error(create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"step must be > 0 for {helper_type} (got {step}).",
-                context={"helper_type": helper_type, "step": step},
+                context=_simple_helper_error_context(helper_type, step=step),
             ))
         if (
             min_value is not None
@@ -273,12 +531,12 @@ def _validate_numeric_range(
                 f"(max_value - min_value = {max_value - min_value}). "
                 f"HA does not reject this, but the resulting slider/control "
                 f"is unusable. Reduce step or widen the range.",
-                context={
-                    "helper_type": helper_type,
-                    "min_value": min_value,
-                    "max_value": max_value,
-                    "step": step,
-                },
+                context=_simple_helper_error_context(
+                    helper_type,
+                    min_value=min_value,
+                    max_value=max_value,
+                    step=step,
+                ),
             ))
 
 
@@ -303,7 +561,9 @@ def _validate_input_select_options(options: Any) -> None:
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"input_select options must be unique. Duplicate option(s): "
             f"{', '.join(repr(d) for d in duplicates)}.",
-            context={"helper_type": "input_select", "duplicates": duplicates},
+            context=_simple_helper_error_context(
+                "input_select", duplicates=duplicates,
+            ),
             suggestions=["Remove duplicate entries from the options list."],
         ))
 
@@ -362,7 +622,9 @@ def _validate_schedule_days(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"schedule {day_name}[{idx}] must include both 'from' "
                     f"and 'to' keys, got: {sorted(time_range.keys())}.",
-                    context={"helper_type": "schedule", "day": day_name},
+                    context=_simple_helper_error_context(
+                        "schedule", day=day_name,
+                    ),
                 ))
             from_parsed = _parse_hms(time_range["from"])
             to_parsed = _parse_hms(time_range["to"])
@@ -388,7 +650,9 @@ def _validate_schedule_days(
                     f"{cur_from // 3600:02d}:{(cur_from % 3600) // 60:02d}-"
                     f"{cur_to // 3600:02d}:{(cur_to % 3600) // 60:02d}). "
                     f"HA requires non-overlapping ranges per day.",
-                    context={"helper_type": "schedule", "day": day_name},
+                    context=_simple_helper_error_context(
+                        "schedule", day=day_name,
+                    ),
                 ))
 
 
@@ -642,7 +906,11 @@ async def _check_name_collision(
         f"A {helper_type} helper named {name!r} already exists "
         f"(id: {existing_id!r}). Pass helper_id={existing_id!r} to update it, "
         f"or use a different name to create a new helper.",
-        context={
+        context=_simple_helper_error_context(
+            helper_type, name=name, existing_helper_id=existing_id,
+        )
+        if helper_type in SIMPLE_HELPER_TYPES
+        else {
             "helper_type": helper_type,
             "name": name,
             "existing_helper_id": existing_id,
@@ -845,7 +1113,7 @@ async def _handle_flow_helper(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "config must be a JSON object (dict) for flow-based helpers",
                 suggestions=['Example: {"name": "my_helper", "source": "sensor.x"}'],
-                context={"helper_type": helper_type},
+                context=await _flow_helper_error_context(client, helper_type),
             ))
         config_dict: dict[str, Any] = parsed
     elif isinstance(config, dict):
@@ -856,7 +1124,7 @@ async def _handle_flow_helper(
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"config must be a dict or JSON string, got {type(config).__name__}",
-            context={"helper_type": helper_type},
+            context=await _flow_helper_error_context(client, helper_type),
         ))
 
     # Pre-flow warnings (e.g. stripped `name` on update) collected here and
@@ -900,7 +1168,7 @@ async def _handle_flow_helper(
         raise_tool_error(create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"Invalid labels parameter: {e}",
-            context={"helper_type": helper_type},
+            context=await _flow_helper_error_context(client, helper_type),
         ))
 
     # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config
@@ -925,7 +1193,7 @@ async def _handle_flow_helper(
                     'Add "name": "My Helper" at the top level of the JSON arguments',
                     'Or include "name": "My Helper" inside the "config" dict',
                 ],
-                context={"helper_type": helper_type},
+                context=await _flow_helper_error_context(client, helper_type),
             ))
         flow_result = await create_flow_helper(client, helper_type, config_dict)
     else:
@@ -1509,6 +1777,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - For flow-based helpers, config keys not declared by any step's
           data_schema are silently ignored by HA; verify field names with
           `ha_get_helper_schema` before relying on them.
+        - Validation errors raised by this tool carry the helper's
+          `data_schema` in the response context so a follow-up call can
+          self-correct. Calling `ha_get_helper_schema(helper_type)` ahead of
+          time is therefore optional — the schema is delivered alongside the
+          first 4xx if you call without it.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:
@@ -1629,7 +1902,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"The 'config' parameter is only valid for flow-based helper types. "
                         f"For '{helper_type}', use the explicit parameters (name, options, min_value, etc.).",
-                        context={"helper_type": helper_type},
+                        context=_simple_helper_error_context(helper_type),
                         suggestions=[
                             f"Pass values for '{helper_type}' via explicit parameters (e.g. options=..., min_value=...)",
                             "For flow-based types (template, group, utility_meter, ...), use 'config' as a dict or JSON string",
@@ -1706,7 +1979,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 'Add "name": "My Helper" at the top level of the JSON arguments',
                                 'Or pass "helper_id": "my_helper" if you intended to update an existing helper',
                             ],
-                            context={"helper_type": helper_type},
+                            context=_simple_helper_error_context(helper_type),
                         )
                     )
 
@@ -1727,7 +2000,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                                 "options list is required for input_select",
-                                context={"helper_type": helper_type},
+                                context=_simple_helper_error_context(helper_type),
                             )
                         )
                     if not isinstance(options, list) or len(options) == 0:
@@ -1735,7 +2008,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                                 "options must be a non-empty list for input_select",
-                                context={"helper_type": helper_type},
+                                context=_simple_helper_error_context(helper_type),
                             )
                         )
                     message["options"] = options
@@ -1750,11 +2023,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                                     f"initial={initial!r} must be one of options "
                                     f"{options!r} for input_select.",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "initial": initial,
-                                        "options": options,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type,
+                                        initial=initial,
+                                        options=options,
+                                    ),
                                     suggestions=[
                                         "Pick an `initial` value that's in `options`.",
                                         "Or omit `initial` so the entity starts unset.",
@@ -1824,7 +2097,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                                 "At least one of has_date or has_time must be True for input_datetime",
-                                context={"helper_type": helper_type},
+                                context=_simple_helper_error_context(helper_type),
                             )
                         )
 
@@ -1881,7 +2154,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                                 "schedule helper requires at least one day-of-week "
                                 "with at least one time range.",
-                                context={"helper_type": helper_type},
+                                context=_simple_helper_error_context(helper_type),
                                 suggestions=[
                                     "Pass e.g. monday=[{\"from\": \"08:00\", \"to\": \"17:00\"}]",
                                     "Each day's value is a list of {\"from\": \"HH:MM\", \"to\": \"HH:MM\"} dicts",
@@ -1904,10 +2177,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                                 f"zone helper requires {' and '.join(missing)}.",
-                                context={
-                                    "helper_type": helper_type,
-                                    "missing_fields": missing,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type, missing_fields=missing,
+                                ),
                                 suggestions=[
                                     "Pass latitude (float) and longitude (float)",
                                     "Optionally pass radius (meters, default 100) and passive (bool)",
@@ -2022,7 +2294,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
                             f"Failed to create helper: {result.get('error', 'Unknown error')}",
-                            context={"helper_type": helper_type, "name": name},
+                            context=_simple_helper_error_context(
+                                helper_type, name=name,
+                            ),
                         )
                     )
 
@@ -2032,7 +2306,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
                             "helper_id is required for update action",
-                            context={"helper_type": helper_type},
+                            context=_simple_helper_error_context(helper_type),
                         )
                     )
 
@@ -2085,10 +2359,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.SERVICE_CALL_FAILED,
                                 f"Failed to update tag config: {result.get('error', 'Unknown error')}",
-                                context={
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type, entity_id=entity_id,
+                                ),
                             )
                         )
                     updated_data = result.get("result", {})
@@ -2130,12 +2403,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.ENTITY_NOT_FOUND,
                                 f"Could not find {helper_type} entity: {entity_id}",
-                                context={
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                    "helper_id": helper_id,
-                                    "name": name,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type,
+                                    entity_id=entity_id,
+                                    helper_id=helper_id,
+                                    name=name,
+                                ),
                                 suggestions=suggestions,
                             )
                         )
@@ -2145,10 +2418,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.INTERNAL_ERROR,
                                 f"Unexpected registry response for {entity_id}",
-                                context={
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type, entity_id=entity_id,
+                                ),
                             )
                         )
                     unique_id = registry_entry.get("unique_id")
@@ -2157,10 +2429,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.CONFIG_NOT_FOUND,
                                 f"No unique_id found in entity registry for {entity_id}",
-                                context={
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type, entity_id=entity_id,
+                                ),
                             )
                         )
 
@@ -2175,10 +2446,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to fetch person config list: {list_result.get('error', 'Unknown')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
 
@@ -2205,10 +2475,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.CONFIG_NOT_FOUND,
                                     f"Person config not found for id: {unique_id}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
 
@@ -2237,10 +2506,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to update person config: {result.get('error', 'Unknown error')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
                         updated_data = result.get("result", {})
@@ -2267,10 +2535,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to update zone config: {result.get('error', 'Unknown error')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
                         updated_data = result.get("result", {})
@@ -2303,10 +2570,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to update schedule config: {result.get('error', 'Unknown error')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
                         updated_data = result.get("result", {})
@@ -2325,10 +2591,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to fetch {helper_type} config list: {list_result.get('error', 'Unknown')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
                         existing = next(
@@ -2345,10 +2610,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.CONFIG_NOT_FOUND,
                                     f"{helper_type} config not found for id: {unique_id}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
 
@@ -2540,10 +2804,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
                                     f"Failed to update {helper_type} config: {result.get('error', 'Unknown error')}",
-                                    context={
-                                        "helper_type": helper_type,
-                                        "entity_id": entity_id,
-                                    },
+                                    context=_simple_helper_error_context(
+                                        helper_type, entity_id=entity_id,
+                                    ),
                                 )
                             )
                         updated_data = result.get("result", {})
@@ -2613,10 +2876,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             create_error_response(
                                 ErrorCode.SERVICE_CALL_FAILED,
                                 f"Failed to update helper: {result.get('error', 'Unknown error')}",
-                                context={
-                                    "helper_type": helper_type,
-                                    "entity_id": entity_id,
-                                },
+                                context=_simple_helper_error_context(
+                                    helper_type, entity_id=entity_id,
+                                ),
                             )
                         )
 
