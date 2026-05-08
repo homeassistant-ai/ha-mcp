@@ -742,8 +742,9 @@ def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
     except OSError as err:
         if err.errno != errno.ENOTEMPTY:
             _LOGGER.warning(
-                "Could not remove legacy backup dir %s: %s",
+                "Could not remove legacy backup dir %s: [%s] %s",
                 legacy_dir,
+                type(err).__name__,
                 err,
             )
 
@@ -810,7 +811,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # notification is best-effort UX and must not block setup.
             _LOGGER.warning(
                 "Could not create persistent notification for "
-                "GHSA-g39v-cvjh-8fpf migration: %s",
+                "GHSA-g39v-cvjh-8fpf migration: [%s] %s",
+                type(err).__name__,
                 err,
             )
 
