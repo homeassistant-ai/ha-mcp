@@ -19,7 +19,12 @@ from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.operation_manager import get_operation_from_memory, store_pending_operation
-from .helpers import exception_to_structured_error, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    raise_tool_error,
+    safe_info,
+    safe_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -546,7 +551,6 @@ class DeviceControlTools:
         Args:
             operations: List of device control operations
             parallel: Whether to execute operations in parallel
-            ctx: Optional FastMCP Context for progress reporting
 
         Returns:
             Bulk operation results
@@ -568,17 +572,18 @@ class DeviceControlTools:
                 operations, skipped_operations
             )
 
-            if ctx is not None:
-                await ctx.info(
-                    f"bulk_device_control: {len(valid_operations)} valid op(s), "
-                    f"{len(skipped_operations)} skipped, "
-                    f"mode={'parallel' if parallel else 'sequential'}"
-                )
-                await ctx.report_progress(
-                    progress=0,
-                    total=len(valid_operations),
-                    message="dispatching operations",
-                )
+            await safe_info(
+                ctx,
+                f"bulk_device_control: {len(valid_operations)} valid op(s), "
+                f"{len(skipped_operations)} skipped, "
+                f"mode={'parallel' if parallel else 'sequential'}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=len(valid_operations),
+                message="dispatching operations",
+            )
 
             # Execute only valid operations
             if parallel:
@@ -588,15 +593,15 @@ class DeviceControlTools:
                     valid_operations, results, operation_ids, ctx=ctx
                 )
 
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=len(valid_operations),
-                    total=len(valid_operations),
-                    message=(
-                        f"dispatched {len(operation_ids)} op(s); "
-                        "use get_bulk_operation_status to verify completion"
-                    ),
-                )
+            await safe_progress(
+                ctx,
+                progress=len(valid_operations),
+                total=len(valid_operations),
+                message=(
+                    f"dispatched {len(operation_ids)} op(s); "
+                    "use get_bulk_operation_status to verify completion"
+                ),
+            )
 
             return self._build_bulk_response(
                 operations, results, operation_ids, skipped_operations, parallel
@@ -682,12 +687,12 @@ class DeviceControlTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     f"Exception during execution: {e!s}",
                 ))
-            if ctx is not None:
-                await ctx.report_progress(
-                    progress=i + 1,
-                    total=total,
-                    message=f"{entity_id} {action} dispatched",
-                )
+            await safe_progress(
+                ctx,
+                progress=i + 1,
+                total=total,
+                message=f"{entity_id} {action} dispatched",
+            )
 
     def _build_bulk_response(
         self,

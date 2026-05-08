@@ -22,6 +22,8 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    safe_info,
+    safe_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -167,16 +169,17 @@ class TraceTools:
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
 
-            if ctx is not None:
-                await ctx.info(
-                    f"ha_get_automation_traces starting: id={automation_id} "
-                    f"run_id={run_id or '<list>'}"
-                )
-                await ctx.report_progress(
-                    progress=0,
-                    total=3,
-                    message="connecting to Home Assistant WebSocket",
-                )
+            await safe_info(
+                ctx,
+                f"ha_get_automation_traces starting: id={automation_id} "
+                f"run_id={run_id or '<list>'}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=3,
+                message="connecting to Home Assistant WebSocket",
+            )
 
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
@@ -198,12 +201,12 @@ class TraceTools:
                     ws_client, automation_id, object_id
                 )
 
-                if ctx is not None:
-                    await ctx.report_progress(
-                        progress=1,
-                        total=3,
-                        message=f"fetching trace {'detail' if run_id else 'list'}",
-                    )
+                await safe_progress(
+                    ctx,
+                    progress=1,
+                    total=3,
+                    message=f"fetching trace {'detail' if run_id else 'list'}",
+                )
 
                 if run_id:
                     # Get specific trace details
@@ -225,10 +228,9 @@ class TraceTools:
                         ))
 
                     trace_data = result.get("result", {})
-                    if ctx is not None:
-                        await ctx.report_progress(
-                            progress=3, total=3, message="formatting trace"
-                        )
+                    await safe_progress(
+                        ctx, progress=3, total=3, message="formatting trace"
+                    )
                     return _format_detailed_trace(
                         automation_id, run_id, trace_data,
                         deduplicate=deduplicate, detailed=detailed,
@@ -253,29 +255,28 @@ class TraceTools:
 
                     # If traces are empty, gather diagnostic information
                     if not traces_data:
-                        if ctx is not None:
-                            await ctx.report_progress(
-                                progress=2,
-                                total=3,
-                                message="no traces; gathering diagnostics",
-                            )
+                        await safe_progress(
+                            ctx,
+                            progress=2,
+                            total=3,
+                            message="no traces; gathering diagnostics",
+                        )
                         diagnostics = await _gather_diagnostics(
                             ws_client, self._client, automation_id, domain
                         )
-                        if ctx is not None:
-                            await ctx.report_progress(
-                                progress=3, total=3, message="diagnostics complete"
-                            )
+                        await safe_progress(
+                            ctx, progress=3, total=3, message="diagnostics complete"
+                        )
                         return _format_trace_list(
                             automation_id, traces_data, limit, diagnostics
                         )
 
-                    if ctx is not None:
-                        await ctx.report_progress(
-                            progress=3,
-                            total=3,
-                            message=f"listed {len(traces_data)} traces",
-                        )
+                    await safe_progress(
+                        ctx,
+                        progress=3,
+                        total=3,
+                        message=f"listed {len(traces_data)} traces",
+                    )
                     return _format_trace_list(automation_id, traces_data, limit)
 
             finally:

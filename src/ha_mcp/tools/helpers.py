@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Any, Literal, NoReturn, overload
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
@@ -369,6 +370,43 @@ def log_tool_usage(func: Any) -> Any:
             )
 
     return wrapper
+
+
+async def safe_progress(
+    ctx: Context | None,
+    *,
+    progress: float,
+    total: float | None = None,
+    message: str | None = None,
+) -> None:
+    """Best-effort wrapper around ``ctx.report_progress``.
+
+    A transport hiccup on a progress notification must never convert a
+    successful tool result into a ``ToolError``. Transport errors are logged
+    at debug; ``TypeError``/``AttributeError`` are escalated to ``warning``
+    because they signal a signature mismatch (call-site bug), not a flaky
+    client. ``ctx is None`` short-circuits without I/O.
+    """
+    if ctx is None:
+        return
+    try:
+        await ctx.report_progress(progress=progress, total=total, message=message)
+    except (TypeError, AttributeError) as e:
+        logger.warning("ctx.report_progress signature error: %s", e)
+    except Exception as e:
+        logger.debug("ctx.report_progress failed: %s", e)
+
+
+async def safe_info(ctx: Context | None, message: str) -> None:
+    """Best-effort wrapper around ``ctx.info`` — same rationale as ``safe_progress``."""
+    if ctx is None:
+        return
+    try:
+        await ctx.info(message)
+    except (TypeError, AttributeError) as e:
+        logger.warning("ctx.info signature error: %s", e)
+    except Exception as e:
+        logger.debug("ctx.info failed: %s", e)
 
 
 def register_tool_methods(mcp: Any, instance: Any) -> None:
