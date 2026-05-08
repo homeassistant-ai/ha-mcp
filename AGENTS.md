@@ -496,7 +496,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 - `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
 - `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
 
-**Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to this list and to `.gemini/styleguide.md` as part of the same PR rather than forcing a poor fit. Keep both files in sync.
+**Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to this list rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
 
 ### Tool Structure
 Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
