@@ -55,6 +55,8 @@ Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-pr
 uv tool install mcp-proxy
 # or
 pipx install mcp-proxy
+# or (macOS)
+brew install mcp-proxy
 ```
 
 Then add to your Claude Desktop configuration file:
