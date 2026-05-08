@@ -581,7 +581,8 @@ async def area_with_mixed_domains(mcp_client):
     area_name = f"e2e_1162_{suffix}"
 
     area_result = await mcp_client.call_tool(
-        "ha_config_set_area", {"name": area_name, "icon": "mdi:test-tube"}
+        "ha_set_area_or_floor",
+        {"kind": "area", "name": area_name, "icon": "mdi:test-tube"},
     )
     area_data = assert_mcp_success(area_result, "Create test area")
     area_id = area_data["area_id"]
@@ -653,7 +654,9 @@ async def area_with_mixed_domains(mcp_client):
         except Exception as exc:  # pragma: no cover — cleanup best-effort
             logger.warning(f"Cleanup failed for {entity_id}: {exc}")
     try:
-        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+        await mcp_client.call_tool(
+            "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+        )
     except Exception as exc:  # pragma: no cover — cleanup best-effort
         logger.warning(f"Cleanup failed for area {area_id}: {exc}")
 
@@ -900,8 +903,8 @@ async def two_areas_fuzzy_match(mcp_client):
     helpers: list[dict[str, str]] = []
     for tag in ("alpha", "beta"):
         area_result = await mcp_client.call_tool(
-            "ha_config_set_area",
-            {"name": f"{prefix}_{tag}", "icon": "mdi:test-tube"},
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": f"{prefix}_{tag}", "icon": "mdi:test-tube"},
         )
         area_data = assert_mcp_success(area_result, f"Create area {tag}")
         area_id = area_data["area_id"]
@@ -945,7 +948,9 @@ async def two_areas_fuzzy_match(mcp_client):
     for kind, oid in reversed(created):
         try:
             if kind == "area":
-                await mcp_client.call_tool("ha_config_remove_area", {"area_id": oid})
+                await mcp_client.call_tool(
+                    "ha_remove_area_or_floor", {"kind": "area", "id": oid}
+                )
             else:
                 await mcp_client.call_tool(
                     "ha_delete_helpers_integrations",
