@@ -1302,6 +1302,131 @@ class HomeAssistantClient:
             raise
 
 
+    async def _resolve_scene_id(self, identifier: str) -> str:
+        """
+        Resolve a scene identifier to its storage key via the entity registry.
+
+        Scenes may be renamed in the HA UI, changing the entity_id but keeping
+        the original storage key. Mirrors :meth:`_resolve_script_id` — scenes
+        likewise need a WebSocket entity registry lookup; their state attributes
+        do not surface the storage key.
+
+        Args:
+            identifier: Scene ID (with or without ``scene.`` prefix)
+
+        Returns:
+            The storage key for the configuration API
+        """
+        bare_id = identifier.removeprefix("scene.")
+        entity_id = f"scene.{bare_id}"
+        try:
+            result = await self.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": entity_id}
+            )
+            if result.get("success") is not False:
+                unique_id = result.get("result", {}).get("unique_id")
+                if unique_id:
+                    if unique_id != bare_id:
+                        logger.debug(
+                            f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
+                        )
+                    return str(unique_id)
+        except Exception:
+            logger.debug(
+                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
+                exc_info=True,
+            )
+        return bare_id
+
+    async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
+        """Get Home Assistant scene configuration by scene_id."""
+        resolved_id = await self._resolve_scene_id(scene_id)
+        try:
+            endpoint = f"config/scene/config/{resolved_id}"
+            response = await self._request("GET", endpoint)
+
+            return {"success": True, "scene_id": resolved_id, "config": response}
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                msg = f"Scene not found: {scene_id}"
+                if resolved_id != scene_id:
+                    msg += f" (resolved storage key: {resolved_id})"
+                raise HomeAssistantAPIError(msg, status_code=404) from e
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get scene config for {scene_id}: {e}")
+            raise
+
+    async def upsert_scene_config(
+        self, config: dict[str, Any], scene_id: str
+    ) -> dict[str, Any]:
+        """Create or update Home Assistant scene configuration."""
+        resolved_id = await self._resolve_scene_id(scene_id)
+        try:
+            endpoint = f"config/scene/config/{resolved_id}"
+
+            # Default a name when missing — mirrors the script upsert behaviour
+            # so a bare config dict is still acceptable.
+            if "name" not in config:
+                config["name"] = scene_id
+
+            # Validate required field. ``entities`` is a dict keyed by entity_id,
+            # not a list — distinct from script ``sequence`` and automation ``action``.
+            if "entities" not in config:
+                raise ValueError(
+                    "Scene configuration must include an 'entities' field "
+                    "(a dict keyed by entity_id)"
+                )
+
+            response = await self._request("POST", endpoint, json=config)
+
+            return {
+                "success": True,
+                "scene_id": resolved_id,
+                "result": response.get("result", "ok"),
+                "operation": "created" if response.get("result") == "ok" else "updated",
+            }
+        except Exception as e:
+            logger.error(f"Failed to upsert scene config for {scene_id}: {e}")
+            raise
+
+    async def delete_scene_config(self, scene_id: str) -> dict[str, Any]:
+        """Delete Home Assistant scene configuration."""
+        resolved_id = await self._resolve_scene_id(scene_id)
+        try:
+            endpoint = f"config/scene/config/{resolved_id}"
+            response = await self._request("DELETE", endpoint)
+
+            return {
+                "success": True,
+                "scene_id": resolved_id,
+                "result": response.get("result", "ok"),
+                "operation": "deleted",
+            }
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                msg = f"Scene not found: {scene_id}"
+                if resolved_id != scene_id:
+                    msg += f" (resolved storage key: {resolved_id})"
+                raise HomeAssistantAPIError(msg, status_code=404) from e
+            elif e.status_code == 405:
+                raise HomeAssistantAPIError(
+                    f"Cannot delete scene '{scene_id}': The HTTP DELETE method is blocked. "
+                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
+                    f"the Supervisor ingress proxy only allows GET and POST requests. "
+                    f"It may also occur if the scene is defined in YAML configuration files. "
+                    f"WORKAROUNDS: "
+                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
+                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
+                    f"(3) If the scene is YAML-defined, edit the configuration file directly. "
+                    f"(4) As a fallback, rename the scene with a 'DELETE_' prefix "
+                    f"(e.g., 'DELETE_{scene_id}') so you can identify and manually delete it later "
+                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scenes).",
+                    status_code=405,
+                ) from e
+            raise
+
+
 async def create_client() -> HomeAssistantClient:
     """Create and return a new Home Assistant client."""
     return HomeAssistantClient()

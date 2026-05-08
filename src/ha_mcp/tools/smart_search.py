@@ -44,6 +44,7 @@ def _env_float(key: str, default: float) -> float:
 
 AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
 SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
+SCENE_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCENE_CONFIG_TIME_BUDGET", 20.0)
 
 # Batch size for parallel individual config fetches (Attempt C fallback)
 INDIVIDUAL_FETCH_BATCH_SIZE = 10
@@ -804,14 +805,16 @@ class SmartSearchTools:
         exact_match: bool = True,
     ) -> dict[str, Any]:
         """
-        Deep search across automation, script, helper, and dashboard definitions.
+        Deep search across automation, script, scene, helper, and dashboard
+        definitions.
 
         Searches not just entity names but also within configuration definitions
-        including triggers, actions, sequences, and other config fields.
+        including triggers, actions, sequences, scene entity sets, and other
+        config fields.
 
         Args:
             query: Search query (can be partial, with typos when exact_match=False)
-            search_types: Types to search (default: ["automation", "script", "helper"])
+            search_types: Types to search (default: ["automation", "script", "scene", "helper"])
             limit: Maximum total results to return (default: 5)
             offset: Number of results to skip for pagination (default: 0)
             include_config: Include full config in results (default: False)
@@ -822,12 +825,13 @@ class SmartSearchTools:
             Dictionary with search results grouped by type
         """
         if search_types is None:
-            search_types = ["automation", "script", "helper"]
+            search_types = ["automation", "script", "scene", "helper"]
 
         try:
             results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
+                "scenes": [],
                 "helpers": [],
                 "dashboards": [],
             }
@@ -1162,6 +1166,164 @@ class SmartSearchTools:
                                 "match_in_name": match_in_name,
                                 "match_in_config": config_match_score >= threshold,
                                 "config": script_config if script_config else None,
+                            }
+                        )
+
+            # ================================================================
+            # SCENE SEARCH (same 3-tier strategy: REST bulk -> WS bulk -> individual)
+            # Mirrors the script branch — scenes have no listing primitive, so
+            # entities are enumerated from get_states() and configs fetched per id.
+            # ================================================================
+            if "scene" in search_types:
+                scene_entities = [
+                    e
+                    for e in all_entities
+                    if e.get("entity_id", "").startswith("scene.")
+                ]
+
+                # Phase 1: Score all scenes by name (instant)
+                scene_name_scored: list[tuple[str, str, str, int]] = []
+                for entity in scene_entities:
+                    entity_id = entity.get("entity_id", "")
+                    friendly_name = entity.get("attributes", {}).get(
+                        "friendly_name", entity_id
+                    )
+                    scene_id = entity_id.replace("scene.", "")
+                    name_score = self.fuzzy_searcher._calculate_entity_score(
+                        entity_id, friendly_name, "scene", query_lower
+                    )
+                    scene_name_scored.append(
+                        (entity_id, friendly_name, scene_id, name_score)
+                    )
+
+                # Phase 2: Try bulk fetch for scenes
+                all_scene_configs: dict[str, dict[str, Any]] = {}
+                scene_bulk_fetched = False
+
+                # Attempt A: REST bulk endpoint
+                try:
+                    resp = await asyncio.wait_for(
+                        self.client._request("GET", "/config/scene/config"),
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                    )
+                    if isinstance(resp, list):
+                        for item in resp:
+                            sid = item.get("id") or item.get(
+                                "name", ""
+                            ).lower().replace(" ", "_")
+                            if sid:
+                                all_scene_configs[sid] = item
+                        scene_bulk_fetched = True
+                except Exception as e:
+                    logger.debug(f"Scene REST bulk fetch failed: {e}")
+
+                # Attempt B: WebSocket bulk endpoints
+                if not scene_bulk_fetched:
+                    for ws_type in [
+                        "config/scene/config/list",
+                        "scene/config/list",
+                    ]:
+                        if scene_bulk_fetched:
+                            break
+                        try:
+                            ws_resp = await asyncio.wait_for(
+                                self.client.send_websocket_message({"type": ws_type}),
+                                timeout=BULK_WEBSOCKET_TIMEOUT,
+                            )
+                            if isinstance(ws_resp, dict) and ws_resp.get("success"):
+                                for item in ws_resp.get("result", []):
+                                    sid = item.get("id") or item.get(
+                                        "name", ""
+                                    ).lower().replace(" ", "_")
+                                    if sid:
+                                        all_scene_configs[sid] = item
+                                scene_bulk_fetched = True
+                        except Exception as e:
+                            logger.debug(
+                                f"Scene WebSocket bulk fetch ({ws_type}) failed: {e}"
+                            )
+
+                # Attempt C: Parallel individual fetch with budget (see #879)
+                if not scene_bulk_fetched:
+                    budget_start = time.perf_counter()
+                    sids_to_fetch = [
+                        sid
+                        for _, _, sid, _ in scene_name_scored
+                        if sid and sid not in all_scene_configs
+                    ]
+                    total_to_fetch = len(sids_to_fetch)
+                    fetched_count = 0
+                    failed_count = 0
+
+                    async def _fetch_scene_config(sid: str) -> tuple[str, dict[str, Any] | None]:
+                        try:
+                            config_resp = await asyncio.wait_for(
+                                self.client.get_scene_config(sid),
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                            )
+                            return (sid, config_resp.get("config", {}))
+                        except Exception as e:
+                            logger.debug(
+                                f"Scene individual config fetch ({sid}) failed: {e}"
+                            )
+                            return (sid, None)
+
+                    for i in range(0, len(sids_to_fetch), INDIVIDUAL_FETCH_BATCH_SIZE):
+                        if (
+                            time.perf_counter() - budget_start
+                            > SCENE_CONFIG_TIME_BUDGET
+                        ):
+                            skipped = total_to_fetch - fetched_count - failed_count
+                            logger.warning(
+                                f"Scene config fetch budget exhausted "
+                                f"({SCENE_CONFIG_TIME_BUDGET}s). "
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), skipped {skipped} scenes."
+                            )
+                            break
+                        batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
+                        batch_results = await asyncio.gather(
+                            *[_fetch_scene_config(sid) for sid in batch],
+                        )
+                        for sid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_scene_configs[sid_result] = config_result
+                                fetched_count += 1
+                            else:
+                                failed_count += 1
+
+                # Phase 3: Score scenes
+                for (
+                    entity_id,
+                    friendly_name,
+                    scene_id,
+                    name_score,
+                ) in scene_name_scored:
+                    scene_config = all_scene_configs.get(scene_id, {})
+                    config_match_score = (
+                        self._search_in_dict(scene_config, query_lower, exact_match)
+                        if scene_config
+                        else 0
+                    )
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
+
+                    if total_score >= threshold:
+                        results["scenes"].append(
+                            {
+                                "entity_id": entity_id,
+                                "scene_id": scene_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": match_in_name,
+                                "match_in_config": config_match_score >= threshold,
+                                "config": scene_config if scene_config else None,
                             }
                         )
 

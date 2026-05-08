@@ -85,12 +85,7 @@ _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 #      override real ones in the in-memory state machine).
 #   2. Endpoints whose corresponding wrapping MCP tool performs
 #      validation / lint / hash-locking that raw ``api_post`` would skip
-#      — currently ``config/{automation,script}/config/``.
-# Scene config writes (``config/scene/config/*``) are intentionally NOT
-# in this list: there is no ``ha_config_set_scene`` tool to redirect to,
-# and blocking the path without offering a substitute would just remove
-# capability with no validated alternative. Add the block back when a
-# wrapping tool lands.
+#      — currently ``config/{automation,script,scene}/config/``.
 # The prefixes are matched after ``_normalize_endpoint`` strips the
 # leading ``api/`` so they are written as plain HA-relative paths.
 _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
@@ -110,6 +105,12 @@ _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
         "config/script/config/",
         "Direct writes to /api/config/script/config/*",
         "use call_tool('ha_config_set_script', ...)",
+    ),
+    (
+        "config/scene/config/",
+        "Direct writes to /api/config/scene/config/*",
+        "use call_tool('ha_config_set_scene', ...) so the entities-must-be-dict "
+        "shape check, reference validation, and hash-locking run",
     ),
 )
 
