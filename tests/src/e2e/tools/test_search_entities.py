@@ -6,10 +6,12 @@ entities of that domain, not return empty results.
 """
 
 import logging
+import uuid
 
 import pytest
 
 from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +147,9 @@ async def test_search_entities_area_filter_only(mcp_client):
         f"Expected search_type 'area_only', got '{data.get('search_type')}'"
     )
 
-    logger.info(f"area_filter='kitchen' returned {data.get('total_matches', 0)} matches")
+    logger.info(
+        f"area_filter='kitchen' returned {data.get('total_matches', 0)} matches"
+    )
 
 
 @pytest.mark.asyncio
@@ -555,3 +559,437 @@ class TestSearchEntitiesLimitValidation:
         assert inner["error"]["code"] == "VALIDATION_FAILED", (
             f"Expected VALIDATION_FAILED, got: {inner}"
         )
+
+
+# ============================================================================
+# Regression tests: area_filter + domain_filter interaction
+# ============================================================================
+
+
+@pytest.fixture
+async def area_with_mixed_domains(mcp_client):
+    """Create a test area with helpers in two distinct domains.
+
+    Yields a dict with:
+        - area_id: the created area's id
+        - boolean_id: input_boolean.* entity in the area
+        - number_id: input_number.* entity in the area
+
+    Cleans up area + helpers afterwards.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"e2e_1162_{suffix}"
+
+    area_result = await mcp_client.call_tool(
+        "ha_config_set_area", {"name": area_name, "icon": "mdi:test-tube"}
+    )
+    area_data = assert_mcp_success(area_result, "Create test area")
+    area_id = area_data["area_id"]
+
+    boolean_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": f"e2e 1162 bool {suffix}",
+            "area_id": area_id,
+        },
+    )
+    boolean_data = assert_mcp_success(boolean_result, "Create input_boolean")
+    boolean_id = (
+        boolean_data.get("entity_id")
+        or f"input_boolean.{boolean_data['helper_data']['id']}"
+    )
+
+    number_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_number",
+            "name": f"e2e 1162 num {suffix}",
+            "area_id": area_id,
+            "min_value": 0,
+            "max_value": 10,
+            "step": 1,
+        },
+    )
+    number_data = assert_mcp_success(number_result, "Create input_number")
+    number_id = (
+        number_data.get("entity_id")
+        or f"input_number.{number_data['helper_data']['id']}"
+    )
+
+    # Wait until both entities are visible under this area in the registries
+    # consulted by ha_search_entities (helper creation + area assignment is
+    # eventually-consistent across the entity / device / area registries).
+    await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_search_entities",
+        arguments={"area_filter": area_id, "limit": 50},
+        predicate=lambda d: {
+            e.get("entity_id") for e in d.get("data", d).get("results", [])
+        }.issuperset({boolean_id, number_id}),
+        description="both helpers visible in area search",
+    )
+
+    yield {
+        "area_id": area_id,
+        "area_name": area_name,
+        "boolean_id": boolean_id,
+        "number_id": number_id,
+    }
+
+    for entity_id, helper_type in (
+        (boolean_id, "input_boolean"),
+        (number_id, "input_number"),
+    ):
+        try:
+            await mcp_client.call_tool(
+                "ha_delete_helpers_integrations",
+                {
+                    "target": entity_id,
+                    "helper_type": helper_type,
+                    "confirm": True,
+                },
+            )
+        except Exception as exc:  # pragma: no cover — cleanup best-effort
+            logger.warning(f"Cleanup failed for {entity_id}: {exc}")
+    try:
+        await mcp_client.call_tool("ha_config_remove_area", {"area_id": area_id})
+    except Exception as exc:  # pragma: no cover — cleanup best-effort
+        logger.warning(f"Cleanup failed for area {area_id}: {exc}")
+
+
+PAGINATION_FIELDS = (
+    "total_matches",
+    "offset",
+    "limit",
+    "count",
+    "has_more",
+    "next_offset",
+)
+
+
+@pytest.mark.asyncio
+async def test_area_filter_with_domain_filter_no_query(
+    mcp_client, area_with_mixed_domains
+):
+    """area_filter + domain_filter (no query) returns only domain matches.
+
+    by_domain must be absent when group_by_domain is not requested.
+    """
+    fixture = area_with_mixed_domains
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "domain_filter": "input_boolean",
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "area+domain filter, no query")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_only"
+    assert data.get("domain_filter") == "input_boolean", (
+        f"Response should echo domain_filter, got: {data}"
+    )
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["boolean_id"] in entity_ids
+    assert fixture["number_id"] not in entity_ids
+    assert all(eid.startswith("input_boolean.") for eid in entity_ids), (
+        f"Non-boolean entities leaked through domain_filter: {entity_ids}"
+    )
+    assert "by_domain" not in data, (
+        f"by_domain must only appear when group_by_domain=True: {data}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_with_domain_filter_group_by_domain(
+    mcp_client, area_with_mixed_domains
+):
+    """area_filter + domain_filter + group_by_domain restricts by_domain keys.
+
+    Verifies the by_domain rebuild is also restricted to the filtered domain,
+    not just the flat results list.
+    """
+    fixture = area_with_mixed_domains
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "domain_filter": "input_boolean",
+            "group_by_domain": True,
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "area+domain+group_by_domain")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_only"
+    assert "by_domain" in data, (
+        f"by_domain must appear when group_by_domain=True: {data}"
+    )
+    by_domain = data["by_domain"]
+    assert set(by_domain) == {"input_boolean"}, (
+        f"by_domain must be restricted to filtered domain: {list(by_domain)}"
+    )
+    assert all(
+        e["entity_id"].startswith("input_boolean.") for e in by_domain["input_boolean"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_with_domain_filter_and_query(
+    mcp_client, area_with_mixed_domains
+):
+    """area_filter + domain_filter + query also respects the domain."""
+    fixture = area_with_mixed_domains
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "domain_filter": "input_boolean",
+            "query": "1162",
+            "exact_match": False,
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "area+domain+query")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_filtered_query"
+    assert data.get("domain_filter") == "input_boolean"
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["number_id"] not in entity_ids, (
+        f"input_number leaked through domain_filter on area+query branch: {entity_ids}"
+    )
+    assert all(eid.startswith("input_boolean.") for eid in entity_ids)
+    # Fixture has one input_boolean in the area; domain_filter must drop the
+    # input_number before fuzzy search, so total_matches == 1.
+    assert data["total_matches"] == 1, (
+        f"Expected exactly 1 match after domain_filter pre-filtered: {data}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_query_with_domain_filter_group_by_domain(
+    mcp_client, area_with_mixed_domains
+):
+    """area_filter + domain_filter + query + group_by_domain restricts by_domain keys.
+
+    Mirror of test_area_filter_with_domain_filter_group_by_domain for the
+    area_filtered_query branch — verifies the grouped view in the with-query
+    code path is also restricted to the filtered domain.
+    """
+    fixture = area_with_mixed_domains
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "domain_filter": "input_boolean",
+            "query": "1162",
+            "exact_match": False,
+            "group_by_domain": True,
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "area+domain+query+group_by_domain")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_filtered_query"
+    assert "by_domain" in data
+    by_domain = data["by_domain"]
+    assert set(by_domain) <= {"input_boolean"}, (
+        f"by_domain leaked non-matching domains: {list(by_domain)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_only_paginates(mcp_client, area_with_mixed_domains):
+    """area_only branch respects limit/offset and emits full pagination metadata."""
+    fixture = area_with_mixed_domains
+
+    page = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": fixture["area_id"], "limit": 1, "offset": 0},
+    )
+    raw = assert_mcp_success(page, "area_only with limit=1")
+    data = raw.get("data", raw)
+
+    for field in PAGINATION_FIELDS:
+        assert field in data, f"Missing pagination field {field}: {data}"
+
+    assert data["limit"] == 1
+    assert data["offset"] == 0
+    assert data["count"] == len(data["results"]) == 1
+    # Fixture provisions exactly two entities into the unique area, so
+    # total_matches must equal 2 — anything else means the area leaked.
+    assert data["total_matches"] == 2, (
+        f"Expected exactly 2 entities in fixture area: {data}"
+    )
+    assert data["has_more"] is True
+    assert data["next_offset"] == 1
+
+    # Second page should not overlap with first.
+    page2 = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": fixture["area_id"], "limit": 1, "offset": 1},
+    )
+    raw2 = assert_mcp_success(page2, "area_only second page")
+    data2 = raw2.get("data", raw2)
+
+    ids1 = {r["entity_id"] for r in data["results"]}
+    ids2 = {r["entity_id"] for r in data2["results"]}
+    assert ids1.isdisjoint(ids2), f"Pages overlap: {ids1 & ids2}"
+
+
+@pytest.mark.asyncio
+async def test_area_filter_empty_area_response_shape(mcp_client):
+    """Empty-area branch emits full pagination metadata + domain_filter echo.
+
+    Covers the `area_result["areas"]` empty path: a regression there would
+    silently ship a response without has_more / next_offset / count or
+    domain_filter echo, breaking consistency with the populated branch.
+    """
+    nonexistent_area = f"e2e_1162_no_such_area_{uuid.uuid4().hex[:8]}"
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": nonexistent_area,
+            "domain_filter": "input_boolean",
+            "limit": 5,
+        },
+    )
+    raw = assert_mcp_success(result, "empty-area branch")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_only"
+    assert data["total_matches"] == 0
+    assert data["results"] == []
+    assert data.get("domain_filter") == "input_boolean", (
+        f"Empty-area response must still echo domain_filter: {data}"
+    )
+    for field in PAGINATION_FIELDS:
+        assert field in data, f"Missing pagination field {field}: {data}"
+    assert data["has_more"] is False
+    assert data["next_offset"] is None
+    # group_by_domain not requested, so by_domain must be absent.
+    assert "by_domain" not in data, (
+        f"by_domain must only appear when group_by_domain=True: {data}"
+    )
+
+
+@pytest.fixture
+async def two_areas_fuzzy_match(mcp_client):
+    """Two areas sharing a name prefix, each with one input_boolean helper.
+
+    Used to exercise fuzzy area-name resolution: a query that fuzzy-matches
+    multiple registered areas (`partial_ratio >= 80` in
+    `get_entities_by_area`) should yield all of them, and downstream
+    domain_filter logic must continue to work in that multi-area shape.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    prefix = f"e2e_fuzzy_{suffix}"
+    created: list[tuple[str, str]] = []  # (kind, id)
+
+    helpers: list[dict[str, str]] = []
+    for tag in ("alpha", "beta"):
+        area_result = await mcp_client.call_tool(
+            "ha_config_set_area",
+            {"name": f"{prefix}_{tag}", "icon": "mdi:test-tube"},
+        )
+        area_data = assert_mcp_success(area_result, f"Create area {tag}")
+        area_id = area_data["area_id"]
+        created.append(("area", area_id))
+
+        bool_result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": f"{prefix} bool {tag}",
+                "area_id": area_id,
+            },
+        )
+        bool_data = assert_mcp_success(bool_result, f"Create boolean {tag}")
+        bool_id = (
+            bool_data.get("entity_id")
+            or f"input_boolean.{bool_data['helper_data']['id']}"
+        )
+        created.append(("input_boolean", bool_id))
+        helpers.append({"area_id": area_id, "boolean_id": bool_id, "tag": tag})
+
+    expected_ids = {h["boolean_id"] for h in helpers}
+    await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_search_entities",
+        arguments={
+            "area_filter": prefix,
+            "domain_filter": "input_boolean",
+            "query": "bool",
+            "exact_match": False,
+            "limit": 50,
+        },
+        predicate=lambda d: expected_ids.issubset(
+            {e.get("entity_id") for e in d.get("data", d).get("results", [])}
+        ),
+        description="both fuzzy-matched helpers visible",
+    )
+
+    yield {"prefix": prefix, "helpers": helpers}
+
+    for kind, oid in reversed(created):
+        try:
+            if kind == "area":
+                await mcp_client.call_tool("ha_config_remove_area", {"area_id": oid})
+            else:
+                await mcp_client.call_tool(
+                    "ha_delete_helpers_integrations",
+                    {"target": oid, "helper_type": kind, "confirm": True},
+                )
+        except Exception as exc:  # pragma: no cover — cleanup best-effort
+            logger.warning(f"Cleanup failed for {kind} {oid}: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_area_filter_fuzzy_multi_area_with_query(
+    mcp_client, two_areas_fuzzy_match
+):
+    """Fuzzy area_filter resolving to multiple areas + domain_filter + query.
+
+    Exercises the with-query branch's iteration over `area_result["areas"]`
+    when `get_entities_by_area` resolves the fuzzy name to multiple areas.
+    Domain filter must apply across all matched areas.
+    """
+    fixture = two_areas_fuzzy_match
+
+    result = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["prefix"],
+            "domain_filter": "input_boolean",
+            "query": "bool",
+            "exact_match": False,
+            "limit": 50,
+        },
+    )
+    raw = assert_mcp_success(result, "fuzzy multi-area + domain + query")
+    data = raw.get("data", raw)
+
+    assert data["search_type"] == "area_filtered_query"
+    assert data.get("domain_filter") == "input_boolean"
+    for field in PAGINATION_FIELDS:
+        assert field in data, f"Missing pagination field {field}: {data}"
+    entity_ids = {r["entity_id"] for r in data["results"]}
+    expected = {h["boolean_id"] for h in fixture["helpers"]}
+    assert expected.issubset(entity_ids), (
+        f"Both fuzzy-matched areas' helpers should appear: missing {expected - entity_ids}"
+    )
+    assert all(eid.startswith("input_boolean.") for eid in entity_ids)
+    assert data["total_matches"] == 2, (
+        f"Both fuzzy-matched areas contribute one input_boolean each: {data}"
+    )
