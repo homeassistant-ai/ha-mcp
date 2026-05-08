@@ -1185,6 +1185,8 @@ class SmartSearchTools:
             # uses the same shape today; treat them as parallel implementations
             # that can diverge if either domain's listing primitive lands later.
             # ================================================================
+            scene_fetch_failed_count = 0
+            scene_fetch_skipped_count = 0
             if "scene" in search_types:
                 scene_entities = [
                     e
@@ -1322,12 +1324,15 @@ class SmartSearchTools:
                             time.perf_counter() - budget_start
                             > SCENE_CONFIG_TIME_BUDGET
                         ):
-                            skipped = total_to_fetch - fetched_count - failed_count
+                            scene_fetch_skipped_count = (
+                                total_to_fetch - fetched_count - failed_count
+                            )
                             logger.warning(
                                 f"Scene config fetch budget exhausted "
                                 f"({SCENE_CONFIG_TIME_BUDGET}s). "
                                 f"Fetched {fetched_count}/{total_to_fetch} "
-                                f"({failed_count} failed), skipped {skipped} scenes."
+                                f"({failed_count} failed), "
+                                f"skipped {scene_fetch_skipped_count} scenes."
                             )
                             break
                         batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
@@ -1340,6 +1345,7 @@ class SmartSearchTools:
                                 fetched_count += 1
                             else:
                                 failed_count += 1
+                    scene_fetch_failed_count = failed_count
 
                 # Phase 3: Score scenes
                 for (
@@ -1565,6 +1571,7 @@ class SmartSearchTools:
             final_results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
+                "scenes": [],
                 "helpers": [],
                 "dashboards": [],
             }
@@ -1590,9 +1597,26 @@ class SmartSearchTools:
                 "search_types": search_types,
             }
 
-            # Only include dashboards key when dashboard search was requested
+            # Only include scenes/dashboards keys when those searches were requested
+            if "scene" in search_types:
+                response["scenes"] = final_results["scenes"]
             if "dashboard" in search_types:
                 response["dashboards"] = final_results["dashboards"]
+
+            # Surface partial results from the scene Attempt-C fetch so the
+            # caller can distinguish "no scene matched" from "matches may be
+            # missing because some configs failed or timed out". Only set
+            # ``partial: True`` when something actually went wrong; downstream
+            # consumers should treat absence as success.
+            if scene_fetch_failed_count or scene_fetch_skipped_count:
+                response["partial"] = True
+                response["partial_reason"] = (
+                    f"Scene config fetch incomplete: "
+                    f"{scene_fetch_failed_count} failed, "
+                    f"{scene_fetch_skipped_count} skipped (time budget). "
+                    f"Some scene matches may be missing config data; tune "
+                    f"HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
+                )
 
             return response
 
