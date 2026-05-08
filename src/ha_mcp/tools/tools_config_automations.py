@@ -22,6 +22,7 @@ from ..errors import (
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    format_sandbox_error,
     get_security_documentation,
     safe_execute,
 )
@@ -552,16 +553,12 @@ class AutomationConfigTools:
                 try:
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
+                    message, suggestions = format_sandbox_error(e, python_transform)
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
-                            str(e),
-                            suggestions=[
-                                "Check expression syntax",
-                                "Ensure only allowed operations are used",
-                                "See tool description for allowed operations",
-                                f"Expression: {python_transform[:100]}{'...' if len(python_transform) > 100 else ''}",
-                            ],
+                            message,
+                            suggestions=suggestions,
                             context={"action": "python_transform", "identifier": identifier},
                         )
                     )
