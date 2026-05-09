@@ -2022,6 +2022,98 @@
     "source_file": "tools_labels.py"
   },
   {
+    "name": "ha_config_get_scene",
+    "title": "Get Scene Config",
+    "description": "Retrieve Home Assistant scene configuration.\n\nReturns the complete configuration for a scene, including the ``entities``\ndict and other settings (``name``, ``icon``, ``id``).\n\nEXAMPLES:\n- Get scene: ha_config_get_scene(\"movie_night\")\n- Get scene: ha_config_get_scene(\"bedroom_dim\")\n\nRELATED TOOLS:\n- ha_config_set_scene — pass the returned ``config_hash`` for\n  ``python_transform`` updates.\n\nFor detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.",
+    "inputSchema": {
+      "properties": {
+        "scene_id": {
+          "type": "Annotated[str, Field(description=\"Scene identifier (e.g., 'movie_night')\")]"
+        }
+      },
+      "required": [
+        "scene_id"
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "Scenes"
+    ],
+    "source_file": "tools_config_scenes.py"
+  },
+  {
+    "name": "ha_config_remove_scene",
+    "title": "Remove Scene",
+    "description": "Delete a Home Assistant scene.\n\nEXAMPLES:\n- Delete scene: ha_config_remove_scene(\"old_scene\")\n- Delete scene: ha_config_remove_scene(\"temporary_scene\")\n\n**IMPORTANT LIMITATION:**\nThis tool can only delete scenes created via the Home Assistant UI.\nScenes defined in YAML configuration files (scenes.yaml or configuration.yaml)\ncannot be deleted through the API and will return a 405 Method Not Allowed error.\n\nTo remove YAML-defined scenes, you must edit the configuration file directly.\n\n**WARNING:** Deleting a scene that is referenced by automations or scripts\n(via ``scene.turn_on``) may cause those to fail.",
+    "inputSchema": {
+      "properties": {
+        "scene_id": {
+          "type": "Annotated[str, Field(description=\"Scene identifier to delete (e.g., 'old_scene')\")]"
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for scene to be fully removed before returning. Default: True.', default=True)]",
+          "default": true
+        }
+      },
+      "required": [
+        "scene_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "tags": [
+      "Scenes"
+    ],
+    "source_file": "tools_config_scenes.py"
+  },
+  {
+    "name": "ha_config_set_scene",
+    "title": "Create or Update Scene",
+    "description": "Create or update a Home Assistant scene.\n\nSupports two modes: full config replacement (``config``) or\nPython transformation of an existing scene (``python_transform``).\nSee the field descriptions for ``python_transform`` examples and\nthe ``config`` shape contract.\n\nWHEN TO USE:\n- ``python_transform``: surgical edits to an existing scene\n  (add/remove/update a single entity entry). Requires ``config_hash``\n  from ha_config_get_scene() for optimistic locking.\n- ``config``: creating a new scene, or wholesale replacement.\n\nWHEN NOT TO USE:\n- To activate a scene at runtime, use ha_call_service(domain=\"scene\",\n  service=\"turn_on\", target=...) — this tool only manages scene\n  *configuration*, not the runtime turn-on/off side.\n- To list or look up existing scenes, use\n  ha_search_entities(domain_filter=\"scene\") or ha_deep_search.\n\nSCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,\n``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a\nlist. Automations use a list of actions; scenes capture a snapshot\nof states as a dict.\n\nEXAMPLE:\n\nha_config_set_scene(scene_id=\"movie_night\", config={\n    \"name\": \"Movie Night\",\n    \"entities\": {\n        \"light.living_room\": {\"state\": \"on\", \"brightness\": 50},\n    },\n    \"icon\": \"mdi:movie\",\n})\n\nFor detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.",
+    "inputSchema": {
+      "properties": {
+        "scene_id": {
+          "type": "Annotated[str, Field(description=\"Scene identifier (e.g., 'movie_night')\")]"
+        },
+        "config": {
+          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Scene configuration dictionary. Must include 'entities' (a dict keyed by entity_id, NOT a list). Optional fields: 'name' (defaults to scene_id), 'icon', 'id'. Mutually exclusive with python_transform.\", default=None)]",
+          "default": null
+        },
+        "python_transform": {
+          "type": "Annotated[str | None, Field(description='Python expression to transform existing scene config. Mutually exclusive with config. Requires config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Add entity: python_transform=\"config[\\'entities\\'][\\'light.bed\\'] = {\\'state\\': \\'on\\'}\" Update brightness: python_transform=\"config[\\'entities\\'][\\'light.kitchen\\'][\\'brightness\\'] = 50\" Remove entity: python_transform=\"del config[\\'entities\\'][\\'light.kitchen\\']\" \\n\\n' + get_security_documentation())]",
+          "default": null
+        },
+        "config_hash": {
+          "type": "Annotated[str | None, Field(description='Config hash from ha_config_get_scene for optimistic locking. REQUIRED for python_transform (validates scene unchanged). Optional for config updates (validates before full replacement if provided).')]",
+          "default": null
+        },
+        "category": {
+          "type": "Annotated[str | None, Field(description=\"Category ID to assign to this scene. Use ha_config_get_category(scope='scene') to list available categories, or ha_config_set_category() to create one.\", default=None)]",
+          "default": null
+        },
+        "wait": {
+          "type": "Annotated[bool | str, Field(description='Wait for scene to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "default": true
+        }
+      },
+      "required": [
+        "scene_id"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Scenes"
+    ],
+    "source_file": "tools_config_scenes.py"
+  },
+  {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
     "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_home_assistant_best_practices.",
@@ -2116,14 +2208,14 @@
   {
     "name": "ha_deep_search",
     "title": "Deep Search",
-    "description": "Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.\n\nUse this when you need to find automations/scripts by what they *do* (e.g., which automations\ncall a specific service, reference a particular entity, or contain a certain action).\nFor finding entity IDs by name, use ha_search_entities instead.\n\nSearches within configuration definitions including triggers, actions, sequences, and other\nconfig fields. Also searches dashboard configurations (cards, badges, views) when\nsearch_types includes 'dashboard'.\n\n**NOTE:** Dashboards and badges are NOT searched by default. Add 'dashboard' to\nsearch_types to include them.\n\nArgs:\n    query: Search query (exact substring by default, or fuzzy with exact_match=False)\n    search_types: Types to search (default: [\"automation\", \"script\", \"helper\"])\n    limit: Maximum total results to return (default: 5)\n    exact_match: Use exact substring matching (default: True)\n\nExamples:\n    - Find automations referencing an entity: ha_deep_search(\"sensor.temperature\")\n    - Find with fuzzy matching: ha_deep_search(\"motion\", exact_match=False)\n    - Search dashboards for entity refs: ha_deep_search(\"sensor.temperature\", search_types=[\"dashboard\"])\n    - Search everything: ha_deep_search(\"light.bedroom\", search_types=[\"automation\",\"script\",\"helper\",\"dashboard\"])",
+    "description": "Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.\n\nUse this when you need to find configurations by what they *do* (e.g., which automations\ncall a specific service, which scenes set a particular entity, or any config that contains\na certain action). For finding entity IDs by name, use ha_search_entities instead.\n\nSearches within configuration definitions including triggers, actions, sequences, scene\nentity sets, and other config fields. Also searches dashboard configurations (cards,\nbadges, views) when search_types includes 'dashboard'.\n\n**NOTE:** Dashboards and badges are NOT searched by default. Add 'dashboard' to\nsearch_types to include them.\n\nArgs:\n    query: Search query (exact substring by default, or fuzzy with exact_match=False)\n    search_types: Types to search (default: [\"automation\", \"script\", \"scene\", \"helper\"])\n    limit: Maximum total results to return (default: 5)\n    exact_match: Use exact substring matching (default: True)\n\nExamples:\n    - Find automations referencing an entity: ha_deep_search(\"sensor.temperature\")\n    - Find with fuzzy matching: ha_deep_search(\"motion\", exact_match=False)\n    - Find scenes touching a light: ha_deep_search(\"light.kitchen\")\n    - Search dashboards for entity refs: ha_deep_search(\"sensor.temperature\", search_types=[\"dashboard\"])\n    - Search everything: ha_deep_search(\"light.bedroom\", search_types=[\"automation\",\"script\",\"scene\",\"helper\",\"dashboard\"])",
     "inputSchema": {
       "properties": {
         "query": {
           "type": "str"
         },
         "search_types": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Types to search: 'automation', 'script', 'helper', 'dashboard'. Pass as list or JSON array string. Default: automation, script, helper.\")]",
+          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Types to search: 'automation', 'script', 'scene', 'helper', 'dashboard'. Pass as list or JSON array string. Default: automation, script, scene, helper.\")]",
           "default": null
         },
         "limit": {
