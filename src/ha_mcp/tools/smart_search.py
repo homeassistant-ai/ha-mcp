@@ -1318,6 +1318,14 @@ class SmartSearchTools:
                 # HA-managed scene and Attempt C would otherwise try every
                 # Hue scene).
                 homeassistant_scene_uids: set[str] = set()
+                # Issue #1168 R7 blocker 17/21: registry-derived slug→storage
+                # map for the result-builder fallback. When ``all_scene_configs``
+                # has no entry for a scene (bulk omitted it, integration-
+                # managed, or ``id`` field absent), the result-builder
+                # previously fell back silently to the entity-id slug. With
+                # this map the storage key stays correct for any scene the
+                # registry knows about, regardless of bulk-fetch coverage.
+                slug_to_storage_id: dict[str, str] = {}
                 try:
                     reg_resp = await asyncio.wait_for(
                         self.client.send_websocket_message(
@@ -1333,8 +1341,10 @@ class SmartSearchTools:
                                 continue
                             if entry.get("platform") == "homeassistant":
                                 homeassistant_scene_uids.add(uid)
+                            slug = ent_id.removeprefix("scene.")
+                            if slug:
+                                slug_to_storage_id[slug] = uid
                             if uid in all_scene_configs:
-                                slug = ent_id.removeprefix("scene.")
                                 if slug and slug != uid:
                                     all_scene_configs[slug] = all_scene_configs[uid]
                 except Exception as e:
@@ -1449,20 +1459,40 @@ class SmartSearchTools:
                     )
 
                     if total_score >= threshold:
-                        # Issue #1168 R6 blocker 17: ``scene_id`` here must
-                        # be the storage key (matching the contract used by
+                        # Issue #1168 R6 blocker 17 (refined per R7
+                        # blockers 17/21): ``scene_id`` here must be the
+                        # storage key (matching the contract used by
                         # ``ha_config_get_scene`` / ``ha_config_set_scene``),
-                        # not the entity_id-slug derived at fetch time. The
-                        # bulk-fetched config carries the storage key as its
-                        # ``id`` field; fall back to the slug only when no
-                        # config was fetched (Phase-3-without-config-data
-                        # path).
-                        storage_id = (
-                            scene_config["id"]
-                            if isinstance(scene_config, dict)
-                            and isinstance(scene_config.get("id"), str)
-                            else scene_id
-                        )
+                        # not the entity_id-slug derived at fetch time.
+                        # Three-tier resolution:
+                        #   1. ``scene_config["id"]`` — most direct, present
+                        #      whenever the bulk fetch carried this scene.
+                        #   2. ``slug_to_storage_id`` — registry-derived
+                        #      mapping built during the Phase-2.5 walk,
+                        #      covers integration-managed scenes and any
+                        #      scene whose bulk record omitted ``id``.
+                        #   3. ``scene_id`` itself (the entity-id slug) —
+                        #      final fallback when the registry walk also
+                        #      failed; surfaced via ``logger.warning`` so
+                        #      the silent-slug-mismatch path becomes
+                        #      observable.
+                        if isinstance(scene_config, dict) and isinstance(
+                            scene_config.get("id"), str
+                        ):
+                            storage_id = scene_config["id"]
+                        elif scene_id in slug_to_storage_id:
+                            storage_id = slug_to_storage_id[scene_id]
+                        else:
+                            storage_id = scene_id
+                            logger.warning(
+                                "ha_deep_search scene result fell back to "
+                                "entity-id slug for scene_id=%r — neither "
+                                "bulk config nor registry walk produced a "
+                                "storage key. ``ha_config_get_scene`` will "
+                                "rely on its resolver remap to land on the "
+                                "right scene.",
+                                scene_id,
+                            )
                         results["scenes"].append(
                             {
                                 "entity_id": entity_id,

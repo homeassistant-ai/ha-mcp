@@ -392,3 +392,94 @@ class TestSceneLifecycle:
             {"scene_id": scene_id, "wait": False},
         )
         assert remove_data.get("success") is True, f"Remove failed: {remove_data}"
+
+    async def test_deep_search_to_get_scene_round_trip_on_renamed_scene(
+        self, mcp_client, cleanup_tracker
+    ):
+        """R7 blocker 17/21 end-to-end: ``ha_deep_search`` returns the
+        storage key as ``scene_id`` (not the entity-id slug) for a
+        renamed scene, and ``ha_config_get_scene`` lands on the same
+        scene without relying on the resolver remap.
+
+        Setup mirrors the rename pattern from
+        ``test_scene_rename_decouples_entity_id_from_storage_key``:
+        storage key ``r7_storkey_alpha`` + name ``R7 Distinct Friendly Round-Trip``
+        produces entity_id ``scene.r7_distinct_friendly_round_trip``
+        (HA's slugify of the friendly name).
+
+        The contract being verified: ``deep_search`` → ``get_scene`` works
+        directly with the returned ``scene_id``. Without R7's slug→storage
+        map the deep_search result would carry the entity-id slug, and
+        the get-scene call would either 404 or rely on its internal
+        resolver to remap — both are slower / less robust paths.
+        """
+        scene_id = "r7_storkey_alpha"
+        cleanup_tracker.track("scene", f"scene.{scene_id}")
+        cleanup_tracker.track("scene", "scene.r7_distinct_friendly_round_trip")
+
+        # 1. Create a scene whose entity_id slug diverges from the
+        # storage key (the rename pattern that exposes B17).
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_scene",
+            {
+                "scene_id": scene_id,
+                "config": {
+                    "name": "R7 Distinct Friendly Round-Trip",
+                    "icon": "mdi:magnify",
+                    "entities": {
+                        "light.bed_light": {"state": "on", "brightness": 50},
+                    },
+                },
+                "wait": True,
+            },
+        )
+        assert create_data.get("success") is True, f"Create failed: {create_data}"
+
+        registered = await _wait_for_scene_registered(mcp_client, scene_id)
+        assert registered, f"Scene {scene_id} not registered after create"
+
+        # 2. ha_deep_search by friendly_name fragment.
+        search_data = await safe_call_tool(
+            mcp_client,
+            "ha_deep_search",
+            {
+                "query": "R7 Distinct Friendly",
+                "search_types": ["scene"],
+                "limit": 5,
+            },
+        )
+        assert search_data.get("success") is True, f"Search failed: {search_data}"
+        scenes = search_data.get("scenes") or []
+        match = next(
+            (s for s in scenes if s.get("entity_id") == "scene.r7_distinct_friendly_round_trip"),
+            None,
+        )
+        assert match is not None, (
+            f"deep_search did not return the test scene; scenes={scenes}"
+        )
+
+        # The contract: scene_id is the storage key, not the entity slug.
+        assert match["scene_id"] == scene_id, (
+            f"deep_search returned scene_id={match['scene_id']!r}, expected "
+            f"the storage key {scene_id!r}. The R7 slug→storage map should "
+            "have supplied this even when bulk config omits ``id``."
+        )
+
+        # 3. Round-trip: feed the returned scene_id into get_scene.
+        get_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_get_scene",
+            {"scene_id": match["scene_id"]},
+        )
+        assert get_data.get("success") is True, (
+            f"get_scene round-trip failed on deep_search-returned scene_id "
+            f"{match['scene_id']!r}: {get_data}"
+        )
+
+        # Cleanup.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_scene",
+            {"scene_id": scene_id, "wait": False},
+        )

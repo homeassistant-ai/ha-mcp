@@ -221,7 +221,7 @@ class ConfigSceneTools:
             # surfaced as ``RESOURCE_NOT_FOUND`` with a misleading
             # `entities`-related suggestion. Pre-flight here so the caller
             # gets the actual problem.
-            if not scene_id:
+            if not scene_id or not scene_id.strip():
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -520,7 +520,7 @@ class ConfigSceneTools:
             # any config dispatch — keeps the error code/message aligned with
             # the actual problem rather than the misleading
             # ``RESOURCE_NOT_FOUND`` from a downstream lookup.
-            if not scene_id:
+            if not scene_id or not scene_id.strip():
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -652,10 +652,13 @@ class ConfigSceneTools:
                 # ``id`` rebind. R6 blocker 18: only reject an explicit
                 # mismatched id; a transform that ``del config['id']`` is
                 # legitimate (HA treats ``id`` as optional) and should pass
-                # through.
+                # through. R7 blocker 24: ``transformed_config["id"] = None``
+                # is the in-place equivalent of ``del`` — normalise both
+                # by checking against ``(None, resolved_id)``, so only an
+                # explicit non-None mismatch triggers the reject.
                 if (
                     "id" in transformed_config
-                    and transformed_config["id"] != resolved_id
+                    and transformed_config["id"] not in (None, resolved_id)
                 ):
                     raise_tool_error(
                         create_error_response(
@@ -791,7 +794,14 @@ class ConfigSceneTools:
             # the hash check + upsert commits. Same partial-state hazard as
             # the python_transform branch — a phantom category must not
             # rewrite the scene before erroring.
-            if effective_category:
+            #
+            # Issue #1168 R7 blocker 22: gate on the user-facing ``category``
+            # param, not ``effective_category``. ``_validate_scene_config``
+            # promotes a metadata-embedded category into ``effective_category``
+            # when the user passed ``category=None``; validating that on
+            # every call costs a category-registry round-trip even when the
+            # user wasn't trying to change the category at all.
+            if category is not None and effective_category:
                 await self._validate_category_id(effective_category)
 
             # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
@@ -930,7 +940,7 @@ class ConfigSceneTools:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
             # the resolver — keeps the error code/message aligned with the
             # actual problem.
-            if not scene_id:
+            if not scene_id or not scene_id.strip():
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,

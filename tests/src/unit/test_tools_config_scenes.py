@@ -1338,6 +1338,44 @@ class TestEmptySceneIdGuard:
         assert "scene_id must not be empty" in body["error"]["message"]
         mock_client.delete_scene_config.assert_not_called()
 
+    @pytest.mark.parametrize("whitespace_value", ["   ", "\t", "\n", " \t\n "])
+    async def test_get_scene_rejects_whitespace_only_scene_id(
+        self, tools, whitespace_value: str,
+    ):
+        """R7 blocker 23: whitespace-only ``scene_id`` slipped past the
+        original ``if not scene_id`` and surfaced as ``RESOURCE_NOT_FOUND`` —
+        the exact misleading error B16 was supposed to prevent. Refined
+        guard catches it via ``not scene_id.strip()``."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_scene(scene_id=whitespace_value)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+
+    async def test_set_scene_rejects_whitespace_only_scene_id(
+        self, tools, mock_client,
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="   ",
+                config={"name": "X", "entities": {"light.x": {"state": "on"}}},
+                wait=False,
+            )
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_remove_scene_rejects_whitespace_only_scene_id(
+        self, tools, mock_client,
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_scene(scene_id="   ", wait=False)
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+        mock_client.delete_scene_config.assert_not_called()
+
 
 class TestPythonTransformDeleteIdLegitimate:
     """R6 blocker 18 — a transform that ``del config['id']`` is legitimate
@@ -1601,3 +1639,272 @@ class TestResolverRetriedFlag:
             f"exhausted-retry log must fire after the retry exits without "
             f"a match; got {[r.message for r in caplog.records]}"
         )
+
+
+class TestCategoryValidationGate:
+    """R7 blocker 22 — gate ``_validate_category_id`` on the user-facing
+    ``category`` param, not on ``effective_category``.
+
+    ``_validate_scene_config`` promotes a metadata-embedded category into
+    ``effective_category`` when the caller passed ``category=None``. The
+    R6 fix ran the validator on every call where ``effective_category``
+    was truthy, costing a category-registry round-trip even when the user
+    wasn't trying to change the category at all.
+    """
+
+    async def test_metadata_promoted_category_does_not_validate(
+        self, tools, mock_client,
+    ):
+        """User passes ``category=None``, config has a metadata category
+        (e.g. preserved from a previous get → set round-trip). The
+        validator must NOT fire — no WS round-trip for ``category_registry/list``.
+        """
+        # Track whether _validate_category_id was called via WS payload.
+        ws_calls: list[dict] = []
+
+        async def _ws_handler(message):
+            ws_calls.append(message)
+            return {"success": True, "result": []}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "X",
+                "entities": {"light.x": {"state": "on"}},
+                "metadata": {"category": "lighting"},  # promoted to effective_category
+            },
+            category=None,  # user didn't pass — promotion fires
+            wait=False,
+        )
+
+        category_list_calls = [
+            c for c in ws_calls
+            if isinstance(c, dict)
+            and c.get("type") == "config/category_registry/list"
+        ]
+        assert not category_list_calls, (
+            "_validate_category_id must NOT fire when the user passed "
+            "category=None — the metadata-promoted value is preserved-state, "
+            "not a user-driven category change. "
+            f"Got payloads: {category_list_calls}"
+        )
+
+    async def test_user_passed_category_still_validates(
+        self, tools, mock_client,
+    ):
+        """User passes a non-None ``category`` — the validator MUST fire
+        regardless of metadata-promotion. The R7 gate is about excluding
+        the promotion-only case, not breaking the user-driven path."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"category_id": "lighting"}],
+            }
+        )
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"name": "X", "entities": {"light.x": {"state": "on"}}},
+            category="lighting",
+            wait=False,
+        )
+
+        category_list_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/category_registry/list"
+        ]
+        assert category_list_calls, (
+            "_validate_category_id must fire when the user passes a category"
+        )
+
+
+class TestPythonTransformIdNoneRebind:
+    """R7 blocker 24 — a transform that sets ``config['id'] = None``
+    explicitly is the in-place equivalent of ``del config['id']`` (HA
+    treats ``id`` as optional). The R6 strict check rejected it with
+    a misleading "rename detected" error because ``None != resolved_id``.
+    R7 normalises both as missing-key.
+    """
+
+    async def test_transform_setting_id_to_none_passes_through(
+        self, tools, mock_client,
+    ):
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform="config['id'] = None",
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        # The upsert was called — id=None is legitimate.
+        mock_client.upsert_scene_config.assert_called_once()
+        # The transform's None passed through; the upsert sees id=None.
+        sent_config = mock_client.upsert_scene_config.call_args.args[0]
+        assert sent_config.get("id") is None
+
+
+class TestSmartSearchSceneIdFallbackPaths:
+    """R7 blockers 17/21 — three-tier resolution of ``scene_id`` in
+    ``ha_deep_search`` results: (1) ``scene_config["id"]``, (2) registry-
+    derived map, (3) entity-id slug + WARNING.
+
+    The R6 fix only covered tier 1 (alias-hit path); the empty-dict
+    fallback silently returned the slug. R7 adds the registry-derived
+    map (tier 2) and a logger.warning (tier 3 visibility).
+    """
+
+    async def test_scene_with_no_bulk_config_uses_registry_map(self) -> None:
+        """When the bulk fetch omits a scene's ``id`` field but the
+        registry walk supplies the slug→storage map, the result-builder
+        uses the map's storage key (tier 2)."""
+        from typing import Any
+        from unittest.mock import MagicMock as _MagicMock
+        from unittest.mock import patch as _patch
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        client = _MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.bat_distinct_friendly_name",
+                    "state": "scening",
+                    "attributes": {
+                        "friendly_name": "BAT Distinct Friendly Name",
+                    },
+                }
+            ]
+        )
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type in ("config/scene/config/list", "scene/config/list"):
+                # Bulk omits the ``id`` field — simulates the regression case.
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            # NO ``id`` field
+                            "name": "BAT Distinct Friendly Name",
+                            "entities": {"light.x": {"state": "on"}},
+                        }
+                    ],
+                }
+            if msg_type == "config/entity_registry/list":
+                # Registry knows the storage key.
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.bat_distinct_friendly_name",
+                            "unique_id": "bat_storkey_alpha",
+                            "platform": "homeassistant",
+                        }
+                    ],
+                }
+            return {"success": False}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        with _patch(
+            "ha_mcp.tools.smart_search.get_global_settings"
+        ) as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools_obj = SmartSearchTools(client=client)
+            result = await tools_obj.deep_search(
+                query="distinct friendly",
+                search_types=["scene"],
+                limit=10,
+                include_config=True,
+            )
+
+        scenes = result.get("scenes", [])
+        assert scenes, f"expected 1 scene match, got: {scenes}"
+        # Tier 2 map provides the storage key — NOT the entity-id slug.
+        assert scenes[0]["scene_id"] == "bat_storkey_alpha", (
+            "registry-derived slug→storage map must supply the storage key "
+            "when bulk config omits ``id``; got "
+            f"{scenes[0]['scene_id']!r}"
+        )
+        assert scenes[0]["entity_id"] == "scene.bat_distinct_friendly_name"
+
+    async def test_scene_falls_back_to_slug_with_warning(
+        self, caplog,
+    ) -> None:
+        """When neither the bulk config nor the registry walk produced a
+        storage key for a scene, the result-builder falls back to the
+        entity-id slug AND emits a WARNING — the silent-slug-mismatch
+        path is now observable."""
+        import logging
+        from typing import Any
+        from unittest.mock import MagicMock as _MagicMock
+        from unittest.mock import patch as _patch
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        client = _MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.orphaned",
+                    "state": "scening",
+                    "attributes": {"friendly_name": "Orphaned Scene"},
+                }
+            ]
+        )
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            # Both bulk and registry return empty — neither tier 1 nor 2.
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+        client.get_scene_config = AsyncMock(return_value=None)
+
+        caplog.set_level(logging.WARNING, logger="ha_mcp.tools.smart_search")
+
+        with _patch(
+            "ha_mcp.tools.smart_search.get_global_settings"
+        ) as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools_obj = SmartSearchTools(client=client)
+            result = await tools_obj.deep_search(
+                query="orphaned",
+                search_types=["scene"],
+                limit=10,
+            )
+
+        scenes = result.get("scenes", [])
+        if scenes:
+            # Tier 3 fallback — slug stays as scene_id.
+            assert scenes[0]["scene_id"] == "orphaned"
+            # WARNING log fired so the silent path becomes observable.
+            warn_records = [
+                r
+                for r in caplog.records
+                if "fell back to entity-id slug" in r.message
+                and r.levelno == logging.WARNING
+            ]
+            assert warn_records, (
+                "tier-3 slug-fallback must emit a WARNING; got "
+                f"{[(r.levelname, r.message) for r in caplog.records]}"
+            )
