@@ -168,6 +168,38 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
     return normalized_triggers
 
 
+def _action_contains_scene_create(action: Any) -> bool:
+    """True if the action — or any nested action under HA's wrapper keys —
+    invokes ``scene.create``.
+
+    Walks the standard wrappers: ``sequence``, ``parallel``, ``choose``
+    (with options' inner ``sequence``), ``default``, and the ``then``/
+    ``else`` siblings of ``if``. Returns True on the first hit, so a deep
+    misroute is caught before the upsert reaches HA.
+    """
+    if not isinstance(action, dict):
+        return False
+    # 'service:' is the legacy key, 'action:' the modern HA service-call
+    # key (HA 2024.8+). Both reach scene.create.
+    if "scene.create" in (action.get("service"), action.get("action")):
+        return True
+    # Wrappers whose value is a list of nested actions.
+    for nested_key in ("sequence", "parallel", "default", "then", "else"):
+        nested = action.get(nested_key)
+        if isinstance(nested, list):
+            for sub in nested:
+                if _action_contains_scene_create(sub):
+                    return True
+    # ``choose``: list of ``{conditions, sequence}`` options.
+    if isinstance(action.get("choose"), list):
+        for opt in action["choose"]:
+            if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
+                for sub in opt["sequence"]:
+                    if _action_contains_scene_create(sub):
+                        return True
+    return False
+
+
 def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize automation config from GET response for direct use in SET.
@@ -371,8 +403,8 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
-        WHEN TO ROUTE ELSEWHERE — pick a dedicated tool before reaching for
-        an automation:
+        Before reaching for ``ha_config_set_automation``, consider whether a
+        dedicated tool fits the use case better:
 
         - State snapshot of one or more entities (capture-then-replay,
           no trigger needed) -> ha_config_set_scene
@@ -835,23 +867,27 @@ class AutomationConfigTools:
                 missing_fields=missing_fields,
             ))
 
-        # Issue #1169: Path-1 misroute defense. BAT validation of #1168 surfaced
-        # gpt-4o-mini-class models constructing an automation that wraps a
-        # ``scene.create`` service call when the user wanted a state snapshot.
-        # HA's REST endpoint accepts ``trigger: []`` and produces a
-        # never-firing automation — corruption marker, not a draft. Reject only
-        # the narrow misroute pattern (empty trigger + scene.create action) so
-        # legitimate empty-trigger drafts paired with other actions still pass.
+        # Issue #1169: reject configs that wrap ``scene.create`` in an
+        # automation with no functional trigger. Models occasionally produce
+        # these when they want a state snapshot but pattern-match to
+        # ``ha_config_set_automation`` instead of ``ha_config_set_scene``.
+        # HA's REST endpoint accepts ``trigger: []`` (or ``null``/missing)
+        # and stores a never-firing automation — corruption marker, not a
+        # draft. Only the narrow misroute pattern is rejected so legitimate
+        # empty-trigger drafts paired with other actions still pass.
         trigger_value = config_dict.get("trigger")
-        if isinstance(trigger_value, list) and not trigger_value:
+        trigger_empty = trigger_value is None or (
+            isinstance(trigger_value, list) and not trigger_value
+        )
+        if trigger_empty:
             actions_list = coerce_to_list(config_dict.get("action"))
+            # Walks the standard HA wrappers (``sequence`` / ``parallel`` /
+            # ``choose`` / ``if``-``then``/``else``) so a nested
+            # ``scene.create`` is caught alongside the top-level case.
             scene_create_indices = [
                 i
                 for i, a in enumerate(actions_list)
-                if isinstance(a, dict)
-                # 'service:' is the legacy key, 'action:' the modern HA
-                # service-call key (HA 2024.8+). Both reach scene.create.
-                and "scene.create" in (a.get("service"), a.get("action"))
+                if _action_contains_scene_create(a)
             ]
             if scene_create_indices:
                 raise_tool_error(create_error_response(
