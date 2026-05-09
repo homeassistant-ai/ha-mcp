@@ -2387,6 +2387,84 @@ class TestOAuthProviderConstructorValidation:
                 signing_key=b"too-short")
 
 
+class TestProbeOAuthActive:
+    """The OAuth probe is the load-bearing detector for the
+    "stale-code, fail-closed" path: if the integration code currently
+    in HA's Python module cache doesn't enforce OAuth, the probe must
+    return False so start.py can disable the webhook before unauth'd
+    requests get through."""
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def test_probe_returns_true_when_metadata_endpoint_returns_json(
+        self, start
+    ):
+        with (
+            patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
+            patch.object(
+                start,
+                "_ha_core_api",
+                return_value={
+                    "resource": "https://h/api/webhook/x",
+                    "authorization_servers": ["https://h/api/mcp_proxy/oauth"],
+                },
+            ),
+        ):
+            assert start._probe_oauth_active() is True
+
+    def test_probe_returns_false_when_endpoint_404s(self, start):
+        # _ha_core_api returns None on HTTPError — that's the 404 case
+        with (
+            patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
+            patch.object(start, "_ha_core_api", return_value=None),
+        ):
+            assert start._probe_oauth_active() is False
+
+    def test_probe_returns_false_when_response_is_not_json_dict(self, start):
+        with (
+            patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
+            patch.object(start, "_ha_core_api", return_value="not a dict"),
+        ):
+            assert start._probe_oauth_active() is False
+
+    def test_probe_returns_false_when_authorization_servers_missing(
+        self, start
+    ):
+        # A different endpoint accidentally exists at the same URL
+        with (
+            patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
+            patch.object(start, "_ha_core_api", return_value={"unrelated": "data"}),
+        ):
+            assert start._probe_oauth_active() is False
+
+    def test_probe_returns_false_when_manifest_unreadable(self, start):
+        with patch.object(start, "_read_integration_domain", return_value=None):
+            assert start._probe_oauth_active() is False
+
+    def test_probe_uses_manifest_domain_for_url(self, start):
+        """The probe URL is derived from the source manifest's domain so
+        it works for both the prod variant (mcp_proxy) and the fork-dev
+        variant (mcp_proxy_dev) without any code change."""
+        captured = {}
+
+        def fake_api(method, path):
+            captured["method"] = method
+            captured["path"] = path
+            return {"authorization_servers": []}
+
+        with (
+            patch.object(
+                start, "_read_integration_domain", return_value="mcp_proxy_dev"
+            ),
+            patch.object(start, "_ha_core_api", side_effect=fake_api),
+        ):
+            start._probe_oauth_active()
+
+        assert captured["path"] == "/mcp_proxy_dev/oauth/protected-resource"
+
+
 class TestOAuthSetupEntryRegistersExpectedViews:
     """Strengthens the existing register_view test: assert the set of
     URLs actually registered, not just the count. Replacing all four

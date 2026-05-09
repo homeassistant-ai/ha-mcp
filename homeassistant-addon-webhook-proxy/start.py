@@ -453,6 +453,49 @@ def _get_or_create_webhook_id(data_dir: Path) -> str:
     return wid
 
 
+def _read_integration_domain() -> str | None:
+    """Read the integration's domain from the source manifest.
+
+    Used by the OAuth probe to construct the metadata URL without
+    hard-coding `mcp_proxy` here — the dev fork-variant of the addon
+    overrides the domain (e.g. `mcp_proxy_dev`), and this function
+    keeps the probe consistent with whichever variant is installed.
+    """
+    src_manifest = Path("/opt/mcp_proxy/manifest.json")
+    if not src_manifest.exists():
+        # Dev fork-variant places the integration source at /opt/mcp_proxy_dev
+        src_manifest = Path("/opt/mcp_proxy_dev/manifest.json")
+    try:
+        return json.loads(src_manifest.read_text()).get("domain")
+    except (OSError, json.JSONDecodeError) as e:
+        log_error(
+            f"Could not read integration manifest ({type(e).__name__}): {e}"
+        )
+        return None
+
+
+def _probe_oauth_active() -> bool:
+    """Probe the OAuth protected-resource metadata endpoint.
+
+    Returns True only if HA serves the metadata URL — which means the
+    OAuth-enforcing integration code is the one actually loaded in HA's
+    Python module cache. HA loads custom_component modules once per boot
+    and `reload_config_entry` doesn't reimport them, so an addon update
+    that places new code on disk doesn't take effect until HA fully
+    restarts. Without this probe, the addon would happily reload the
+    config entry against the OLD module's `async_setup_entry`, which
+    has no OAuth gate, and the webhook would serve unauthenticated
+    requests despite the user's "OAuth ENABLED" line in the log.
+    """
+    domain = _read_integration_domain()
+    if not domain:
+        return False
+    result = _ha_core_api(
+        "GET", f"/{domain}/oauth/protected-resource"
+    )
+    return isinstance(result, dict) and "authorization_servers" in result
+
+
 def _install_integration() -> IntegrationInstall:
     """Install/update the mcp_proxy custom component into HA config dir.
 
@@ -921,6 +964,84 @@ def main() -> int:
                 "POST",
                 "/services/persistent_notification/dismiss",
                 {"notification_id": "mcp_proxy_restart"},
+            )
+
+    # OAuth fail-closed gate. If the user enabled OAuth but the integration
+    # code currently loaded in HA's Python module cache is the old (no-auth)
+    # version, the webhook would happily serve unauthenticated requests
+    # despite the addon log saying "OAuth ENABLED". Detect this directly by
+    # probing the OAuth metadata endpoint — only the new code registers it.
+    # If absent, unregister the webhook so the URL stops working entirely
+    # until HA is restarted, and tell the user loudly.
+    if enable_oauth and not _probe_oauth_active():
+        log_error("")
+        log_error("=" * 70)
+        log_error(
+            "  OAuth is enabled but the integration code currently loaded "
+            "in"
+        )
+        log_error(
+            "  Home Assistant does not enforce it (HA was not restarted "
+            "after"
+        )
+        log_error("  the addon update).")
+        log_error("")
+        log_error(
+            "  Disabling the webhook to prevent unauthenticated access."
+        )
+        log_error(
+            "  RESTART HOME ASSISTANT (Settings → System → Restart) — the"
+        )
+        log_error("  webhook will reactivate automatically afterwards.")
+        log_error("=" * 70)
+        log_error("")
+        _remove_config_entry()
+        _ha_core_api(
+            "POST",
+            "/services/persistent_notification/create",
+            {
+                "title": (
+                    "MCP Webhook Proxy: HA restart required for OAuth"
+                ),
+                "message": (
+                    "OAuth is enabled in the addon configuration, but "
+                    "the new OAuth-enforcing integration code has not "
+                    "been loaded into Home Assistant yet (HA was not "
+                    "restarted after the addon update).\n\n"
+                    "**The webhook URL has been disabled** to prevent "
+                    "unauthenticated access while in this state. Please "
+                    "restart Home Assistant (**Settings → System → "
+                    "Restart**); the webhook will reactivate "
+                    "automatically once HA comes back up."
+                ),
+                "notification_id": "mcp_proxy_oauth_stale",
+            },
+        )
+        # Wait for HA to restart, then re-create the config entry. With
+        # the new code now in memory, the next async_setup_entry call
+        # registers the OAuth-enforcing handler.
+        _wait_for_ha_restart()
+        if not _ensure_config_entry():
+            log_error(
+                "Could not re-create config entry after HA restart. "
+                "Webhook remains disabled. Restart Home Assistant again "
+                "or remove and re-add the integration manually."
+            )
+        elif _probe_oauth_active():
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/dismiss",
+                {"notification_id": "mcp_proxy_oauth_stale"},
+            )
+            log_info(
+                "OAuth-enforcing integration code is now active; "
+                "webhook re-enabled."
+            )
+        else:
+            log_error(
+                "OAuth metadata endpoint still not reachable after HA "
+                "restart — webhook re-registered but OAuth status is "
+                "uncertain. Check HA logs."
             )
 
     # Log URLs. resolved_remote may already have been computed above for
