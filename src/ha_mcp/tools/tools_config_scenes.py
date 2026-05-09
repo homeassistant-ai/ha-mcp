@@ -795,13 +795,19 @@ class ConfigSceneTools:
             # the python_transform branch — a phantom category must not
             # rewrite the scene before erroring.
             #
-            # Issue #1168 R7 blocker 22: gate on the user-facing ``category``
-            # param, not ``effective_category``. ``_validate_scene_config``
-            # promotes a metadata-embedded category into ``effective_category``
-            # when the user passed ``category=None``; validating that on
-            # every call costs a category-registry round-trip even when the
-            # user wasn't trying to change the category at all.
-            if category is not None and effective_category:
+            # Issue #1168 R8 (post-merge follow-up): gate on
+            # ``effective_category`` truthy, not on the user-facing
+            # ``category`` param. ``_validate_scene_config`` promotes a
+            # top-level ``config["category"]`` into ``effective_category``
+            # when the user passed ``category=None``; the R7 fix gated on
+            # ``category is not None`` to skip the WS round-trip when no
+            # category was supplied, but that left the dict-promoted path
+            # uncovered — a phantom category in ``config["category"]``
+            # would skip validation and reach ``apply_entity_category``,
+            # which attaches the phantom ID to the entity registry without
+            # checking it exists. Truthy check covers both sources and
+            # still skips the WS call when neither produces a category.
+            if effective_category:
                 await self._validate_category_id(effective_category)
 
             # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
