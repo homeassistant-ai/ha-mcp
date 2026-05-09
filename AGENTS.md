@@ -417,13 +417,13 @@ docker run -d -p 127.0.0.1:8086:8086 \
 # HTTP mode (LAN-reachable) — set MCP_SECRET_PATH before binding to all interfaces
 docker run -d -p 8086:8086 \
   -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
-  -e MCP_SECRET_PATH="/private_$(python -c 'import secrets; print(secrets.token_urlsafe(16))')" \
+  -e MCP_SECRET_PATH="/private_$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')" \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
 ```
 
 The standard-mode HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by
 URL-path secrecy: any request to the configured path (default `/mcp`,
-overridable via `MCP_SECRET_PATH`) is authorised. The MCP client must use the
+overridable via `MCP_SECRET_PATH`) is authorized. The MCP client must use the
 full URL including this path (e.g. `http://host:8086/private_<random>`); the
 web settings UI mounts under the same path (`<MCP_SECRET_PATH>/settings`), so
 operators reach it through the secret-prefixed URL too. Bind to `127.0.0.1`
