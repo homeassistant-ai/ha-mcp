@@ -120,8 +120,8 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 - `/.../api/webhook/<id>` — MCP webhook (now bearer-protected)
 - `/.../api/mcp_proxy/oauth/protected-resource` — RFC 9728 metadata
 - `/.../api/mcp_proxy/oauth/authorization-server` — RFC 8414 metadata
-- `/.../api/mcp_proxy/oauth/authorize` — consent screen
-- `/.../api/mcp_proxy/oauth/token` — token endpoint
+- `/.../authorize` — consent screen (root path; Claude.ai expects it here)
+- `/.../token` — token endpoint (root path; Claude.ai expects it here)
 
 **Notes:**
 

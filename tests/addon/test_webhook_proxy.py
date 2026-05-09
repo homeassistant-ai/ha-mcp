@@ -1859,10 +1859,11 @@ class TestAuthorizationServerView:
 
         body = json_resp.call_args.args[0]
         assert body["issuer"].endswith("/api/mcp_proxy/oauth")
-        assert body["authorization_endpoint"].endswith(
-            "/api/mcp_proxy/oauth/authorize"
-        )
-        assert body["token_endpoint"].endswith("/api/mcp_proxy/oauth/token")
+        # Authorize/token endpoints live at the root path of the host so
+        # that clients constructing them from the resource host (Claude.ai)
+        # find them.
+        assert body["authorization_endpoint"] == "https://legit.example/authorize"
+        assert body["token_endpoint"] == "https://legit.example/token"
         assert "code" in body["response_types_supported"]
         assert "authorization_code" in body["grant_types_supported"]
         assert "refresh_token" in body["grant_types_supported"]
@@ -1974,6 +1975,8 @@ class TestAuthorizeViewGet:
         assert 'name="redirect_uri"' in html
         assert 'name="state"' in html
         assert 'name="code_challenge"' in html
+        # Form posts back to the same root /authorize URL
+        assert 'action="/authorize"' in html
 
     async def test_escapes_redirect_uri_in_consent_page(self, setup):
         """A malicious actor can put `<script>` in their redirect_uri to
@@ -2503,11 +2506,14 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         registered_urls = {
             call.args[0].url for call in hass.http.register_view.call_args_list
         }
+        # Authorize/token live at the root because Claude.ai constructs
+        # those URLs from the resource host without consulting the
+        # authorization-server metadata document.
         assert registered_urls == {
             "/api/mcp_proxy/oauth/protected-resource",
             "/api/mcp_proxy/oauth/authorization-server",
-            "/api/mcp_proxy/oauth/authorize",
-            "/api/mcp_proxy/oauth/token",
+            "/authorize",
+            "/token",
         }
 
 
