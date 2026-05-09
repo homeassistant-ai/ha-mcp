@@ -128,30 +128,36 @@ def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
     """Read tool-surface-shaping config toggles from Settings.
 
     Defaults to the global settings singleton; tests can pass a fake Settings
-    instance instead. Returns an empty dict if Settings construction fails so
-    a misconfigured environment can't break the bug report path itself.
+    instance instead. Returns an empty dict on any failure (Settings
+    construction, attribute coercion, list-field split) so a misconfigured
+    environment can't break the bug report path itself.
     """
     try:
         s = settings if settings is not None else get_global_settings()
-    except Exception as e:  # pragma: no cover — defensive guard
-        logger.warning("Failed to read settings for bug report toggles: %s", e)
+
+        toggles: dict[str, Any] = {}
+        for field in _CONFIG_TOGGLE_FIELDS:
+            value = getattr(s, field, None)
+            if value is None:
+                continue
+            toggles[field] = value
+
+        # Summarize list-shaped seeds as counts rather than dumping the full
+        # strings — they can be very long, and listing the exact tools the
+        # user disabled isn't useful for triage.
+        for list_field in ("disabled_tools", "pinned_tools"):
+            raw = getattr(s, list_field, "") or ""
+            count = len([item for item in raw.split(",") if item.strip()])
+            toggles[f"{list_field}_count"] = count
+
+        return toggles
+    except Exception as e:
+        logger.warning(
+            "Failed to read settings for bug report toggles: %s (%s)",
+            e,
+            type(e).__name__,
+        )
         return {}
-
-    toggles: dict[str, Any] = {}
-    for field in _CONFIG_TOGGLE_FIELDS:
-        value = getattr(s, field, None)
-        if value is None:
-            continue
-        toggles[field] = value
-
-    # Summarize list-shaped seeds rather than dumping the full strings, which
-    # may include private tool names or be very long.
-    for list_field in ("disabled_tools", "pinned_tools"):
-        raw = getattr(s, list_field, "") or ""
-        count = len([item for item in raw.split(",") if item.strip()])
-        toggles[f"{list_field}_count"] = count
-
-    return toggles
 
 
 def _extract_client_info(ctx: Context | None) -> dict[str, str]:
@@ -159,15 +165,23 @@ def _extract_client_info(ctx: Context | None) -> dict[str, str]:
 
     The MCP ``initialize`` handshake carries a ``clientInfo`` Implementation
     object (``name``/``version``/optional ``title``). FastMCP exposes the
-    underlying server session as ``ctx.session``, and the MCP server session
-    keeps the parsed initialize params on ``client_params``. This is the
-    ground truth for which application is talking to ha-mcp — we use it
-    instead of asking the LLM to self-report ``Client application``.
+    underlying server session as ``ctx.session``; the MCP SDK's
+    ``ServerSession`` keeps the parsed initialize params on ``client_params``.
+    The attribute name on the parsed Pydantic model is ``clientInfo`` in
+    ``mcp`` 1.24.x (the version this project pins) — we also fall back to
+    ``client_info`` to stay forward-compatible with SDK versions that switch
+    to snake_case.
 
-    Returns ``{"name": ..., "version": ..., "title": ...}`` with ``"unknown"``
-    for fields the client didn't send. Returns an empty dict if no context is
-    available (tool invoked outside an MCP request, e.g. unit tests) so the
-    bug-report path stays robust.
+    Returns ``{"name": ..., "version": ..., "title": ...}``. ``name`` and
+    ``version`` fall back to ``"unknown"`` when the client didn't send them;
+    ``title`` falls back to the empty string so callers can distinguish "not
+    sent" from a real title without false-positive aside rendering.
+
+    Returns an empty dict if no context is available (tool invoked outside an
+    MCP request, e.g. unit tests) so the bug-report path stays robust. The
+    log level is intentionally INFO, not DEBUG: this catch is the only signal
+    we'd get if FastMCP/MCP SDK shape drifts in a future release, and silent
+    drift would hide a regression for months.
     """
     if ctx is None:
         return {}
@@ -176,7 +190,13 @@ def _extract_client_info(ctx: Context | None) -> dict[str, str]:
         params = (
             getattr(session, "client_params", None) if session is not None else None
         )
-        client = getattr(params, "clientInfo", None) if params is not None else None
+        if params is None:
+            return {}
+        # Try the camelCase attribute (mcp 1.24.x) first, then snake_case so
+        # we keep working if the SDK switches the alias direction.
+        client = getattr(params, "clientInfo", None) or getattr(
+            params, "client_info", None
+        )
         if client is None:
             return {}
         return {
@@ -184,27 +204,32 @@ def _extract_client_info(ctx: Context | None) -> dict[str, str]:
             "version": getattr(client, "version", None) or "unknown",
             "title": getattr(client, "title", None) or "",
         }
-    except Exception as e:  # pragma: no cover — defensive guard
-        logger.debug("Failed to read MCP client info from context: %s", e)
+    except Exception as e:
+        logger.info(
+            "Failed to read MCP client info from context: %s (%s)",
+            e,
+            type(e).__name__,
+        )
         return {}
 
 
 def _format_client_info_for_template(info: dict[str, str]) -> str:
     """Render the MCP client identification as a single human-readable line.
 
-    Falls back to ``unknown (no client_info on context)`` when the handshake
-    didn't carry a ``clientInfo`` block — this happens for direct MCP clients
-    that skip the optional field, or when the bug report tool runs outside a
-    live request.
+    Falls back to ``unknown (client did not advertise itself)`` when no
+    client info was available — this happens for direct MCP clients that
+    skip the optional ``clientInfo`` field, or when the bug report tool
+    runs outside a live request. Phrasing is deliberately observable
+    rather than naming the underlying API field (which may be renamed).
     """
     if not info:
-        return "unknown (no client_info on context)"
+        return "unknown (client did not advertise itself)"
     name = info.get("name") or "unknown"
     version = info.get("version") or "unknown"
     title = info.get("title") or ""
     base = f"{name} {version}"
     if title and title != name:
-        return f"{base}  _(advertised title: {title})_"
+        return f"{base} _(advertised title: {title})_"
     return base
 
 
@@ -216,27 +241,35 @@ def _detect_mcp_transport() -> str:
     and well-known env hints. The result is informational — the bug template
     surfaces it as an auto-detect that the agent or user can override.
     """
-    # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP).
+    # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP, ``ha-mcp-sse``
+    # for SSE; pyproject.toml's [project.scripts] is the source of truth).
     argv0 = (sys.argv[0] if sys.argv else "").lower()
     basename = os.path.basename(argv0)
-    if basename.endswith("-web") or basename.endswith("-http"):
+    if basename.endswith("-web"):
         return "http"
     if basename.endswith("-sse"):
         return "sse"
 
-    # Env hints set by HTTP wrappers / supervisors.
+    # Env hints set by HTTP wrappers / supervisors. ``streamable-http`` is the
+    # documented FastMCP variant; collapse it to ``http`` since the
+    # distinction doesn't change triage decisions.
     transport_env = os.environ.get("FASTMCP_TRANSPORT", "").strip().lower()
     if transport_env in {"http", "stdio", "sse"}:
         return transport_env
+    if transport_env == "streamable-http":
+        return "http"
     if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
         return "http"
 
-    # If stdin is a real TTY, ha-mcp wasn't launched by an MCP host pipe —
-    # it's almost certainly a manual run, not stdio MCP traffic.
+    # If stdin is piped (not a TTY), ha-mcp was launched by an MCP host on
+    # stdio. If it IS a TTY, this is a manual / interactive run with no
+    # other transport hints — fall through to ``unknown``.
     try:
         if not sys.stdin.isatty():
             return "stdio"
-    except Exception:  # pragma: no cover — sys.stdin can be None in tests
+    except (AttributeError, OSError, ValueError):
+        # ``sys.stdin`` can be None or detached (pythonw, daemonized
+        # contexts, certain test harnesses). Treat as no signal.
         pass
 
     return "unknown"
@@ -995,7 +1028,7 @@ def _generate_agent_behavior_template(
     # _extract_error_messages and recent_logs are unused in the agent template;
     # tool sequence already lives in log_summary. Kept in the signature so
     # callers don't have to remember which template needs which arg.
-    del recent_logs  # explicit: not used in agent template
+    del recent_logs
 
     return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
 

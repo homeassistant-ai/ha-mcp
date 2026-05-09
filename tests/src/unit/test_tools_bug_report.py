@@ -850,6 +850,12 @@ class TestGetConfigToggles:
 class TestDetectMcpTransport:
     """Tests for _detect_mcp_transport."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_transport_env(self, monkeypatch):
+        """Drop any env vars that could otherwise leak between tests."""
+        for var in ("FASTMCP_TRANSPORT", "MCP_HTTP_PORT", "FASTMCP_PORT"):
+            monkeypatch.delenv(var, raising=False)
+
     def test_http_argv0(self, monkeypatch):
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-web"])
         assert _detect_mcp_transport() == "http"
@@ -858,16 +864,64 @@ class TestDetectMcpTransport:
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-sse"])
         assert _detect_mcp_transport() == "sse"
 
-    def test_env_override_wins_over_argv0_default(self, monkeypatch):
+    def test_argv0_wins_over_env(self, monkeypatch):
+        # Real precedence test: argv0 ending in -web returns "http" early,
+        # before the FASTMCP_TRANSPORT env check would otherwise force "stdio".
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-web"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "stdio")
+        assert _detect_mcp_transport() == "http"
+
+    def test_env_picks_up_when_argv0_is_neutral(self, monkeypatch):
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
         monkeypatch.setenv("FASTMCP_TRANSPORT", "http")
         assert _detect_mcp_transport() == "http"
 
+    def test_env_streamable_http_collapses_to_http(self, monkeypatch):
+        # FastMCP documents "streamable-http" as a valid transport literal.
+        # We collapse it to "http" — the distinction doesn't change triage.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "streamable-http")
+        assert _detect_mcp_transport() == "http"
+
     def test_env_port_implies_http(self, monkeypatch):
         monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
-        monkeypatch.delenv("FASTMCP_TRANSPORT", raising=False)
         monkeypatch.setenv("MCP_HTTP_PORT", "8086")
         assert _detect_mcp_transport() == "http"
+
+    def test_fastmcp_port_implies_http(self, monkeypatch):
+        # Cover the second half of the port-env clause that previously had no test.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_PORT", "8086")
+        assert _detect_mcp_transport() == "http"
+
+    def test_piped_stdin_is_stdio(self, monkeypatch):
+        # The most common production deployment shape (Claude Desktop launching
+        # ha-mcp via stdio pipe). Without this test the stdio branch is dead
+        # from the suite — a regression there would silently mislabel every
+        # Desktop bug report's transport as "unknown".
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        fake_stdin = SimpleNamespace(isatty=lambda: False)
+        monkeypatch.setattr("sys.stdin", fake_stdin)
+        assert _detect_mcp_transport() == "stdio"
+
+    def test_tty_stdin_with_no_hints_returns_unknown(self, monkeypatch):
+        # Manual / interactive run with no transport hints whatsoever.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        fake_stdin = SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr("sys.stdin", fake_stdin)
+        assert _detect_mcp_transport() == "unknown"
+
+    def test_detached_stdin_falls_through_to_unknown(self, monkeypatch):
+        # ``sys.stdin.isatty()`` can raise OSError when stdin is detached
+        # (pythonw, daemonized contexts). The except clause must not let
+        # the helper crash.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+
+        def boom():
+            raise OSError("stdin closed")
+
+        monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=boom))
+        assert _detect_mcp_transport() == "unknown"
 
 
 class TestFormatConfigTogglesForTemplate:
@@ -933,6 +987,36 @@ class TestExtractClientInfo:
         assert info["version"] == "0.42"
         assert info["title"] == ""
 
+    def test_missing_version_falls_back_to_unknown(self):
+        # Pin the docstring promise: name/version default to "unknown" when
+        # the client didn't send them. If the future SDK refactor stops
+        # sending `version`, the f"{name} {version}" downstream rendering
+        # must not produce "Cursor None".
+        client_info_obj = SimpleNamespace(name="Cursor", version=None, title=None)
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(clientInfo=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info == {"name": "Cursor", "version": "unknown", "title": ""}
+
+    def test_snake_case_client_info_attribute_is_picked_up(self):
+        # ha-mcp pins mcp 1.24.x where the attribute is `clientInfo`. Future
+        # SDK versions may switch to `client_info` (snake_case). The helper
+        # falls back to the snake_case attribute name so we keep working
+        # across the rename.
+        client_info_obj = SimpleNamespace(
+            name="Future Client", version="9.9.9", title=None
+        )
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(client_info=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info == {"name": "Future Client", "version": "9.9.9", "title": ""}
+
     def test_swallows_exceptions_and_returns_empty(self):
         # If the context shape is unexpected (future MCP / FastMCP API churn),
         # we'd rather degrade silently than fail the bug report.
@@ -949,7 +1033,9 @@ class TestFormatClientInfoForTemplate:
     def test_empty_renders_unknown_placeholder(self):
         rendered = _format_client_info_for_template({})
         assert "unknown" in rendered
-        assert "no client_info" in rendered
+        # Phrasing describes the observable, not the underlying API field name,
+        # so the message stays accurate if MCP renames the attribute.
+        assert "did not advertise" in rendered
 
     def test_name_and_version_render_as_single_line(self):
         rendered = _format_client_info_for_template(
@@ -1085,6 +1171,19 @@ class TestBugReportNewIdentityFields:
             # At least one known toggle ends up in the rendered section.
             assert "enable_tool_search" in template
 
+        # The plain-text formatted_report body (separate output from the
+        # markdown templates, returned to callers as a triage-readable
+        # summary) must mirror the new auto-detected rows. A future refactor
+        # that drops them from formatted_report while keeping the templates
+        # correct would silently regress the plain-text output.
+        report = result["formatted_report"]
+        assert "MCP Transport:" in report
+        assert "MCP Client:" in report
+        # Renamed from "Platform" to "Operating System" in this PR — pin it.
+        assert "Operating System:" in report
+        assert "=== ha-mcp Config Toggles ===" in report
+        assert "enable_tool_search" in report
+
         # The diagnostic dict carries the structured value too.
         toggles = result["diagnostic_info"]["config_toggles"]
         assert toggles["enable_tool_search"] is True
@@ -1102,6 +1201,13 @@ class TestBugReportNewIdentityFields:
         assert "&title=" in result["agent_behavior_submit_url"]
         assert result["runtime_bug_submit_url"].startswith(
             "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+        )
+        # Verify the title is actually URL-encoded — a regression that drops
+        # the quote_plus call would leak raw spaces / brackets into the
+        # query, which GitHub mangles.
+        title_query = result["runtime_bug_submit_url"].split("&title=", 1)[1]
+        assert " " not in title_query, (
+            f"Title query must be URL-encoded; got raw space in {title_query!r}"
         )
         # The submit URL is the one printed inside the rendered template body.
         assert result["runtime_bug_submit_url"] in result["runtime_bug_template"]
