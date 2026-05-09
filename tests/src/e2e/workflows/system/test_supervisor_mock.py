@@ -213,10 +213,12 @@ class TestMockResilience:
     async def test_unauthorized_supervisor_call_surfaces_as_tool_error(
         self, mcp_client, supervisor_mock, monkeypatch
     ):
-        """Wrong token → 401 from mock → tool raises a structured error.
+        """Wrong token → 401 from mock → tool raises an AUTH_INVALID_TOKEN error.
 
         Exercises the auth-failure path through the full ha_get_logs →
-        _supervisor_logs_get → mock chain.
+        _supervisor_logs_get → mock chain. Pinning the error code (not just
+        success=False) catches future regressions where 401 silently re-maps
+        to a generic INTERNAL_ERROR.
         """
         monkeypatch.setenv("SUPERVISOR_TOKEN", "wrong-token-on-purpose")
         result = await safe_call_tool(
@@ -225,3 +227,5 @@ class TestMockResilience:
             {"source": "system_service", "slug": "core"},
         )
         assert result.get("success") is False
+        # HomeAssistantAuthError → create_auth_error → AUTH_INVALID_TOKEN
+        assert result.get("error", {}).get("code") == "AUTH_INVALID_TOKEN"

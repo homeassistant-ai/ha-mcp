@@ -83,14 +83,16 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
+        # Auth runs FIRST — real Supervisor returns 401 regardless of path
+        # when the bearer token is wrong. Routing/404 happens only after.
+        if not self._check_auth():
+            return
         if m := _SERVICE_LOGS_RE.match(self.path):
             service = m.group(1)
             if service not in SYSTEM_SERVICES:
                 self._send_json(
                     404, {"result": "error", "message": f"Unknown service: {service}"}
                 )
-                return
-            if not self._check_auth():
                 return
             self._send_text(
                 200,
@@ -102,8 +104,6 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
 
         if m := _ADDON_LOGS_RE.match(self.path):
             slug = m.group(1)
-            if not self._check_auth():
-                return
             self._send_text(
                 200,
                 f"[addon:{slug}] mock log line 1\n[addon:{slug}] mock log line 2\n",
@@ -115,9 +115,9 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
+        if not self._check_auth():
+            return
         if self.path == "/addons/self/restart":
-            if not self._check_auth():
-                return
             # Real Supervisor returns this envelope on success; the call site
             # discards the body but checks the status code.
             self._send_json(200, {"result": "ok", "data": {}})
