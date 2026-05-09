@@ -28,7 +28,16 @@
   this is a configuration or usage issue, not a security vulnerability.
   Tool visibility controls (`ENABLED_TOOL_MODULES`, group toggles) exist for this purpose.
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
-  (e.g., standard-mode instance exposed to the internet without TLS)
+  (e.g., standard-mode instance exposed to the internet without TLS, or a
+  network-reachable HTTP entrypoint without `MCP_SECRET_PATH` set).
+
+  **Standard-mode threat model.** The HTTP entrypoints (`ha-mcp-web`,
+  `ha-mcp-sse`) authenticate by URL-path secrecy and are designed for
+  same-host stdio, loopback HTTP, or LAN HTTP with a 128-bit-entropy
+  `MCP_SECRET_PATH`. For internet-facing deployments use the OAuth
+  entrypoint (`ha-mcp-oauth`) behind a TLS-terminating reverse proxy
+  (see [OAuth Mode](#oauth-mode--beta-warning) below). Deployment
+  guidance: [AGENTS.md → Docker](AGENTS.md#docker).
 
 ## OAuth Mode — Beta Warning
 
