@@ -1612,7 +1612,7 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Retrieve execution traces for automations and scripts to debug issues.\n\nTraces show what happened during automation/script runs:\n- What triggered the automation\n- Which conditions passed or failed\n- What actions were executed\n- Any errors that occurred\n- Variable values during execution\n\nUSAGE MODES:\n\n1. List recent traces (omit run_id):\n   ha_get_automation_traces(\"automation.motion_light\")\n   Returns a summary of recent execution runs with timestamps, triggers, and status.\n\n2. Get detailed trace (provide run_id):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   Returns full execution details including trigger info, condition results,\n   action trace with timing, and context variables.\n\n3. Get detailed trace with logbook (provide run_id and detailed=True):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", detailed=True)\n   Returns the formatted trace plus logbook entries and context metadata.\n   Useful when the standard trace summary doesn't reveal enough for debugging.\n   Note: script-style action paths (sequence/, numeric) are always matched\n   regardless of this flag.\n\n4. Get full variables without deduplication (provide run_id and deduplicate=False):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", deduplicate=False)\n   Returns the formatted trace with full variables at every action step.\n\nDEBUGGING EXAMPLES:\n\nAutomation not triggering:\n- Check if traces exist (automation may not be triggered)\n- Look at trigger info to see what event was received\n\nAutomation runs but conditions fail:\n- Get detailed trace to see condition_results\n- Each condition shows whether it passed (true) or failed (false)\n\nUnexpected behavior in actions:\n- Get detailed trace to see action_trace\n- Shows each action step with result and any errors\n- For 'choose' actions, shows which branch was taken\n\nTemplate debugging:\n- Detailed trace shows evaluated template values in context\n- Trigger variables available under trigger_variables\n\nNOTES:\n- Traces are stored for a limited time by Home Assistant\n- Works for both automations and scripts (use full entity_id)\n- The 'state' field shows: 'stopped' (completed), 'running', or error state",
+    "description": "Retrieve execution traces for automations and scripts to debug issues.\n\nTraces show what happened during automation/script runs:\n- What triggered the automation\n- Which conditions passed or failed\n- What actions were executed\n- Any errors that occurred\n- Variable values during execution\n\nUSAGE MODES:\n\n1. List recent traces (omit run_id):\n   ha_get_automation_traces(\"automation.motion_light\")\n   Returns a summary of recent execution runs with timestamps, triggers, and status.\n   Use `offset` to page deeper when `has_more` is true, or `order=\"oldest\"` to\n   start from the earliest stored trace instead of the most recent.\n\n2. Get detailed trace (provide run_id):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   Returns full execution details including trigger info, condition results,\n   action trace with timing, and context variables.\n\n3. Get detailed trace with logbook (provide run_id and detailed=True):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", detailed=True)\n   Returns the formatted trace plus logbook entries and context metadata.\n   Useful when the standard trace summary doesn't reveal enough for debugging.\n   Note: script-style action paths (sequence/, numeric) are always matched\n   regardless of this flag.\n\n4. Get full variables without deduplication (provide run_id and deduplicate=False):\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\", deduplicate=False)\n   Returns the formatted trace with full variables at every action step.\n\nDEBUGGING EXAMPLES:\n\nAutomation not triggering:\n- Check if traces exist (automation may not be triggered)\n- Look at trigger info to see what event was received\n\nAutomation runs but conditions fail:\n- Get detailed trace to see condition_results\n- Each condition shows whether it passed (true) or failed (false)\n\nUnexpected behavior in actions:\n- Get detailed trace to see action_trace\n- Shows each action step with result and any errors\n- For 'choose' actions, shows which branch was taken\n\nTemplate debugging:\n- Detailed trace shows evaluated template values in context\n- Trigger variables available under trigger_variables\n\nNOTES:\n- Traces are stored for a limited time by Home Assistant\n- Works for both automations and scripts (use full entity_id)\n- The 'state' field shows: 'stopped' (completed), 'running', or error state",
     "inputSchema": {
       "properties": {
         "automation_id": {
@@ -1623,7 +1623,7 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int, Field(description='Maximum number of traces to return when listing (default: 10, max: 50)', default=10, ge=1, le=50)]",
+          "type": "Annotated[int, Field(description='Maximum number of traces to return when listing (default: 10, max: 50).', default=10, ge=1, le=50)]",
           "default": 10
         },
         "deduplicate": {
@@ -1637,6 +1637,14 @@
         "sections": {
           "type": "Annotated[str | None, Field(description=\"Comma-separated list of trace sections to return. Valid values: trigger, conditions, actions, config, error, logbook, context. Omit to return all sections. Example: 'actions' or 'trigger,conditions'.\", default=None)]",
           "default": null
+        },
+        "offset": {
+          "type": "Annotated[int, Field(description='Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.', default=0, ge=0)]",
+          "default": 0
+        },
+        "order": {
+          "type": "Annotated[Literal['newest', 'oldest'], Field(description=\"Order traces are returned in. 'newest' (default) returns most-recent first; 'oldest' returns chronological-first.\", default='newest')]",
+          "default": "newest"
         }
       },
       "required": [
