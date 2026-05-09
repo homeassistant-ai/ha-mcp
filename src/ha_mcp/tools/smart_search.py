@@ -1225,6 +1225,7 @@ class SmartSearchTools:
             scene_fetch_failed_count = 0
             scene_fetch_skipped_count = 0
             scene_integration_skipped_count = 0
+            scene_registry_fetch_failed = False  # B11: signals fallback engaged
             if "scene" in search_types:
                 scene_entities = [
                     e
@@ -1337,7 +1338,17 @@ class SmartSearchTools:
                                 if slug and slug != uid:
                                     all_scene_configs[slug] = all_scene_configs[uid]
                 except Exception as e:
-                    logger.debug(f"Scene entity-registry augmentation failed: {e}")
+                    # Issue #1168 R5 blocker 11: promote DEBUG → WARNING
+                    # and signal the fallback so partial_reason can
+                    # explain why the count looks elevated. The previous
+                    # DEBUG-only log meant a true registry outage looked
+                    # identical to the steady-state happy path on stderr.
+                    logger.warning(
+                        "Scene entity-registry augmentation failed: %s; "
+                        "integration-platform filter unavailable, attempting all scenes",
+                        e,
+                    )
+                    scene_registry_fetch_failed = True
 
                 # Attempt C: parallel per-id fetch with a wall-clock budget so a
                 # few slow scenes don't tank the whole search; remaining ids
@@ -1720,6 +1731,18 @@ class SmartSearchTools:
                     reason_parts.append(
                         f" {scene_integration_skipped_count} integration-managed "
                         "scenes are scored by attribute only (no per-id fetch)."
+                    )
+                if scene_registry_fetch_failed:
+                    # Issue #1168 R5 blocker 11: when the registry fetch
+                    # errors, the integration-platform filter is
+                    # unavailable and Attempt C falls back to attempting
+                    # all scenes — surface that so an elevated
+                    # ``failed_count`` isn't mistaken for a real config
+                    # outage.
+                    reason_parts.append(
+                        " Entity-registry fetch failed; integration-platform "
+                        "filter unavailable, attempted all scenes "
+                        "(false-positive failures expected for integration-managed scenes)."
                     )
                 reason_parts.append(
                     " Some scene matches may be missing config data; tune "

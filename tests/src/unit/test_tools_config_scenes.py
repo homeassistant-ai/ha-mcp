@@ -183,6 +183,7 @@ class TestScenePythonTransform:
         # First call (hash verify) returns the seed config.
         # Second call (re-fetch authoritative hash) returns the same shape.
         seed = {
+            "id": "test_scene",
             "name": "Test Scene",
             "entities": {"light.kitchen": {"state": "on", "brightness": 100}},
         }
@@ -212,6 +213,7 @@ class TestScenePythonTransform:
     async def test_transform_hash_mismatch_raises_conflict(self, tools, mock_client):
         """A stale config_hash on python_transform surfaces a conflict error."""
         seed = {
+            "id": "test_scene",
             "name": "Test Scene",
             "entities": {"light.kitchen": {"state": "on"}},
         }
@@ -236,6 +238,7 @@ class TestScenePythonTransform:
         apply_entity_category — surfaced in the PR #1168 Gemini review.
         """
         seed = {
+            "id": "test_scene",
             "name": "Test Scene",
             "entities": {"light.kitchen": {"state": "on"}},
         }
@@ -250,6 +253,18 @@ class TestScenePythonTransform:
             return f"scene.{scene_id}"
 
         monkeypatch.setattr(tools, "_resolve_scene_entity_id", _stub_resolve)
+
+        # B9: _validate_category_id pre-flights against the category registry.
+        # Wire send_websocket_message to recognise the list call and surface
+        # ``my_category`` so validation passes; default empty result for
+        # everything else (resolver, etc.) is unaffected because the resolver
+        # is stubbed above.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"category_id": "my_category", "name": "My Cat"}],
+            }
+        )
 
         # Capture apply_entity_category invocations from the tools module.
         calls: list[tuple] = []
@@ -293,6 +308,7 @@ class TestScenePythonTransform:
     async def test_transform_must_keep_entities_dict_shape(self, tools, mock_client):
         """A transform that drops the entities key fails the post-transform check."""
         seed = {
+            "id": "test_scene",
             "name": "Test Scene",
             "entities": {"light.kitchen": {"state": "on"}},
         }
@@ -324,7 +340,11 @@ class TestScenePythonTransform:
         message naming the offending node, not as a stack trace or
         SERVICE_CALL_FAILED.
         """
-        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        seed = {
+            "id": "test_scene",
+            "name": "S",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
         mock_client.get_scene_config = AsyncMock(return_value=seed)
 
         from ha_mcp.utils.config_hash import compute_config_hash
@@ -351,7 +371,11 @@ class TestScenePythonTransform:
         as ToolError VALIDATION_FAILED, not an unhandled SyntaxError leaking
         a stack trace through the tool boundary.
         """
-        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        seed = {
+            "id": "test_scene",
+            "name": "S",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
         mock_client.get_scene_config = AsyncMock(return_value=seed)
 
         from ha_mcp.utils.config_hash import compute_config_hash
@@ -377,7 +401,11 @@ class TestScenePythonTransform:
         raised by valid-but-failing transform expressions surface as
         ToolError VALIDATION_FAILED rather than propagating raw.
         """
-        seed = {"name": "S", "entities": {"light.kitchen": {"state": "on"}}}
+        seed = {
+            "id": "test_scene",
+            "name": "S",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
         mock_client.get_scene_config = AsyncMock(return_value=seed)
 
         from ha_mcp.utils.config_hash import compute_config_hash
@@ -687,9 +715,7 @@ class TestSceneResponseShape:
     the storage key.
     """
 
-    async def test_get_scene_response_is_not_doubly_nested(
-        self, tools, mock_client
-    ):
+    async def test_get_scene_response_is_not_doubly_nested(self, tools, mock_client):
         """``ha_config_get_scene`` returns the actual scene body in
         ``response['config']`` — no nested ``success`` / ``scene_id`` /
         ``config`` from the rest-client envelope."""
@@ -751,7 +777,9 @@ class TestSceneResponseShape:
         rest-client-resolved storage key, regardless of whether the caller
         passed the entity_id slug. Caller passes "scene.led_desk_strip" but
         the resolver returns "night_light_led_desk_strip" (rename history)."""
-        mock_client.resolve_scene_id = AsyncMock(return_value="night_light_led_desk_strip")
+        mock_client.resolve_scene_id = AsyncMock(
+            return_value="night_light_led_desk_strip"
+        )
         mock_client.upsert_scene_config = AsyncMock(
             return_value={
                 "success": True,
@@ -768,12 +796,12 @@ class TestSceneResponseShape:
 
         assert result["scene_id"] == "night_light_led_desk_strip"
 
-    async def test_remove_scene_response_uses_storage_key(
-        self, tools, mock_client
-    ):
+    async def test_remove_scene_response_uses_storage_key(self, tools, mock_client):
         """Issue #1168 R3 blocker 6: remove-scene response surfaces the
         storage key, even when the caller passed the entity_id slug."""
-        mock_client.resolve_scene_id = AsyncMock(return_value="night_light_led_desk_strip")
+        mock_client.resolve_scene_id = AsyncMock(
+            return_value="night_light_led_desk_strip"
+        )
         mock_client.delete_scene_config = AsyncMock(
             return_value={
                 "success": True,
@@ -783,7 +811,8 @@ class TestSceneResponseShape:
         )
 
         result = await tools.ha_config_remove_scene(
-            scene_id="led_desk_strip", wait=False,
+            scene_id="led_desk_strip",
+            wait=False,
         )
 
         assert result["scene_id"] == "night_light_led_desk_strip"
@@ -791,28 +820,45 @@ class TestSceneResponseShape:
     async def test_set_scene_config_mode_stale_hash_raises_conflict(
         self, tools, mock_client
     ):
-        """Issue #1168 R3 blocker 7: when the caller passes
-        ``config_hash`` in config-mode (full replacement), the tool
-        verifies it before upsert. A stale hash surfaces as a structured
-        conflict error AND carries the fresh hash in context (per the
-        ``current_config_hash`` contract from R1).
+        """Issue #1168 R3 blocker 7 + R5 test gap 14: when the caller
+        passes ``config_hash`` in config-mode (full replacement), the
+        tool verifies it before upsert. A stale hash surfaces as a
+        structured conflict error AND carries the fresh hash in
+        context (per the ``current_config_hash`` contract from R1).
+
+        R5 test gap 14: assert ``error_data["scene_id"]`` equals the
+        resolved storage key (not the caller-input slug). Uses a
+        slug-input fixture (``led_desk_strip`` → registry storage key
+        ``night_light_led_desk_strip``) so a regression that drops the
+        slug→storage-key thread-through is caught — without the slug
+        remap, the caller-input value happens to match the storage key
+        and the assertion is meaningless.
         """
         from ha_mcp.utils.config_hash import compute_config_hash
 
+        # Slug → storage key remap, mirroring TestResolveSceneEntityId's
+        # ``night_light_led_desk_strip`` fixture pattern.
+        mock_client.resolve_scene_id = AsyncMock(
+            return_value="night_light_led_desk_strip"
+        )
         seed = {
-            "id": "test_scene",
+            "id": "night_light_led_desk_strip",
             "name": "Old Name",
             "entities": {"light.kitchen": {"state": "on"}},
         }
         # rest_client.get_scene_config returns the rest-client envelope.
         mock_client.get_scene_config = AsyncMock(
-            return_value={"success": True, "scene_id": "test_scene", "config": seed}
+            return_value={
+                "success": True,
+                "scene_id": "night_light_led_desk_strip",
+                "config": seed,
+            }
         )
         fresh_hash = compute_config_hash(seed)
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_scene(
-                scene_id="test_scene",
+                scene_id="led_desk_strip",  # input slug, not storage key
                 config={
                     "name": "New Name",
                     "entities": {"light.kitchen": {"state": "off"}},
@@ -826,6 +872,12 @@ class TestSceneResponseShape:
         assert "modified" in error_data["error"]["message"].lower()
         # Fresh hash carried in context so the caller can retry.
         assert error_data.get("current_config_hash") == fresh_hash
+        # R5 test gap 14: storage key threaded through to error context.
+        assert error_data.get("scene_id") == "night_light_led_desk_strip", (
+            "Conflict error must carry the resolved storage key, not the "
+            "caller-input slug — regression-guards the slug→storage-key "
+            "thread-through introduced for R3 blocker 6."
+        )
         # upsert was NOT called — the hash check fires first.
         mock_client.upsert_scene_config.assert_not_called()
 
@@ -870,9 +922,7 @@ class TestPythonTransformOrphanMetadata:
     full-replace ``config=`` mode (which clears metadata cleanly).
     """
 
-    async def test_orphan_metadata_pruned_after_entity_filter(
-        self, tools, mock_client
-    ):
+    async def test_orphan_metadata_pruned_after_entity_filter(self, tools, mock_client):
         """A list-comprehension transform filters ``entities`` — metadata
         for the removed entity is pruned before upsert, mirroring full-
         replace's behaviour."""
@@ -912,14 +962,10 @@ class TestPythonTransformOrphanMetadata:
         sent_config = upsert_call.args[0]
         assert sent_config["entities"] == {"light.kitchen": {"state": "on"}}
         # Orphan metadata for the filtered-out entity must be gone.
-        assert sent_config["metadata"] == {
-            "light.kitchen": {"entity_only": True}
-        }
+        assert sent_config["metadata"] == {"light.kitchen": {"entity_only": True}}
         assert "select.motion2_baud_rate" not in sent_config["metadata"]
 
-    async def test_metadata_unchanged_when_entities_unchanged(
-        self, tools, mock_client
-    ):
+    async def test_metadata_unchanged_when_entities_unchanged(self, tools, mock_client):
         """The prune step must not corrupt metadata when the transform
         doesn't touch ``entities`` (e.g., a brightness adjustment on an
         existing entity). Both pre- and post-transform metadata identical.
@@ -947,6 +993,282 @@ class TestPythonTransformOrphanMetadata:
         )
 
         sent_config = mock_client.upsert_scene_config.call_args.args[0]
-        assert sent_config["metadata"] == {
-            "light.kitchen": {"entity_only": True}
+        assert sent_config["metadata"] == {"light.kitchen": {"entity_only": True}}
+
+
+class TestPythonTransformGuardrails:
+    """R5 blockers 8/10/12/13 — python_transform input/output guards."""
+
+    async def test_transform_rebinding_config_to_none_rejected(
+        self, tools, mock_client
+    ):
+        """R5 blocker 8: ``config = None`` inside the transform used to
+        crash the next ``in`` check with a TypeError surfacing as
+        ``INTERNAL_ERROR``. Reject with a clean ``VALIDATION_FAILED``
+        signal instead.
+        """
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
         }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                python_transform="config = None",
+                config_hash=seed_hash,
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+        assert "none" in error_data["error"]["message"].lower()
+        # Critical: the failure is NOT an INTERNAL_ERROR leak.
+        assert error_data["error"]["code"] != "INTERNAL_ERROR"
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_transform_mutating_config_id_rejected(self, tools, mock_client):
+        """R5 blocker 10: ``config['id'] = 'other'`` would create a
+        duplicate scene at the new storage key and orphan the original.
+        Reject before upsert reaches HA.
+        """
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                python_transform="config['id'] = 'completely_different_id'",
+                config_hash=seed_hash,
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+        msg = error_data["error"]["message"]
+        assert "id" in msg.lower()
+        # The attempted-id is surfaced for the user.
+        assert error_data.get("attempted_id") == "completely_different_id"
+        # Upsert MUST NOT be called — duplicate prevention is the point.
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_transform_metadata_prune_logs_dropped_keys(
+        self, tools, mock_client, caplog, monkeypatch
+    ):
+        """R5 blocker 12: metadata prune used to be silent, masking
+        accidental entity drops. The prune step now logs at INFO with
+        the list of pruned keys.
+        """
+        import logging
+
+        # Stub apply_entity_category and wait so the test stays narrow.
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        async def _noop_category(*_a, **_k):
+            return None
+
+        async def _stub_wait(*_a, **_k):
+            return True
+
+        monkeypatch.setattr(scene_mod, "apply_entity_category", _noop_category)
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _stub_wait)
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {
+                "light.kitchen": {"state": "on"},
+                "light.bedroom": {"state": "on"},
+            },
+            "metadata": {
+                "light.kitchen": {"entity_only": True},
+                "light.bedroom": {"entity_only": True},
+            },
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        caplog.set_level(logging.INFO, logger="ha_mcp.tools.tools_config_scenes")
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform="del config['entities']['light.bedroom']",
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        # The INFO log records BOTH the count and the specific key list.
+        prune_records = [
+            r
+            for r in caplog.records
+            if "pruned" in r.message and "metadata" in r.message
+        ]
+        assert prune_records, (
+            f"metadata prune must log at INFO; got records={[r.message for r in caplog.records]}"
+        )
+        msg = prune_records[0].message
+        assert "light.bedroom" in msg
+        assert "1 orphan" in msg
+
+    async def test_resolver_logs_debug_on_exhausted_retry(
+        self, tools, mock_client, caplog
+    ):
+        """R5 blocker 13: when both registry calls succeed but neither
+        matches, log at DEBUG before falling back to ``scene.<scene_id>``
+        so the downstream phantom-404 warning has a correlative entry.
+        """
+        import logging
+
+        # Registry list always returns no matching row.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.unrelated",
+                        "unique_id": "unrelated",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
+
+        result = await tools._resolve_scene_entity_id("missing_scene")
+
+        # Naive fallback returned.
+        assert result == "scene.missing_scene"
+        # Exhausted-retry log entry present.
+        exhaust_records = [
+            r for r in caplog.records if "registry retry exhausted" in r.message.lower()
+        ]
+        assert exhaust_records, (
+            f"exhausted-retry-no-match path must log at DEBUG; "
+            f"got records={[r.message for r in caplog.records]}"
+        )
+        assert "missing_scene" in exhaust_records[0].message
+
+
+class TestCategoryValidation:
+    """R5 blocker 9 — pre-validate category IDs against the registry."""
+
+    @staticmethod
+    def _ws_side_effect_with_categories(category_ids: list[str]):
+        """Build a ``send_websocket_message`` side_effect that returns
+        the supplied category IDs for ``category_registry/list`` and an
+        empty result for anything else (resolver registry calls etc.).
+        """
+
+        async def _side_effect(message):
+            if isinstance(message, dict) and message.get("type") == (
+                "config/category_registry/list"
+            ):
+                return {
+                    "success": True,
+                    "result": [{"category_id": cid} for cid in category_ids],
+                }
+            return {"success": True, "result": []}
+
+        return _side_effect
+
+    async def test_set_scene_config_mode_rejects_phantom_category(
+        self, tools, mock_client
+    ):
+        """R5 blocker 9 (config-mode branch): a category ID that does
+        not exist in the live registry is rejected with
+        ``VALIDATION_INVALID_PARAMETER`` before HA writes it. Without
+        this gate, HA accepts the phantom ID silently and the entity
+        registry ends up with a reference invisible in
+        ``ha_config_get_category(scope='scene')`` results.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_side_effect_with_categories(["lighting", "ambience"])
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                config={"name": "X", "entities": {"light.kitchen": {"state": "on"}}},
+                category="nonexistent_id",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "nonexistent_id" in error_data["error"]["message"]
+        # Suggestion points at the right tool for category creation.
+        suggestions_blob = " ".join(error_data["error"].get("suggestions") or [])
+        assert "ha_config_set_category" in suggestions_blob
+
+    async def test_set_scene_config_mode_accepts_existing_category(
+        self, tools, mock_client
+    ):
+        """Sanity: an existing category ID passes the gate and the
+        upsert proceeds.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_side_effect_with_categories(["lighting"])
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"name": "X", "entities": {"light.kitchen": {"state": "on"}}},
+            category="lighting",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_scene_config.assert_called_once()
+
+    async def test_python_transform_branch_rejects_phantom_category(
+        self, tools, mock_client
+    ):
+        """R5 blocker 9 (python_transform branch): same gate must fire
+        on the transform path too — the bug originally surfaced through
+        the python_transform branch silently accepting phantom IDs.
+        """
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+        # Live registry has only 'lighting' — phantom_id should be rejected.
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_side_effect_with_categories(["lighting"])
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                python_transform=(
+                    "config['entities']['light.kitchen']['brightness'] = 100"
+                ),
+                config_hash=seed_hash,
+                category="phantom_id",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "phantom_id" in error_data["error"]["message"]

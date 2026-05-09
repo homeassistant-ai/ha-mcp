@@ -389,3 +389,107 @@ class TestSceneIntegrationFilter:
         assert "integration-managed" in reason.lower(), (
             f"partial_reason should distinguish integration scenes: {reason!r}"
         )
+
+
+@pytest.mark.asyncio
+class TestSceneRegistryFetchFailureSurfacing:
+    """R5 blocker 11 — surface registry-fetch failures clearly.
+
+    Before the fix, the catch around ``config/entity_registry/list``
+    logged at DEBUG and silently switched to "attempt all scenes"
+    mode. A real registry outage looked identical on stderr to the
+    steady-state happy path, and the elevated ``failed_count`` from
+    integration-managed scenes 404-ing on the per-id endpoint had no
+    explanation — partial_reason just said "X failed" with no signal
+    the registry was the upstream cause.
+
+    Fix: WARNING log + a flag that threads "integration-platform filter
+    unavailable" into ``partial_reason``.
+    """
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                _make_scene_entity("scene.bedroom", "Bedroom"),
+            ]
+        )
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+        return client
+
+    async def test_registry_fetch_failure_logs_warning(
+        self, mock_client, caplog
+    ) -> None:
+        """``config/entity_registry/list`` raising must log at WARNING,
+        not DEBUG. Operators rely on stderr WARNING+ for triage; a
+        DEBUG-only log meant a true outage was invisible.
+        """
+        import logging
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type == "config/entity_registry/list":
+                raise RuntimeError("simulated registry outage")
+            # WS bulk also fails so the branch reaches Attempt C.
+            return {"success": False}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        async def _failing_get(scene_id: str) -> dict[str, Any]:
+            raise RuntimeError(f"Mock fetch fail for {scene_id}")
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_failing_get)
+        tools = _make_tools(mock_client)
+
+        caplog.set_level(logging.WARNING, logger="ha_mcp.tools.smart_search")
+
+        await tools.deep_search(query="bedroom", search_types=["scene"], limit=10)
+
+        warn_records = [
+            r
+            for r in caplog.records
+            if "entity-registry augmentation failed" in r.message
+            and r.levelno == logging.WARNING
+        ]
+        assert warn_records, (
+            "registry fetch failure must log at WARNING; "
+            f"got records={[(r.levelname, r.message) for r in caplog.records]}"
+        )
+
+    async def test_registry_fetch_failure_threads_into_partial_reason(
+        self, mock_client
+    ) -> None:
+        """When the registry fetch fails AND Attempt C records per-id
+        failures, ``partial_reason`` must explain the registry-fetch
+        fallback so the elevated count isn't read as a config outage.
+        """
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type == "config/entity_registry/list":
+                raise RuntimeError("simulated registry outage")
+            return {"success": False}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        async def _failing_get(scene_id: str) -> dict[str, Any]:
+            raise RuntimeError(f"Mock fetch fail for {scene_id}")
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_failing_get)
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="bedroom", search_types=["scene"], limit=10
+        )
+
+        assert result.get("partial") is True
+        reason = result.get("partial_reason", "")
+        assert "registry" in reason.lower() and "fetch failed" in reason.lower(), (
+            f"partial_reason must surface the registry-fetch fallback; got {reason!r}"
+        )
+        # The user-facing wording explains the elevated failed_count.
+        assert (
+            "filter unavailable" in reason.lower() or "false-positive" in reason.lower()
+        ), f"partial_reason must explain the elevated failed_count; got {reason!r}"

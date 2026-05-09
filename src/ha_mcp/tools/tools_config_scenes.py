@@ -95,9 +95,8 @@ class ConfigSceneTools:
                 if result.get("success") is not False:
                     for entry in result.get("result") or []:
                         entity_id = entry.get("entity_id") or ""
-                        if (
-                            entry.get("unique_id") == scene_id
-                            and entity_id.startswith("scene.")
+                        if entry.get("unique_id") == scene_id and entity_id.startswith(
+                            "scene."
                         ):
                             return entity_id
             except (TimeoutError, HomeAssistantAPIError, HomeAssistantConnectionError):
@@ -118,7 +117,67 @@ class ConfigSceneTools:
                 # one short retry catches the common case before falling
                 # back to the naive entity_id.
                 await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+        # Issue #1168 R5 blocker 13: surface the exhausted-retry exit so
+        # the downstream phantom-404 warning has a correlating log entry
+        # the operator can grep for.
+        logger.debug(
+            f"_resolve_scene_entity_id: registry retry exhausted for "
+            f"scene_id={scene_id!r}, falling back to scene.{scene_id}"
+        )
         return f"scene.{scene_id}"
+
+    async def _validate_category_id(self, category: str) -> None:
+        """Confirm ``category`` exists in the ``scene`` category registry.
+
+        Issue #1168 R5 blocker 9: ``apply_entity_category`` forwards the
+        supplied ID blindly to the entity-registry update; HA accepts a
+        non-existent category ID without complaint, leaving the registry
+        with a phantom reference invisible in
+        ``ha_config_get_category(scope='scene')`` results. Pre-validating
+        the ID against the live category registry is the only place the
+        phantom can be caught without changing HA itself.
+        """
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "config/category_registry/list", "scope": "scene"}
+            )
+        except (
+            TimeoutError,
+            HomeAssistantAPIError,
+            HomeAssistantConnectionError,
+        ) as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to validate category {category!r}: {e}",
+                    context={"category": category, "scope": "scene"},
+                )
+            )
+        if not isinstance(result, dict) or not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list categories for validation of {category!r}",
+                    context={"category": category, "scope": "scene"},
+                )
+            )
+        valid_ids = {
+            c.get("category_id")
+            for c in (result.get("result") or [])
+            if isinstance(c, dict)
+        }
+        if category not in valid_ids:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Category {category!r} does not exist in scope 'scene'",
+                    suggestions=[
+                        "Use ha_config_get_category(scope='scene') to list available categories",
+                        "Use ha_config_set_category(name=..., scope='scene') to create a new category",
+                    ],
+                    context={"category": category, "scope": "scene"},
+                )
+            )
 
     @tool(
         name="ha_config_get_scene",
@@ -228,9 +287,11 @@ class ConfigSceneTools:
         outer ``scene_id`` matches the inner body's ``id`` regardless of
         whether the caller passed the entity_id slug or the storage key.
         """
-        actual_config, current_hash, resolved_id = (
-            await self._get_scene_config_internal(scene_id)
-        )
+        (
+            actual_config,
+            current_hash,
+            resolved_id,
+        ) = await self._get_scene_config_internal(scene_id)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -490,6 +551,28 @@ class ConfigSceneTools:
                         )
                     )
 
+                # Issue #1168 R5 blocker 8: a transform that reassigns
+                # config to ``None`` (or returns ``None`` from a list-comp
+                # mistake) used to crash the next ``in`` check with a
+                # ``TypeError`` that surfaced as ``INTERNAL_ERROR``. Catch
+                # the rebind here so the user gets the same VALIDATION
+                # signal the dict-shape checks below produce.
+                if transformed_config is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            "Transform must not reassign config to None",
+                            suggestions=[
+                                "The transform must produce a dict matching the scene config shape",
+                                "Mutate ``config`` in-place rather than reassigning it",
+                            ],
+                            context={
+                                "action": "python_transform",
+                                "scene_id": resolved_id,
+                            },
+                        )
+                    )
+
                 # Validate transformed config still has the required shape.
                 if "entities" not in transformed_config:
                     raise_tool_error(
@@ -521,6 +604,31 @@ class ConfigSceneTools:
                         )
                     )
 
+                # Issue #1168 R5 blocker 10: a transform that mutates
+                # ``config['id']`` produces a duplicate scene at the new
+                # storage key AND orphans the original (state goes
+                # ``unavailable``, registry row left behind). HA itself
+                # accepts the mismatched-id upsert silently. Reject the
+                # rename here — renaming a scene means delete-old +
+                # create-new through the explicit tools, not an in-place
+                # ``id`` rebind.
+                if transformed_config.get("id") != resolved_id:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_FAILED,
+                            "Transform must not change ``config['id']``",
+                            suggestions=[
+                                f"Original scene_id is {resolved_id!r} — keep it unchanged",
+                                "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
+                            ],
+                            context={
+                                "action": "python_transform",
+                                "scene_id": resolved_id,
+                                "attempted_id": transformed_config.get("id"),
+                            },
+                        )
+                    )
+
                 # Issue #1168 R3 blocker 5: prune orphan ``metadata`` keys
                 # whose entity was deleted by the transform (e.g. a list
                 # comprehension that filters ``entities`` doesn't touch
@@ -530,6 +638,17 @@ class ConfigSceneTools:
                 metadata = transformed_config.get("metadata")
                 if isinstance(metadata, dict):
                     valid_keys = set(transformed_config["entities"].keys())
+                    pruned_keys = sorted(k for k in metadata if k not in valid_keys)
+                    if pruned_keys:
+                        # Issue #1168 R5 blocker 12: a buggy transform that
+                        # accidentally drops entities used to silently
+                        # rewrite metadata. Surface the prune so a stray
+                        # ``del entities[k]`` doesn't lose the friendly_name
+                        # without trace.
+                        logger.info(
+                            f"python_transform pruned {len(pruned_keys)} orphan "
+                            f"metadata key(s) from scene {resolved_id}: {pruned_keys}"
+                        )
                     transformed_config["metadata"] = {
                         k: v for k, v in metadata.items() if k in valid_keys
                     }
@@ -568,6 +687,10 @@ class ConfigSceneTools:
                             f"Scene updated but verification failed: {e}"
                         )
                 if category and entity_id:
+                    # Issue #1168 R5 blocker 9: pre-validate the category
+                    # ID against the live category registry — HA accepts
+                    # phantom IDs silently otherwise.
+                    await self._validate_category_id(category)
                     await apply_entity_category(
                         self._client,
                         entity_id,
@@ -667,6 +790,10 @@ class ConfigSceneTools:
 
             # Apply category to entity registry if provided.
             if effective_category and entity_id:
+                # Issue #1168 R5 blocker 9: pre-validate the category
+                # ID against the live category registry — HA accepts
+                # phantom IDs silently otherwise.
+                await self._validate_category_id(effective_category)
                 await apply_entity_category(
                     self._client,
                     entity_id,
