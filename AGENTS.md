@@ -410,6 +410,7 @@ docker run --rm -i \
   ghcr.io/homeassistant-ai/ha-mcp:latest
 
 # HTTP mode (loopback only, same-host LLM client)
+# Connect URL: http://127.0.0.1:8086/mcp  (default MCP_SECRET_PATH)
 docker run -d -p 127.0.0.1:8086:8086 \
   -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
@@ -423,17 +424,16 @@ docker run -d -p 8086:8086 \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
 ```
 
-The standard-mode HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by
-URL-path secrecy: any request to the configured path (default `/mcp`,
-overridable via `MCP_SECRET_PATH`) is authorized. The MCP client must use the
-full URL including this path (e.g. `http://host:8086/private_<random>`); the
-web settings UI mounts under the same path (`<MCP_SECRET_PATH>/settings`), so
+The standard-mode `ha-mcp-web` HTTP entrypoint authenticates by URL-path
+secrecy: any request to the configured path (default `/mcp`, overridable
+via `MCP_SECRET_PATH`) is accepted. The MCP client must use the full URL
+including this path (e.g. `http://host:8086/private_<random>`); the web
+settings UI mounts under the same path (`<MCP_SECRET_PATH>/settings`), so
 operators reach it through the secret-prefixed URL too. Bind to `127.0.0.1`
 for same-host LLM clients; on LAN-reachable interfaces set a 128-bit-entropy
 `MCP_SECRET_PATH` (the Home Assistant add-on auto-generates one with
-`secrets.token_urlsafe(16)`). Internet-facing deployments need the OAuth
-entrypoint (`ha-mcp-oauth`) behind a TLS-terminating reverse proxy — see
-[SECURITY.md](SECURITY.md).
+`secrets.token_urlsafe(16)`). Internet-facing deployments need a different
+mode — see [SECURITY.md](SECURITY.md).
 
 ## Architecture
 

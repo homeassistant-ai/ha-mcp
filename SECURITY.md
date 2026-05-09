@@ -31,13 +31,14 @@
   (e.g., standard-mode instance exposed to the internet without TLS, or a
   network-reachable HTTP entrypoint using the default `MCP_SECRET_PATH`).
 
-  **Standard-mode threat model.** The HTTP entrypoints (`ha-mcp-web`,
-  `ha-mcp-sse`) authenticate by URL-path secrecy and are designed for
-  same-host stdio, loopback HTTP, or LAN HTTP with a 128-bit-entropy
-  `MCP_SECRET_PATH`. For internet-facing deployments use the OAuth
-  entrypoint (`ha-mcp-oauth`) behind a TLS-terminating reverse proxy
-  (see [OAuth Mode](#oauth-mode--beta-warning) below). Deployment
-  guidance: [AGENTS.md → Docker](AGENTS.md#docker).
+### Standard-mode threat model
+
+The HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by URL-path
+secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
+`MCP_SECRET_PATH`. For internet-facing deployments use the OAuth entrypoint
+(`ha-mcp-oauth`) behind a TLS-terminating reverse proxy (see
+[OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
+[AGENTS.md → Docker](AGENTS.md#docker).
 
 ## OAuth Mode — Beta Warning
 
