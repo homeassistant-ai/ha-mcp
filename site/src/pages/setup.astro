@@ -1448,7 +1448,7 @@ ingress:
   - hostname: ha-mcp.yourdomain.com
     service: http://homeassistant.local:9583</code></pre>
             <p class="text-xs text-slate-400 mt-2">Replace <code>homeassistant.local</code> with your HA host's IP or hostname — match the IP from the MCP add-on's log line (e.g. <code>http://192.168.1.100:9583/...</code>). The Cloudflared add-on tunnels from inside its own container, so <code>localhost</code> won't reach the MCP add-on.</p>
-            <p class="text-xs text-slate-400 mt-2">Or, point the tunnel at the MCP add-on's container hostname (shown on the MCP Server add-on's <strong>Information</strong> page, e.g. <code>b37de126-ha-mcp</code>): <code>service: http://b37de126-ha-mcp:9583</code>.</p>
+            <p class="text-xs text-slate-400 mt-2">Or, point the tunnel at the MCP add-on's container hostname (shown on the MCP Server add-on's <strong>Information</strong> page, e.g. <code>b37de126-ha-mcp</code>): <code>service: http://&lt;your-prefix&gt;-ha-mcp:9583</code>.</p>
           </details>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
