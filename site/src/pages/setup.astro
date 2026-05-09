@@ -1510,6 +1510,14 @@ ingress:
             <p class="text-slate-300 text-sm font-medium">Non-Nabu Casa users</p>
             <p class="text-slate-400 text-xs mt-1">If you use a custom reverse proxy (Cloudflare, DuckDNS, nginx, etc.), set <code class="bg-slate-800 px-1 rounded">remote_url</code> in the webhook proxy add-on configuration to your external HA URL (e.g., <code class="bg-slate-800 px-1 rounded">https://ha.example.com</code>).</p>
           </div>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-3">
+            <p class="text-amber-300 text-sm font-medium">⚠️ Treat the webhook URL like a password</p>
+            <p class="text-amber-200/80 text-xs mt-1">By default the webhook URL is <strong>unauthenticated</strong> — anyone with the full URL can reach your MCP server. Don't share it in screenshots, logs, or chat transcripts. If it leaks, rotate immediately: stop the add-on, delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the add-on filesystem, restart, and copy the new URL into your client.</p>
+          </div>
+          <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
+            <p class="text-purple-300 text-sm font-medium">🔒 Optional: OAuth (Beta)</p>
+            <p class="text-purple-200/80 text-xs mt-1">For a real auth layer on top of the URL secret, enable <strong>OAuth (Beta)</strong> in the add-on configuration. Toggle <em>Show unused optional configuration options</em>, set <strong>Enable OAuth</strong> to on, leave Client ID and Client Secret blank, and restart the add-on. The add-on auto-generates a strong Client ID and Client Secret on first start and prints them in the log; copy them into your MCP client's <strong>Advanced settings</strong> OAuth fields (in Claude.ai). Generated values persist at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code> across restarts. To rotate later: either set new values in the config fields, or flip <strong>Regenerate OAuth Credentials on Next Start</strong> on and restart — the add-on auto-clears the toggle after generating fresh values. Beta — works with Claude.ai today; other clients may vary. When the toggle is off, the webhook behaves exactly as before with no auth.</p>
+          </div>
         </div>`;
       } else if (state.proxy === 'custom') {
         proxyInstr = `<div class="instruction-block">

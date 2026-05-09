@@ -1,9 +1,16 @@
 """MCP Webhook Proxy - routes MCP requests to the ha-mcp addon via webhook.
 
 This integration is auto-installed by the webhook proxy addon when started.
-It registers an unauthenticated webhook endpoint that proxies MCP requests
-to the ha-mcp addon, allowing remote access via any reverse proxy (Nabu Casa,
-Cloudflare, DuckDNS, nginx, etc.).
+By default it registers an UNAUTHENTICATED webhook endpoint that proxies
+MCP requests to the ha-mcp addon, allowing remote access via any reverse
+proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.). The webhook URL itself
+is the shared secret in this default mode.
+
+Authentication: when the addon's "Enable OAuth" toggle is on, the addon
+writes OAuth client credentials into the config file and this integration
+lazy-imports `oauth.py` to register the OAuth 2.1 endpoints + bearer-token
+gate. When the toggle is off, no OAuth code is loaded and the proxy behaves
+exactly like the original unauthenticated webhook.
 
 Configuration is read from /config/.mcp_proxy_config.json, which is written
 by the proxy addon's startup script. No manual configuration is needed — the
@@ -159,10 +166,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Failed to register webhook endpoint: {err}"
         ) from err
 
+    # OAuth is opt-in. When the addon writes an `oauth` section into the
+    # config file (only when enable_oauth is on AND both creds are non-empty,
+    # validated by start.py), we lazy-import the provider and register its
+    # views. When the section is absent, this branch is skipped entirely and
+    # NOTHING about the proxy's behavior changes from the no-auth baseline.
+    oauth_provider = None
+    oauth_section = proxy_config.get("oauth")
+    if isinstance(oauth_section, dict):
+        client_id = str(oauth_section.get("client_id", ""))
+        client_secret = str(oauth_section.get("client_secret", ""))
+        if client_id and client_secret:
+            from .oauth import OAuthProvider
+            oauth_provider = OAuthProvider(
+                hass=hass,
+                client_id=client_id,
+                client_secret=client_secret,
+                webhook_id=webhook_id,
+            )
+            try:
+                oauth_provider.register_views()
+            except Exception:
+                _LOGGER.exception(
+                    "MCP Proxy: failed to register OAuth views — "
+                    "falling back to no-auth mode"
+                )
+                oauth_provider = None
+            else:
+                _LOGGER.info(
+                    "MCP Proxy: OAuth ENABLED (client_id=%s)",
+                    oauth_provider.client_id_masked(),
+                )
+        else:
+            # start.py validates this before writing the config, but defend
+            # in depth: blank creds → treat as auth-disabled rather than
+            # locking everyone out.
+            _LOGGER.warning(
+                "MCP Proxy: 'oauth' section present but client_id/secret "
+                "blank — auth is NOT enforced. Restart the addon after "
+                "fixing config."
+            )
+
     hass.data[DOMAIN] = {
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
+        "oauth": oauth_provider,
     }
 
     return True
@@ -186,6 +235,14 @@ async def _handle_webhook(
     """Forward the MCP request to the addon and stream the response back."""
     data = hass.data[DOMAIN]
     target_url = data["target_url"]
+
+    # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
+    # this branch is a single attribute lookup with zero behavior change vs
+    # the original handler.
+    oauth_provider = data.get("oauth")
+    if oauth_provider is not None and not oauth_provider.validate_bearer(request):
+        from .oauth import build_unauthorized_response
+        return build_unauthorized_response(request)
 
     body = await request.read()
 

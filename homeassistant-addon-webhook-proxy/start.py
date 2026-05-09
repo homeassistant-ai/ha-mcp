@@ -84,6 +84,29 @@ def _supervisor_get(path: str) -> dict | None:
         return None
 
 
+def _supervisor_post(path: str, data: dict) -> bool:
+    """POST to the Supervisor API. Returns True on 2xx."""
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return False
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(
+        f"http://supervisor{path}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        data=body,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+        log_error(f"Supervisor API POST {path}: {e}")
+        return False
+
+
 def _supervisor_get_text(path: str) -> str | None:
     """GET request returning raw text (e.g. addon logs)."""
     token = os.environ.get("SUPERVISOR_TOKEN")
@@ -277,6 +300,97 @@ def get_nabu_casa_url() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _regenerate_oauth_creds(data_dir: Path) -> None:
+    """Wipe the persisted OAuth creds file so the next resolve generates fresh
+    values. Idempotent: missing file is fine."""
+    creds_file = data_dir / "oauth_creds.json"
+    try:
+        if creds_file.exists():
+            creds_file.unlink()
+            log_info("Wiped existing OAuth credentials per regenerate toggle")
+    except OSError as e:
+        log_error(f"Failed to wipe OAuth creds for regeneration: {e}")
+
+
+def _clear_regenerate_toggle(current_config: dict) -> bool:
+    """Flip regenerate_oauth_creds back to false in the addon's own options
+    so subsequent restarts don't keep regenerating.
+
+    Posts the merged options dict to /addons/self/options. Returns True on
+    success. Falsy return means the user has to flip it off manually.
+    """
+    new_options = dict(current_config)
+    new_options["regenerate_oauth_creds"] = False
+    return _supervisor_post("/addons/self/options", {"options": new_options})
+
+
+def _resolve_oauth_creds(
+    data_dir: Path, configured_id: str, configured_secret: str
+) -> tuple[str, str]:
+    """Return the (client_id, client_secret) pair to use for OAuth.
+
+    Resolution order (per field, since users may rotate one without the
+    other):
+      1. Value supplied in the addon config (after trim).
+      2. Value persisted in /data/oauth_creds.json from a prior run.
+      3. Freshly generated and persisted now.
+
+    The persisted file makes auto-generated creds stable across restarts —
+    important so a Claude.ai connector keeps working after addon restart.
+    Persisted values are written with 0600 permissions; the file is in the
+    addon's /data volume which already has restricted access.
+
+    Empty return tuple ("", "") signals an unrecoverable error (bad
+    permissions etc); main() will refuse to start.
+    """
+    creds_file = data_dir / "oauth_creds.json"
+    stored: dict = {}
+    if creds_file.exists():
+        try:
+            loaded = json.loads(creds_file.read_text())
+            if isinstance(loaded, dict):
+                stored = loaded
+        except (OSError, json.JSONDecodeError) as e:
+            log_error(f"Could not read existing OAuth creds: {e}")
+
+    final_id = configured_id.strip() or stored.get("client_id", "")
+    final_secret = configured_secret.strip() or stored.get("client_secret", "")
+
+    if not final_id:
+        # 16 hex bytes after the "hamcp-" prefix → 38 chars total, well past
+        # the 16-char floor we enforce on client_ids
+        final_id = "hamcp-" + secrets.token_hex(16)
+        log_info("Generated new OAuth Client ID (no value configured or stored)")
+    if not final_secret:
+        # 32 random bytes → ~43 base64url chars → 256 bits of entropy
+        final_secret = secrets.token_urlsafe(32)
+        log_info("Generated new OAuth Client Secret")
+
+    # Persist whatever we ended up with so the same values come back next
+    # restart. Skip the write if nothing changed vs what's on disk.
+    needs_write = (
+        stored.get("client_id") != final_id
+        or stored.get("client_secret") != final_secret
+    )
+    if needs_write:
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            creds_file.write_text(
+                json.dumps(
+                    {"client_id": final_id, "client_secret": final_secret}
+                )
+            )
+            try:
+                creds_file.chmod(0o600)
+            except OSError:
+                pass  # tmpfs / non-POSIX filesystems may not support chmod
+        except OSError as e:
+            log_error(f"Failed to persist OAuth creds: {e}")
+            return "", ""
+
+    return final_id, final_secret
+
+
 def _get_or_create_webhook_id(data_dir: Path) -> str:
     """Get or create a persistent webhook ID."""
     wh_file = data_dir / "webhook_id.txt"
@@ -296,17 +410,23 @@ def _get_or_create_webhook_id(data_dir: Path) -> str:
     return wid
 
 
-def _install_integration() -> bool:
+def _install_integration() -> tuple[bool, bool]:
     """Install/update the mcp_proxy custom component into HA config dir.
 
-    Returns True if this is a first install (HA restart required).
+    Returns (first_install, version_changed):
+    - first_install: integration directory didn't exist (fresh setup, full HA
+      restart required to load it).
+    - version_changed: integration directory existed but the manifest version
+      differs (existing user updating; HA must be restarted to pick up the
+      new Python module — `reload_config_entry` only re-runs setup, it does
+      not re-import the .py files).
     """
     src = Path("/opt/mcp_proxy")
     dst = Path("/config/custom_components/mcp_proxy")
 
     if not src.exists():
         log_error("Integration source not found at /opt/mcp_proxy")
-        return False
+        return False, False
 
     Path("/config/custom_components").mkdir(parents=True, exist_ok=True)
 
@@ -324,6 +444,7 @@ def _install_integration() -> bool:
             pass
 
     first_install = not dst.exists()
+    version_changed = needs_update and not first_install
 
     if needs_update:
         if dst.exists():
@@ -333,7 +454,7 @@ def _install_integration() -> bool:
     else:
         log_info("mcp_proxy integration up to date")
 
-    return first_install
+    return first_install, version_changed
 
 
 def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
@@ -512,6 +633,11 @@ def main() -> int:
     remote_url = ""
     mcp_server_url = ""
     mcp_port = 9583
+    enable_oauth = False
+    oauth_client_id = ""
+    oauth_client_secret = ""
+    regenerate_oauth_creds = False
+    config: dict = {}
 
     if config_file.exists():
         try:
@@ -519,8 +645,54 @@ def main() -> int:
             remote_url = config.get("remote_url", "")
             mcp_server_url = config.get("mcp_server_url", "")
             mcp_port = config.get("mcp_port", 9583)
+            enable_oauth = bool(config.get("enable_oauth", False))
+            oauth_client_id = config.get("oauth_client_id", "")
+            oauth_client_secret = config.get("oauth_client_secret", "")
+            regenerate_oauth_creds = bool(
+                config.get("regenerate_oauth_creds", False)
+            )
         except (OSError, json.JSONDecodeError) as e:
             log_error(f"Failed to read config: {e}")
+
+    # OAuth credential resolution: user-supplied values in the addon config
+    # win. Otherwise fall back to a persisted creds file in /data, and if
+    # that doesn't exist either, auto-generate. This makes the happy path
+    # "toggle on, restart, copy creds from log" without the user ever having
+    # to invent secret strings.
+    if enable_oauth:
+        if regenerate_oauth_creds:
+            _regenerate_oauth_creds(data_dir)
+            # Force fresh generation: ignore any user-supplied values in this
+            # run since the user explicitly asked for new random ones.
+            oauth_client_id = ""
+            oauth_client_secret = ""
+            # Best-effort flip the toggle back to off via Supervisor self-
+            # options API. If it fails (older Supervisor), tell the user to
+            # do it manually so subsequent restarts don't keep regenerating.
+            if not _clear_regenerate_toggle(config):
+                log_error(
+                    "Could not auto-clear the 'Regenerate OAuth Credentials' "
+                    "toggle via the Supervisor API. Please flip it back to "
+                    "OFF manually in the addon configuration to avoid "
+                    "regenerating on every restart."
+                )
+
+        oauth_client_id, oauth_client_secret = _resolve_oauth_creds(
+            data_dir, oauth_client_id, oauth_client_secret
+        )
+        if not oauth_client_id or not oauth_client_secret:
+            log_error(
+                "Failed to resolve OAuth credentials. Check addon log "
+                "for prior errors and disk permissions on /data."
+            )
+            return 1
+        if len(oauth_client_id) < 16:
+            log_error(
+                f"OAuth Client ID is too short (got {len(oauth_client_id)} "
+                "characters, need >= 16). Clear the field to let the addon "
+                "generate one, or pick a longer string."
+            )
+            return 1
 
     # Resolve the MCP server target URL
     target_url = None
@@ -558,7 +730,12 @@ def main() -> int:
     webhook_path = f"/api/webhook/{webhook_id}"
 
     # Write proxy config for the mcp_proxy integration
-    proxy_config = {"target_url": target_url, "webhook_id": webhook_id}
+    proxy_config: dict = {"target_url": target_url, "webhook_id": webhook_id}
+    if enable_oauth:
+        proxy_config["oauth"] = {
+            "client_id": oauth_client_id,
+            "client_secret": oauth_client_secret,
+        }
     proxy_config_file = Path("/config/.mcp_proxy_config.json")
     try:
         proxy_config_file.write_text(json.dumps(proxy_config))
@@ -567,7 +744,36 @@ def main() -> int:
         return 1
 
     # Install the mcp_proxy custom component
-    first_install = _install_integration()
+    first_install, version_changed = _install_integration()
+
+    if version_changed:
+        # Existing user updating to a new addon version. The integration
+        # files on disk were just refreshed but Python won't pick up the
+        # new module code without an HA restart — `reload_config_entry`
+        # only re-runs `async_setup_entry`, it doesn't re-import the
+        # module. Surface a notification so the user knows.
+        log_info("")
+        log_info("*" * 60)
+        log_info("  INTEGRATION UPDATED — restart Home Assistant to load")
+        log_info("  the new mcp_proxy code. The addon will keep running")
+        log_info("  with the previous version's code until then.")
+        log_info("*" * 60)
+        log_info("")
+        _ha_core_api(
+            "POST",
+            "/services/persistent_notification/create",
+            {
+                "title": "MCP Webhook Proxy: Restart Required",
+                "message": (
+                    "The MCP Webhook Proxy integration was updated to a "
+                    "new version. Please restart Home Assistant "
+                    "(**Settings → System → Restart**) so the new code "
+                    "takes effect. The webhook keeps working in the "
+                    "meantime with the previous version."
+                ),
+                "notification_id": "mcp_proxy_update",
+            },
+        )
 
     if first_install:
         log_info("First install detected — HA restart required to load integration")
@@ -648,6 +854,23 @@ def main() -> int:
         log_info("    Set 'remote_url' in addon config, or enable Nabu Casa")
     log_info("")
     log_info("  Copy the remote URL above into your MCP client.")
+    if enable_oauth:
+        log_info("")
+        log_info("  OAuth (Beta) is ENABLED for this URL.")
+        log_info(f"    OAuth Client ID:     {oauth_client_id}")
+        log_info(f"    OAuth Client Secret: {oauth_client_secret}")
+        log_info(
+            "    Paste both into the OAuth fields of your MCP client's"
+        )
+        log_info(
+            "    connector setup (Claude.ai: connector → Advanced settings)."
+        )
+        log_info(
+            "    These values persist at /data/oauth_creds.json — same"
+        )
+        log_info(
+            "    values across addon restarts."
+        )
     log_info("=" * 70)
     log_info("")
 

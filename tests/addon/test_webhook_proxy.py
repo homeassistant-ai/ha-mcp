@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -72,12 +73,20 @@ def _install_runtime_stubs():
     aiohttp_web.Request = MagicMock
     aiohttp_web.Response = MagicMock
     aiohttp_web.StreamResponse = MagicMock
+    aiohttp_web.json_response = MagicMock(name="json_response")
     aiohttp_mod.web = aiohttp_web
+
+    # Stub the HA HTTP module just enough for the OAuth views to import
+    ha_components_http = types.ModuleType("homeassistant.components.http")
+    ha_components_http.HomeAssistantView = type(
+        "HomeAssistantView", (), {"requires_auth": True, "cors_allowed": False}
+    )
 
     sys.modules.update({
         "homeassistant": ha,
         "homeassistant.components": ha_components,
         "homeassistant.components.webhook": ha_webhook,
+        "homeassistant.components.http": ha_components_http,
         "homeassistant.config_entries": ha_config_entries,
         "homeassistant.core": ha_core,
         "homeassistant.helpers": ha_helpers,
@@ -88,13 +97,51 @@ def _install_runtime_stubs():
     })
 
 
-def _import_mcp_proxy():
+def _import_mcp_proxy(preload_oauth=None):
+    """Import the mcp_proxy package's __init__.py with HA imports stubbed.
+
+    `preload_oauth`: pre-register a specific oauth module under the
+    relative-import name (`mcp_proxy_init.oauth`). Without this, the
+    integration's `from .oauth import ...` calls would load a fresh oauth
+    module pointing at /config — fine for production, useless for tests.
+    """
     _install_runtime_stubs()
     init_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "__init__.py")
     sys.modules.pop("mcp_proxy_init", None)
-    spec = importlib.util.spec_from_file_location("mcp_proxy_init", init_path)
+    sys.modules.pop("mcp_proxy_init.oauth", None)
+    spec = importlib.util.spec_from_file_location(
+        "mcp_proxy_init",
+        init_path,
+        submodule_search_locations=[
+            os.path.join(PROXY_ADDON_DIR, "mcp_proxy")
+        ],
+    )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["mcp_proxy_init"] = mod
+    if preload_oauth is not None:
+        sys.modules["mcp_proxy_init.oauth"] = preload_oauth
     spec.loader.exec_module(mod)
+    return mod
+
+
+def _import_oauth(tmp_secret_dir=None):
+    """Import the oauth submodule, optionally redirecting the secret file
+    to a tmp dir so tests don't need root or write access to /config.
+
+    Registers in sys.modules under both `mcp_proxy_oauth` (so test patches
+    targeting that name resolve) and the module returned can be passed to
+    `_import_mcp_proxy(preload_oauth=...)` so the integration's relative
+    import resolves to the same instance.
+    """
+    _install_runtime_stubs()
+    oauth_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "oauth.py")
+    sys.modules.pop("mcp_proxy_oauth", None)
+    spec = importlib.util.spec_from_file_location("mcp_proxy_oauth", oauth_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["mcp_proxy_oauth"] = mod
+    spec.loader.exec_module(mod)
+    if tmp_secret_dir is not None:
+        mod.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
     return mod
 
 
@@ -141,6 +188,52 @@ class TestWebhookProxyStructure:
         assert "mcp_server_url" in config["schema"]
         assert "mcp_port" in config["schema"]
         assert config["options"]["mcp_port"] == 9583
+
+    def test_config_yaml_oauth_fields(self):
+        """OAuth fields are in schema as optional, with no defaults in options.
+
+        Defaultless + optional makes them hidden in the addon UI until the
+        "Show unused optional configuration options" toggle is flipped, which
+        keeps the basic config tab uncluttered for the no-auth case (where
+        the proxy must keep behaving exactly like 1.0.2).
+        """
+        with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+
+        assert config["schema"]["enable_oauth"] == "bool?"
+        assert config["schema"]["oauth_client_id"] == "str?"
+        assert config["schema"]["oauth_client_secret"] == "password?"
+        for key in ("enable_oauth", "oauth_client_id", "oauth_client_secret"):
+            assert key not in config["options"], (
+                f"{key} should not have a default in options:; that would "
+                "make it appear in the basic config tab."
+            )
+
+    def test_translations_cover_oauth_fields(self):
+        """Each new schema field has a translation entry."""
+        with open(f"{PROXY_ADDON_DIR}/translations/en.yaml") as f:
+            translations = yaml.safe_load(f)
+
+        cfg = translations["configuration"]
+        for key in ("enable_oauth", "oauth_client_id", "oauth_client_secret"):
+            assert key in cfg, f"Missing translation for {key}"
+            assert cfg[key].get("name"), f"Missing name for {key}"
+            assert cfg[key].get("description"), f"Missing description for {key}"
+        # Toggle must be flagged as Beta in the user-facing label
+        assert "Beta" in cfg["enable_oauth"]["name"]
+
+    def test_addon_and_integration_versions_match(self):
+        """config.yaml and manifest.json versions track together so that
+        `_install_integration` correctly detects updates."""
+        with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
+            addon_version = yaml.safe_load(f)["version"]
+        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/manifest.json") as f:
+            manifest_version = json.load(f)["version"]
+        assert addon_version == manifest_version, (
+            "Addon config.yaml version and integration manifest.json "
+            "version must match; otherwise the integration update "
+            "detection in start.py will misfire."
+        )
 
     def test_config_yaml_no_image_field(self):
         """Webhook proxy addon should not have an image field (not published to GHCR yet)."""
@@ -926,3 +1019,669 @@ class TestUnloadEntry:
         mock_unreg.assert_called_once_with(hass, "mcp_test_id")
         session.close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
+
+
+# ===========================================================================
+# OAuth tests
+# ===========================================================================
+#
+# The "Enable OAuth" toggle is a beta opt-in. The hard requirement is that
+# when the toggle is OFF (or the proxy_config has no `oauth` section at all)
+# the integration must behave EXACTLY like 1.0.2 — no extra views, no extra
+# code paths, no extra HTTP behavior. The first class below proves that
+# property, the rest exercise the OAuth code path itself.
+
+
+class TestOAuthOffPreservesBehavior:
+    """Critical regression guard: when oauth is not configured, async_setup_entry
+    and _handle_webhook must behave exactly like before."""
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    async def test_setup_without_oauth_section_stores_none(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert hass.data[mod.DOMAIN]["oauth"] is None
+
+    async def test_setup_does_not_import_oauth_module_when_off(self, mod, hass):
+        """Confirms the lazy-import: oauth submodule shouldn't be loaded
+        unless OAuth is configured. If this regresses, the OFF path picks up
+        new dependencies and the 'no behavior change' guarantee breaks."""
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+        }
+        # Wipe any stale import
+        sys.modules.pop("mcp_proxy_init.oauth", None)
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        # The submodule name follows from the parent's package name
+        # ("mcp_proxy_init"). If it ever appears here, the OFF path imported it.
+        assert "mcp_proxy_init.oauth" not in sys.modules
+
+    async def test_blank_creds_disables_auth(self, mod, hass):
+        """Defense in depth: even if the config file has an oauth section
+        with blank values, treat it as auth-disabled. Otherwise a partial
+        config could lock everyone out with no recourse."""
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {"client_id": "", "client_secret": ""},
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert hass.data[mod.DOMAIN]["oauth"] is None
+
+    async def test_webhook_handler_no_auth_skips_oauth_check(self, mod):
+        """The auth gate must not run when oauth is None — only one extra
+        attribute lookup vs the original handler."""
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        sentinel = mod.aiohttp.ClientError("stop here")
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(side_effect=sentinel)
+
+        await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_awaited_once()  # auth gate didn't short-circuit
+
+
+class TestOAuthProvider:
+    """Direct unit tests against the OAuthProvider class."""
+
+    @pytest.fixture
+    def provider(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        return oauth.OAuthProvider(
+            hass=hass,
+            client_id="client-id-1234567890",
+            client_secret="client-secret-very-secret",
+            webhook_id="mcp_webhook_id_xxx",
+        )
+
+    def test_issues_and_validates_access_token(self, provider):
+        token = provider.issue_access_token()
+        assert provider.validate_access_token(token) is True
+
+    def test_validates_refresh_token(self, provider):
+        token = provider.issue_refresh_token()
+        assert provider.validate_refresh_token(token) is True
+
+    def test_access_token_does_not_validate_as_refresh(self, provider):
+        access = provider.issue_access_token()
+        assert provider.validate_refresh_token(access) is False
+
+    def test_refresh_token_does_not_validate_as_access(self, provider):
+        refresh = provider.issue_refresh_token()
+        assert provider.validate_access_token(refresh) is False
+
+    def test_garbage_token_rejected(self, provider):
+        assert provider.validate_access_token("not.a.real.token") is False
+        assert provider.validate_access_token("") is False
+        assert provider.validate_access_token("bare") is False
+
+    def test_token_with_tampered_payload_rejected(self, provider):
+        token = provider.issue_access_token()
+        body, sig = token.rsplit(".", 1)
+        tampered_body = body[:-1] + ("A" if body[-1] != "A" else "B")
+        assert provider.validate_access_token(f"{tampered_body}.{sig}") is False
+
+    def test_token_with_tampered_signature_rejected(self, provider):
+        token = provider.issue_access_token()
+        body, sig = token.rsplit(".", 1)
+        tampered_sig = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+        assert provider.validate_access_token(f"{body}.{tampered_sig}") is False
+
+    def test_expired_token_rejected(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+        )
+        token = provider.issue_access_token()
+        future = int(time.time()) + oauth.ACCESS_TOKEN_TTL + 60
+        with patch.object(oauth.time, "time", return_value=future):
+            assert provider.validate_access_token(token) is False
+
+    def test_validate_bearer_accepts_valid_token(self, provider):
+        token = provider.issue_access_token()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Bearer {token}"}
+        assert provider.validate_bearer(request) is True
+
+    def test_validate_bearer_rejects_basic_scheme(self, provider):
+        request = MagicMock()
+        request.headers = {"Authorization": "Basic abcd"}
+        assert provider.validate_bearer(request) is False
+
+    def test_validate_bearer_rejects_missing_header(self, provider):
+        request = MagicMock()
+        request.headers = {}
+        assert provider.validate_bearer(request) is False
+
+    def test_authenticate_client_accepts_correct_creds(self, provider):
+        assert provider.authenticate_client(
+            "client-id-1234567890", "client-secret-very-secret"
+        )
+
+    def test_authenticate_client_rejects_wrong_id(self, provider):
+        assert not provider.authenticate_client(
+            "wrong", "client-secret-very-secret"
+        )
+
+    def test_authenticate_client_rejects_wrong_secret(self, provider):
+        assert not provider.authenticate_client(
+            "client-id-1234567890", "wrong"
+        )
+
+    def test_authenticate_client_rejects_blanks(self, provider):
+        assert not provider.authenticate_client("", "")
+        assert not provider.authenticate_client("a", "")
+        assert not provider.authenticate_client("", "b")
+        assert not provider.authenticate_client(None, None)
+
+    def test_pkce_code_round_trip(self, provider, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        verifier = "test-verifier-with-enough-length-for-spec"
+        challenge = oauth._b64url_encode(
+            __import__("hashlib").sha256(verifier.encode()).digest()
+        )
+        code = provider.issue_code("https://claude.ai/cb", challenge)
+        # Wrong verifier rejected
+        assert provider.consume_code(code, "https://claude.ai/cb", "wrong") is False
+        # Code is wiped on consume attempt — re-issue for the success case
+        code2 = provider.issue_code("https://claude.ai/cb", challenge)
+        assert provider.consume_code(code2, "https://claude.ai/cb", verifier) is True
+        # Code is single-use
+        assert provider.consume_code(code2, "https://claude.ai/cb", verifier) is False
+
+    def test_code_rejects_redirect_uri_mismatch(self, provider, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        verifier = "test-verifier-12345678901234567890"
+        challenge = oauth._b64url_encode(
+            __import__("hashlib").sha256(verifier.encode()).digest()
+        )
+        code = provider.issue_code("https://claude.ai/cb", challenge)
+        assert provider.consume_code(code, "https://attacker.com/cb", verifier) is False
+
+    def test_rotating_client_id_invalidates_existing_tokens(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        provider1 = oauth.OAuthProvider(
+            hass=hass, client_id="id-aaaaaaaaaaaaaaaaa", client_secret="secret",
+            webhook_id="wh",
+        )
+        token = provider1.issue_access_token()
+        # New provider with a different client_id (admin rotated) — token
+        # signed for the old client_id must be rejected.
+        provider2 = oauth.OAuthProvider(
+            hass=hass, client_id="id-bbbbbbbbbbbbbbbbb", client_secret="secret",
+            webhook_id="wh",
+        )
+        assert provider2.validate_access_token(token) is False
+
+    def test_signing_key_persists_across_provider_instances(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        provider1 = oauth.OAuthProvider(
+            hass=hass, client_id="cid", client_secret="sec", webhook_id="wh",
+        )
+        token = provider1.issue_access_token()
+        # New provider on the same disk → same signing key → token still valid
+        provider2 = oauth.OAuthProvider(
+            hass=hass, client_id="cid", client_secret="sec", webhook_id="wh",
+        )
+        assert provider2.validate_access_token(token) is True
+
+
+class TestOAuthSetupEntry:
+    """async_setup_entry creates and registers an OAuthProvider when the
+    config has an oauth section with non-empty creds."""
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self, tmp_path):
+        h = MagicMock()
+        h.data = {}
+        h.http = MagicMock()
+        h.http.register_view = MagicMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    async def test_oauth_section_creates_provider_and_registers_views(
+        self, hass, tmp_path
+    ):
+        # Pre-load the oauth module with a tmp secret file, then bind it as
+        # mcp_proxy_init.oauth so the integration's relative import finds it.
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        provider = hass.data[mod.DOMAIN]["oauth"]
+        assert provider is not None
+        assert provider.client_id == "client-1234567890ABCDEF"
+        # 4 OAuth views registered
+        assert hass.http.register_view.call_count == 4
+
+
+class TestOAuthWebhookHandler:
+    """The webhook handler enforces bearer auth when an OAuthProvider is
+    configured, and is a no-op gate when not."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        """Import mcp_proxy with a shared oauth module so the integration's
+        `from .oauth import build_unauthorized_response` resolves to the
+        same instance used by the test fixture."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        return mod, oauth
+
+    def _make_request(self, auth_header=None):
+        req = MagicMock()
+        req.headers = {"Authorization": auth_header} if auth_header else {}
+        req.read = AsyncMock(return_value=b"")
+        req.method = "POST"
+        req.scheme = "https"
+        return req
+
+    def _make_hass(self, mod, oauth_provider):
+        h = MagicMock()
+        h.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test",
+                "session": MagicMock(),
+                "oauth": oauth_provider,
+            }
+        }
+        return h
+
+    async def test_returns_401_on_missing_bearer(self, setup):
+        mod, oauth = setup
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
+            client_secret="sec", webhook_id="wh",
+        )
+        hass = self._make_hass(mod, provider)
+        request = self._make_request(None)
+        request.headers["Host"] = "example.nabu.casa"
+
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_not_awaited()
+        response_ctor.assert_called_once()
+        kwargs = response_ctor.call_args.kwargs
+        assert kwargs.get("status") == 401
+        ww = kwargs.get("headers", {}).get("WWW-Authenticate", "")
+        assert ww.startswith("Bearer realm=")
+        assert "resource_metadata=" in ww
+
+    async def test_returns_401_on_invalid_bearer(self, setup):
+        mod, oauth = setup
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
+            client_secret="sec", webhook_id="wh",
+        )
+        hass = self._make_hass(mod, provider)
+        request = self._make_request("Bearer not.a.valid.token")
+        request.headers["Host"] = "example.nabu.casa"
+
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_not_awaited()
+        response_ctor.assert_called_once()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+
+    async def test_passes_through_with_valid_bearer(self, setup):
+        mod, oauth = setup
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
+            client_secret="sec", webhook_id="wh",
+        )
+        token = provider.issue_access_token()
+        hass = self._make_hass(mod, provider)
+        request = self._make_request(f"Bearer {token}")
+
+        sentinel = mod.aiohttp.ClientError("stop here")
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(side_effect=sentinel)
+
+        await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_awaited_once()  # auth gate passed
+
+
+class TestResolveOAuthCreds:
+    """start.py auto-generates OAuth creds when the user leaves the addon
+    fields blank. User-supplied values take precedence; persisted values are
+    reused across restarts so a Claude.ai connector keeps working."""
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def test_user_values_passthrough(self, start, tmp_path):
+        cid, sec = start._resolve_oauth_creds(
+            tmp_path, "user-supplied-id-1234567890", "user-supplied-secret"
+        )
+        assert cid == "user-supplied-id-1234567890"
+        assert sec == "user-supplied-secret"
+
+    def test_user_values_trimmed(self, start, tmp_path):
+        cid, sec = start._resolve_oauth_creds(
+            tmp_path, "  user-supplied-id-1234567890  ", "  pw  "
+        )
+        assert cid == "user-supplied-id-1234567890"
+        assert sec == "pw"
+
+    def test_blank_fields_auto_generate(self, start, tmp_path):
+        cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        assert cid.startswith("hamcp-")
+        assert len(cid) >= 16
+        assert len(sec) >= 32  # token_urlsafe(32) is ~43 chars
+
+    def test_blank_fields_persist_to_disk(self, start, tmp_path):
+        cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        creds_file = tmp_path / "oauth_creds.json"
+        assert creds_file.exists()
+        stored = json.loads(creds_file.read_text())
+        assert stored["client_id"] == cid
+        assert stored["client_secret"] == sec
+
+    def test_persisted_values_reused_across_calls(self, start, tmp_path):
+        cid1, sec1 = start._resolve_oauth_creds(tmp_path, "", "")
+        cid2, sec2 = start._resolve_oauth_creds(tmp_path, "", "")
+        assert cid1 == cid2
+        assert sec1 == sec2
+
+    def test_user_value_overrides_persisted(self, start, tmp_path):
+        # First call generates and persists
+        gen_cid, gen_sec = start._resolve_oauth_creds(tmp_path, "", "")
+        # Second call with user-supplied values uses those
+        cid, sec = start._resolve_oauth_creds(
+            tmp_path, "user-id-1234567890123", "user-secret"
+        )
+        assert cid == "user-id-1234567890123"
+        assert sec == "user-secret"
+        # And the persisted file is updated
+        stored = json.loads((tmp_path / "oauth_creds.json").read_text())
+        assert stored["client_id"] == "user-id-1234567890123"
+        assert stored["client_secret"] == "user-secret"
+
+    def test_partial_override_picks_persisted_for_blank_field(
+        self, start, tmp_path
+    ):
+        # Generate and persist baseline
+        gen_cid, gen_sec = start._resolve_oauth_creds(tmp_path, "", "")
+        # User rotates only the secret, leaves client_id blank
+        cid, sec = start._resolve_oauth_creds(tmp_path, "", "rotated-secret")
+        assert cid == gen_cid  # client_id reused from disk
+        assert sec == "rotated-secret"
+
+    def test_corrupted_creds_file_falls_back_to_generation(
+        self, start, tmp_path, capsys
+    ):
+        (tmp_path / "oauth_creds.json").write_text("not valid json{{{")
+        cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        assert cid.startswith("hamcp-")
+        assert len(sec) >= 32
+        # Logged a warning
+        assert "Could not read existing OAuth creds" in capsys.readouterr().err
+
+
+class TestStartOAuthValidation:
+    """start.py-level validation: enable_oauth=true triggers credential
+    resolution; only the length check on a user-supplied client_id can
+    block startup. Blank fields are valid (auto-generated)."""
+
+    def _patched_path(self, tmp_path, **opts):
+        options_dir = tmp_path / "data"
+        options_dir.mkdir()
+        (options_dir / "options.json").write_text(json.dumps(opts))
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return options_dir / "options.json"
+            if arg == "/data":
+                return options_dir
+            return Path(arg)
+        return path_factory
+
+    def _run_main_with_options(self, tmp_path, **opts):
+        start = _import_start()
+        path_factory = self._patched_path(tmp_path, **opts)
+        with patch.object(start, "Path", side_effect=path_factory):
+            return start.main()
+
+    def test_short_user_supplied_client_id_rejected(self, tmp_path, capsys):
+        rc = self._run_main_with_options(
+            tmp_path,
+            enable_oauth=True,
+            oauth_client_id="too-short",
+            oauth_client_secret="some-secret-here-with-length",
+        )
+        assert rc == 1
+        assert "OAuth Client ID is too short" in capsys.readouterr().err
+
+
+class TestRegenerateOAuthCreds:
+    """The Regenerate OAuth Credentials toggle wipes the stored creds and
+    forces fresh generation, then auto-clears itself via the Supervisor API
+    so subsequent restarts don't keep regenerating."""
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def test_regenerate_wipes_existing_creds_file(self, start, tmp_path):
+        creds_file = tmp_path / "oauth_creds.json"
+        creds_file.write_text(
+            '{"client_id": "old-id-1234567890", "client_secret": "old-sec"}'
+        )
+        start._regenerate_oauth_creds(tmp_path)
+        assert not creds_file.exists()
+
+    def test_regenerate_is_idempotent_when_file_missing(
+        self, start, tmp_path
+    ):
+        # Should not raise even though the file isn't there
+        start._regenerate_oauth_creds(tmp_path)
+        assert not (tmp_path / "oauth_creds.json").exists()
+
+    def test_regenerate_followed_by_resolve_yields_new_values(
+        self, start, tmp_path
+    ):
+        creds_file = tmp_path / "oauth_creds.json"
+        creds_file.write_text(
+            '{"client_id": "old-id-1234567890", "client_secret": "old-sec"}'
+        )
+        start._regenerate_oauth_creds(tmp_path)
+        cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        assert cid != "old-id-1234567890"
+        assert sec != "old-sec"
+        assert cid.startswith("hamcp-")
+        assert len(sec) >= 32
+
+    def test_clear_regenerate_toggle_posts_options_with_false(
+        self, start
+    ):
+        captured = {}
+
+        def fake_post(path, data):
+            captured["path"] = path
+            captured["data"] = data
+            return True
+
+        with patch.object(start, "_supervisor_post", side_effect=fake_post):
+            ok = start._clear_regenerate_toggle(
+                {
+                    "remote_url": "https://example.com",
+                    "regenerate_oauth_creds": True,
+                }
+            )
+
+        assert ok is True
+        assert captured["path"] == "/addons/self/options"
+        # Toggle was flipped, other options preserved
+        assert captured["data"] == {
+            "options": {
+                "remote_url": "https://example.com",
+                "regenerate_oauth_creds": False,
+            }
+        }
+
+    def test_clear_regenerate_toggle_returns_false_on_supervisor_error(
+        self, start
+    ):
+        with patch.object(start, "_supervisor_post", return_value=False):
+            ok = start._clear_regenerate_toggle({"regenerate_oauth_creds": True})
+        assert ok is False
+
+
+class TestStartInstallIntegration:
+    """_install_integration returns (first_install, version_changed)."""
+
+    def test_first_install_when_dst_missing(self, tmp_path, monkeypatch):
+        start = _import_start()
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
+        dst_parent = tmp_path / "dst-parent"
+
+        # Patch the two Path calls inside _install_integration
+        def path_factory(arg):
+            if arg == "/opt/mcp_proxy":
+                return src
+            if arg == "/config/custom_components/mcp_proxy":
+                return dst_parent / "mcp_proxy"
+            if arg == "/config/custom_components":
+                return dst_parent
+            return Path(arg)
+
+        with patch.object(start, "Path", side_effect=path_factory):
+            first_install, version_changed = start._install_integration()
+
+        assert first_install is True
+        assert version_changed is False
+        assert (dst_parent / "mcp_proxy" / "manifest.json").exists()
+
+    def test_version_changed_when_versions_differ(self, tmp_path):
+        start = _import_start()
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
+        dst_parent = tmp_path / "dst-parent"
+        dst_parent.mkdir()
+        (dst_parent / "mcp_proxy").mkdir()
+        (dst_parent / "mcp_proxy" / "manifest.json").write_text(
+            '{"version": "1.0.2"}'
+        )
+
+        def path_factory(arg):
+            if arg == "/opt/mcp_proxy":
+                return src
+            if arg == "/config/custom_components/mcp_proxy":
+                return dst_parent / "mcp_proxy"
+            if arg == "/config/custom_components":
+                return dst_parent
+            return Path(arg)
+
+        with patch.object(start, "Path", side_effect=path_factory):
+            first_install, version_changed = start._install_integration()
+
+        assert first_install is False
+        assert version_changed is True
+
+    def test_no_change_when_versions_match(self, tmp_path):
+        start = _import_start()
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
+        dst_parent = tmp_path / "dst-parent"
+        dst_parent.mkdir()
+        (dst_parent / "mcp_proxy").mkdir()
+        (dst_parent / "mcp_proxy" / "manifest.json").write_text(
+            '{"version": "1.0.3-beta.1"}'
+        )
+
+        def path_factory(arg):
+            if arg == "/opt/mcp_proxy":
+                return src
+            if arg == "/config/custom_components/mcp_proxy":
+                return dst_parent / "mcp_proxy"
+            if arg == "/config/custom_components":
+                return dst_parent
+            return Path(arg)
+
+        with patch.object(start, "Path", side_effect=path_factory):
+            first_install, version_changed = start._install_integration()
+
+        assert first_install is False
+        assert version_changed is False
