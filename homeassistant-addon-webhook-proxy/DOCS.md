@@ -130,6 +130,44 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 - The signing key is generated once and persisted at `/config/.mcp_proxy_oauth_secret`. Delete that file to invalidate every token in one shot.
 - **Beta status:** the OAuth flow is implemented against the [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) but real-world MCP-client coverage varies. The URL-as-secret mode (default) is the stable, documented path. Treat OAuth as opt-in until tested with your client. Report problems on GitHub.
 
+### End-to-end flow (what happens when Claude.ai connects)
+
+When OAuth is enabled and you paste the webhook URL + Client ID + Client Secret into Claude.ai's connector setup, here's what happens:
+
+1. **Claude.ai's browser session** is redirected to `https://<your-host>/authorize?response_type=code&client_id=...&redirect_uri=...&code_challenge=...&code_challenge_method=S256&state=...&resource=https://<your-host>/api/webhook/<id>`.
+2. The addon serves a **consent page** (Allow / Deny) showing the redirect destination so you can verify it's Claude.ai's callback URL before proceeding.
+3. You click **Allow** → the addon issues a one-time auth code and redirects the browser back to Claude.ai's callback (`redirect_uri`).
+4. Claude.ai's backend exchanges the auth code at `https://<your-host>/token` using the configured Client ID and Client Secret (Basic auth or form body) plus the PKCE `code_verifier`. The addon validates all of these, then issues:
+   - An **access token** (1-hour HMAC-signed bearer)
+   - A **refresh token** (30-day HMAC-signed bearer)
+5. Claude.ai stores the tokens. From then on, every MCP request includes `Authorization: Bearer <access-token>`. The webhook handler validates the bearer; expired tokens are refreshed automatically using the refresh token.
+
+### Threat model and the role of the Client Secret
+
+The `/authorize` consent page is reachable without being logged into Home Assistant or Nabu Casa. **This is intentional and matches how mainstream OAuth servers work** — the consent page must be reachable by the browser session being redirected from the OAuth client (Claude.ai), which has no Home Assistant credentials of its own.
+
+What stops an attacker who can reach the consent page from gaining access:
+
+- Clicking **Allow** on a maliciously-crafted authorize URL only mints a one-time auth code bound to the attacker's `redirect_uri` and PKCE `code_challenge`.
+- That code is **useless without the OAuth Client Secret**, which is required at the `/token` endpoint to complete the exchange.
+- PKCE binds the code to the original `code_verifier`, which only the legitimate client (Claude.ai) generated.
+
+**This means: the OAuth Client Secret is the actual security boundary.** Treat it like a password.
+
+**Where the Client Secret lives:**
+
+- The addon log on each start (plaintext for copying into Claude.ai)
+- The addon's persistent storage at `/data/oauth_creds.json`
+- Claude.ai's backend (after you paste it into the connector setup)
+- Anywhere you've recorded it (password manager, etc.)
+
+**Keep the Client Secret safe:**
+
+- Don't share the addon log publicly without redacting the OAuth Client Secret line.
+- Don't paste it into chat transcripts, screenshots, support threads, or public configs.
+- If you suspect it has leaked, **rotate it immediately** using one of the three rotation methods above. After rotation, the old Client Secret stops working — any tokens previously issued will fail at refresh, forcing the client to re-do the OAuth flow with the new credentials.
+- If you can't tell whether it leaked but want a clean slate (e.g., after sharing logs for debugging, after a migration), rotating proactively is cheap: flip **Regenerate OAuth Credentials on Next Start**, restart, paste the new credentials into Claude.ai. Takes ~30 seconds.
+
 ## How it works
 
 1. The addon installs a lightweight `mcp_proxy` custom integration into Home Assistant
