@@ -149,12 +149,12 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
-**If `localhost` doesn't work**, you can also point the tunnel at the MCP add-on's container hostname (shown on the MCP Server add-on's **Information** page, e.g. `b37de126-ha-mcp`):
+**If `localhost` doesn't reach the MCP add-on** (the Cloudflared add-on tunnels from inside its own container), point the tunnel at the MCP add-on's container hostname instead — find it on the MCP Server add-on's **Information** page (e.g. `b37de126-ha-mcp`):
 
 ```yaml
 additional_hosts:
   - hostname: ha-mcp.yourdomain.com
-    service: http://b37de126-ha-mcp:9583
+    service: http://<your-prefix>-ha-mcp:9583
 ```
 
 ##### Authenticate and Get Your Public URL
