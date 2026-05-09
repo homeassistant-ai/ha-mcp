@@ -12,12 +12,14 @@ Out of scope (intentional): the WS-proxy ``supervisor/api`` path used by
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
 import httpx
 import pytest
 
+from ha_mcp._version import get_supervisor_base_url, is_running_in_addon
 from ha_mcp.tools.tools_bug_report import _fetch_addon_logs
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
@@ -142,3 +144,85 @@ class TestSettingsUiRestart:
                 url, headers={"Authorization": "Bearer wrong-token"}
             )
         assert resp.status_code == 401
+
+
+@pytest.mark.system
+class TestFixtureWiring:
+    """Sanity checks that the fixture flips the production gates correctly.
+
+    These are fast, deterministic, and prove that subsequent tests aren't
+    silently exercising the wrong branch (e.g. falling back to the HA Core
+    proxy when they should be hitting the mock).
+    """
+
+    async def test_is_running_in_addon_returns_true(self, supervisor_mock):
+        """SUPERVISOR_TOKEN set → addon-mode branch is taken."""
+        assert is_running_in_addon() is True
+
+    async def test_base_url_resolves_to_mock(self, supervisor_mock):
+        """The new helper picks up the override env var."""
+        assert get_supervisor_base_url() == supervisor_mock
+        assert get_supervisor_base_url().startswith("http://127.0.0.1:")
+
+    async def test_default_when_override_unset(self, supervisor_mock, monkeypatch):
+        """Removing the override falls back to the production hostname."""
+        monkeypatch.delenv("SUPERVISOR_BASE_URL", raising=False)
+        assert get_supervisor_base_url() == "http://supervisor"
+
+
+@pytest.mark.system
+class TestMockResilience:
+    """Stresses the mock to catch obvious wiring bugs (event-loop conflicts,
+    socket reuse issues, header mishandling) that trivial happy-path tests
+    would miss.
+    """
+
+    async def test_concurrent_log_fetches(self, mcp_client, supervisor_mock):
+        """Five parallel ha_get_logs calls all succeed.
+
+        The mock and the MCP server share the test event loop; if either
+        serialises requests incorrectly this surfaces as a hang or an error.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            results = await asyncio.gather(
+                *(
+                    mcp.call_tool_success(
+                        "ha_get_logs",
+                        {"source": "system_service", "slug": svc},
+                    )
+                    for svc in sorted(SYSTEM_SERVICES)
+                )
+            )
+        assert {r["slug"] for r in results} == SYSTEM_SERVICES
+        assert all(r["total_lines"] == 3 for r in results)
+
+    async def test_addon_logs_limit_truncation(self, mcp_client, supervisor_mock):
+        """limit=1 returns the last line only — proves the tool's tail-N
+        truncation works against real wire bytes, not just mock dicts.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": "supervisor", "slug": "core_zigbee", "limit": 1},
+            )
+        assert result["returned_lines"] == 1
+        assert result["total_lines"] == 2
+        # The mock returns "line 1\nline 2\n" — tail-1 should give us line 2.
+        assert "line 2" in result["log"]
+        assert "line 1" not in result["log"]
+
+    async def test_unauthorized_supervisor_call_surfaces_as_tool_error(
+        self, mcp_client, supervisor_mock, monkeypatch
+    ):
+        """Wrong token → 401 from mock → tool raises a structured error.
+
+        Exercises the auth-failure path through the full ha_get_logs →
+        _supervisor_logs_get → mock chain.
+        """
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "wrong-token-on-purpose")
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_get_logs",
+            {"source": "system_service", "slug": "core"},
+        )
+        assert result.get("success") is False
