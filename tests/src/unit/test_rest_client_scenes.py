@@ -19,7 +19,7 @@ from ha_mcp.client.rest_client import (
 def _make_mock_client() -> HomeAssistantClient:
     """Create a mock HomeAssistantClient with WebSocket fallback.
 
-    The send_websocket_message mock raises so _resolve_scene_id falls back to
+    The send_websocket_message mock raises so resolve_scene_id falls back to
     the bare id, keeping tests independent of the registry resolver.
     """
     with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
@@ -198,7 +198,7 @@ class TestUpsertSceneConfig:
 
 
 class TestResolveSceneId:
-    """Tests for _resolve_scene_id entity registry resolution."""
+    """Tests for resolve_scene_id entity registry resolution."""
 
     @pytest.fixture
     def mock_client(self):
@@ -211,7 +211,7 @@ class TestResolveSceneId:
             return_value={"result": {"unique_id": "movie_night"}}
         )
 
-        result = await mock_client._resolve_scene_id("movie_night")
+        result = await mock_client.resolve_scene_id("movie_night")
 
         assert result == "movie_night"
         mock_client.send_websocket_message.assert_called_once_with(
@@ -225,7 +225,7 @@ class TestResolveSceneId:
             return_value={"result": {"unique_id": "original_storage_key"}}
         )
 
-        result = await mock_client._resolve_scene_id("renamed_scene")
+        result = await mock_client.resolve_scene_id("renamed_scene")
 
         assert result == "original_storage_key"
 
@@ -236,7 +236,7 @@ class TestResolveSceneId:
             return_value={"result": {"unique_id": "movie_night"}}
         )
 
-        result = await mock_client._resolve_scene_id("scene.movie_night")
+        result = await mock_client.resolve_scene_id("scene.movie_night")
 
         assert result == "movie_night"
         mock_client.send_websocket_message.assert_called_once_with(
@@ -250,7 +250,7 @@ class TestResolveSceneId:
             side_effect=Exception("WS unavailable")
         )
 
-        result = await mock_client._resolve_scene_id("test_scene")
+        result = await mock_client.resolve_scene_id("test_scene")
 
         assert result == "test_scene"
 
@@ -261,6 +261,6 @@ class TestResolveSceneId:
             return_value={"success": False, "error": {"code": "not_found"}}
         )
 
-        result = await mock_client._resolve_scene_id("test_scene")
+        result = await mock_client.resolve_scene_id("test_scene")
 
         assert result == "test_scene"

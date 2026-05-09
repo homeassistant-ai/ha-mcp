@@ -1302,7 +1302,7 @@ class HomeAssistantClient:
             raise
 
 
-    async def _resolve_scene_id(self, identifier: str) -> str:
+    async def resolve_scene_id(self, identifier: str) -> str:
         """
         Resolve a scene identifier to its storage key via the entity registry.
 
@@ -1340,7 +1340,7 @@ class HomeAssistantClient:
 
     async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
         """Get Home Assistant scene configuration by scene_id."""
-        resolved_id = await self._resolve_scene_id(scene_id)
+        resolved_id = await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("GET", endpoint)
@@ -1361,7 +1361,7 @@ class HomeAssistantClient:
         self, config: dict[str, Any], scene_id: str
     ) -> dict[str, Any]:
         """Create or update Home Assistant scene configuration."""
-        resolved_id = await self._resolve_scene_id(scene_id)
+        resolved_id = await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
 
@@ -1380,11 +1380,16 @@ class HomeAssistantClient:
 
             response = await self._request("POST", endpoint, json=config)
 
+            # Issue #1168 R3 blocker 4: HA's POST /config/scene/config/<id>
+            # returns the same ``"ok"`` for both create and update — the
+            # previous ``"created" if "ok" else "updated"`` heuristic was a
+            # tautology that always reported "created". Drop the field
+            # rather than ship a misleading signal; callers tracking write
+            # activity should diff before/after via ``ha_config_get_scene``.
             return {
                 "success": True,
                 "scene_id": resolved_id,
                 "result": response.get("result", "ok"),
-                "operation": "created" if response.get("result") == "ok" else "updated",
             }
         except Exception as e:
             logger.error(f"Failed to upsert scene config for {scene_id}: {e}")
@@ -1392,7 +1397,7 @@ class HomeAssistantClient:
 
     async def delete_scene_config(self, scene_id: str) -> dict[str, Any]:
         """Delete Home Assistant scene configuration."""
-        resolved_id = await self._resolve_scene_id(scene_id)
+        resolved_id = await self.resolve_scene_id(scene_id)
         try:
             endpoint = f"config/scene/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)

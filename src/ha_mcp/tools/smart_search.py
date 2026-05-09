@@ -1224,6 +1224,7 @@ class SmartSearchTools:
             # ================================================================
             scene_fetch_failed_count = 0
             scene_fetch_skipped_count = 0
+            scene_integration_skipped_count = 0
             if "scene" in search_types:
                 scene_entities = [
                     e
@@ -1293,50 +1294,80 @@ class SmartSearchTools:
                                 f"Scene WebSocket bulk fetch ({ws_type}) failed: {e}"
                             )
 
-                # Phase 2.5: Augment with entity_id-slug keys via the
-                # entity registry. HA derives a scene's entity_id from the
-                # ``name`` field via its own slugify (collapsing runs of
-                # underscores, replacing all non-alnum with underscores,
-                # etc.); approximating that with `.replace()` chains
-                # produces near-misses (e.g. "LED Desk Strip - Night Light"
-                # slugifies to ``led_desk_strip_night_light`` in HA, not
-                # ``led_desk_strip_-_night_light`` or
-                # ``led_desk_strip__night_light`` from naive replacement).
-                # The registry holds the authoritative ``unique_id`` →
-                # ``entity_id`` mapping, so we use that to add slug-keyed
-                # aliases pointing at the same config.
-                if all_scene_configs:
-                    try:
-                        reg_resp = await asyncio.wait_for(
-                            self.client.send_websocket_message(
-                                {"type": "config/entity_registry/list"}
-                            ),
-                            timeout=BULK_WEBSOCKET_TIMEOUT,
-                        )
-                        if isinstance(reg_resp, dict) and reg_resp.get("success"):
-                            for entry in reg_resp.get("result") or []:
-                                ent_id = entry.get("entity_id") or ""
-                                uid = entry.get("unique_id")
-                                if (
-                                    ent_id.startswith("scene.")
-                                    and uid in all_scene_configs
-                                ):
-                                    slug = ent_id.removeprefix("scene.")
-                                    if slug and slug != uid:
-                                        all_scene_configs[slug] = all_scene_configs[uid]
-                    except Exception as e:
-                        logger.debug(f"Scene entity-registry augmentation failed: {e}")
+                # Phase 2.5: walk the entity registry once. Two outputs:
+                #
+                # 1. ``homeassistant_scene_uids`` — the set of unique_ids
+                #    backed by ``platform == "homeassistant"`` (HA's storage
+                #    collection). Integration-managed scenes (Hue, IKEA,
+                #    deCONZ, …) are entity-only — the per-id REST endpoint
+                #    ``/config/scene/config/<id>`` can't fetch them and
+                #    treating their 404s as ``failed_count`` produces a
+                #    misleading ``partial: true`` flag on every install
+                #    with integration scenes (issue #1168 R3 blocker 2).
+                # 2. Slug-keyed aliases pointing at the bulk-fetched
+                #    config. HA derives a scene's entity_id from the
+                #    ``name`` field via its own slugify (collapsing runs
+                #    of underscores, replacing all non-alnum with
+                #    underscores, etc.); approximating that with
+                #    `.replace()` chains produces near-misses.
+                #
+                # Run the registry fetch unconditionally so the platform
+                # filter is available even when Phase 2 returned nothing
+                # (the common Hue-only case where bulk fetches the lone
+                # HA-managed scene and Attempt C would otherwise try every
+                # Hue scene).
+                homeassistant_scene_uids: set[str] = set()
+                try:
+                    reg_resp = await asyncio.wait_for(
+                        self.client.send_websocket_message(
+                            {"type": "config/entity_registry/list"}
+                        ),
+                        timeout=BULK_WEBSOCKET_TIMEOUT,
+                    )
+                    if isinstance(reg_resp, dict) and reg_resp.get("success"):
+                        for entry in reg_resp.get("result") or []:
+                            ent_id = entry.get("entity_id") or ""
+                            uid = entry.get("unique_id")
+                            if not ent_id.startswith("scene.") or not uid:
+                                continue
+                            if entry.get("platform") == "homeassistant":
+                                homeassistant_scene_uids.add(uid)
+                            if uid in all_scene_configs:
+                                slug = ent_id.removeprefix("scene.")
+                                if slug and slug != uid:
+                                    all_scene_configs[slug] = all_scene_configs[uid]
+                except Exception as e:
+                    logger.debug(f"Scene entity-registry augmentation failed: {e}")
 
                 # Attempt C: parallel per-id fetch with a wall-clock budget so a
                 # few slow scenes don't tank the whole search; remaining ids
                 # bail out via SCENE_CONFIG_TIME_BUDGET below.
                 if not scene_bulk_fetched:
                     budget_start = time.perf_counter()
-                    sids_to_fetch = [
-                        sid
-                        for _, _, sid, _ in scene_name_scored
-                        if sid and sid not in all_scene_configs
-                    ]
+                    # Issue #1168 R3 blocker 2: skip integration-managed
+                    # scenes — their per-id REST endpoint 404s by design,
+                    # and surfacing those as fetch failures masks real
+                    # errors. Counted separately so the partial_reason
+                    # string can distinguish the two failure modes. When
+                    # the registry call failed (homeassistant_scene_uids
+                    # empty), fall back to attempting all scenes — false
+                    # partials beat dropping legitimate HA-managed scenes
+                    # silently.
+                    if homeassistant_scene_uids:
+                        sids_to_fetch = []
+                        for _, _, sid, _ in scene_name_scored:
+                            if not sid or sid in all_scene_configs:
+                                continue
+                            if sid in homeassistant_scene_uids:
+                                sids_to_fetch.append(sid)
+                            else:
+                                scene_integration_skipped_count += 1
+                    else:
+                        sids_to_fetch = [
+                            sid
+                            for _, _, sid, _ in scene_name_scored
+                            if sid and sid not in all_scene_configs
+                        ]
                     total_to_fetch = len(sids_to_fetch)
                     fetched_count = 0
                     failed_count = 0
@@ -1671,15 +1702,30 @@ class SmartSearchTools:
             # missing because some configs failed or timed out". Only set
             # ``partial: True`` when something actually went wrong; downstream
             # consumers should treat absence as success.
+            #
+            # Issue #1168 R3 blocker 2: integration-managed scenes (Hue,
+            # IKEA, deCONZ, …) intentionally don't go through the per-id
+            # fetch — they're scored on entity attributes only — so they
+            # are NOT considered a fault for the partial flag. The
+            # ``_integration_skipped`` count is informational; it never
+            # raises ``partial: true`` on its own.
             if scene_fetch_failed_count or scene_fetch_skipped_count:
                 response["partial"] = True
-                response["partial_reason"] = (
+                reason_parts = [
                     f"Scene config fetch incomplete: "
                     f"{scene_fetch_failed_count} failed, "
-                    f"{scene_fetch_skipped_count} skipped (time budget). "
-                    f"Some scene matches may be missing config data; tune "
-                    f"HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
+                    f"{scene_fetch_skipped_count} skipped (time budget)."
+                ]
+                if scene_integration_skipped_count:
+                    reason_parts.append(
+                        f" {scene_integration_skipped_count} integration-managed "
+                        "scenes are scored by attribute only (no per-id fetch)."
+                    )
+                reason_parts.append(
+                    " Some scene matches may be missing config data; tune "
+                    "HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
                 )
+                response["partial_reason"] = "".join(reason_parts)
 
             return response
 

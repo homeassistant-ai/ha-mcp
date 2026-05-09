@@ -48,11 +48,23 @@ def mock_client():
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": []}
     )
+    # rest_client.resolve_scene_id is consulted in the no-hash config-mode
+    # path (issue #1168 R3 blocker 6, threading the storage key through to
+    # responses). Default identity-mapping mirrors the real resolver's
+    # fallback when the unique_id lookup misses; tests asserting a slug↔
+    # storage-key remapping override per-test.
+    client.resolve_scene_id = AsyncMock(
+        side_effect=lambda sid: sid.removeprefix("scene.")
+    )
     return client
 
 
 @pytest.fixture
-def tools(mock_client):
+def tools(mock_client, monkeypatch):
+    # Issue #1168 R3 blocker 1 added a 200 ms retry-sleep on registry-miss
+    # for ``_resolve_scene_entity_id``. Patch to 0 in tests so the
+    # fallback paths don't multiply unit-test wall-clock time.
+    monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
     return ConfigSceneTools(mock_client)
 
 
@@ -515,7 +527,7 @@ class TestResolveSceneEntityId:
     async def test_resolver_strips_scene_prefix(self, tools, mock_client):
         """Passing a fully-qualified ``scene.foo`` must not yield
         ``scene.scene.foo`` on fallback. Mirrors
-        ``rest_client._resolve_scene_id`` ergonomics."""
+        ``rest_client.resolve_scene_id`` ergonomics."""
         # Force fallback by making registry list yield no match.
         mock_client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": []}
@@ -524,6 +536,53 @@ class TestResolveSceneEntityId:
         result = await tools._resolve_scene_entity_id("scene.movie_night")
 
         assert result == "scene.movie_night"
+
+    async def test_resolver_retries_once_when_first_call_misses(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 1: on a freshly-upserted scene the
+        registry index lags the storage write by tens to ~200 ms. The
+        resolver must retry once after a short delay before falling back
+        to the naive entity_id, otherwise post-upsert callsites trail
+        ``wait_for_entity_registered`` to a phantom-404 timeout. First
+        call returns no match, second call returns the resolved entity
+        — resolver returns the registry's slug, not ``scene.<scene_id>``.
+        """
+        responses = [
+            {"success": True, "result": []},
+            {
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.led_desk_strip_night_light",
+                        "unique_id": "night_light_led_desk_strip",
+                        "platform": "homeassistant",
+                    }
+                ],
+            },
+        ]
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await tools._resolve_scene_entity_id("night_light_led_desk_strip")
+
+        assert result == "scene.led_desk_strip_night_light"
+        assert mock_client.send_websocket_message.call_count == 2
+
+    async def test_resolver_skips_retry_on_api_failure(self, tools, mock_client):
+        """Issue #1168 R3 blocker 1: API-level failures are sticky (auth /
+        500 / connection won't change between calls), so the resolver must
+        bail to the naive form immediately instead of double-paying the
+        timeout. Single call expected; result is the naive fallback."""
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("registry offline")
+        )
+
+        result = await tools._resolve_scene_entity_id("test_scene")
+
+        assert result == "scene.test_scene"
+        assert mock_client.send_websocket_message.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -615,3 +674,279 @@ class TestSceneRestClientErrorMapping:
             "entities" in (s or "").lower() or "scene shape" in (s or "").lower()
             for s in suggestions
         ), f"Expected entities-shape hint in suggestions, got: {suggestions}"
+
+
+@pytest.mark.asyncio
+class TestSceneResponseShape:
+    """Issue #1168 R3 blockers 3, 4, 6: response-shape contracts.
+
+    Locks the unwrapped get-config payload, the absence of the
+    misleading ``operation`` field on upsert, and the storage-key
+    consistency across get / set / remove / conflict responses
+    regardless of whether the caller passed the entity_id slug or
+    the storage key.
+    """
+
+    async def test_get_scene_response_is_not_doubly_nested(
+        self, tools, mock_client
+    ):
+        """``ha_config_get_scene`` returns the actual scene body in
+        ``response['config']`` — no nested ``success`` / ``scene_id`` /
+        ``config`` from the rest-client envelope."""
+        mock_client.get_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "movie_night",
+                "config": {
+                    "id": "movie_night",
+                    "name": "Movie Night",
+                    "entities": {"light.tv": {"state": "on"}},
+                },
+            }
+        )
+
+        result = await tools.ha_config_get_scene(scene_id="movie_night")
+
+        # Outer envelope: success / action / scene_id / config / config_hash.
+        assert result["success"] is True
+        assert result["action"] == "get"
+        assert result["scene_id"] == "movie_night"
+        # ``config`` carries the scene body directly — not the wrapper.
+        assert "success" not in result["config"]
+        assert result["config"].get("id") == "movie_night"
+        assert result["config"].get("entities") == {"light.tv": {"state": "on"}}
+
+    async def test_set_scene_response_omits_misleading_operation_field(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 4: HA's POST returns the same ``"ok"``
+        for create and update, so the rest_client used to report
+        ``operation: "created"`` for every successful upsert. The field
+        was dropped (it was a tautology); the response must not contain
+        ``operation``."""
+        # rest_client.upsert_scene_config no longer emits ``operation``.
+        mock_client.upsert_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "movie_night",
+                "result": "ok",
+            }
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="movie_night",
+            config={"name": "Movie Night", "entities": {"light.x": {"state": "on"}}},
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert "operation" not in result, (
+            f"`operation` field was dropped (R3 blocker 4); got: {result}"
+        )
+
+    async def test_set_scene_response_uses_storage_key_when_caller_passes_slug(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 6: the outer ``scene_id`` is the
+        rest-client-resolved storage key, regardless of whether the caller
+        passed the entity_id slug. Caller passes "scene.led_desk_strip" but
+        the resolver returns "night_light_led_desk_strip" (rename history)."""
+        mock_client.resolve_scene_id = AsyncMock(return_value="night_light_led_desk_strip")
+        mock_client.upsert_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "night_light_led_desk_strip",
+                "result": "ok",
+            }
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="led_desk_strip",
+            config={"name": "X", "entities": {"light.x": {"state": "on"}}},
+            wait=False,
+        )
+
+        assert result["scene_id"] == "night_light_led_desk_strip"
+
+    async def test_remove_scene_response_uses_storage_key(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 6: remove-scene response surfaces the
+        storage key, even when the caller passed the entity_id slug."""
+        mock_client.resolve_scene_id = AsyncMock(return_value="night_light_led_desk_strip")
+        mock_client.delete_scene_config = AsyncMock(
+            return_value={
+                "success": True,
+                "scene_id": "night_light_led_desk_strip",
+                "result": "ok",
+            }
+        )
+
+        result = await tools.ha_config_remove_scene(
+            scene_id="led_desk_strip", wait=False,
+        )
+
+        assert result["scene_id"] == "night_light_led_desk_strip"
+
+    async def test_set_scene_config_mode_stale_hash_raises_conflict(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 7: when the caller passes
+        ``config_hash`` in config-mode (full replacement), the tool
+        verifies it before upsert. A stale hash surfaces as a structured
+        conflict error AND carries the fresh hash in context (per the
+        ``current_config_hash`` contract from R1).
+        """
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Old Name",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        # rest_client.get_scene_config returns the rest-client envelope.
+        mock_client.get_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "test_scene", "config": seed}
+        )
+        fresh_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                config={
+                    "name": "New Name",
+                    "entities": {"light.kitchen": {"state": "off"}},
+                },
+                config_hash="stale-hash-value",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert "modified" in error_data["error"]["message"].lower()
+        # Fresh hash carried in context so the caller can retry.
+        assert error_data.get("current_config_hash") == fresh_hash
+        # upsert was NOT called — the hash check fires first.
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_set_scene_config_mode_matching_hash_proceeds(
+        self, tools, mock_client
+    ):
+        """Issue #1168 R3 blocker 7: matching ``config_hash`` lets the
+        upsert proceed (no conflict). Sanity check that the stale-hash
+        path isn't blocking the legitimate matching-hash flow."""
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Old Name",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "test_scene", "config": seed}
+        )
+        fresh_hash = compute_config_hash(seed)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "New Name",
+                "entities": {"light.kitchen": {"state": "off"}},
+            },
+            config_hash=fresh_hash,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_scene_config.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestPythonTransformOrphanMetadata:
+    """Issue #1168 R3 blocker 5: a python_transform comprehension that
+    filters ``entities`` leaves ``metadata`` orphan entries on disk
+    because HA's storage write doesn't reconcile the two dicts. The
+    tool prunes orphan keys before upsert so the contract matches the
+    full-replace ``config=`` mode (which clears metadata cleanly).
+    """
+
+    async def test_orphan_metadata_pruned_after_entity_filter(
+        self, tools, mock_client
+    ):
+        """A list-comprehension transform filters ``entities`` — metadata
+        for the removed entity is pruned before upsert, mirroring full-
+        replace's behaviour."""
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {
+                "light.kitchen": {"state": "on"},
+                "select.motion2_baud_rate": {"state": "9600"},
+            },
+            "metadata": {
+                "light.kitchen": {"entity_only": True},
+                "select.motion2_baud_rate": {"entity_only": True},
+            },
+        }
+        mock_client.get_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "test_scene", "config": seed}
+        )
+        seed_hash = compute_config_hash(seed)
+
+        # Transform: keep only the kitchen light.
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform=(
+                "config['entities'] = "
+                "{k: v for k, v in config['entities'].items() "
+                "if k == 'light.kitchen'}"
+            ),
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        # Inspect the config dict the tool actually sent to upsert.
+        upsert_call = mock_client.upsert_scene_config.call_args
+        sent_config = upsert_call.args[0]
+        assert sent_config["entities"] == {"light.kitchen": {"state": "on"}}
+        # Orphan metadata for the filtered-out entity must be gone.
+        assert sent_config["metadata"] == {
+            "light.kitchen": {"entity_only": True}
+        }
+        assert "select.motion2_baud_rate" not in sent_config["metadata"]
+
+    async def test_metadata_unchanged_when_entities_unchanged(
+        self, tools, mock_client
+    ):
+        """The prune step must not corrupt metadata when the transform
+        doesn't touch ``entities`` (e.g., a brightness adjustment on an
+        existing entity). Both pre- and post-transform metadata identical.
+        """
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on", "brightness": 100}},
+            "metadata": {"light.kitchen": {"entity_only": True}},
+        }
+        mock_client.get_scene_config = AsyncMock(
+            return_value={"success": True, "scene_id": "test_scene", "config": seed}
+        )
+        seed_hash = compute_config_hash(seed)
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform=(
+                "config['entities']['light.kitchen']['brightness'] = 200"
+            ),
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        sent_config = mock_client.upsert_scene_config.call_args.args[0]
+        assert sent_config["metadata"] == {
+            "light.kitchen": {"entity_only": True}
+        }

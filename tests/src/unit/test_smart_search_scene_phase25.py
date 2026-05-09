@@ -257,3 +257,135 @@ class TestSceneFetchPartialFailure:
         assert result["success"] is True
         assert "partial" not in result, f"Clean fetch must not set partial: {result}"
         assert "partial_reason" not in result
+
+
+@pytest.mark.asyncio
+class TestSceneIntegrationFilter:
+    """Issue #1168 R3 blocker 2: integration-managed scenes (Hue, IKEA,
+    deCONZ, …) are entity-only — the per-id REST endpoint
+    ``/config/scene/config/<id>`` 404s by design, so treating those 404s
+    as Attempt-C failures produces a misleading ``partial: True`` flag
+    on every install with integration scenes (KP13's Hue test rig hit
+    106 of 107 scenes failing). Phase 2.5 reads the registry's
+    ``platform`` field to filter Attempt C to HA-managed scenes only;
+    integration scenes are scored on attributes alone.
+    """
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # One HA-managed scene + two Hue-managed scenes.
+        client.get_states = AsyncMock(
+            return_value=[
+                _make_scene_entity("scene.movie_night", "Movie Night"),
+                _make_scene_entity("scene.hue_relax", "Hue Relax"),
+                _make_scene_entity("scene.hue_concentrate", "Hue Concentrate"),
+            ]
+        )
+        # Force REST + WS bulk fetches into the no-bulk path so Attempt C
+        # runs and the platform filter actually gates per-id fetches.
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+
+        async def _ws_message(payload: dict[str, Any]) -> dict[str, Any]:
+            msg_type = payload.get("type", "")
+            if msg_type == "config/entity_registry/list":
+                # Registry surfaces platform info — HA-managed first, then Hue.
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.movie_night",
+                            "unique_id": "movie_night",
+                            "platform": "homeassistant",
+                        },
+                        {
+                            "entity_id": "scene.hue_relax",
+                            "unique_id": "hue_relax",
+                            "platform": "hue",
+                        },
+                        {
+                            "entity_id": "scene.hue_concentrate",
+                            "unique_id": "hue_concentrate",
+                            "platform": "hue",
+                        },
+                    ],
+                }
+            # All other WS calls (the bulk-listing attempts) fail to force Attempt C.
+            raise Exception(f"WS not configured for {msg_type}")
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_message)
+        return client
+
+    async def test_hue_scenes_not_counted_as_failures(self, mock_client) -> None:
+        """Per-id fetch is gated by ``platform == "homeassistant"``: Hue
+        scenes are skipped entirely (no 404), and the response is NOT
+        flagged partial when the only "missing" scenes were Hue."""
+
+        # Only the HA-managed scene has a per-id config to return.
+        async def _get_scene(sid: str) -> dict[str, Any]:
+            if sid == "movie_night":
+                return {
+                    "config": {
+                        "name": "Movie Night",
+                        "entities": {"light.tv": {"state": "on"}},
+                    }
+                }
+            # Hue scenes would 404 here — but the platform filter must
+            # prevent the call from happening in the first place.
+            raise AssertionError(
+                f"Hue scene {sid!r} must NOT be per-id-fetched (R3 blocker 2)"
+            )
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_get_scene)
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="hue",  # match the Hue-named scenes
+            search_types=["scene"],
+            limit=10,
+        )
+
+        assert result["success"] is True
+        # No ``partial`` flag — the only "missing config" cases are
+        # integration-managed (informational, not a fault).
+        assert result.get("partial") is not True, (
+            f"Hue-only skip must not raise partial: {result}"
+        )
+
+    async def test_partial_reason_distinguishes_integration_from_failure(
+        self, mock_client
+    ) -> None:
+        """When BOTH a real failure (HA-managed scene 404) AND
+        integration-managed skips happen, ``partial: True`` fires for
+        the real failure and the reason names both buckets so an
+        operator can tell them apart."""
+
+        async def _get_scene(sid: str) -> dict[str, Any]:
+            if sid == "movie_night":
+                # The HA-managed scene fails the per-id fetch — real
+                # failure, must contribute to partial.
+                raise RuntimeError("REST 500 on movie_night")
+            raise AssertionError(
+                f"Hue scene {sid!r} must NOT be per-id-fetched (R3 blocker 2)"
+            )
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_get_scene)
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="movie",
+            search_types=["scene"],
+            limit=10,
+        )
+
+        assert result["success"] is True
+        assert result.get("partial") is True
+        reason = result.get("partial_reason", "")
+        # The real failure is named (so the operator knows something broke).
+        assert "failed" in reason.lower()
+        # Integration-managed scenes are surfaced separately so their
+        # 100+ count on Hue installs doesn't read as "everything broken".
+        assert "integration-managed" in reason.lower(), (
+            f"partial_reason should distinguish integration scenes: {reason!r}"
+        )

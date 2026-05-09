@@ -7,6 +7,7 @@ patterns; the key shape difference is that scene ``entities`` is a dict
 keyed by entity_id (not a list).
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, cast
 
@@ -51,6 +52,12 @@ class ConfigSceneTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    # Time to wait between the first and second registry-list query when the
+    # scene was just upserted but hasn't yet been indexed. Exposed as a class
+    # attribute so tests can patch it down to ``0`` instead of waiting 200 ms
+    # in suite runs.
+    _RESOLVE_RETRY_DELAY = 0.2
+
     async def _resolve_scene_entity_id(self, scene_id: str) -> str:
         """Resolve a scene's actual entity_id via the entity registry.
 
@@ -64,37 +71,53 @@ class ConfigSceneTools:
         Naively assuming ``f"scene.{scene_id}"`` for the wait/category
         callsites surfaces a false-negative warning ("not yet queryable")
         whenever a name is supplied. This helper finds the actual entity_id
-        by matching the scene_id to ``unique_id`` in the entity registry,
-        and falls back to the naive form if the registry lookup is
-        inconclusive — keeping the previous behaviour intact for the case
-        where the slugs happen to match.
+        by matching the scene_id to ``unique_id`` in the entity registry.
+
+        On a freshly-upserted scene the registry can lag the storage write
+        by tens to ~200 ms — the first query returns no match and the naive
+        ``scene.{scene_id}`` fallback is then chased by
+        ``wait_for_entity_registered`` to its phantom-404 timeout. Retry
+        the registry list once after a short delay so the post-upsert
+        callsites see the real entity_id instead of trailing the lookup
+        with a phantom (issue #1168 R3 blocker 1).
 
         Accepts a bare ``scene_id`` ("movie_night") or a fully-qualified
         ``entity_id`` ("scene.movie_night") — the leading ``scene.`` is
         stripped so callers don't accidentally produce ``scene.scene.movie_night``
-        on fallback. Mirrors ``rest_client._resolve_scene_id`` ergonomics.
+        on fallback. Mirrors ``rest_client.resolve_scene_id`` ergonomics.
         """
         scene_id = scene_id.removeprefix("scene.")
-        try:
-            result = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/list"}
-            )
-            if result.get("success") is not False:
-                for entry in result.get("result") or []:
-                    entity_id = entry.get("entity_id") or ""
-                    if entry.get("unique_id") == scene_id and entity_id.startswith(
-                        "scene."
-                    ):
-                        return entity_id
-        except (TimeoutError, HomeAssistantAPIError, HomeAssistantConnectionError):
-            # Programming bugs (AttributeError, KeyError, …) propagate; only
-            # genuine HA-API failures fall through to the naive form so the
-            # caller still gets a best-effort entity_id rather than a 500.
-            logger.warning(
-                f"Entity registry resolve failed for scene_id={scene_id}, "
-                f"falling back to scene.{scene_id}",
-                exc_info=True,
-            )
+        for attempt in range(2):
+            try:
+                result = await self._client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                )
+                if result.get("success") is not False:
+                    for entry in result.get("result") or []:
+                        entity_id = entry.get("entity_id") or ""
+                        if (
+                            entry.get("unique_id") == scene_id
+                            and entity_id.startswith("scene.")
+                        ):
+                            return entity_id
+            except (TimeoutError, HomeAssistantAPIError, HomeAssistantConnectionError):
+                # Programming bugs (AttributeError, KeyError, …) propagate; only
+                # genuine HA-API failures fall through to the naive form so the
+                # caller still gets a best-effort entity_id rather than a 500.
+                logger.warning(
+                    f"Entity registry resolve failed for scene_id={scene_id}, "
+                    f"falling back to scene.{scene_id}",
+                    exc_info=True,
+                )
+                # API failure is sticky — retrying won't change a 500 / auth
+                # error. Bail to the naive form immediately.
+                break
+            if attempt == 0:
+                # Registry list succeeded but no row matched. On a freshly-
+                # upserted scene the registry index lags the storage write —
+                # one short retry catches the common case before falling
+                # back to the naive entity_id.
+                await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
         return f"scene.{scene_id}"
 
     @tool(
@@ -130,25 +153,32 @@ class ConfigSceneTools:
         For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
         """
         try:
-            config_result = await self._client.get_scene_config(scene_id)
-            actual_config = config_result.get("config", config_result)
+            # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
+            # so the response carries the scene body directly (no nested
+            # `success`/`scene_id`/`config` chain), and use the storage key
+            # consistently for `scene_id` regardless of whether the caller
+            # passed the entity_id slug or the storage key.
+            envelope = await self._client.get_scene_config(scene_id)
+            actual_config = envelope.get("config", envelope)
+            resolved_id = envelope.get("scene_id", scene_id)
             config_hash_value = compute_config_hash(actual_config)
 
             # Resolve real entity_id via registry — see _resolve_scene_entity_id
             # for the reasoning. Category fetch on the wrong entity_id is a
             # silent no-op, masking real category assignments.
-            entity_id = await self._resolve_scene_entity_id(scene_id)
+            entity_id = await self._resolve_scene_entity_id(resolved_id)
             cat_id = await fetch_entity_category(self._client, entity_id, "scene")
-            if cat_id:
-                config_result["category"] = cat_id
 
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "action": "get",
-                "scene_id": scene_id,
-                "config": config_result,
+                "scene_id": resolved_id,
+                "config": actual_config,
                 "config_hash": config_hash_value,
             }
+            if cat_id:
+                response["category"] = cat_id
+            return response
         except ToolError:
             raise
         except Exception as e:
@@ -161,7 +191,7 @@ class ConfigSceneTools:
                 e,
                 context={
                     "scene_id": scene_id,
-                    "entity_id": f"scene.{scene_id}",
+                    "entity_id": f"scene.{scene_id.removeprefix('scene.')}",
                 },
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
@@ -172,26 +202,35 @@ class ConfigSceneTools:
 
     async def _get_scene_config_internal(
         self, scene_id: str
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str, str]:
         """Fetch scene config without logging or category injection.
 
-        Returns ``(actual_config, config_hash)`` where ``actual_config`` is the
-        inner scene body (not the REST wrapper). Used by ``_fetch_and_verify_hash``.
+        Returns ``(actual_config, config_hash, resolved_id)`` where
+        ``actual_config`` is the inner scene body (not the REST wrapper) and
+        ``resolved_id`` is the storage key the rest-client resolved the input
+        to (issue #1168 R3 blocker 6). Used by ``_fetch_and_verify_hash``.
         """
-        config_result = await self._client.get_scene_config(scene_id)
-        actual_config = config_result.get("config", config_result)
+        envelope = await self._client.get_scene_config(scene_id)
+        actual_config = envelope.get("config", envelope)
+        resolved_id = envelope.get("scene_id", scene_id.removeprefix("scene."))
         config_hash_value = compute_config_hash(actual_config)
-        return actual_config, config_hash_value
+        return actual_config, config_hash_value, resolved_id
 
     async def _fetch_and_verify_hash(
         self, scene_id: str, config_hash: str, action: str
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], str]:
         """Fetch current scene config and verify config_hash for optimistic locking.
 
-        Returns the actual scene config dict (inner body).
-        Raises ToolError if the hash does not match (conflict).
+        Returns ``(actual_config, resolved_id)`` — the inner scene body and
+        the storage key the rest-client resolved the input to. Raises
+        ``ToolError`` if the hash does not match (conflict). Issue #1168 R3
+        blocker 6: callers thread ``resolved_id`` into responses so the
+        outer ``scene_id`` matches the inner body's ``id`` regardless of
+        whether the caller passed the entity_id slug or the storage key.
         """
-        actual_config, current_hash = await self._get_scene_config_internal(scene_id)
+        actual_config, current_hash, resolved_id = (
+            await self._get_scene_config_internal(scene_id)
+        )
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -203,12 +242,12 @@ class ConfigSceneTools:
                     ],
                     context={
                         "action": action,
-                        "scene_id": scene_id,
+                        "scene_id": resolved_id,
                         "current_config_hash": current_hash,
                     },
                 )
             )
-        return actual_config
+        return actual_config, resolved_id
 
     @staticmethod
     def _validate_scene_config(
@@ -427,7 +466,7 @@ class ConfigSceneTools:
                         )
                     )
 
-                actual_config = await self._fetch_and_verify_hash(
+                actual_config, resolved_id = await self._fetch_and_verify_hash(
                     scene_id, config_hash, "python_transform"
                 )
 
@@ -446,7 +485,7 @@ class ConfigSceneTools:
                             ],
                             context={
                                 "action": "python_transform",
-                                "scene_id": scene_id,
+                                "scene_id": resolved_id,
                             },
                         )
                     )
@@ -463,7 +502,7 @@ class ConfigSceneTools:
                             ],
                             context={
                                 "action": "python_transform",
-                                "scene_id": scene_id,
+                                "scene_id": resolved_id,
                             },
                         )
                     )
@@ -474,7 +513,7 @@ class ConfigSceneTools:
                             "Transformed 'entities' must remain a dict keyed by entity_id",
                             context={
                                 "action": "python_transform",
-                                "scene_id": scene_id,
+                                "scene_id": resolved_id,
                                 "resulting_type": type(
                                     transformed_config["entities"]
                                 ).__name__,
@@ -482,19 +521,34 @@ class ConfigSceneTools:
                         )
                     )
 
+                # Issue #1168 R3 blocker 5: prune orphan ``metadata`` keys
+                # whose entity was deleted by the transform (e.g. a list
+                # comprehension that filters ``entities`` doesn't touch
+                # ``metadata`` and HA keeps the orphan entries on disk).
+                # Full-replace via ``config=`` clears metadata cleanly; the
+                # transform path needs to mirror that contract.
+                metadata = transformed_config.get("metadata")
+                if isinstance(metadata, dict):
+                    valid_keys = set(transformed_config["entities"].keys())
+                    transformed_config["metadata"] = {
+                        k: v for k, v in metadata.items() if k in valid_keys
+                    }
+
                 result = await self._client.upsert_scene_config(
-                    transformed_config, scene_id
+                    transformed_config, resolved_id
                 )
 
                 # Re-fetch to get authoritative hash (HA may normalise after save).
-                _, new_config_hash = await self._get_scene_config_internal(scene_id)
+                _, new_config_hash, _ = await self._get_scene_config_internal(
+                    resolved_id
+                )
 
                 # Resolve actual entity_id and apply wait + category — same
                 # post-upsert finalisation the full-config branch runs. Without
                 # these, ``wait`` and ``category`` are silently dropped on
                 # python_transform calls.
                 wait_bool = coerce_bool_param(wait, "wait", default=True)
-                entity_id = await self._resolve_scene_entity_id(scene_id)
+                entity_id = await self._resolve_scene_entity_id(resolved_id)
                 if wait_bool:
                     try:
                         registered = await wait_for_entity_registered(
@@ -523,14 +577,20 @@ class ConfigSceneTools:
                         "scene",
                     )
 
+                # Issue #1168 R3 blocker 6: build the response from
+                # ``resolved_id`` directly (not the caller-input ``scene_id``)
+                # so the outer field always matches the storage key carried
+                # in ``result``. ``result["scene_id"]`` is also the storage
+                # key from rest_client; the kwarg-after-spread order means
+                # the explicit assignment wins on key-collision regardless.
                 response: dict[str, Any] = {
                     "success": True,
+                    **{k: v for k, v in result.items() if k != "success"},
                     "action": "python_transform",
-                    "scene_id": scene_id,
+                    "scene_id": resolved_id,
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
-                    "message": f"Scene {scene_id} updated via Python transform",
-                    **{k: v for k, v in result.items() if k != "success"},
+                    "message": f"Scene {resolved_id} updated via Python transform",
                 }
                 return response
 
@@ -553,9 +613,25 @@ class ConfigSceneTools:
                 category,
             )
 
-            # Optional hash check for full config updates
+            # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
+            # honor the optimistic-locking semantics promised by the field
+            # description. ``_fetch_and_verify_hash`` raises ToolError on
+            # mismatch. We capture ``resolved_id`` from the verified fetch
+            # so subsequent upsert/response builders use the storage key
+            # consistently (issue #1168 R3 blocker 6).
+            #
+            # Path branching: if a hash is supplied for a non-existent
+            # scene, the inner fetch raises 404 and surfaces as
+            # ENTITY_NOT_FOUND via the outer except — which is the right
+            # caller-facing semantics ("you can't lock against a scene
+            # that doesn't exist"). The no-hash branch resolves separately
+            # so a fresh create still threads the resolved id correctly.
             if config_hash:
-                await self._fetch_and_verify_hash(scene_id, config_hash, "set")
+                _, resolved_id = await self._fetch_and_verify_hash(
+                    scene_id, config_hash, "set"
+                )
+            else:
+                resolved_id = await self._client.resolve_scene_id(scene_id)
 
             # Cross-check literal service and entity references against the
             # live registries. Soft warnings only.
@@ -563,12 +639,12 @@ class ConfigSceneTools:
                 self._client, config_dict
             )
 
-            result = await self._client.upsert_scene_config(config_dict, scene_id)
+            result = await self._client.upsert_scene_config(config_dict, resolved_id)
 
             # Resolve actual entity_id via registry — HA derives scene
             # entity_ids from the 'name' slug, not the scene_id storage key,
             # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-            entity_id = await self._resolve_scene_entity_id(scene_id)
+            entity_id = await self._resolve_scene_entity_id(resolved_id)
 
             # Wait for scene to be queryable
             wait_bool = coerce_bool_param(wait, "wait", default=True)
@@ -602,9 +678,15 @@ class ConfigSceneTools:
 
             merge_validation_meta(result, validation_meta)
 
+            # Issue #1168 R3 blocker 6: build response from ``resolved_id``
+            # so the outer ``scene_id`` always matches the storage key.
+            # ``result["scene_id"]`` is also the storage key (from
+            # rest_client); explicit assignment after the spread guards
+            # against any future result-shape drift.
             return {
                 "success": True,
                 **result,
+                "scene_id": resolved_id,
             }
 
         except ToolError:
@@ -662,13 +744,20 @@ class ConfigSceneTools:
         (via ``scene.turn_on``) may cause those to fail.
         """
         try:
+            # Issue #1168 R3 blocker 6: resolve once up-front so every later
+            # callsite (entity_id resolver, delete call, response) uses the
+            # storage key consistently — outer ``scene_id`` matches the
+            # inner body regardless of whether the caller passed the
+            # entity_id slug or the storage key.
+            resolved_id = await self._client.resolve_scene_id(scene_id)
+
             # Resolve actual entity_id BEFORE delete — once the registry
             # entry is gone, the unique_id lookup can no longer find it.
-            # Falls back to f"scene.{scene_id}" if the registry has no
+            # Falls back to f"scene.{resolved_id}" if the registry has no
             # matching unique_id (e.g. scene_id-as-entity-id slug case).
-            entity_id = await self._resolve_scene_entity_id(scene_id)
+            entity_id = await self._resolve_scene_entity_id(resolved_id)
 
-            result = await self._client.delete_scene_config(scene_id)
+            result = await self._client.delete_scene_config(resolved_id)
 
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             if wait_bool:
@@ -687,7 +776,12 @@ class ConfigSceneTools:
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
 
-            return {"success": True, "action": "delete", **result}
+            return {
+                "success": True,
+                "action": "delete",
+                **result,
+                "scene_id": resolved_id,
+            }
         except ToolError:
             raise
         except Exception as e:
