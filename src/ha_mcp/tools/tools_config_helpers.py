@@ -1798,6 +1798,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 config={"after_time": "22:00:00", "before_time": "07:00:00"})
 
         For complex schemas and per-type parameter details, use ha_get_helper_schema.
+        For broader helper-design guidance (when to pick which helper type, YAML
+        examples), use ha_get_skill_home_assistant_best_practices — the skill's
+        `helper-selection.md` reference covers the `input_*` family, `counter`,
+        `timer`, and `schedule` with worked examples and a decision matrix.
         """
         try:
             # Determine if this is a create or update — set early so the
