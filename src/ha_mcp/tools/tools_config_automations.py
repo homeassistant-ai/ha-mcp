@@ -168,6 +168,38 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
     return normalized_triggers
 
 
+def _action_contains_scene_create(action: Any) -> bool:
+    """True if the action — or any nested action under HA's wrapper keys —
+    invokes ``scene.create``.
+
+    Walks the standard wrappers: ``sequence``, ``parallel``, ``choose``
+    (with options' inner ``sequence``), ``default``, and the ``then``/
+    ``else`` siblings of ``if``. Returns True on the first hit, so a deep
+    misroute is caught before the upsert reaches HA.
+    """
+    if not isinstance(action, dict):
+        return False
+    # 'service:' is the legacy key, 'action:' the modern HA service-call
+    # key (HA 2024.8+). Both reach scene.create.
+    if "scene.create" in (action.get("service"), action.get("action")):
+        return True
+    # Wrappers whose value is a list of nested actions.
+    for nested_key in ("sequence", "parallel", "default", "then", "else"):
+        nested = action.get(nested_key)
+        if isinstance(nested, list):
+            for sub in nested:
+                if _action_contains_scene_create(sub):
+                    return True
+    # ``choose``: list of ``{conditions, sequence}`` options.
+    if isinstance(action.get("choose"), list):
+        for opt in action["choose"]:
+            if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
+                for sub in opt["sequence"]:
+                    if _action_contains_scene_create(sub):
+                        return True
+    return False
+
+
 def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize automation config from GET response for direct use in SET.
@@ -370,6 +402,17 @@ class AutomationConfigTools:
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.
+
+        Before reaching for ``ha_config_set_automation``, consider whether a
+        dedicated tool fits the use case better:
+
+        - State snapshot of one or more entities (capture-then-replay,
+          no trigger needed) -> ha_config_set_scene
+        - State-derived value that recomputes when its inputs change
+          (template sensor / binary sensor / number / select)
+          -> ha_config_set_helper(helper_type='template')
+        - Stateful counter / timer / schedule / boolean / etc.
+          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
 
         PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and
@@ -823,6 +866,55 @@ class AutomationConfigTools:
                 identifier=identifier,
                 missing_fields=missing_fields,
             ))
+
+        # Issue #1169: reject configs that wrap ``scene.create`` in an
+        # automation with no functional trigger. Models occasionally produce
+        # these when they want a state snapshot but pattern-match to
+        # ``ha_config_set_automation`` instead of ``ha_config_set_scene``.
+        # HA's REST endpoint accepts ``trigger: []`` (or ``null``/missing)
+        # and stores a never-firing automation — corruption marker, not a
+        # draft. Only the narrow misroute pattern is rejected so legitimate
+        # empty-trigger drafts paired with other actions still pass.
+        trigger_value = config_dict.get("trigger")
+        trigger_empty = trigger_value is None or (
+            isinstance(trigger_value, list) and not trigger_value
+        )
+        if trigger_empty:
+            actions_list = coerce_to_list(config_dict.get("action"))
+            # Walks the standard HA wrappers (``sequence`` / ``parallel`` /
+            # ``choose`` / ``if``-``then``/``else``) so a nested
+            # ``scene.create`` is caught alongside the top-level case.
+            scene_create_indices = [
+                i
+                for i, a in enumerate(actions_list)
+                if _action_contains_scene_create(a)
+            ]
+            if scene_create_indices:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        "Empty trigger paired with a scene.create action — "
+                        "this automation can never fire. For a state snapshot "
+                        "of one or more entities, use ha_config_set_scene "
+                        "directly instead of wrapping scene.create in an "
+                        "automation."
+                    ),
+                    suggestions=[
+                        "ha_config_set_scene(scene_id='...', config={'name': "
+                        "'...', 'entities': {'<entity_id>': {...}}}) creates "
+                        "a scene without a trigger.",
+                        "If the snapshot really should be the result of an "
+                        "event, add the trigger that should fire it and keep "
+                        "the automation.",
+                        "For a state-derived value that recomputes when its "
+                        "inputs change, use "
+                        "ha_config_set_helper(helper_type='template') instead.",
+                    ],
+                    context={
+                        "scene_create_action_indices": scene_create_indices,
+                        "identifier": identifier,
+                    },
+                ))
 
         # HA accepts conditions with 'platform' (trigger syntax) but then crashes
         # with an unhelpful 500 rather than a 400 validation error.
