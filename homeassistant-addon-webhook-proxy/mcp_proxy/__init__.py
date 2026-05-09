@@ -171,48 +171,78 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # validated by start.py), we lazy-import the provider and register its
     # views. When the section is absent, this branch is skipped entirely and
     # NOTHING about the proxy's behavior changes from the no-auth baseline.
-    oauth_provider = None
+    #
+    # If the OAuth section IS present but malformed — blank creds, or view
+    # registration fails — we fail loudly via ConfigEntryError. The user
+    # explicitly opted into auth; silently falling back to no-auth would
+    # leave them with an open endpoint they think is locked.
+    hass_data: dict = {
+        "target_url": target_url,
+        "webhook_id": webhook_id,
+        "session": session,
+    }
+
+    # OAuth is opt-in. When the addon writes an `oauth` section into the
+    # config file (only when enable_oauth is on AND both creds are non-empty,
+    # validated by start.py), we lazy-import the provider and register its
+    # views. When the section is absent, this entire branch is skipped —
+    # nothing about hass.data, imports, or registered HTTP views changes
+    # from the no-auth baseline. That is the load-bearing guarantee for
+    # users who don't opt into OAuth.
+    #
+    # If the OAuth section IS present but malformed — blank creds, or view
+    # registration fails — we fail loudly via ConfigEntryError. The user
+    # explicitly opted into auth; silently falling back to no-auth would
+    # leave them with an open endpoint they think is locked.
     oauth_section = proxy_config.get("oauth")
     if isinstance(oauth_section, dict):
         client_id = str(oauth_section.get("client_id", ""))
         client_secret = str(oauth_section.get("client_secret", ""))
-        if client_id and client_secret:
-            from .oauth import OAuthProvider
+        if not client_id or not client_secret:
+            await session.close()
+            raise ConfigEntryError(
+                "OAuth was enabled in the addon but client_id and/or "
+                "client_secret is blank in /config/.mcp_proxy_config.json. "
+                "Restart the Webhook Proxy addon to regenerate the config "
+                "file, or turn off Enable OAuth in the addon configuration."
+            )
+        public_base_url = proxy_config.get("public_base_url")
+        if not isinstance(public_base_url, str) or not public_base_url:
+            public_base_url = None
+        from .oauth import OAuthProvider, load_or_create_secret
+        try:
+            # Filesystem I/O — must run off the event loop.
+            signing_key = await hass.async_add_executor_job(
+                load_or_create_secret
+            )
             oauth_provider = OAuthProvider(
                 hass=hass,
                 client_id=client_id,
                 client_secret=client_secret,
                 webhook_id=webhook_id,
+                signing_key=signing_key,
+                public_base_url=public_base_url,
             )
-            try:
-                oauth_provider.register_views()
-            except Exception:
-                _LOGGER.exception(
-                    "MCP Proxy: failed to register OAuth views — "
-                    "falling back to no-auth mode"
-                )
-                oauth_provider = None
-            else:
-                _LOGGER.info(
-                    "MCP Proxy: OAuth ENABLED (client_id=%s)",
-                    oauth_provider.client_id_masked(),
-                )
-        else:
-            # start.py validates this before writing the config, but defend
-            # in depth: blank creds → treat as auth-disabled rather than
-            # locking everyone out.
-            _LOGGER.warning(
-                "MCP Proxy: 'oauth' section present but client_id/secret "
-                "blank — auth is NOT enforced. Restart the addon after "
-                "fixing config."
+            oauth_provider.register_views()
+        except Exception as err:
+            _LOGGER.exception(
+                "MCP Proxy: failed to initialise OAuth provider (%s)",
+                type(err).__name__,
             )
+            await session.close()
+            raise ConfigEntryError(
+                f"Failed to enable OAuth on the MCP webhook: {err}. "
+                "Auth is not being enforced — refusing to start the "
+                "integration so the webhook URL is not silently exposed "
+                "without the protection the user requested."
+            ) from err
+        _LOGGER.info(
+            "MCP Proxy: OAuth ENABLED (client_id=%s)",
+            oauth_provider.client_id_masked(),
+        )
+        hass_data["oauth"] = oauth_provider
 
-    hass.data[DOMAIN] = {
-        "target_url": target_url,
-        "webhook_id": webhook_id,
-        "session": session,
-        "oauth": oauth_provider,
-    }
+    hass.data[DOMAIN] = hass_data
 
     return True
 
@@ -242,7 +272,7 @@ async def _handle_webhook(
     oauth_provider = data.get("oauth")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
         from .oauth import build_unauthorized_response
-        return build_unauthorized_response(request)
+        return build_unauthorized_response(request, oauth_provider)
 
     body = await request.read()
 

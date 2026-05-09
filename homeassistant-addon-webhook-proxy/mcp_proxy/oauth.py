@@ -29,14 +29,20 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
+import re
 import secrets
 import time
 from html import escape
 from pathlib import Path
+from typing import TypedDict
+from urllib.parse import urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
 
 OAUTH_BASE = "/api/mcp_proxy/oauth"
 SECRET_FILE = Path("/config/.mcp_proxy_oauth_secret")
@@ -46,6 +52,34 @@ REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
 AUTH_CODE_TTL = 5 * 60              # 5 minutes
 TOKEN_KIND_ACCESS = "access"
 TOKEN_KIND_REFRESH = "refresh"
+
+# RFC 7636 §4.1: code_verifier is 43-128 chars from the unreserved URL set.
+PKCE_VERIFIER_MIN = 43
+PKCE_VERIFIER_MAX = 128
+# SHA-256 → 32 bytes → 43 base64url chars (no padding).
+PKCE_S256_CHALLENGE_LEN = 43
+_PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
+_PKCE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
+# Pending-code dict cap. An attacker spamming /authorize with valid params
+# could grow the dict between the prune passes that run on each issuance.
+# 1000 codes is well past anything legitimate (5-min TTL, single-tenant).
+MAX_PENDING_CODES = 1000
+
+# Minimum client_id length — also enforced in start.py before the addon
+# writes the proxy config, but duplicated here so the type itself rejects
+# misconfiguration if a future caller forgets the up-front check.
+MIN_CLIENT_ID_LEN = 16
+
+
+class _PendingCode(TypedDict):
+    """Shape of an entry in OAuthProvider._codes. TypedDict so a typo on
+    one of these keys (`expires`/`redirect_uri`/`code_challenge`) fails
+    type-check rather than silently treating it as missing."""
+
+    redirect_uri: str
+    code_challenge: str
+    expires: float
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -57,8 +91,14 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def _load_or_create_secret() -> bytes:
-    """Persist a 32-byte signing secret across restarts."""
+def load_or_create_secret() -> bytes:
+    """Persist a 32-byte signing secret across restarts.
+
+    Public (no leading underscore) because callers in `__init__.py` invoke
+    it via `hass.async_add_executor_job` — HA forbids blocking filesystem
+    I/O on the event loop, so the OAuth provider receives the loaded key
+    rather than loading it itself in `__init__`.
+    """
     if SECRET_FILE.exists():
         data = SECRET_FILE.read_bytes()
         if len(data) >= 32:
@@ -68,19 +108,56 @@ def _load_or_create_secret() -> bytes:
     SECRET_FILE.write_bytes(new_secret)
     try:
         SECRET_FILE.chmod(0o600)
-    except OSError:
-        pass
+    except OSError as e:
+        # Filesystem doesn't support chmod (tmpfs / non-POSIX) — secret
+        # ends up world-readable in /config. Warn so an operator with an
+        # unusual /config mount knows the HMAC key isn't perm-restricted.
+        _LOGGER.warning(
+            "MCP Proxy OAuth: could not chmod 0600 the signing key file "
+            "at %s (%s: %s). The key may have wider permissions than intended.",
+            SECRET_FILE,
+            type(e).__name__,
+            e,
+        )
     return new_secret
 
 
-def _build_base_url(request: web.Request) -> str:
-    """Reconstruct the public base URL behind any reverse proxy.
+def _is_valid_redirect_uri(redirect_uri: str) -> bool:
+    """Spec-floor validation for OAuth redirect_uri: must be an https:// URL
+    with a non-empty host and no fragment. Single-tenant addon — we don't
+    maintain a per-client allowlist, but reject the obvious bad shapes that
+    would let an attacker direct the auth flow to an empty/malformed URL."""
+    if not redirect_uri:
+        return False
+    try:
+        parsed = urlparse(redirect_uri)
+    except ValueError:
+        return False
+    if parsed.scheme != "https":
+        return False
+    if not parsed.hostname:
+        return False
+    # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
+    return not parsed.fragment
 
-    Nabu Casa / Cloudflare / nginx terminate TLS upstream and forward
-    via X-Forwarded-Proto / Host. We trust those headers because the
-    request reached us via HA's HTTP layer, which is the same trust
-    boundary used elsewhere in HA.
+
+def _build_base_url(
+    request: web.Request, public_base_url: str | None = None
+) -> str:
+    """Build the public base URL used in OAuth metadata and redirects.
+
+    When `public_base_url` is provided (the operator-configured
+    `remote_url`/Nabu Casa URL written into proxy_config by start.py),
+    it wins and per-request headers are ignored. This pins canonical
+    URLs to the operator's intent and prevents an attacker who can hit
+    the addon via a forged Host header from poisoning the metadata.
+
+    Falls back to X-Forwarded-Proto/Host or request.scheme/Host when
+    no public base URL is configured (e.g. cloudflared/custom proxy
+    setups where start.py couldn't auto-detect the public URL).
     """
+    if public_base_url:
+        return public_base_url.rstrip("/")
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
     return f"{scheme}://{host}"
@@ -101,16 +178,31 @@ class OAuthProvider:
         client_id: str,
         client_secret: str,
         webhook_id: str,
+        signing_key: bytes,
+        public_base_url: str | None = None,
     ) -> None:
+        if not client_id or len(client_id) < MIN_CLIENT_ID_LEN:
+            raise ValueError(
+                f"client_id must be a non-empty string at least "
+                f"{MIN_CLIENT_ID_LEN} characters long"
+            )
+        if not client_secret:
+            raise ValueError("client_secret must be a non-empty string")
+        if len(signing_key) < 32:
+            raise ValueError("signing_key must be at least 32 bytes")
         self._hass = hass
         self._client_id = client_id
         self._client_secret = client_secret
         self._webhook_id = webhook_id
-        self._signing_key = _load_or_create_secret()
+        self._public_base_url = public_base_url
+        # Loaded by the caller via `hass.async_add_executor_job` — HA's
+        # event loop must not be blocked with sync filesystem I/O during
+        # integration setup.
+        self._signing_key = signing_key
         # In-memory pending authorization codes. Codes are short-lived
         # (5 min) and one-shot; restart wipes them, which only forces
         # in-flight authorize/token round-trips to retry.
-        self._codes: dict[str, dict] = {}
+        self._codes: dict[str, _PendingCode] = {}
 
     @property
     def client_id(self) -> str:
@@ -126,6 +218,9 @@ class OAuthProvider:
 
     def authorization_server_url(self, base_url: str) -> str:
         return f"{base_url}{OAUTH_BASE}"
+
+    def base_url_for(self, request: web.Request) -> str:
+        return _build_base_url(request, self._public_base_url)
 
     # -----------------------------------------------------------------
     # View registration
@@ -182,7 +277,10 @@ class OAuthProvider:
             # Token was issued for a previous client_id config — reject so
             # rotating client_id revokes outstanding tokens.
             return False
-        return payload.get("exp", 0) >= int(time.time())
+        # Token is valid up to but not including `exp` — at the boundary
+        # `now == exp`, the token has expired (matches RFC 7519 §4.1.4
+        # convention used by mainstream JWT implementations).
+        return payload.get("exp", 0) > int(time.time())
 
     def issue_access_token(self) -> str:
         return self._issue_token(TOKEN_KIND_ACCESS, ACCESS_TOKEN_TTL)
@@ -209,11 +307,22 @@ class OAuthProvider:
 
     def issue_code(
         self, redirect_uri: str, code_challenge: str
-    ) -> str:
-        code = secrets.token_urlsafe(32)
-        # Prune expired entries so the dict can't grow unbounded under abuse
+    ) -> str | None:
+        """Issue a one-shot authorization code, or return None if the
+        pending-code store is at capacity (which signals an abuse attempt
+        — see MAX_PENDING_CODES)."""
+        # Prune expired entries — bounds dict size to O(active codes)
+        # between abusive bursts; the cap below handles the burst case.
         now = time.time()
         self._codes = {k: v for k, v in self._codes.items() if v["expires"] > now}
+        if len(self._codes) >= MAX_PENDING_CODES:
+            _LOGGER.warning(
+                "MCP Proxy OAuth: pending-code store at cap (%d); refusing "
+                "new issuance until existing codes expire or are consumed.",
+                MAX_PENDING_CODES,
+            )
+            return None
+        code = secrets.token_urlsafe(32)
         self._codes[code] = {
             "redirect_uri": redirect_uri,
             "code_challenge": code_challenge,
@@ -224,6 +333,13 @@ class OAuthProvider:
     def consume_code(
         self, code: str, redirect_uri: str, code_verifier: str
     ) -> bool:
+        # Validate the verifier shape per RFC 7636 §4.1 before doing any
+        # crypto. A confused client passing an empty/short verifier should
+        # be rejected explicitly rather than silently hashing junk.
+        if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
+            return False
+        if not _PKCE_VERIFIER_RE.match(code_verifier):
+            return False
         entry = self._codes.pop(code, None)
         if entry is None:
             return False
@@ -233,7 +349,10 @@ class OAuthProvider:
             return False
         # PKCE S256 verification: SHA-256(verifier) base64url(no pad) == challenge
         derived = _b64url_encode(hashlib.sha256(code_verifier.encode()).digest())
-        return hmac.compare_digest(derived, entry["code_challenge"])
+        return hmac.compare_digest(
+            derived.encode("ascii"),
+            entry["code_challenge"].encode("ascii"),
+        )
 
     # -----------------------------------------------------------------
     # Client authentication
@@ -267,7 +386,7 @@ class ProtectedResourceMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        base = _build_base_url(request)
+        base = self._provider.base_url_for(request)
         return web.json_response(
             {
                 "resource": self._provider.resource_url(base),
@@ -294,7 +413,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        base = _build_base_url(request)
+        base = self._provider.base_url_for(request)
         as_url = self._provider.authorization_server_url(base)
         return web.json_response(
             {
@@ -329,11 +448,13 @@ class AuthorizeView(HomeAssistantView):
     def _redirect_with(
         redirect_uri: str, **params: str
     ) -> web.Response:
-        sep = "&" if "?" in redirect_uri else "?"
-        from urllib.parse import urlencode
+        # yarl ships with aiohttp and handles existing-query-string merging
+        # plus parameter encoding correctly — safer than hand-rolling.
+        import yarl
+        url = yarl.URL(redirect_uri).update_query(params)
         return web.Response(
             status=302,
-            headers={"Location": f"{redirect_uri}{sep}{urlencode(params)}"},
+            headers={"Location": str(url)},
         )
 
     async def get(self, request: web.Request) -> web.Response:
@@ -345,16 +466,15 @@ class AuthorizeView(HomeAssistantView):
         code_challenge_method = params.get("code_challenge_method", "")
         response_type = params.get("response_type", "")
 
-        if response_type != "code":
-            return web.Response(status=400, text="unsupported_response_type")
-        if code_challenge_method != "S256":
-            return web.Response(status=400, text="invalid code_challenge_method (S256 required)")
-        if not code_challenge:
-            return web.Response(status=400, text="missing code_challenge")
-        if client_id != self._provider.client_id:
-            return web.Response(status=400, text="invalid client_id")
-        if not redirect_uri.startswith("https://"):
-            return web.Response(status=400, text="redirect_uri must be HTTPS")
+        err = self._validate_authorize_params(
+            response_type=response_type,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+        )
+        if err is not None:
+            return err
 
         # Render minimal consent page. Showing the redirect_uri lets the user
         # verify the flow goes back to a domain they recognize (claude.ai etc).
@@ -390,19 +510,25 @@ class AuthorizeView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         data = await request.post()
-        action = data.get("action", "")
+        action = str(data.get("action", ""))
         client_id = str(data.get("client_id", ""))
         redirect_uri = str(data.get("redirect_uri", ""))
         state = str(data.get("state", ""))
         code_challenge = str(data.get("code_challenge", ""))
 
         # Re-validate everything from the form — never trust hidden fields.
-        if client_id != self._provider.client_id:
-            return web.Response(status=400, text="invalid client_id")
-        if not redirect_uri.startswith("https://"):
-            return web.Response(status=400, text="redirect_uri must be HTTPS")
-        if not code_challenge:
-            return web.Response(status=400, text="missing code_challenge")
+        # response_type/method aren't carried on the POST so we hard-code
+        # the spec values here; the validator still applies all the same
+        # rules to the user-influenceable fields.
+        err = self._validate_authorize_params(
+            response_type="code",
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
+        )
+        if err is not None:
+            return err
 
         if action == "deny":
             return self._redirect_with(
@@ -412,7 +538,44 @@ class AuthorizeView(HomeAssistantView):
             return web.Response(status=400, text="invalid action")
 
         code = self._provider.issue_code(redirect_uri, code_challenge)
+        if code is None:
+            # Pending-code store at cap → signal back to the client per
+            # RFC 6749 §4.1.2.1 instead of silently failing.
+            return self._redirect_with(
+                redirect_uri, error="temporarily_unavailable", state=state
+            )
         return self._redirect_with(redirect_uri, code=code, state=state)
+
+    def _validate_authorize_params(
+        self,
+        *,
+        response_type: str,
+        client_id: str,
+        redirect_uri: str,
+        code_challenge: str,
+        code_challenge_method: str,
+    ) -> web.Response | None:
+        """Return a 400 web.Response if any /authorize param is invalid,
+        or None if all checks pass. Centralized so GET and POST share
+        identical validation — the POST path explicitly re-validates the
+        hidden form fields rather than trusting them."""
+        if response_type != "code":
+            return web.Response(status=400, text="unsupported_response_type")
+        if code_challenge_method != "S256":
+            return web.Response(
+                status=400, text="invalid code_challenge_method (S256 required)"
+            )
+        if not _PKCE_CHALLENGE_RE.match(code_challenge):
+            return web.Response(
+                status=400, text="invalid code_challenge (must be 43-char base64url)"
+            )
+        if client_id != self._provider.client_id:
+            return web.Response(status=400, text="invalid client_id")
+        if not _is_valid_redirect_uri(redirect_uri):
+            return web.Response(
+                status=400, text="redirect_uri must be an https:// URL with a host"
+            )
+        return None
 
 
 class TokenView(HomeAssistantView):
@@ -500,15 +663,19 @@ class TokenView(HomeAssistantView):
 # ---------------------------------------------------------------------------
 
 
-def build_unauthorized_response(request: web.Request) -> web.Response:
+def build_unauthorized_response(
+    request: web.Request, provider: OAuthProvider
+) -> web.Response:
     """Build the 401 + WWW-Authenticate response that MCP clients use to
     discover the OAuth endpoints.
 
     Per RFC 9728 §5.1 / MCP 2025-06-18 spec: WWW-Authenticate's
     resource_metadata parameter points to the protected-resource metadata
-    URL, where the client finds the authorization server URL.
+    URL, where the client finds the authorization server URL. We use the
+    provider's configured public base URL (when set) so the metadata URL
+    isn't built from attacker-supplied Host headers.
     """
-    base = _build_base_url(request)
+    base = provider.base_url_for(request)
     metadata_url = f"{base}{OAUTH_BASE}/protected-resource"
     return web.Response(
         status=401,

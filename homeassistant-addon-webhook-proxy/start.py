@@ -22,8 +22,16 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from urllib.parse import urlparse
+
+
+class IntegrationInstall(NamedTuple):
+    """Result of `_install_integration`. NamedTuple so callers can't
+    accidentally swap the two booleans."""
+
+    first_install: bool
+    version_changed: bool
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -103,8 +111,16 @@ def _supervisor_post(path: str, data: dict) -> bool:
         with urllib.request.urlopen(req, timeout=10) as resp:
             status: int = resp.status
             return 200 <= status < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-        log_error(f"Supervisor API POST {path}: {e}")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e} — {body}")
+        return False
+    except (urllib.error.URLError, TimeoutError) as e:
+        log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e}")
         return False
 
 
@@ -301,6 +317,22 @@ def get_nabu_casa_url() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_remote_url(remote_url: str) -> str | None:
+    """Return the public base URL for the proxy, or None if unknown.
+
+    User-supplied `remote_url` from the addon config wins; falls back to
+    the Nabu Casa cloud URL when blank. The returned value is an absolute
+    https URL with no trailing slash, or None when neither source has one
+    (cloudflared/custom proxy users who haven't filled remote_url).
+    """
+    if remote_url and remote_url.strip():
+        url = remote_url.strip().rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return url
+    return get_nabu_casa_url()
+
+
 def _regenerate_oauth_creds(data_dir: Path) -> None:
     """Wipe the persisted OAuth creds file so the next resolve generates fresh
     values. Idempotent: missing file is fine."""
@@ -310,7 +342,10 @@ def _regenerate_oauth_creds(data_dir: Path) -> None:
             creds_file.unlink()
             log_info("Wiped existing OAuth credentials per regenerate toggle")
     except OSError as e:
-        log_error(f"Failed to wipe OAuth creds for regeneration: {e}")
+        log_error(
+            f"Failed to wipe OAuth creds for regeneration "
+            f"({type(e).__name__}): {e}"
+        )
 
 
 def _clear_regenerate_toggle(current_config: dict) -> bool:
@@ -352,7 +387,10 @@ def _resolve_oauth_creds(
             if isinstance(loaded, dict):
                 stored = loaded
         except (OSError, json.JSONDecodeError) as e:
-            log_error(f"Could not read existing OAuth creds: {e}")
+            log_error(
+                f"Could not read existing OAuth creds "
+                f"({type(e).__name__}): {e}"
+            )
 
     final_id = configured_id.strip() or stored.get("client_id", "")
     final_secret = configured_secret.strip() or stored.get("client_secret", "")
@@ -386,7 +424,9 @@ def _resolve_oauth_creds(
             except OSError:
                 pass  # tmpfs / non-POSIX filesystems may not support chmod
         except OSError as e:
-            log_error(f"Failed to persist OAuth creds: {e}")
+            log_error(
+                f"Failed to persist OAuth creds ({type(e).__name__}): {e}"
+            )
             return "", ""
 
     return final_id, final_secret
@@ -411,41 +451,53 @@ def _get_or_create_webhook_id(data_dir: Path) -> str:
     return wid
 
 
-def _install_integration() -> tuple[bool, bool]:
+def _install_integration() -> IntegrationInstall:
     """Install/update the mcp_proxy custom component into HA config dir.
 
-    Returns (first_install, version_changed):
-    - first_install: integration directory didn't exist (fresh setup, full HA
-      restart required to load it).
-    - version_changed: integration directory existed but the manifest version
-      differs (existing user updating; HA must be restarted to pick up the
-      new Python module — `reload_config_entry` only re-runs setup, it does
-      not re-import the .py files).
+    `first_install` is True when the integration directory didn't exist
+    (fresh setup, full HA restart required to load it).
+
+    `version_changed` is True only when the destination manifest existed,
+    was readable, AND its version differs from the source manifest. A
+    missing or unreadable destination manifest does NOT trigger
+    version_changed — that case still copies the new files (since we can
+    no longer be sure they're current) but doesn't fire the
+    "restart required" notification, which is reserved for genuine
+    version bumps.
     """
     src = Path("/opt/mcp_proxy")
     dst = Path("/config/custom_components/mcp_proxy")
 
     if not src.exists():
         log_error("Integration source not found at /opt/mcp_proxy")
-        return False, False
+        return IntegrationInstall(False, False)
 
     Path("/config/custom_components").mkdir(parents=True, exist_ok=True)
 
-    # Check if update needed
-    needs_update = True
+    first_install = not dst.exists()
     src_manifest = src / "manifest.json"
     dst_manifest = dst / "manifest.json"
-    if dst_manifest.exists() and src_manifest.exists():
+
+    # Determine whether to copy and whether this is a real version change.
+    # Version change is a strict comparison: both manifests readable and
+    # versions differ. A corrupt/missing dst manifest forces a copy (to
+    # repair the install) but isn't reported as a version change.
+    sv: str | None = None
+    dv: str | None = None
+    if src_manifest.exists():
         try:
             sv = json.loads(src_manifest.read_text()).get("version")
+        except (OSError, json.JSONDecodeError) as e:
+            log_error(f"Could not parse source manifest: {e}")
+    if dst_manifest.exists():
+        try:
             dv = json.loads(dst_manifest.read_text()).get("version")
-            if sv == dv:
-                needs_update = False
-        except (OSError, json.JSONDecodeError):
-            pass
+        except (OSError, json.JSONDecodeError) as e:
+            log_error(f"Could not parse destination manifest: {e}")
 
-    first_install = not dst.exists()
-    version_changed = needs_update and not first_install
+    versions_differ = sv is not None and dv is not None and sv != dv
+    needs_update = first_install or versions_differ or dv is None
+    version_changed = versions_differ and not first_install
 
     if needs_update:
         if dst.exists():
@@ -455,7 +507,7 @@ def _install_integration() -> tuple[bool, bool]:
     else:
         log_info("mcp_proxy integration up to date")
 
-    return first_install, version_changed
+    return IntegrationInstall(first_install, version_changed)
 
 
 def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
@@ -653,7 +705,7 @@ def main() -> int:
                 config.get("regenerate_oauth_creds", False)
             )
         except (OSError, json.JSONDecodeError) as e:
-            log_error(f"Failed to read config: {e}")
+            log_error(f"Failed to read config ({type(e).__name__}): {e}")
 
     # OAuth credential resolution: user-supplied values in the addon config
     # win. Otherwise fall back to a persisted creds file in /data, and if
@@ -667,16 +719,40 @@ def main() -> int:
             # run since the user explicitly asked for new random ones.
             oauth_client_id = ""
             oauth_client_secret = ""
-            # Best-effort flip the toggle back to off via Supervisor self-
-            # options API. If it fails (older Supervisor), tell the user to
-            # do it manually so subsequent restarts don't keep regenerating.
+            # Flip the toggle back to off via Supervisor self-options API.
+            # Failure is fatal: if we proceed with the toggle still on, the
+            # next restart would regenerate AGAIN — the user's MCP client
+            # would lose access on every restart with no explanation. We
+            # surface a persistent_notification + return non-zero so the
+            # user can't miss the manual fix.
             if not _clear_regenerate_toggle(config):
                 log_error(
                     "Could not auto-clear the 'Regenerate OAuth Credentials' "
-                    "toggle via the Supervisor API. Please flip it back to "
-                    "OFF manually in the addon configuration to avoid "
-                    "regenerating on every restart."
+                    "toggle via the Supervisor API. Refusing to start to "
+                    "avoid an infinite-regeneration loop. Flip the toggle "
+                    "back to OFF manually in the addon configuration, then "
+                    "start the addon again."
                 )
+                _ha_core_api(
+                    "POST",
+                    "/services/persistent_notification/create",
+                    {
+                        "title": (
+                            "MCP Webhook Proxy: manual action required"
+                        ),
+                        "message": (
+                            "The Webhook Proxy addon could not "
+                            "automatically clear the 'Regenerate OAuth "
+                            "Credentials on Next Start' toggle via the "
+                            "Supervisor API. To avoid regenerating "
+                            "credentials on every restart, please flip "
+                            "the toggle back to OFF in the addon "
+                            "configuration and start the addon again."
+                        ),
+                        "notification_id": "mcp_proxy_regen_stuck",
+                    },
+                )
+                return 1
 
         oauth_client_id, oauth_client_secret = _resolve_oauth_creds(
             data_dir, oauth_client_id, oauth_client_secret
@@ -730,9 +806,20 @@ def main() -> int:
     webhook_id = _get_or_create_webhook_id(data_dir)
     webhook_path = f"/api/webhook/{webhook_id}"
 
-    # Write proxy config for the mcp_proxy integration
+    # Write proxy config for the mcp_proxy integration. The OFF (no-OAuth)
+    # path writes exactly the same two keys that v1.0.2 wrote — no extra
+    # fields, no shape change. The new keys (`public_base_url`, `oauth`)
+    # are only added when OAuth is enabled, so existing users who don't
+    # turn on OAuth see no change to their config file.
     proxy_config: dict = {"target_url": target_url, "webhook_id": webhook_id}
+    resolved_remote: str | None = None
     if enable_oauth:
+        # Resolve the remote URL so the OAuth provider can pin metadata
+        # URLs to the operator-configured public URL instead of trusting
+        # attacker-supplied Host headers on a per-request basis.
+        resolved_remote = _resolve_remote_url(remote_url)
+        if resolved_remote:
+            proxy_config["public_base_url"] = resolved_remote
         proxy_config["oauth"] = {
             "client_id": oauth_client_id,
             "client_secret": oauth_client_secret,
@@ -834,16 +921,11 @@ def main() -> int:
                 {"notification_id": "mcp_proxy_restart"},
             )
 
-    # Resolve remote URL
-    resolved_remote = None
-    if remote_url and remote_url.strip():
-        resolved_remote = remote_url.strip().rstrip("/")
-        if not resolved_remote.startswith("http"):
-            resolved_remote = "https://" + resolved_remote
-    else:
-        resolved_remote = get_nabu_casa_url()
-
-    # Log URLs
+    # Log URLs. resolved_remote may already have been computed above for
+    # the OAuth path; fall back to the same lookup for the no-OAuth path
+    # so the log line still shows the right URL when OAuth is off.
+    if resolved_remote is None:
+        resolved_remote = _resolve_remote_url(remote_url)
     log_info("")
     log_info("=" * 70)
     log_info(f"  MCP target (local): {target_url}")

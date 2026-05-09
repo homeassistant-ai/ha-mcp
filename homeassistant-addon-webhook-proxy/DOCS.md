@@ -93,13 +93,14 @@ If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (
 1. Toggle **Show unused optional configuration options** at the bottom of the Configuration tab.
 2. Set **Enable OAuth (Beta)** to on. Leave **OAuth Client ID** and **OAuth Client Secret** blank — the addon will generate strong values for you on first start.
 3. Save and **restart the addon**.
-4. Open the addon log and copy the displayed Client ID and Client Secret:
+4. Open the addon log and copy the displayed Client ID and Client Secret. Both values are printed in plaintext exactly as Claude.ai needs them — copy them straight from the log:
    ```
    OAuth (Beta) is ENABLED for this URL.
-     OAuth Client ID:     hamcp-1a2b3c4d5e6f...
-     OAuth Client Secret: (configured)
+     OAuth Client ID:     hamcp-1a2b3c4d5e6f7890abcdef1234567890
+     OAuth Client Secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH...
+     Paste both into the OAuth fields of your MCP client's
+     connector setup (Claude.ai: connector → Advanced settings).
    ```
-   The full secret is also printed once in plaintext on the line above the masked summary so you can copy it.
 5. In your MCP client, configure the OAuth fields:
    - **Claude.ai:** when adding the connector, expand **Advanced settings** and paste the Client ID and Client Secret into the OAuth fields. Claude.ai completes the rest automatically (consent screen → token exchange → bearer token).
    - **Other clients:** configure the same Client ID + Client Secret in the client's OAuth settings if it supports OAuth 2.1 with manual client registration.
