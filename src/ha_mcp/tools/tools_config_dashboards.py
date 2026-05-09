@@ -1168,6 +1168,15 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 elif isinstance(result, list):
                     existing_dashboards = result
                 else:
+                    # Mirror the warning emitted by ``_resolve_dashboard`` on
+                    # the same response-shape failure, so a future HA shape
+                    # change shows up at every fetch site rather than going
+                    # silent on this one.
+                    logger.warning(
+                        "lovelace/dashboards/list returned an unexpected shape "
+                        "(type=%s); treating as no-match",
+                        type(result).__name__,
+                    )
                     existing_dashboards = []
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards

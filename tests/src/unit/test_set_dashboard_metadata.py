@@ -265,3 +265,33 @@ class TestSetDashboardListCallDedup:
         body = json.loads(str(exc_info.value))
         assert "url_path must contain a hyphen" in body["error"]["message"]
         assert self._list_call_count(mock_client) == 1
+
+    @pytest.mark.asyncio
+    async def test_canonical_url_path_branch_warns_on_unexpected_shape(
+        self, set_tool, mock_client, caplog
+    ):
+        """Existence-check fallback fetch logs a warning on unexpected
+        response shapes, mirroring ``_resolve_dashboard``'s same-arm
+        behaviour. Without this parity, an HA-side shape change would go
+        silent on the canonical-url_path branch — the bug reports would
+        be wedged on ``dashboard_exists = False`` with no operator
+        signal."""
+        import logging
+
+        mock_client.send_websocket_message.side_effect = [
+            "unexpected string",  # response shape failure
+            {"success": True},  # create-dashboard call (still proceeds)
+        ]
+
+        with caplog.at_level(
+            logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
+        ):
+            await set_tool(url_path="my-dash", title="New")
+
+        assert any(
+            "unexpected shape" in rec.message and "type=str" in rec.message
+            for rec in caplog.records
+        ), (
+            f"expected an 'unexpected shape' warning naming the response "
+            f"type; got {[rec.message for rec in caplog.records]}"
+        )
