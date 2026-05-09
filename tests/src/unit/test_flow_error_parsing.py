@@ -1,15 +1,18 @@
-"""Unit tests for flow error parsing (Bug 15 / issue #1150).
+"""Unit tests for flow error parsing (Bug 15 / issue #1150 + issue #1149).
 
 When Home Assistant returns a 400/422 during a flow create or update,
-the tool should surface a structured error with field-level detail or,
-failing that, attach the helper's ``data_schema`` so the caller can
-react. The pre-fix behaviour collapsed every 4xx into a generic
+the tool should surface a structured error with field-level detail AND
+the helper's ``data_schema`` so the caller has both "what failed" and
+"what's accepted" — together they're enough for self-correction. The
+pre-fix behaviour collapsed every 4xx into a generic
 ``"API error: 400 - Bad Request"`` ToolError with no actionable detail.
 
 Tests in this module:
 
 1. HA returns ``{"errors": {...}}`` -> ToolError carries ``field_errors``
-   with the original keys/values.
+   with the original keys/values AND ``data_schema`` (issue #1149: the
+   schema is now attached symmetrically with the unstructured branch
+   instead of being skipped when field_errors are present).
 2. HA returns an unstructured 400 (just ``{"message": "..."}``) ->
    ToolError carries ``data_schema`` fetched via a fresh introspection
    flow against the helper.
@@ -64,16 +67,35 @@ class TestStructuredFieldErrors:
 
     async def test_create_flow_with_400_field_errors_raises_structured(self) -> None:
         """End-to-end: a form submit failing with structured errors should
-        surface the field errors via the wrapping ToolError."""
+        surface the field errors via the wrapping ToolError, and (issue
+        #1149) ALSO attach the data_schema so the LLM has both "what
+        failed" and "what's accepted" available."""
+        # The introspection flow fired by the new schema-attach branch is a
+        # second call to start_config_flow; sequence both.
+        intro_schema = [
+            {"name": "entity_id", "required": True, "selector": {"entity": {}}},
+            {"name": "filter", "required": True, "selector": {"select": {"options": ["lowpass", "outlier"]}}},
+        ]
+        start_calls: list[str] = []
+
+        async def start_flow(handler: str) -> dict[str, Any]:
+            start_calls.append(handler)
+            if len(start_calls) == 1:
+                return {
+                    "type": "form",
+                    "flow_id": "flow-1",
+                    "step_id": "user",
+                    "data_schema": [{"name": "entity_id"}],
+                }
+            return {
+                "type": "form",
+                "flow_id": "intro-flow",
+                "step_id": "user",
+                "data_schema": intro_schema,
+            }
+
         client = AsyncMock()
-        # Initial form for the helper.
-        initial_step = {
-            "type": "form",
-            "flow_id": "flow-1",
-            "step_id": "user",
-            "data_schema": [{"name": "entity_id"}],
-        }
-        client.start_config_flow = AsyncMock(return_value=initial_step)
+        client.start_config_flow = AsyncMock(side_effect=start_flow)
 
         api_err = HomeAssistantAPIError(
             "API error: 400 - Bad Request",
@@ -91,11 +113,12 @@ class TestStructuredFieldErrors:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         # Field errors are exposed at the top level (via context).
         assert body.get("field_errors") == {"entity_id": "not_a_sensor"}
-        assert "filter" in body.get("helper_type", "") or True  # tolerate omission
         assert body.get("status_code") == 400
-        # When structured errors exist, the data_schema introspection is skipped.
-        assert "data_schema" not in body
-        # The flow was aborted exactly once after the failure bubbled up.
+        # Issue #1149: the data_schema is now attached even when
+        # structured field_errors are present — the LLM gets both
+        # "what failed" and "what's accepted" to self-correct.
+        assert body.get("data_schema") == intro_schema
+        # The original-flow + introspection-flow were both aborted.
         client.abort_config_flow.assert_called()
 
 
@@ -253,9 +276,25 @@ class TestHandleFlowStepsOptionsFlowError:
             "data_schema": [{"name": "window_size"}],
         }
 
+        # Issue #1149: the structured-error branch now also tries to fetch
+        # the data_schema for context. Wire the client mock so the
+        # introspection flow (`start_config_flow` -> a form with a usable
+        # `flow_id`) succeeds, and the matching `abort_config_flow` is
+        # awaitable. Without an explicit return value AsyncMock surfaces
+        # auto-generated coroutines that never await cleanly.
+        client = AsyncMock()
+        intro_schema = [{"name": "window_size", "selector": {"number": {}}}]
+        client.start_config_flow = AsyncMock(return_value={
+            "type": "form",
+            "flow_id": "intro-opt",
+            "step_id": "init",
+            "data_schema": intro_schema,
+        })
+        client.abort_config_flow = AsyncMock(return_value={})
+
         with pytest.raises(ToolError) as exc_info:
             await _handle_flow_steps(
-                client=AsyncMock(),
+                client=client,
                 flow_id="opt-flow",
                 initial_step=initial_step,
                 config={"window_size": 1},
@@ -267,4 +306,6 @@ class TestHandleFlowStepsOptionsFlowError:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body.get("field_errors") == {"window_size": "value_too_small"}
         assert body.get("status_code") == 400
+        # Issue #1149: data_schema is now attached alongside field_errors.
+        assert body.get("data_schema") == intro_schema
         assert body.get("flow_id") == "opt-flow"
