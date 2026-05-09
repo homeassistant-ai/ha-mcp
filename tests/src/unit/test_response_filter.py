@@ -10,7 +10,11 @@ import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.base import ToolResult
 
-from ha_mcp.middleware.response_filter import JMESPathFilterMiddleware, _PARAM_NAME, _apply_jmespath
+from ha_mcp.middleware.response_filter import (
+    _PARAM_NAME,
+    JMESPathFilterMiddleware,
+    _apply_jmespath,
+)
 
 
 def _make_result(data: dict) -> ToolResult:

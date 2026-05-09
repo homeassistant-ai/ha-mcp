@@ -65,15 +65,19 @@ async def test_jmespath_projection_reduces_response(mcp_client):
 @pytest.mark.asyncio
 async def test_jmespath_projection_preserves_envelope(mcp_client):
     """Envelope fields (success, partial, warning) survive a sub-field projection."""
+    # ha_config_list_areas returns {"success": True, "count": N, "areas": [...]} directly
+    # (no add_timezone_metadata wrapper), so success is at the top level where the
+    # middleware's envelope merge loop looks for it.
     result = await mcp_client.call_tool(
-        "ha_get_state",
-        {"entity_id": "sun.sun", "_jmespath": "data.state"},
+        "ha_config_list_areas",
+        {"_jmespath": "areas[*].name"},
     )
     data = parse_mcp_result(result)
 
-    # ha_get_state returns success=True; a scalar projection wraps in {"result": ...}
-    # but the envelope key must be re-attached by the middleware
+    # areas[*].name returns a list — wrapped in {"result": [...]} by the middleware.
+    # The envelope key "success" must be re-attached alongside the filtered result.
     assert "success" in data, f"Envelope 'success' must be preserved; got keys: {list(data)}"
+    assert "result" in data, f"Filtered list must be under 'result'; got keys: {list(data)}"
     logger.info(f"✅ Envelope preserved after projection: {data}")
 
 

@@ -21,8 +21,8 @@ _PARAM_NAME = "_jmespath"
 _PARAM_SCHEMA: dict[str, Any] = {
     "type": "string",
     "description": (
-        "Optional JMESPath filter for results - see jmespath.org"
-        "Examples: '{areas:areas[*].{id: area_id, name: name}'."
+        "Optional JMESPath filter — see https://jmespath.org. "
+        "Example: '{areas: areas[*].{id: area_id, name: name}}'."
     ),
 }
 
