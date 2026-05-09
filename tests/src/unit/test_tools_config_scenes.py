@@ -1642,24 +1642,24 @@ class TestResolverRetriedFlag:
 
 
 class TestCategoryValidationGate:
-    """R7 blocker 22 — gate ``_validate_category_id`` on the user-facing
-    ``category`` param, not on ``effective_category``.
+    """R8 follow-up — gate ``_validate_category_id`` on
+    ``effective_category`` truthy, covering BOTH sources (user param and
+    ``_validate_scene_config``-promoted top-level ``config["category"]``).
 
-    ``_validate_scene_config`` promotes a metadata-embedded category into
-    ``effective_category`` when the caller passed ``category=None``. The
-    R6 fix ran the validator on every call where ``effective_category``
-    was truthy, costing a category-registry round-trip even when the user
-    wasn't trying to change the category at all.
+    The R7 fix gated on ``category is not None`` to skip the WS
+    round-trip when no category was supplied, but that left the
+    dict-promoted path uncovered: a phantom category in
+    ``config["category"]`` would skip validation and reach
+    ``apply_entity_category``, which attaches the phantom ID to the
+    entity registry without checking it exists. R8 widens the gate so
+    any non-None ``effective_category`` validates, regardless of source.
     """
 
-    async def test_metadata_promoted_category_does_not_validate(
+    async def test_no_category_at_all_skips_validation(
         self, tools, mock_client,
     ):
-        """User passes ``category=None``, config has a metadata category
-        (e.g. preserved from a previous get → set round-trip). The
-        validator must NOT fire — no WS round-trip for ``category_registry/list``.
-        """
-        # Track whether _validate_category_id was called via WS payload.
+        """Neither user param nor config dict supplies a category — the
+        validator must NOT fire. No WS round-trip for category_registry/list."""
         ws_calls: list[dict] = []
 
         async def _ws_handler(message):
@@ -1670,12 +1670,8 @@ class TestCategoryValidationGate:
 
         await tools.ha_config_set_scene(
             scene_id="test_scene",
-            config={
-                "name": "X",
-                "entities": {"light.x": {"state": "on"}},
-                "metadata": {"category": "lighting"},  # promoted to effective_category
-            },
-            category=None,  # user didn't pass — promotion fires
+            config={"name": "X", "entities": {"light.x": {"state": "on"}}},
+            category=None,
             wait=False,
         )
 
@@ -1685,18 +1681,14 @@ class TestCategoryValidationGate:
             and c.get("type") == "config/category_registry/list"
         ]
         assert not category_list_calls, (
-            "_validate_category_id must NOT fire when the user passed "
-            "category=None — the metadata-promoted value is preserved-state, "
-            "not a user-driven category change. "
-            f"Got payloads: {category_list_calls}"
+            "_validate_category_id must NOT fire when no category is supplied "
+            f"from either source. Got payloads: {category_list_calls}"
         )
 
-    async def test_user_passed_category_still_validates(
+    async def test_user_passed_category_validates(
         self, tools, mock_client,
     ):
-        """User passes a non-None ``category`` — the validator MUST fire
-        regardless of metadata-promotion. The R7 gate is about excluding
-        the promotion-only case, not breaking the user-driven path."""
+        """User passes a non-None ``category`` — validator must fire."""
         mock_client.send_websocket_message = AsyncMock(
             return_value={
                 "success": True,
@@ -1720,6 +1712,76 @@ class TestCategoryValidationGate:
         assert category_list_calls, (
             "_validate_category_id must fire when the user passes a category"
         )
+
+    async def test_dict_promoted_category_validates(
+        self, tools, mock_client,
+    ):
+        """User passes ``category=None`` but config has top-level
+        ``config["category"]`` — ``_validate_scene_config`` promotes it
+        to ``effective_category`` and the validator MUST fire so phantom
+        IDs are caught before they reach ``apply_entity_category``."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [{"category_id": "lighting"}],
+            }
+        )
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "X",
+                "category": "lighting",  # top-level → promoted
+                "entities": {"light.x": {"state": "on"}},
+            },
+            category=None,  # user didn't pass — promotion fires
+            wait=False,
+        )
+
+        category_list_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/category_registry/list"
+        ]
+        assert category_list_calls, (
+            "_validate_category_id must fire when the config dict supplies "
+            "a top-level category — phantom IDs in this path were attached "
+            "to the entity registry without validation in R7."
+        )
+
+    async def test_dict_promoted_phantom_rejected_pre_upsert(
+        self, tools, mock_client,
+    ):
+        """B25 regression — phantom category in top-level ``config["category"]``
+        must be rejected pre-upsert. Live reproducer: caller sets
+        ``config={"category": "phantom_id", ...}`` with no ``category=`` param;
+        the R7 gate skipped validation, the upsert committed, and the phantom
+        ID was attached to the entity registry. R8 widens the gate so this
+        path validates and rejects before any state mutation."""
+        # Registry returns no matching category — phantom rejected.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                config={
+                    "name": "X",
+                    "category": "phantom_via_config_dict",
+                    "entities": {"light.x": {"state": "on"}},
+                },
+                category=None,
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "phantom_via_config_dict" in error_data["error"]["message"]
+        # The whole point: no upsert reached HA.
+        mock_client.upsert_scene_config.assert_not_called()
 
 
 class TestPythonTransformIdNoneRebind:
@@ -1894,17 +1956,21 @@ class TestSmartSearchSceneIdFallbackPaths:
             )
 
         scenes = result.get("scenes", [])
-        if scenes:
-            # Tier 3 fallback — slug stays as scene_id.
-            assert scenes[0]["scene_id"] == "orphaned"
-            # WARNING log fired so the silent path becomes observable.
-            warn_records = [
-                r
-                for r in caplog.records
-                if "fell back to entity-id slug" in r.message
-                and r.levelno == logging.WARNING
-            ]
-            assert warn_records, (
-                "tier-3 slug-fallback must emit a WARNING; got "
-                f"{[(r.levelname, r.message) for r in caplog.records]}"
-            )
+        assert scenes, (
+            "tier-3 must yield a result for the matched scene, not drop it. "
+            "A regression that silently omits orphaned entries would produce "
+            f"empty scenes; got {scenes!r}"
+        )
+        # Tier 3 fallback — slug stays as scene_id.
+        assert scenes[0]["scene_id"] == "orphaned"
+        # WARNING log fired so the silent path becomes observable.
+        warn_records = [
+            r
+            for r in caplog.records
+            if "fell back to entity-id slug" in r.message
+            and r.levelno == logging.WARNING
+        ]
+        assert warn_records, (
+            "tier-3 slug-fallback must emit a WARNING; got "
+            f"{[(r.levelname, r.message) for r in caplog.records]}"
+        )
