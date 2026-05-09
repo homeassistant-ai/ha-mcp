@@ -851,10 +851,7 @@ class AutomationConfigTools:
                 if isinstance(a, dict)
                 # 'service:' is the legacy key, 'action:' the modern HA
                 # service-call key (HA 2024.8+). Both reach scene.create.
-                and (
-                    a.get("service") == "scene.create"
-                    or a.get("action") == "scene.create"
-                )
+                and "scene.create" in (a.get("service"), a.get("action"))
             ]
             if scene_create_indices:
                 raise_tool_error(create_error_response(
