@@ -112,12 +112,14 @@ def _supervisor_post(path: str, data: dict) -> bool:
             status: int = resp.status
             return 200 <= status < 300
     except urllib.error.HTTPError as e:
-        body = ""
+        err_body = ""
         try:
-            body = e.read().decode("utf-8", errors="replace")[:200]
+            err_body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
             pass
-        log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e} — {body}")
+        log_error(
+            f"Supervisor API POST {path} ({type(e).__name__}): {e} — {err_body}"
+        )
         return False
     except (urllib.error.URLError, TimeoutError) as e:
         log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e}")
