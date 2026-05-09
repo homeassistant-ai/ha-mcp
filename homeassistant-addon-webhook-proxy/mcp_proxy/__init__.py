@@ -181,16 +181,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Failed to register webhook endpoint: {err}"
         ) from err
 
-    # OAuth is opt-in. When the addon writes an `oauth` section into the
-    # config file (only when enable_oauth is on AND both creds are non-empty,
-    # validated by start.py), we lazy-import the provider and register its
-    # views. When the section is absent, this branch is skipped entirely and
-    # NOTHING about the proxy's behavior changes from the no-auth baseline.
-    #
-    # If the OAuth section IS present but malformed — blank creds, or view
-    # registration fails — we fail loudly via ConfigEntryError. The user
-    # explicitly opted into auth; silently falling back to no-auth would
-    # leave them with an open endpoint they think is locked.
     hass_data: dict = {
         "target_url": target_url,
         "webhook_id": webhook_id,
@@ -262,9 +252,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # If we got here, the integration is set up and (if OAuth is configured)
     # the OAuth provider's views are registered. Either way, any prior
     # "needs HA restart for OAuth" marker is now stale — clear it so the
-    # Repair card disappears.
-    from .repairs import clear_issue
-    clear_issue(hass, DOMAIN)
+    # Repair card disappears. Marker cleanup is filesystem I/O so it runs
+    # in the executor; the issue-registry call is synchronous and safe on
+    # the event loop.
+    from .repairs import _clear_marker, _delete_issue_only
+    await hass.async_add_executor_job(_clear_marker)
+    _delete_issue_only(hass, DOMAIN)
 
     return True
 

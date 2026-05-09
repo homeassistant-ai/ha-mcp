@@ -22,6 +22,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+
+_LOGGER = logging.getLogger(__name__)
 
 ISSUE_ID = "oauth_restart_required"
 RESTART_MARKER_FILE = Path("/config/.mcp_proxy_oauth_restart_required")
@@ -69,14 +72,38 @@ async def async_create_fix_flow(
 
 
 def _clear_marker() -> None:
-    """Best-effort delete of the marker file. Silently swallow errors —
-    if the file doesn't exist (already cleared by the addon), or the
-    process can't write to /config, the worst outcome is the issue
-    re-fires on next boot, which is recoverable."""
+    """Delete the marker file if present.
+
+    `missing_ok=True` covers the common idempotent path (already cleared
+    by the addon side, or never written). Any other OSError (permission
+    denied, read-only filesystem, etc.) is logged at WARNING level so an
+    operator can see why the Repair card keeps re-firing on boot — silent
+    swallow would hide a real disk-state issue. The function is still
+    "best effort" in the sense that the caller continues regardless.
+    """
     try:
         RESTART_MARKER_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as e:
+        _LOGGER.warning(
+            "MCP Proxy: could not delete OAuth restart marker at %s "
+            "(%s: %s) — Repair card may re-appear on next HA boot until "
+            "the file is removed manually.",
+            RESTART_MARKER_FILE,
+            type(e).__name__,
+            e,
+        )
+
+
+def _delete_issue_only(hass: HomeAssistant, domain: str) -> None:
+    """Dismiss the Repair issue without touching the marker file.
+
+    Used by `async_setup_entry` after it has already cleared the marker
+    via the executor — calling `clear_issue` here would do the executor
+    work twice. Kept separate from `clear_issue` so external callers
+    (start.py, fix flow) get the convenience of a single function that
+    does both.
+    """
+    ir.async_delete_issue(hass, domain, ISSUE_ID)
 
 
 def marker_present() -> bool:
@@ -103,9 +130,10 @@ def maybe_create_issue(hass: HomeAssistant, domain: str) -> None:
 
 
 def clear_issue(hass: HomeAssistant, domain: str) -> None:
-    """Dismiss the repair issue and delete the marker file. Called from
-    `async_setup_entry` once OAuth is up and running so the card goes
-    away after the user (or the addon) has resolved the underlying state.
+    """Dismiss the repair issue and delete the marker file.
+
+    Synchronous filesystem I/O — callers on the event loop should prefer
+    `_delete_issue_only` plus `hass.async_add_executor_job(_clear_marker)`.
     """
     _clear_marker()
     ir.async_delete_issue(hass, domain, ISSUE_ID)

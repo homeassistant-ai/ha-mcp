@@ -937,9 +937,29 @@ def main() -> int:
         # The addon keeps running during an HA Core restart.
         _wait_for_ha_restart()
         if not _ensure_config_entry():
-            log_info(
-                "Could not create config entry after HA restart — "
-                "try restarting Home Assistant again."
+            log_error(
+                "Could not create config entry after HA restart. "
+                "Webhook is NOT active. Restart Home Assistant again, "
+                "or remove and re-add the integration manually from "
+                "Settings → Devices & Services."
+            )
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/create",
+                {
+                    "title": (
+                        "MCP Webhook Proxy: setup did not complete"
+                    ),
+                    "message": (
+                        "After restarting Home Assistant, the addon "
+                        "could not create the integration's config "
+                        "entry. **The webhook URL is not active.** "
+                        "Restart Home Assistant once more, or remove "
+                        "and re-add the MCP Webhook Proxy integration "
+                        "from Settings → Devices & Services."
+                    ),
+                    "notification_id": "mcp_proxy_setup_failed",
+                },
             )
         else:
             _reload_config_entry()
@@ -951,9 +971,29 @@ def main() -> int:
             log_info("Setup completed after HA restart")
     else:
         if not _ensure_config_entry():
-            log_info(
-                "Could not create config entry — "
-                "try restarting Home Assistant if this persists."
+            log_error(
+                "Could not create config entry. Webhook is NOT active. "
+                "Restart Home Assistant; if the problem persists, "
+                "remove and re-add the integration manually from "
+                "Settings → Devices & Services."
+            )
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/create",
+                {
+                    "title": (
+                        "MCP Webhook Proxy: webhook URL is not active"
+                    ),
+                    "message": (
+                        "The addon could not create the integration's "
+                        "config entry, so the webhook URL is currently "
+                        "**not active**. Restart Home Assistant; if "
+                        "the problem persists, remove and re-add the "
+                        "MCP Webhook Proxy integration from "
+                        "Settings → Devices & Services."
+                    ),
+                    "notification_id": "mcp_proxy_setup_failed",
+                },
             )
         else:
             # Reload the config entry so the integration reads the fresh
@@ -1064,10 +1104,40 @@ def main() -> int:
                 "webhook re-enabled."
             )
         else:
+            # Re-probe failed AFTER HA was restarted and the config entry
+            # was re-created. The integration loaded SOMETHING — possibly
+            # OAuth-enforcing, possibly not. Don't leave the webhook live
+            # with indeterminate auth: tear the entry back down so the
+            # URL returns 404 again, and escalate the notification so the
+            # user sees that the auto-recovery didn't work.
             log_error(
                 "OAuth metadata endpoint still not reachable after HA "
-                "restart — webhook re-registered but OAuth status is "
-                "uncertain. Check HA logs."
+                "restart. Disabling the webhook again to prevent "
+                "unauthenticated access. The user must remove and "
+                "re-add the integration manually."
+            )
+            _remove_config_entry()
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/create",
+                {
+                    "title": (
+                        "MCP Webhook Proxy: OAuth could not be enabled"
+                    ),
+                    "message": (
+                        "After Home Assistant was restarted, the "
+                        "OAuth-enforcing integration code still did "
+                        "not load (the OAuth metadata endpoint is not "
+                        "reachable). **The webhook URL has been "
+                        "disabled** to prevent unauthenticated "
+                        "access. Please remove the MCP Webhook Proxy "
+                        "integration from Settings → Devices & "
+                        "Services, then restart the addon to re-add "
+                        "it. If the problem persists, file a bug "
+                        "report with the addon log."
+                    ),
+                    "notification_id": "mcp_proxy_oauth_stuck",
+                },
             )
 
     # Log URLs. resolved_remote may already have been computed above for

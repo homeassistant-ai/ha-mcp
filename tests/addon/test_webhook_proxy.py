@@ -2487,6 +2487,86 @@ class TestRepairsModule:
         )
 
 
+class TestRepairsFlowSubmit:
+    """The repair card's Submit button must call homeassistant.restart
+    AND clear the marker file. A typo in either side ships silently —
+    if the service name is wrong, restart doesn't happen and the user
+    is stuck on the card; if the marker isn't cleared, the card re-fires
+    on the next boot."""
+
+    @pytest.fixture
+    def repairs(self, tmp_path):
+        _install_runtime_stubs()
+        repairs_path = os.path.join(
+            PROXY_ADDON_DIR, "mcp_proxy", "repairs.py"
+        )
+        sys.modules.pop("mcp_proxy_repairs", None)
+        spec = importlib.util.spec_from_file_location(
+            "mcp_proxy_repairs", repairs_path
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["mcp_proxy_repairs"] = mod
+        spec.loader.exec_module(mod)
+        mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
+        return mod
+
+    async def test_confirm_with_input_calls_restart_and_clears_marker(
+        self, repairs
+    ):
+        repairs.RESTART_MARKER_FILE.write_text("test")
+        flow = repairs.OAuthRestartRepairFlow()
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        flow.hass = hass
+        flow.async_create_entry = MagicMock(
+            return_value={"type": "create_entry"}
+        )
+
+        await flow.async_step_confirm({})
+
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        hass.services.async_call.assert_awaited_once_with(
+            "homeassistant", "restart", {}, blocking=False
+        )
+
+    async def test_confirm_without_input_shows_form(self, repairs):
+        flow = repairs.OAuthRestartRepairFlow()
+        flow.async_show_form = MagicMock(return_value={"type": "form"})
+        result = await flow.async_step_confirm(None)
+        flow.async_show_form.assert_called_once()
+        assert flow.async_show_form.call_args.kwargs["step_id"] == "confirm"
+
+
+class TestStringsJSONIssueKeys:
+    """The Repair card's translation keys in mcp_proxy/strings.json must
+    match the issue ID and step ID used in repairs.py. A drift between
+    the two would render the card with raw key strings instead of
+    localized text."""
+
+    def test_issue_translation_keys_match_repair_flow(self):
+        with open(
+            f"{PROXY_ADDON_DIR}/mcp_proxy/strings.json"
+        ) as f:
+            strings = json.load(f)
+
+        assert "oauth_restart_required" in strings.get("issues", {})
+        issue = strings["issues"]["oauth_restart_required"]
+        assert issue.get("title")
+
+        confirm = (
+            issue.get("fix_flow", {})
+            .get("step", {})
+            .get("confirm", {})
+        )
+        assert confirm.get("title")
+        assert confirm.get("description")
+
+
 class TestProbeOAuthActive:
     """The OAuth probe is the load-bearing detector for the
     "stale-code, fail-closed" path: if the integration code currently

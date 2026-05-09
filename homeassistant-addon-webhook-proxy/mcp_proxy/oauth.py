@@ -111,6 +111,19 @@ def load_or_create_secret() -> bytes:
         data = SECRET_FILE.read_bytes()
         if len(data) >= 32:
             return data
+        # File exists but is short — partial write, truncation, or
+        # corruption from a prior run. Regenerating it here invalidates
+        # every previously-issued token. Log loudly so a confused user
+        # who suddenly sees their MCP client lose access can find the
+        # cause in the addon log instead of debugging blind.
+        _LOGGER.warning(
+            "MCP Proxy OAuth: existing signing key at %s is shorter than "
+            "32 bytes (got %d). Regenerating — ALL previously issued "
+            "OAuth tokens are now invalid; MCP clients will need to "
+            "re-authorize.",
+            SECRET_FILE,
+            len(data),
+        )
     new_secret = secrets.token_bytes(32)
     SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
     SECRET_FILE.write_bytes(new_secret)
