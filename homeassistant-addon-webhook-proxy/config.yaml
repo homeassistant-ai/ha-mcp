@@ -1,6 +1,6 @@
 name: "Nabu Casa / Webhook Proxy for HA MCP"
 description: "Remote access proxy via Nabu Casa or any reverse proxy (Cloudflare, DuckDNS, nginx)"
-version: "1.0.2"
+version: "1.1.0"
 slug: "ha_mcp_webhook_proxy"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
@@ -23,3 +23,7 @@ schema:
   remote_url: str?
   mcp_server_url: str?
   mcp_port: port?
+  enable_oauth: bool?
+  oauth_client_id: str?
+  oauth_client_secret: password?
+  regenerate_oauth_creds: bool?

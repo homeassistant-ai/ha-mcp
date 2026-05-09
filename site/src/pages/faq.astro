@@ -29,6 +29,7 @@ const withBase = (path: string) => {
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
+        <li class="ml-4"><a href="#webhook-proxy-security" class="text-blue-400 hover:underline">Webhook Proxy: securing the URL</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
         <li class="ml-4"><a href="#quick-test" class="text-blue-400 hover:underline">Test ha-mcp Without Configuring a Client</a></li>
@@ -269,6 +270,45 @@ source ~/.zshrc
             <li>Use that URL in your MCP client configuration</li>
           </ol>
           <p class="text-slate-400 text-sm">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/784" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#784</a> for an example where this resolved a TLS connection issue.</p>
+        </div>
+
+        <div class="faq-item" id="webhook-proxy-security">
+          <h3 class="text-lg font-medium text-white mb-2">Webhook Proxy: securing the URL</h3>
+          <p class="text-slate-300 mb-3">By default the Webhook Proxy add-on registers an <strong>unauthenticated</strong> webhook endpoint. The webhook URL itself is the shared secret — anyone with the full URL can reach your MCP server, which exposes powerful Home Assistant control. Treat the URL like a password.</p>
+          <p class="text-slate-300 font-medium mb-1">Don't share the URL</p>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
+            <li>Avoid pasting it into screenshots, log paste-bins, public configs, or chat transcripts.</li>
+            <li>Mask the part after <code class="bg-slate-800 px-1 rounded">/api/webhook/</code> if you have to share anything.</li>
+            <li>Anyone with the full URL can call your MCP tools.</li>
+          </ul>
+          <p class="text-slate-300 font-medium mb-1">Rotating the URL if it leaks</p>
+          <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
+            <li>Stop the Webhook Proxy add-on.</li>
+            <li>Delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the add-on's filesystem (e.g. via SSH/Terminal add-on).</li>
+            <li>Start the add-on. A new webhook ID and URL are generated on first launch.</li>
+            <li>Copy the new URL from the add-on logs into your MCP client(s). The old URL stops working immediately.</li>
+          </ol>
+          <p class="text-slate-300 font-medium mb-1">Optional: Enable OAuth (Beta)</p>
+          <p class="text-slate-300 mb-3">For a real auth layer on top of the URL secret, the Webhook Proxy add-on (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle <strong>Show unused optional configuration options</strong>, turn <strong>Enable OAuth (Beta)</strong> on, leave Client ID and Client Secret blank, and restart the add-on. The add-on generates a strong Client ID and Client Secret on first start, persists them at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, and prints them in the add-on log.</p>
+          <p class="text-slate-300 mb-3">In Claude.ai, expand the connector's <strong>Advanced settings</strong> when adding it and paste the Client ID and Client Secret from the add-on log into the OAuth fields. Claude.ai handles the rest of the OAuth handshake automatically. When the toggle is off, the webhook URL behaves exactly as before with no auth check.</p>
+          <p class="text-slate-300 font-medium mb-1">OAuth flow end-to-end</p>
+          <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
+            <li>Claude.ai redirects your browser to <code class="bg-slate-800 px-1 rounded">https://&lt;host&gt;/authorize?...</code> with PKCE parameters.</li>
+            <li>The add-on serves a consent page showing the redirect destination — verify it's Claude.ai's callback URL.</li>
+            <li>Click <strong>Allow</strong>. The add-on issues a one-time auth code and redirects back to Claude.ai.</li>
+            <li>Claude.ai exchanges the code at <code class="bg-slate-800 px-1 rounded">https://&lt;host&gt;/token</code> using your Client ID + Client Secret + the PKCE verifier. The add-on returns a 1-hour access token and a 30-day refresh token, both HMAC-signed.</li>
+            <li>From then on Claude.ai sends every MCP request with <code class="bg-slate-800 px-1 rounded">Authorization: Bearer &lt;token&gt;</code>; expired access tokens are refreshed automatically.</li>
+          </ol>
+          <p class="text-slate-300 font-medium mb-1">The Client Secret is the real security boundary</p>
+          <p class="text-slate-300 mb-3">The <code class="bg-slate-800 px-1 rounded">/authorize</code> consent page is reachable without being logged into Home Assistant or Nabu Casa — that's how OAuth works (the consent page must be reachable from the OAuth client's browser session). What stops an attacker who clicks "Allow" on a phishing authorize URL: the resulting auth code is bound to PKCE and useless without your <strong>OAuth Client Secret</strong> at the token endpoint. So the Client Secret is the actual gate, not the consent page.</p>
+          <p class="text-slate-300 mb-3"><strong>Treat the Client Secret like a password.</strong> Don't paste it into screenshots, support threads, or public configs. If you suspect it has leaked — or want a clean slate after sharing logs for debugging — rotate it immediately. After rotation, any tokens issued under the old credentials stop refreshing, forcing the client to redo OAuth.</p>
+          <p class="text-slate-300 font-medium mb-1">Rotating OAuth credentials</p>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
+            <li><strong>From the addon UI (recommended):</strong> turn on <strong>Regenerate OAuth Credentials on Next Start</strong>, save, restart the add-on. The add-on wipes the stored credentials, generates fresh ones, prints them in the log, and auto-clears the regenerate toggle. Update your MCP client to match. Takes ~30 seconds.</li>
+            <li><strong>Custom values:</strong> type new strings into the Client ID and Client Secret fields and restart — your values override the stored file.</li>
+            <li><strong>Filesystem:</strong> stop the addon, delete <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, start the addon. Equivalent to the UI option but requires SSH/Terminal access.</li>
+          </ul>
+          <p class="text-slate-400 text-sm">Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested with Claude.ai. Other clients' OAuth coverage may vary. Report issues on GitHub.</p>
         </div>
 
         <div class="faq-item">
