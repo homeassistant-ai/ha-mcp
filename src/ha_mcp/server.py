@@ -58,6 +58,48 @@ class HaResourcesAsTools(ResourcesAsTools):
         "list_resources": LIST_TOOL_NAME,
         "read_resource": READ_TOOL_NAME,
     }
+    # Shared action-phrased keyword block for retrieval. Some MCP clients
+    # (Claude Code, others) rank candidate tools by token-overlap between
+    # the user's natural-language query and each tool's `description`
+    # field; FastMCP's terse defaults ("List MCP resources") never overlap
+    # with task-phrased queries like "create automation" or "writing
+    # trigger". This block lists the workflow positions where consulting
+    # the bundled skill reference files matters, so retrieval surfaces
+    # this tool when an agent is about to write config.
+    _USE_BEFORE_KEYWORDS = (
+        "Use BEFORE: creating or editing automations, scripts, scenes, "
+        "helpers, or dashboards; writing triggers, conditions, actions, "
+        "wait_template, or service calls; renaming entities or migrating "
+        "device_id to entity_id; calling ha_config_set_automation, "
+        "ha_config_set_script, ha_config_set_helper, ha_config_set_dashboard, "
+        "or ha_set_entity."
+    )
+    _DESCRIPTIONS: ClassVar[dict[str, str]] = {
+        LIST_TOOL_NAME: (
+            "List all available MCP resources, including bundled skill "
+            "reference files. " + _USE_BEFORE_KEYWORDS + " Pair with "
+            "ha_read_resource to load a specific guide."
+        ),
+        READ_TOOL_NAME: (
+            "Get the contents of an MCP resource by URI. Use this to load "
+            "skill reference files (e.g., "
+            "skill://home-assistant-best-practices/references/"
+            "automation-patterns.md) for guidance on native conditions and "
+            "triggers, helper selection, automation modes, template "
+            "guidelines, device control, and safe refactoring. "
+            + _USE_BEFORE_KEYWORDS
+            + " Use ha_list_resources to discover available URIs."
+        ),
+    }
+
+    @classmethod
+    def _rewrite(cls, tool: Tool, new_name: str) -> Tool:
+        """Return a copy of ``tool`` renamed and re-described for ha-mcp."""
+        update: dict[str, Any] = {"name": new_name}
+        description = cls._DESCRIPTIONS.get(new_name)
+        if description is not None:
+            update["description"] = description
+        return tool.model_copy(update=update)
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         # Scan the entire result rather than slicing the tail so a future
@@ -72,7 +114,7 @@ class HaResourcesAsTools(ResourcesAsTools):
             if new_name is None:
                 renamed.append(tool)
                 continue
-            renamed.append(tool.model_copy(update={"name": new_name}))
+            renamed.append(self._rewrite(tool, new_name))
             matches += 1
         if matches != len(self._RENAMES):
             logger.warning(
@@ -93,13 +135,9 @@ class HaResourcesAsTools(ResourcesAsTools):
         version: VersionSpec | None = None,
     ) -> Tool | None:
         if name == self.LIST_TOOL_NAME:
-            return self._make_list_resources_tool().model_copy(
-                update={"name": self.LIST_TOOL_NAME}
-            )
+            return self._rewrite(self._make_list_resources_tool(), self.LIST_TOOL_NAME)
         if name == self.READ_TOOL_NAME:
-            return self._make_read_resource_tool().model_copy(
-                update={"name": self.READ_TOOL_NAME}
-            )
+            return self._rewrite(self._make_read_resource_tool(), self.READ_TOOL_NAME)
         return await call_next(name, version=version)
 
 # Server icon configuration using GitHub-hosted images
@@ -772,12 +810,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             tool_name = f"ha_get_skill_{skill_name.replace('-', '_')}"
             uri = f"skill://{skill_name}/SKILL.md"
 
+            # Action-phrased keyword block for retrieval. Some MCP clients
+            # rank candidate tools by token-overlap between the user's
+            # query and each tool's `description`; the upstream SKILL.md
+            # description is symptom-framed ("Agent uses Jinja2 templates
+            # where..."), which doesn't overlap with task-phrased queries
+            # like "create automation" / "set automation config" / "writing
+            # trigger". This block re-anchors the description in those
+            # task verbs so it surfaces when an agent is about to write
+            # config. Same shared keyword block as
+            # HaResourcesAsTools._USE_BEFORE_KEYWORDS above.
             tool_description = (
+                f"Get available reference files for the {skill_name} skill. "
                 f"CALL THIS FIRST before performing matching actions. "
                 f"{description}\n\n"
-                f"Returns available reference files. Read each file via "
-                f"resources/read (or ha_read_resource as a fallback) using "
-                f"the file URI to load specific guides as needed."
+                f"{HaResourcesAsTools._USE_BEFORE_KEYWORDS} The reference "
+                f"files below cover automation patterns, helper selection, "
+                f"template guidelines, device control, dashboards, and safe "
+                f"refactoring.\n\n"
+                f"Read each reference file via resources/read (or "
+                f"ha_read_resource as a fallback) using the file URI to load "
+                f"specific guides as needed."
             )
 
             ref_files = self._collect_skill_ref_files(skill_dir, skill_name)

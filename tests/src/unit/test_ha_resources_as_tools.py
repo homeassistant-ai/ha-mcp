@@ -22,6 +22,19 @@ def test_transform_generated_tool_names_match_class_constants():
     )
 
 
+def test_descriptions_keys_match_rename_targets():
+    """_DESCRIPTIONS must have exactly one entry per rename target so a
+    future rename can't drift to a tool name with no override (silent
+    fallback to FastMCP default) or an orphan description (typo'd key
+    that's never applied)."""
+    rename_targets = set(HaResourcesAsTools._RENAMES.values())
+    description_keys = set(HaResourcesAsTools._DESCRIPTIONS.keys())
+    assert description_keys == rename_targets, (
+        f"_DESCRIPTIONS keys {description_keys} must equal "
+        f"_RENAMES.values() {rename_targets}"
+    )
+
+
 @pytest.fixture
 def transform():
     """A real HaResourcesAsTools wired to a fresh FastMCP server."""
@@ -109,3 +122,60 @@ class TestGetTool:
         call_next = AsyncMock(return_value=None)
         await transform.get_tool("ha_search_entities", call_next)
         call_next.assert_awaited_once_with("ha_search_entities", version=None)
+
+
+class TestDescriptionOverride:
+    """Tool descriptions get BM25-tuned, action-phrased text on rename.
+
+    FastMCP's defaults are terse and don't surface on the task-phrased
+    tool_search queries agents make when reaching for config-write tools.
+    Issue #1011, Gap 1.
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_resources_description_has_action_keywords(self, transform):
+        result = await transform.list_tools([])
+        list_tool = next(
+            t for t in result if t.name == HaResourcesAsTools.LIST_TOOL_NAME
+        )
+        description = (list_tool.description or "").lower()
+        # Must mention the workflow positions agents query for
+        assert "automation" in description
+        assert "script" in description
+        # Must include a "use BEFORE" anchor for task-phrased queries
+        assert "before" in description
+        # Must mention skill reference files so the listing intent is clear
+        assert "skill" in description or "reference" in description
+
+    @pytest.mark.asyncio
+    async def test_read_resource_description_has_action_keywords(self, transform):
+        result = await transform.list_tools([])
+        read_tool = next(
+            t for t in result if t.name == HaResourcesAsTools.READ_TOOL_NAME
+        )
+        description = (read_tool.description or "").lower()
+        assert "automation" in description
+        assert "script" in description
+        assert "before" in description
+        # Must point at ha_list_resources for discovery
+        assert "ha_list_resources" in description
+
+    @pytest.mark.asyncio
+    async def test_get_tool_returns_overridden_description(self, transform):
+        list_tool = await transform.get_tool(
+            HaResourcesAsTools.LIST_TOOL_NAME, AsyncMock()
+        )
+        read_tool = await transform.get_tool(
+            HaResourcesAsTools.READ_TOOL_NAME, AsyncMock()
+        )
+        assert list_tool is not None and read_tool is not None
+        # Both code paths (list_tools, get_tool) must produce the same
+        # description so the catalog and per-call lookups agree.
+        assert (
+            list_tool.description
+            == HaResourcesAsTools._DESCRIPTIONS[HaResourcesAsTools.LIST_TOOL_NAME]
+        )
+        assert (
+            read_tool.description
+            == HaResourcesAsTools._DESCRIPTIONS[HaResourcesAsTools.READ_TOOL_NAME]
+        )
