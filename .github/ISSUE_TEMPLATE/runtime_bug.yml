@@ -15,6 +15,12 @@ body:
 
         **Not for startup issues** (use Startup/Installation Bug template instead).
 
+        > 📝 **Title tip:** replace the default `[BUG] ` with a one-line summary of what
+        > broke (e.g. `[BUG] ha_call_service times out on light.turn_on`). If you ran
+        > `ha_report_issue` and clicked the submission link it gave you, the title
+        > field is already filled in — keep it or refine it, just don't leave it as
+        > a bare `[BUG]`.
+
   - type: textarea
     id: user_commentary
     attributes:

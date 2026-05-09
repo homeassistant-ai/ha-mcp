@@ -15,6 +15,12 @@ body:
 
         **This is NOT for bugs in ha-mcp** (use Runtime Bug template instead).
 
+        > 📝 **Title tip:** replace the default `[AGENT] ` with a one-line summary
+        > of what the agent did wrong (e.g. `[AGENT] re-runs ha_search_entities
+        > instead of caching the result`). If `ha_report_issue` gave you a
+        > submission link, the title is already filled in — keep it or refine it,
+        > just don't leave it as a bare `[AGENT]`.
+
   - type: textarea
     id: user_commentary
     attributes:
