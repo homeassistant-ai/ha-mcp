@@ -371,6 +371,17 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
+        WHEN TO ROUTE ELSEWHERE — pick a dedicated tool before reaching for
+        an automation:
+
+        - State snapshot of one or more entities (capture-then-replay,
+          no trigger needed) -> ha_config_set_scene
+        - State-derived value that recomputes when its inputs change
+          (template sensor / binary sensor / number / select)
+          -> ha_config_set_helper(helper_type='template')
+        - Stateful counter / timer / schedule / boolean / etc.
+          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
+
         PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and
         do not bypass HA's schema. Templates fail silently at runtime and obscure intent.
@@ -823,6 +834,54 @@ class AutomationConfigTools:
                 identifier=identifier,
                 missing_fields=missing_fields,
             ))
+
+        # Issue #1169: Path-1 misroute defense. BAT validation of #1168 surfaced
+        # gpt-4o-mini-class models constructing an automation that wraps a
+        # ``scene.create`` service call when the user wanted a state snapshot.
+        # HA's REST endpoint accepts ``trigger: []`` and produces a
+        # never-firing automation — corruption marker, not a draft. Reject only
+        # the narrow misroute pattern (empty trigger + scene.create action) so
+        # legitimate empty-trigger drafts paired with other actions still pass.
+        trigger_value = config_dict.get("trigger")
+        if isinstance(trigger_value, list) and not trigger_value:
+            actions_list = coerce_to_list(config_dict.get("action"))
+            scene_create_indices = [
+                i
+                for i, a in enumerate(actions_list)
+                if isinstance(a, dict)
+                # 'service:' is the legacy key, 'action:' the modern HA
+                # service-call key (HA 2024.8+). Both reach scene.create.
+                and (
+                    a.get("service") == "scene.create"
+                    or a.get("action") == "scene.create"
+                )
+            ]
+            if scene_create_indices:
+                raise_tool_error(create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        "Empty trigger paired with a scene.create action — "
+                        "this automation can never fire. For a state snapshot "
+                        "of one or more entities, use ha_config_set_scene "
+                        "directly instead of wrapping scene.create in an "
+                        "automation."
+                    ),
+                    suggestions=[
+                        "ha_config_set_scene(scene_id='...', config={'name': "
+                        "'...', 'entities': {'<entity_id>': {...}}}) creates "
+                        "a scene without a trigger.",
+                        "If the snapshot really should be the result of an "
+                        "event, add the trigger that should fire it and keep "
+                        "the automation.",
+                        "For a state-derived value that recomputes when its "
+                        "inputs change, use "
+                        "ha_config_set_helper(helper_type='template') instead.",
+                    ],
+                    context={
+                        "scene_create_action_indices": scene_create_indices,
+                        "identifier": identifier,
+                    },
+                ))
 
         # HA accepts conditions with 'platform' (trigger syntax) but then crashes
         # with an unhelpful 500 rather than a 400 validation error.

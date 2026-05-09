@@ -142,3 +142,145 @@ class TestValidateConditionBlocks:
             self._base_config([{"condition": "state", "platform": "extra", "entity_id": "x", "state": "on"}]),
             identifier=None,
         )
+
+
+class TestEmptyTriggerSceneCreateDefense:
+    """Issue #1169 — Path-1 misroute defense.
+
+    BAT validation of #1168 (the scene CRUD tools landing for #995)
+    surfaced gpt-4o-mini constructing an automation that wraps
+    ``service: scene.create`` because no scene tools existed at the time.
+    HA's REST endpoint accepts ``trigger: []`` and produces a never-firing
+    automation — concrete corruption, not a draft. The narrow gate here
+    rejects only the misroute pattern (empty trigger + scene.create
+    action); legitimate empty-trigger drafts paired with other actions
+    still pass through.
+    """
+
+    def test_empty_trigger_with_scene_create_service_key_rejected(self) -> None:
+        """Legacy ``service: scene.create`` triggers the gate."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {
+                    "alias": "Movie Snapshot",
+                    "trigger": [],
+                    "action": [
+                        {
+                            "service": "scene.create",
+                            "data": {
+                                "scene_id": "movie_night",
+                                "snapshot_entities": ["light.living_room"],
+                            },
+                        }
+                    ],
+                },
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        # Routing hint must name ha_config_set_scene as the right tool.
+        all_text = json.dumps(error)
+        assert "ha_config_set_scene" in all_text
+        assert "scene.create" in error["message"]
+
+    def test_empty_trigger_with_scene_create_action_key_rejected(self) -> None:
+        """Modern ``action: scene.create`` (HA 2024.8+) also triggers the gate."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {
+                    "alias": "Movie Snapshot",
+                    "trigger": [],
+                    "action": [
+                        {
+                            "action": "scene.create",
+                            "data": {"scene_id": "movie_night"},
+                        }
+                    ],
+                },
+                identifier=None,
+            )
+        error = _error_from_tool_error(exc_info.value)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "ha_config_set_scene" in json.dumps(error)
+
+    def test_empty_trigger_with_other_action_passes(self) -> None:
+        """Draft preservation: empty trigger paired with a non-scene.create
+        action passes through unchanged. Some users save automations as
+        drafts and add triggers later; this is not the misroute pattern."""
+        AutomationConfigTools._validate_required_fields(
+            {
+                "alias": "Draft",
+                "trigger": [],
+                "action": [
+                    {"service": "light.turn_on", "target": {"entity_id": "light.x"}}
+                ],
+            },
+            identifier=None,
+        )
+
+    def test_non_empty_trigger_with_scene_create_passes(self) -> None:
+        """Legitimate use case: a trigger-driven scene snapshot (capture the
+        current state when an event fires). Not the misroute pattern."""
+        AutomationConfigTools._validate_required_fields(
+            {
+                "alias": "Snapshot on guest mode",
+                "trigger": [
+                    {
+                        "platform": "state",
+                        "entity_id": "input_boolean.guest_mode",
+                        "to": "on",
+                    }
+                ],
+                "action": [
+                    {
+                        "service": "scene.create",
+                        "data": {"scene_id": "before_guests"},
+                    }
+                ],
+            },
+            identifier=None,
+        )
+
+    def test_use_blueprint_empty_trigger_strip_preserved(self) -> None:
+        """Backwards-compat: ``use_blueprint`` configs that pass empty
+        ``trigger: []`` historically have those stripped before validation
+        (the blueprint provides the trigger). The new misroute gate must
+        not break that path — checked after ``use_blueprint`` strip, the
+        empty trigger is gone and the gate doesn't fire even with a
+        scene.create action elsewhere."""
+        AutomationConfigTools._validate_required_fields(
+            {
+                "alias": "Motion Light",
+                "use_blueprint": {
+                    "path": "homeassistant/motion_light.yaml",
+                    "input": {
+                        "motion_entity": "binary_sensor.motion",
+                        "light_target": {"entity_id": "light.kitchen"},
+                    },
+                },
+                # These should be stripped by the use_blueprint pre-pass and
+                # never reach the misroute gate.
+                "trigger": [],
+                "action": [],
+            },
+            identifier=None,
+        )
+
+    def test_empty_trigger_scene_create_indices_in_context(self) -> None:
+        """Multi-action lists surface the indices of the scene.create
+        actions in the error context for the LLM to pinpoint."""
+        with pytest.raises(ToolError) as exc_info:
+            AutomationConfigTools._validate_required_fields(
+                {
+                    "alias": "Multi",
+                    "trigger": [],
+                    "action": [
+                        {"service": "light.turn_on"},
+                        {"service": "scene.create", "data": {"scene_id": "a"}},
+                        {"action": "scene.create", "data": {"scene_id": "b"}},
+                    ],
+                },
+                identifier=None,
+            )
+        body = json.loads(str(exc_info.value))
+        assert body.get("scene_create_action_indices") == [1, 2]
