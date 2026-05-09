@@ -33,6 +33,7 @@ BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
 BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
+
 # Time budgets for fallback individual fetching (in seconds).
 # Configurable via env vars for instances with many automations/scripts.
 def _env_float(key: str, default: float) -> float:
@@ -45,8 +46,10 @@ def _env_float(key: str, default: float) -> float:
         logger.warning(f"Invalid value for {key}={raw!r}, using default {default}")
         return default
 
+
 AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
 SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
+SCENE_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCENE_CONFIG_TIME_BUDGET", 20.0)
 
 # Batch size for parallel individual config fetches (Attempt C fallback)
 INDIVIDUAL_FETCH_BATCH_SIZE = 10
@@ -758,7 +761,10 @@ class SmartSearchTools:
                 "system_summary": system_summary,
                 "domain_stats": formatted_domain_stats,
                 "area_analysis": (
-                    {area: {"count": info["count"]} for area, info in area_stats.items()}
+                    {
+                        area: {"count": info["count"]}
+                        for area, info in area_stats.items()
+                    }
                     if detail_level == "minimal"
                     else area_stats
                 ),
@@ -808,14 +814,16 @@ class SmartSearchTools:
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
-        Deep search across automation, script, helper, and dashboard definitions.
+        Deep search across automation, script, scene, helper, and dashboard
+        definitions.
 
         Searches not just entity names but also within configuration definitions
-        including triggers, actions, sequences, and other config fields.
+        including triggers, actions, sequences, scene entity sets, and other
+        config fields.
 
         Args:
             query: Search query (can be partial, with typos when exact_match=False)
-            search_types: Types to search (default: ["automation", "script", "helper"])
+            search_types: Types to search (default: ["automation", "script", "scene", "helper"])
             limit: Maximum total results to return (default: 5)
             offset: Number of results to skip for pagination (default: 0)
             include_config: Include full config in results (default: False)
@@ -826,12 +834,13 @@ class SmartSearchTools:
             Dictionary with search results grouped by type
         """
         if search_types is None:
-            search_types = ["automation", "script", "helper"]
+            search_types = ["automation", "script", "scene", "helper"]
 
         try:
             results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
+                "scenes": [],
                 "helpers": [],
                 "dashboards": [],
             }
@@ -961,7 +970,9 @@ class SmartSearchTools:
                     fetched_count = 0
                     failed_count = 0
 
-                    async def _fetch_automation_config(uid: str) -> tuple[str, dict[str, Any] | None]:
+                    async def _fetch_automation_config(
+                        uid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
                         try:
                             config = await asyncio.wait_for(
                                 self.client._request(
@@ -1123,7 +1134,9 @@ class SmartSearchTools:
                     fetched_count = 0
                     failed_count = 0
 
-                    async def _fetch_script_config(sid: str) -> tuple[str, dict[str, Any] | None]:
+                    async def _fetch_script_config(
+                        sid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
                         try:
                             config_resp = await asyncio.wait_for(
                                 self.client.get_script_config(sid),
@@ -1202,6 +1215,304 @@ class SmartSearchTools:
                     total=total_phases,
                     message=f"scripts searched ({len(results['scripts'])} matches)",
                 )
+
+            # ================================================================
+            # SCENE SEARCH (same 3-tier strategy: REST bulk -> WS bulk -> individual)
+            # Scenes have no listing primitive, so entities are enumerated
+            # from get_states() and configs fetched per id. The script branch
+            # uses the same shape today; treat them as parallel implementations
+            # that can diverge if either domain's listing primitive lands later.
+            # ================================================================
+            scene_fetch_failed_count = 0
+            scene_fetch_skipped_count = 0
+            scene_integration_skipped_count = 0
+            scene_registry_fetch_failed = False  # B11: signals fallback engaged
+            if "scene" in search_types:
+                scene_entities = [
+                    e
+                    for e in all_entities
+                    if e.get("entity_id", "").startswith("scene.")
+                ]
+
+                # Phase 1: Score all scenes by name (instant)
+                scene_name_scored: list[tuple[str, str, str, int]] = []
+                for entity in scene_entities:
+                    entity_id = entity.get("entity_id", "")
+                    friendly_name = entity.get("attributes", {}).get(
+                        "friendly_name", entity_id
+                    )
+                    scene_id = entity_id.replace("scene.", "")
+                    name_score = self.fuzzy_searcher._calculate_entity_score(
+                        entity_id, friendly_name, "scene", query_lower
+                    )
+                    scene_name_scored.append(
+                        (entity_id, friendly_name, scene_id, name_score)
+                    )
+
+                # Phase 2: Try bulk fetch for scenes
+                all_scene_configs: dict[str, dict[str, Any]] = {}
+                scene_bulk_fetched = False
+
+                # Attempt A: REST bulk endpoint
+                try:
+                    resp = await asyncio.wait_for(
+                        self.client._request("GET", "/config/scene/config"),
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                    )
+                    if isinstance(resp, list):
+                        for item in resp:
+                            sid = item.get("id") or item.get(
+                                "name", ""
+                            ).lower().replace(" ", "_")
+                            if sid:
+                                all_scene_configs[sid] = item
+                        scene_bulk_fetched = True
+                except Exception as e:
+                    logger.debug(f"Scene REST bulk fetch failed: {e}")
+
+                # Attempt B: WebSocket bulk endpoints
+                if not scene_bulk_fetched:
+                    for ws_type in [
+                        "config/scene/config/list",
+                        "scene/config/list",
+                    ]:
+                        if scene_bulk_fetched:
+                            break
+                        try:
+                            ws_resp = await asyncio.wait_for(
+                                self.client.send_websocket_message({"type": ws_type}),
+                                timeout=BULK_WEBSOCKET_TIMEOUT,
+                            )
+                            if isinstance(ws_resp, dict) and ws_resp.get("success"):
+                                for item in ws_resp.get("result", []):
+                                    sid = item.get("id") or item.get(
+                                        "name", ""
+                                    ).lower().replace(" ", "_")
+                                    if sid:
+                                        all_scene_configs[sid] = item
+                                scene_bulk_fetched = True
+                        except Exception as e:
+                            logger.debug(
+                                f"Scene WebSocket bulk fetch ({ws_type}) failed: {e}"
+                            )
+
+                # Phase 2.5: walk the entity registry once. Two outputs:
+                #
+                # 1. ``homeassistant_scene_uids`` — the set of unique_ids
+                #    backed by ``platform == "homeassistant"`` (HA's storage
+                #    collection). Integration-managed scenes (Hue, IKEA,
+                #    deCONZ, …) are entity-only — the per-id REST endpoint
+                #    ``/config/scene/config/<id>`` can't fetch them and
+                #    treating their 404s as ``failed_count`` produces a
+                #    misleading ``partial: true`` flag on every install
+                #    with integration scenes (issue #1168 R3 blocker 2).
+                # 2. Slug-keyed aliases pointing at the bulk-fetched
+                #    config. HA derives a scene's entity_id from the
+                #    ``name`` field via its own slugify (collapsing runs
+                #    of underscores, replacing all non-alnum with
+                #    underscores, etc.); approximating that with
+                #    `.replace()` chains produces near-misses.
+                #
+                # Run the registry fetch unconditionally so the platform
+                # filter is available even when Phase 2 returned nothing
+                # (the common Hue-only case where bulk fetches the lone
+                # HA-managed scene and Attempt C would otherwise try every
+                # Hue scene).
+                homeassistant_scene_uids: set[str] = set()
+                # Issue #1168 R7 blocker 17/21: registry-derived slug→storage
+                # map for the result-builder fallback. When ``all_scene_configs``
+                # has no entry for a scene (bulk omitted it, integration-
+                # managed, or ``id`` field absent), the result-builder
+                # previously fell back silently to the entity-id slug. With
+                # this map the storage key stays correct for any scene the
+                # registry knows about, regardless of bulk-fetch coverage.
+                slug_to_storage_id: dict[str, str] = {}
+                try:
+                    reg_resp = await asyncio.wait_for(
+                        self.client.send_websocket_message(
+                            {"type": "config/entity_registry/list"}
+                        ),
+                        timeout=BULK_WEBSOCKET_TIMEOUT,
+                    )
+                    if isinstance(reg_resp, dict) and reg_resp.get("success"):
+                        for entry in reg_resp.get("result") or []:
+                            ent_id = entry.get("entity_id") or ""
+                            uid = entry.get("unique_id")
+                            if not ent_id.startswith("scene.") or not uid:
+                                continue
+                            if entry.get("platform") == "homeassistant":
+                                homeassistant_scene_uids.add(uid)
+                            slug = ent_id.removeprefix("scene.")
+                            if slug:
+                                slug_to_storage_id[slug] = uid
+                            if uid in all_scene_configs:
+                                if slug and slug != uid:
+                                    all_scene_configs[slug] = all_scene_configs[uid]
+                except Exception as e:
+                    # Issue #1168 R5 blocker 11: promote DEBUG → WARNING
+                    # and signal the fallback so partial_reason can
+                    # explain why the count looks elevated. The previous
+                    # DEBUG-only log meant a true registry outage looked
+                    # identical to the steady-state happy path on stderr.
+                    logger.warning(
+                        "Scene entity-registry augmentation failed: %s; "
+                        "integration-platform filter unavailable, attempting all scenes",
+                        e,
+                    )
+                    scene_registry_fetch_failed = True
+
+                # Attempt C: parallel per-id fetch with a wall-clock budget so a
+                # few slow scenes don't tank the whole search; remaining ids
+                # bail out via SCENE_CONFIG_TIME_BUDGET below.
+                if not scene_bulk_fetched:
+                    budget_start = time.perf_counter()
+                    # Issue #1168 R3 blocker 2: skip integration-managed
+                    # scenes — their per-id REST endpoint 404s by design,
+                    # and surfacing those as fetch failures masks real
+                    # errors. Counted separately so the partial_reason
+                    # string can distinguish the two failure modes. When
+                    # the registry call failed (homeassistant_scene_uids
+                    # empty), fall back to attempting all scenes — false
+                    # partials beat dropping legitimate HA-managed scenes
+                    # silently.
+                    if homeassistant_scene_uids:
+                        sids_to_fetch = []
+                        for _, _, sid, _ in scene_name_scored:
+                            if not sid or sid in all_scene_configs:
+                                continue
+                            if sid in homeassistant_scene_uids:
+                                sids_to_fetch.append(sid)
+                            else:
+                                scene_integration_skipped_count += 1
+                    else:
+                        sids_to_fetch = [
+                            sid
+                            for _, _, sid, _ in scene_name_scored
+                            if sid and sid not in all_scene_configs
+                        ]
+                    total_to_fetch = len(sids_to_fetch)
+                    fetched_count = 0
+                    failed_count = 0
+
+                    async def _fetch_scene_config(
+                        sid: str,
+                    ) -> tuple[str, dict[str, Any] | None]:
+                        try:
+                            config_resp = await asyncio.wait_for(
+                                self.client.get_scene_config(sid),
+                                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                            )
+                            return (sid, config_resp.get("config", {}))
+                        except Exception as e:
+                            logger.debug(
+                                f"Scene individual config fetch ({sid}) failed: {e}"
+                            )
+                            return (sid, None)
+
+                    for i in range(0, len(sids_to_fetch), INDIVIDUAL_FETCH_BATCH_SIZE):
+                        if (
+                            time.perf_counter() - budget_start
+                            > SCENE_CONFIG_TIME_BUDGET
+                        ):
+                            scene_fetch_skipped_count = (
+                                total_to_fetch - fetched_count - failed_count
+                            )
+                            logger.warning(
+                                f"Scene config fetch budget exhausted "
+                                f"({SCENE_CONFIG_TIME_BUDGET}s). "
+                                f"Fetched {fetched_count}/{total_to_fetch} "
+                                f"({failed_count} failed), "
+                                f"skipped {scene_fetch_skipped_count} scenes."
+                            )
+                            break
+                        batch = sids_to_fetch[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
+                        batch_results = await asyncio.gather(
+                            *[_fetch_scene_config(sid) for sid in batch],
+                        )
+                        for sid_result, config_result in batch_results:
+                            if config_result is not None:
+                                all_scene_configs[sid_result] = config_result
+                                fetched_count += 1
+                            else:
+                                failed_count += 1
+                    scene_fetch_failed_count = failed_count
+
+                # Phase 3: Score scenes
+                for (
+                    entity_id,
+                    friendly_name,
+                    scene_id,
+                    name_score,
+                ) in scene_name_scored:
+                    scene_config = all_scene_configs.get(scene_id, {})
+                    config_match_score = (
+                        self._search_in_dict(scene_config, query_lower, exact_match)
+                        if scene_config
+                        else 0
+                    )
+                    total_score, threshold, match_in_name = self._score_deep_match(
+                        entity_id,
+                        friendly_name,
+                        name_score,
+                        config_match_score,
+                        query_lower,
+                        exact_match,
+                    )
+
+                    if total_score >= threshold:
+                        # Issue #1168 R6 blocker 17 (refined per R7
+                        # blockers 17/21): ``scene_id`` here must be the
+                        # storage key (matching the contract used by
+                        # ``ha_config_get_scene`` / ``ha_config_set_scene``),
+                        # not the entity_id-slug derived at fetch time.
+                        # Three-tier resolution:
+                        #   1. ``scene_config["id"]`` — most direct, present
+                        #      whenever the bulk fetch carried this scene.
+                        #   2. ``slug_to_storage_id`` — registry-derived
+                        #      mapping built during the Phase-2.5 walk,
+                        #      covers integration-managed scenes and any
+                        #      scene whose bulk record omitted ``id``.
+                        #   3. ``scene_id`` itself (the entity-id slug) —
+                        #      final fallback when the registry walk also
+                        #      failed; surfaced via ``logger.warning`` so
+                        #      the silent-slug-mismatch path becomes
+                        #      observable.
+                        if isinstance(scene_config, dict) and isinstance(
+                            scene_config.get("id"), str
+                        ):
+                            storage_id = scene_config["id"]
+                        elif scene_id in slug_to_storage_id:
+                            storage_id = slug_to_storage_id[scene_id]
+                        else:
+                            storage_id = scene_id
+                            logger.warning(
+                                "ha_deep_search scene result fell back to "
+                                "entity-id slug for scene_id=%r — neither "
+                                "bulk config nor registry walk produced a "
+                                "storage key. ``ha_config_get_scene`` will "
+                                "rely on its resolver remap to land on the "
+                                "right scene.",
+                                scene_id,
+                            )
+                        results["scenes"].append(
+                            {
+                                "entity_id": entity_id,
+                                "scene_id": storage_id,
+                                "friendly_name": friendly_name,
+                                "score": total_score,
+                                "match_in_name": match_in_name,
+                                "match_in_config": config_match_score >= threshold,
+                                "config": scene_config if scene_config else None,
+                            }
+                        )
+
+                phase_done += 1
+                if ctx is not None:
+                    await ctx.report_progress(
+                        progress=phase_done,
+                        total=total_phases,
+                        message=f"scenes searched ({len(results['scenes'])} matches)",
+                    )
 
             # Search helpers with parallel WebSocket calls
             if "helper" in search_types:
@@ -1408,6 +1719,7 @@ class SmartSearchTools:
             final_results: dict[str, list[dict[str, Any]]] = {
                 "automations": [],
                 "scripts": [],
+                "scenes": [],
                 "helpers": [],
                 "dashboards": [],
             }
@@ -1429,13 +1741,59 @@ class SmartSearchTools:
                 "next_offset": offset + limit if has_more else None,
                 "automations": final_results["automations"],
                 "scripts": final_results["scripts"],
+                "scenes": final_results["scenes"],
                 "helpers": final_results["helpers"],
                 "search_types": search_types,
             }
 
-            # Only include dashboards key when dashboard search was requested
+            # Only include the dashboards key when dashboard search was requested.
+            # ``scenes`` is in the default ``search_types`` so the bucket is
+            # always-present alongside automations/scripts/helpers; gating it
+            # would break test helpers that iterate the standard tuple.
             if "dashboard" in search_types:
                 response["dashboards"] = final_results["dashboards"]
+
+            # Surface partial results from the scene Attempt-C fetch so the
+            # caller can distinguish "no scene matched" from "matches may be
+            # missing because some configs failed or timed out". Only set
+            # ``partial: True`` when something actually went wrong; downstream
+            # consumers should treat absence as success.
+            #
+            # Issue #1168 R3 blocker 2: integration-managed scenes (Hue,
+            # IKEA, deCONZ, …) intentionally don't go through the per-id
+            # fetch — they're scored on entity attributes only — so they
+            # are NOT considered a fault for the partial flag. The
+            # ``_integration_skipped`` count is informational; it never
+            # raises ``partial: true`` on its own.
+            if scene_fetch_failed_count or scene_fetch_skipped_count:
+                response["partial"] = True
+                reason_parts = [
+                    f"Scene config fetch incomplete: "
+                    f"{scene_fetch_failed_count} failed, "
+                    f"{scene_fetch_skipped_count} skipped (time budget)."
+                ]
+                if scene_integration_skipped_count:
+                    reason_parts.append(
+                        f" {scene_integration_skipped_count} integration-managed "
+                        "scenes are scored by attribute only (no per-id fetch)."
+                    )
+                if scene_registry_fetch_failed:
+                    # Issue #1168 R5 blocker 11: when the registry fetch
+                    # errors, the integration-platform filter is
+                    # unavailable and Attempt C falls back to attempting
+                    # all scenes — surface that so an elevated
+                    # ``failed_count`` isn't mistaken for a real config
+                    # outage.
+                    reason_parts.append(
+                        " Entity-registry fetch failed; integration-platform "
+                        "filter unavailable, attempted all scenes "
+                        "(false-positive failures expected for integration-managed scenes)."
+                    )
+                reason_parts.append(
+                    " Some scene matches may be missing config data; tune "
+                    "HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
+                )
+                response["partial_reason"] = "".join(reason_parts)
 
             return response
 

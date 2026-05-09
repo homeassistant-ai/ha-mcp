@@ -784,8 +784,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 default=None,
                 description=(
-                    "Types to search: 'automation', 'script', 'helper', 'dashboard'. "
-                    "Pass as list or JSON array string. Default: automation, script, helper."
+                    "Types to search: 'automation', 'script', 'scene', 'helper', 'dashboard'. "
+                    "Pass as list or JSON array string. Default: automation, script, scene, helper."
                 ),
             ),
         ] = None,
@@ -826,30 +826,31 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
+        """Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 
-        Use this when you need to find automations/scripts by what they *do* (e.g., which automations
-        call a specific service, reference a particular entity, or contain a certain action).
-        For finding entity IDs by name, use ha_search_entities instead.
+        Use this when you need to find configurations by what they *do* (e.g., which automations
+        call a specific service, which scenes set a particular entity, or any config that contains
+        a certain action). For finding entity IDs by name, use ha_search_entities instead.
 
-        Searches within configuration definitions including triggers, actions, sequences, and other
-        config fields. Also searches dashboard configurations (cards, badges, views) when
-        search_types includes 'dashboard'.
+        Searches within configuration definitions including triggers, actions, sequences, scene
+        entity sets, and other config fields. Also searches dashboard configurations (cards,
+        badges, views) when search_types includes 'dashboard'.
 
         **NOTE:** Dashboards and badges are NOT searched by default. Add 'dashboard' to
         search_types to include them.
 
         Args:
             query: Search query (exact substring by default, or fuzzy with exact_match=False)
-            search_types: Types to search (default: ["automation", "script", "helper"])
+            search_types: Types to search (default: ["automation", "script", "scene", "helper"])
             limit: Maximum total results to return (default: 5)
             exact_match: Use exact substring matching (default: True)
 
         Examples:
             - Find automations referencing an entity: ha_deep_search("sensor.temperature")
             - Find with fuzzy matching: ha_deep_search("motion", exact_match=False)
+            - Find scenes touching a light: ha_deep_search("light.kitchen")
             - Search dashboards for entity refs: ha_deep_search("sensor.temperature", search_types=["dashboard"])
-            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","helper","dashboard"])
+            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")

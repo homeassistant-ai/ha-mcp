@@ -34,6 +34,7 @@ def code_mode_enabled(ha_container_with_fresh_config):
     os.environ[FEATURE_FLAG] = "true"
     # Reset cached settings so the new server reads the fresh env var
     import ha_mcp.config
+
     ha_mcp.config._settings = None
     logger.info("Code mode feature flag enabled")
     yield
@@ -95,13 +96,16 @@ def _skip_if_unavailable(result: tuple[bool, str | None], test_name: str):
 class TestCodeModeAvailability:
     """Test ha_manage_custom_tool availability and feature flag behavior."""
 
-    async def test_feature_flag_disabled_by_default(self, ha_container_with_fresh_config):
+    async def test_feature_flag_disabled_by_default(
+        self, ha_container_with_fresh_config
+    ):
         """Verify tool is NOT registered when feature flag is disabled."""
         # Ensure flag is OFF for this test
         original = os.environ.pop(FEATURE_FLAG, None)
         try:
             # Reset cached settings singleton so server reads fresh env
             import ha_mcp.config
+
             ha_mcp.config._settings = None
 
             from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -203,9 +207,7 @@ class TestCodeModeValidation:
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "No mode specified")
 
-        data = await safe_call_tool(
-            mcp_client_with_code_mode, TOOL_NAME, {}
-        )
+        data = await safe_call_tool(mcp_client_with_code_mode, TOOL_NAME, {})
         assert data.get("success") is False, f"No mode should fail: {data}"
         logger.info("Correctly rejected no-mode call")
 
@@ -413,9 +415,7 @@ class TestCodeModeCallTool:
             TOOL_NAME,
             {"code": code, "justification": "E2E test: nonexistent tool"},
         )
-        assert data.get("success") is True, (
-            f"Sandbox should succeed: {data}"
-        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
         assert data["data"]["result"] is False, (
             f"Nonexistent tool should return success=False: {data}"
         )
@@ -476,7 +476,7 @@ class TestCodeModeApiAccess:
         # Call homeassistant.check_config — a safe, read-only service
         code = (
             'result = await api_post("/services/homeassistant/check_config")\n'
-            'isinstance(result, (dict, list))'
+            "isinstance(result, (dict, list))"
         )
         data = await safe_call_tool(
             mcp_client_with_code_mode,
@@ -512,9 +512,7 @@ class TestCodeModeApiAccess:
 
         # Render a simple Jinja2 template via the template API
         code = (
-            'result = await api_post("/template", '
-            '{"template": "{{ 40 + 2 }}"})\n'
-            'result'
+            'result = await api_post("/template", {"template": "{{ 40 + 2 }}"})\nresult'
         )
         data = await safe_call_tool(
             mcp_client_with_code_mode,
@@ -578,8 +576,8 @@ class TestCodeModeWebSocket:
         code = (
             'result = await ws_send({"type": "config/area_registry/list"})\n'
             'areas = result.get("result", result if isinstance(result, list) else [])\n'
-            'first_keys = sorted(areas[0].keys()) if isinstance(areas, list) and areas '
-            'and isinstance(areas[0], dict) else []\n'
+            "first_keys = sorted(areas[0].keys()) if isinstance(areas, list) and areas "
+            "and isinstance(areas[0], dict) else []\n"
             '{"count": len(areas) if isinstance(areas, list) else 0,'
             ' "is_list": isinstance(areas, list),'
             ' "first_keys": first_keys}'
@@ -594,7 +592,9 @@ class TestCodeModeWebSocket:
         assert result["is_list"] is True, f"Areas should be a list: {data}"
         # The fresh-config fixture seeds at least one area; if not we'd be
         # asserting against empty registry which is a meaningful failure too.
-        assert result["count"] > 0, f"Expected at least one area in fresh config: {data}"
+        assert result["count"] > 0, (
+            f"Expected at least one area in fresh config: {data}"
+        )
         assert "area_id" in result["first_keys"], (
             f"area_registry/list response should contain area_id: {result}"
         )
@@ -710,9 +710,11 @@ class TestCodeModeSecurity:
         assert result["has_error"] is True, (
             f"api_get must reject absolute URLs, got: {data}"
         )
-        assert "absolute" in result["error"].lower() or "://" in result["error"] or "blocked" in result["error"].lower(), (
-            f"Error message should explain the rejection: {result}"
-        )
+        assert (
+            "absolute" in result["error"].lower()
+            or "://" in result["error"]
+            or "blocked" in result["error"].lower()
+        ), f"Error message should explain the rejection: {result}"
         logger.info("api_get correctly rejected absolute URL")
 
     async def test_api_post_rejects_absolute_url(self, mcp_client_with_code_mode):
@@ -753,7 +755,10 @@ class TestCodeModeSecurity:
         data = await safe_call_tool(
             mcp_client_with_code_mode,
             TOOL_NAME,
-            {"code": code, "justification": "E2E test: api_get protocol-relative rejection"},
+            {
+                "code": code,
+                "justification": "E2E test: api_get protocol-relative rejection",
+            },
         )
         assert data.get("success") is True, f"Sandbox should succeed: {data}"
         result = data["data"]["result"]
@@ -801,9 +806,11 @@ class TestCodeModeSecurity:
             f"Filesystem access should be blocked: {data}"
         )
         error_details = str(data.get("error", ""))
-        assert "open" in error_details.lower() or "not defined" in error_details.lower() or "sandbox" in error_details.lower(), (
-            f"Error should mention the sandbox violation, got: {error_details}"
-        )
+        assert (
+            "open" in error_details.lower()
+            or "not defined" in error_details.lower()
+            or "sandbox" in error_details.lower()
+        ), f"Error should mention the sandbox violation, got: {error_details}"
         logger.info("Correctly blocked filesystem access")
 
     async def test_no_class_definitions(self, mcp_client_with_code_mode):
@@ -858,7 +865,7 @@ class TestCodeModeSecurity:
         code = (
             'result = await call_tool("ha_manage_custom_tool", '
             '{"code": "1+1", "justification": "nested"})\n'
-            'result'
+            "result"
         )
         data = await safe_call_tool(
             mcp_client_with_code_mode,
@@ -901,9 +908,11 @@ class TestCodeModeResourceLimits:
             f"Infinite loop should be terminated: {data}"
         )
         error_details = str(data.get("error", ""))
-        assert "duration" in error_details.lower() or "time" in error_details.lower() or "limit" in error_details.lower(), (
-            f"Error should mention timeout/duration, got: {error_details}"
-        )
+        assert (
+            "duration" in error_details.lower()
+            or "time" in error_details.lower()
+            or "limit" in error_details.lower()
+        ), f"Error should mention timeout/duration, got: {error_details}"
         logger.info("Correctly terminated code that exceeded time limit")
 
 
@@ -975,9 +984,7 @@ class TestSavedTools:
             {"run_saved": "e2e_overwrite"},
         )
         assert data.get("success") is True, f"Should succeed: {data}"
-        assert data["data"]["result"] == 2, (
-            f"Should run v2 (overwritten), got: {data}"
-        )
+        assert data["data"]["result"] == 2, f"Should run v2 (overwritten), got: {data}"
         logger.info("Overwrite correctly replaced saved tool")
 
     async def test_list_saved_tools(self, mcp_client_with_code_mode):
@@ -1016,14 +1023,10 @@ class TestSavedTools:
         assert "saved_tools" in outer, (
             f"Response should nest under data.saved_tools: {data}"
         )
-        assert "count" in outer, (
-            f"Response should include data.count: {data}"
-        )
+        assert "count" in outer, f"Response should include data.count: {data}"
         tools = outer["saved_tools"]
         assert "e2e_listed" in tools, f"Should contain saved tool: {data}"
-        assert tools["e2e_listed"]["code"] == "'listed'", (
-            f"Code should match: {data}"
-        )
+        assert tools["e2e_listed"]["code"] == "'listed'", f"Code should match: {data}"
         assert outer["count"] == len(tools), (
             f"Count must equal saved_tools length: {data}"
         )
@@ -1039,9 +1042,7 @@ class TestSavedTools:
             TOOL_NAME,
             {"run_saved": "nonexistent_e2e_tool_12345"},
         )
-        assert data.get("success") is False, (
-            f"Nonexistent tool should fail: {data}"
-        )
+        assert data.get("success") is False, f"Nonexistent tool should fail: {data}"
         logger.info("Correctly rejected nonexistent saved tool")
 
     async def test_delete_saved_tool_via_sandbox(self, mcp_client_with_code_mode):
@@ -1070,7 +1071,9 @@ class TestSavedTools:
                 "justification": "E2E test: delete saved tool",
             },
         )
-        assert delete.get("success") is True, f"Delete sandbox call should succeed: {delete}"
+        assert delete.get("success") is True, (
+            f"Delete sandbox call should succeed: {delete}"
+        )
         result = delete["data"]["result"]
         assert isinstance(result, dict), f"Expected dict result: {result}"
         assert result.get("deleted") is True, (
@@ -1170,14 +1173,12 @@ class TestCodeModeApiPostBlocklist:
         assert result["has_error"] is True, (
             f"api_post must block /api/states/* writes: {data}"
         )
-        assert "states" in result["error"].lower() or "blocked" in result["error"].lower(), (
-            f"Error should explain the block: {result}"
-        )
+        assert (
+            "states" in result["error"].lower() or "blocked" in result["error"].lower()
+        ), f"Error should explain the block: {result}"
         logger.info("api_post correctly blocked /api/states/* write")
 
-    async def test_api_post_blocks_ha_internal_event(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_api_post_blocks_ha_internal_event(self, mcp_client_with_code_mode):
         """POST /api/events/state_changed is blocked — spoofing HA Core
         internal events can fan out into user automations.
         """
@@ -1200,9 +1201,9 @@ class TestCodeModeApiPostBlocklist:
         assert result["has_error"] is True, (
             f"api_post must block HA-internal events: {data}"
         )
-        assert "state_changed" in result["error"] or "internal" in result["error"].lower(), (
-            f"Error should mention the blocked event: {result}"
-        )
+        assert (
+            "state_changed" in result["error"] or "internal" in result["error"].lower()
+        ), f"Error should mention the blocked event: {result}"
         logger.info("api_post correctly blocked /api/events/state_changed")
 
     async def test_api_post_allows_custom_event(self, mcp_client_with_code_mode):
@@ -1217,7 +1218,7 @@ class TestCodeModeApiPostBlocklist:
         code = (
             'result = await api_post("/events/my_app_completed", {"foo": "bar"})\n'
             '{"has_error": "error" in result if isinstance(result, dict)'
-            ' else False,'
+            " else False,"
             ' "error": result.get("error", "") if isinstance(result, dict)'
             ' else ""}'
         )
@@ -1267,16 +1268,9 @@ class TestCodeModeApiPostBlocklist:
         )
         logger.info("api_post correctly blocked automation config write")
 
-    async def test_api_post_blocks_script_config_write(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_api_post_blocks_script_config_write(self, mcp_client_with_code_mode):
         """POST /api/config/script/config/* is blocked for the same reason
         as automation: bypasses ``ha_config_set_script`` validation.
-
-        ``config/scene/config/*`` is intentionally NOT blocked: there is
-        no ``ha_config_set_scene`` wrapping tool to redirect to, and a
-        block without a validated alternative just removes capability.
-        See ``_API_POST_BLOCKED_PREFIXES`` in tools_code.py.
         """
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "api_post script blocklist")
@@ -1302,19 +1296,14 @@ class TestCodeModeApiPostBlocklist:
         )
         logger.info("api_post correctly blocked script config write")
 
-    async def test_api_post_allows_scene_config_write(
-        self, mcp_client_with_code_mode
-    ):
-        """POST /api/config/scene/config/* must NOT be sandbox-blocked.
-
-        No ``ha_config_set_scene`` wrapping tool exists yet; blocking the
-        path without a validated alternative would just remove capability.
-        Verifies the block was deliberately omitted, not accidentally
-        forgotten — this test should fail loudly if a future maintainer
-        adds the block back without a wrapping tool.
+    async def test_api_post_blocks_scene_config_write(self, mcp_client_with_code_mode):
+        """POST /api/config/scene/config/* is blocked for the same reason
+        as automation/script: bypasses ``ha_config_set_scene`` validation
+        (entities-must-be-dict shape check, reference validation,
+        hash-locking).
         """
         check = await _check_tool_available(mcp_client_with_code_mode)
-        _skip_if_unavailable(check, "api_post scene allowed")
+        _skip_if_unavailable(check, "api_post scene blocklist")
 
         code = (
             'result = await api_post("/config/scene/config/abcd1234",'
@@ -1325,19 +1314,56 @@ class TestCodeModeApiPostBlocklist:
         data = await safe_call_tool(
             mcp_client_with_code_mode,
             TOOL_NAME,
-            {"code": code, "justification": "E2E test: scene config allowed"},
+            {"code": code, "justification": "E2E test: blocked scene config"},
         )
         assert data.get("success") is True, f"Sandbox should succeed: {data}"
         result = data["data"]["result"]
-        # The HA endpoint may return an error for legitimate reasons
-        # (missing fields, schema rejection, etc.), but the sandbox-side
-        # blocklist must not be the cause.
-        if result["has_error"]:
-            err = str(result["error"]).lower()
-            assert "blocked" not in err and "ha_config_set_scene" not in err, (
-                f"Scene config write must not be sandbox-blocked: {result}"
-            )
-        logger.info("api_post correctly allowed scene config write")
+        assert result["has_error"] is True, (
+            f"api_post must block scene/config/*: {data}"
+        )
+        assert "ha_config_set_scene" in result["error"], (
+            f"Error should point at the wrapping tool: {result}"
+        )
+        logger.info("api_post correctly blocked scene config write")
+
+    async def test_api_post_blocks_scene_config_delete(self, mcp_client_with_code_mode):
+        """The path-prefix blocklist catches every operation under
+        ``/api/config/scene/config/`` regardless of payload shape.
+
+        Sandbox exposes only ``api_post``/``api_get`` — there is no
+        ``api_delete`` — so an LLM trying to bypass ``ha_config_remove_scene``
+        must funnel through ``api_post``. This test exercises the
+        delete-flavored attack pattern (empty/null body to trigger the
+        REST API's DELETE-on-empty-POST behaviour) and asserts the
+        path-prefix check still rejects it. Companion to
+        ``test_api_post_blocks_scene_config_write`` — both paths converge
+        on the same prefix and must reject identically.
+        """
+        check = await _check_tool_available(mcp_client_with_code_mode)
+        _skip_if_unavailable(check, "api_post scene blocklist (delete-shaped)")
+
+        code = (
+            # Empty body — the closest a sandboxed caller can get to a
+            # DELETE shape. Whatever the payload, the prefix check fires
+            # before the request is made.
+            'result = await api_post("/config/scene/config/scene_to_delete", None)\n'
+            '{"has_error": "error" in result if isinstance(result, dict) else False,'
+            ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {"code": code, "justification": "E2E test: blocked scene config delete"},
+        )
+        assert data.get("success") is True, f"Sandbox should succeed: {data}"
+        result = data["data"]["result"]
+        assert result["has_error"] is True, (
+            f"api_post must block scene/config/* irrespective of payload: {data}"
+        )
+        assert "ha_config_set_scene" in result["error"], (
+            f"Error should point at the wrapping tool: {result}"
+        )
+        logger.info("api_post correctly blocked scene config delete-shape")
 
 
 # ---------------------------------------------------------------------------
@@ -1350,9 +1376,7 @@ class TestCodeModeWsSendBlocklist:
     state or bypass wrapping-tool validation.
     """
 
-    async def test_ws_send_blocks_core_config_update(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_ws_send_blocks_core_config_update(self, mcp_client_with_code_mode):
         """config/core/update is blocked — it persistently rewrites the HA
         installation's location/timezone/currency/lat-long.
         """
@@ -1380,9 +1404,7 @@ class TestCodeModeWsSendBlocklist:
         )
         logger.info("ws_send correctly blocked config/core/update")
 
-    async def test_ws_send_blocks_lovelace_config_save(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_ws_send_blocks_lovelace_config_save(self, mcp_client_with_code_mode):
         """lovelace/config/save is blocked — bypasses ha_config_set_dashboard
         which performs the storage-mode collision check.
         """
@@ -1444,9 +1466,7 @@ class TestCodeModeWsSendBlocklist:
             "config/category_registry/update",
         ],
     )
-    async def test_ws_send_blocks_command(
-        self, mcp_client_with_code_mode, ws_type
-    ):
+    async def test_ws_send_blocks_command(self, mcp_client_with_code_mode, ws_type):
         """Every entry in _BLOCKED_WS_COMMANDS must be rejected by ws_send.
 
         Parametrizing over the full set catches the "blocklist names a
@@ -1471,9 +1491,7 @@ class TestCodeModeWsSendBlocklist:
         )
         assert data.get("success") is True, f"Sandbox should succeed: {data}"
         result = data["data"]["result"]
-        assert result["has_error"] is True, (
-            f"ws_send must block {ws_type}: {data}"
-        )
+        assert result["has_error"] is True, f"ws_send must block {ws_type}: {data}"
         assert ws_type in result["error"], (
             f"Error should mention the blocked command: {result}"
         )
@@ -1513,9 +1531,7 @@ class TestCodeModeErrorClassification:
     with targeted suggestions, not the previous generic INTERNAL_ERROR.
     """
 
-    async def test_import_returns_syntax_unsupported(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_import_returns_syntax_unsupported(self, mcp_client_with_code_mode):
         """An ``import`` statement maps to SANDBOX_SYNTAX_UNSUPPORTED with a
         suggestion that names the injected helpers, not 'check the syntax'.
         """
@@ -1533,9 +1549,7 @@ class TestCodeModeErrorClassification:
         assert data.get("success") is False, f"Should fail: {data}"
         err = data.get("error", {})
         err_code = err.get("code") if isinstance(err, dict) else ""
-        err_message = (
-            str(err.get("message", "")) if isinstance(err, dict) else str(err)
-        )
+        err_message = str(err.get("message", "")) if isinstance(err, dict) else str(err)
         err_suggestions = err.get("suggestions", []) if isinstance(err, dict) else []
         assert err_code == "SANDBOX_SYNTAX_UNSUPPORTED", (
             f"Expected SANDBOX_SYNTAX_UNSUPPORTED, got {err_code}: {data}"
@@ -1546,9 +1560,7 @@ class TestCodeModeErrorClassification:
         )
         logger.info("Import classification correct: %s", err_message[:120])
 
-    async def test_class_returns_syntax_unsupported(
-        self, mcp_client_with_code_mode
-    ):
+    async def test_class_returns_syntax_unsupported(self, mcp_client_with_code_mode):
         """``class`` definitions are unsupported by Monty; should map to
         SANDBOX_SYNTAX_UNSUPPORTED.
         """
@@ -1716,17 +1728,17 @@ class TestCodeModeNormalizeEndpointTraversal:
     @pytest.mark.parametrize(
         "endpoint",
         [
-            "../auth/providers",          # single ..
-            "../../etc/passwd",            # double .. (path-traversal classic)
-            "..//evil.example.com/foo",   # ..// reverse-proxy edge case
-            "foo/../bar",                  # mid-path ..
+            "../auth/providers",  # single ..
+            "../../etc/passwd",  # double .. (path-traversal classic)
+            "..//evil.example.com/foo",  # ..// reverse-proxy edge case
+            "foo/../bar",  # mid-path ..
             # Percent-encoded traversal — pins the M2 fix's
             # ``urllib.parse.unquote(segment)`` call. Without that
             # call the segment loop sees ``%2e%2e`` as a normal
             # filename and would let it slip past on reverse-proxy
             # setups that decode-then-resolve.
-            "%2e%2e/auth/providers",      # lowercase percent-encoded
-            "%2E%2E/auth/providers",      # uppercase percent-encoded
+            "%2e%2e/auth/providers",  # lowercase percent-encoded
+            "%2E%2E/auth/providers",  # uppercase percent-encoded
         ],
     )
     async def test_api_get_rejects_dot_dot_segment(
@@ -1736,7 +1748,7 @@ class TestCodeModeNormalizeEndpointTraversal:
         _skip_if_unavailable(check, f"api_get traversal {endpoint}")
 
         code = (
-            f'result = await api_get({endpoint!r})\n'
+            f"result = await api_get({endpoint!r})\n"
             '{"has_error": "error" in result if isinstance(result, dict) else False,'
             ' "error": result.get("error", "") if isinstance(result, dict) else ""}'
         )
@@ -1747,9 +1759,7 @@ class TestCodeModeNormalizeEndpointTraversal:
         )
         assert data.get("success") is True, f"Sandbox should succeed: {data}"
         result = data["data"]["result"]
-        assert result["has_error"] is True, (
-            f"api_get must reject {endpoint!r}: {data}"
-        )
+        assert result["has_error"] is True, f"api_get must reject {endpoint!r}: {data}"
         # Either the protocol-relative '//' guard fires (catches
         # '..//evil.example.com/foo') or the explicit '..' guard does;
         # both produce errors that mention the rejection cause.
@@ -1797,9 +1807,9 @@ class TestCodeModeProxyLaunderingBlocked:
             "ha_call_delete_tool",
         ):
             code = (
-                f'result = await call_tool({synthetic!r}, '
+                f"result = await call_tool({synthetic!r}, "
                 '{"name": "ha_get_overview", "arguments": {}})\n'
-                'result'
+                "result"
             )
             data = await safe_call_tool(
                 mcp_client_with_code_mode,
