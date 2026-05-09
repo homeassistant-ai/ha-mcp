@@ -974,6 +974,10 @@ def main() -> int:
     # probing the OAuth metadata endpoint — only the new code registers it.
     # If absent, unregister the webhook so the URL stops working entirely
     # until HA is restarted, and tell the user loudly.
+    # Path to the marker file that the integration's repairs flow watches.
+    # Kept in sync with `mcp_proxy/repairs.py:RESTART_MARKER_FILE`.
+    oauth_restart_marker = Path("/config/.mcp_proxy_oauth_restart_required")
+
     if enable_oauth and not _probe_oauth_active():
         log_error("")
         log_error("=" * 70)
@@ -997,6 +1001,19 @@ def main() -> int:
         log_error("=" * 70)
         log_error("")
         _remove_config_entry()
+        # Drop a marker file that the integration's repairs flow checks at
+        # next HA boot, so the user also sees a "Restart Home Assistant"
+        # Repair card with a click-to-restart submit button (in addition to
+        # the persistent_notification below).
+        try:
+            oauth_restart_marker.write_text(
+                json.dumps({"reason": "stale_integration_code"})
+            )
+        except OSError as e:
+            log_error(
+                f"Could not write OAuth restart marker "
+                f"({type(e).__name__}): {e}"
+            )
         _ha_core_api(
             "POST",
             "/services/persistent_notification/create",
@@ -1034,6 +1051,14 @@ def main() -> int:
                 "/services/persistent_notification/dismiss",
                 {"notification_id": "mcp_proxy_oauth_stale"},
             )
+            # Marker is the integration's signal — the integration's
+            # `async_setup_entry` will already delete it on its own next
+            # boot, but cleaning up here too prevents the Repair card from
+            # flickering on a subsequent restart.
+            try:
+                oauth_restart_marker.unlink(missing_ok=True)
+            except OSError:
+                pass
             log_info(
                 "OAuth-enforcing integration code is now active; "
                 "webhook re-enabled."

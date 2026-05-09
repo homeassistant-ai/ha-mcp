@@ -109,19 +109,47 @@ def _install_runtime_stubs():
         "HomeAssistantView", (), {"requires_auth": True, "cors_allowed": False}
     )
 
+    # repairs.py imports — stub the surface area it needs
+    ha_components_repairs = types.ModuleType("homeassistant.components.repairs")
+    ha_components_repairs.RepairsFlow = type("RepairsFlow", (), {})
+    ha_data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
+    ha_data_entry_flow.FlowResult = dict
+    ha_helpers_issue_registry = types.ModuleType(
+        "homeassistant.helpers.issue_registry"
+    )
+    ha_helpers_issue_registry.async_create_issue = MagicMock(
+        name="async_create_issue"
+    )
+    ha_helpers_issue_registry.async_delete_issue = MagicMock(
+        name="async_delete_issue"
+    )
+
+    class _IssueSeverity:
+        ERROR = "error"
+        WARNING = "warning"
+        CRITICAL = "critical"
+    ha_helpers_issue_registry.IssueSeverity = _IssueSeverity
+
+    voluptuous_mod = types.ModuleType("voluptuous")
+    voluptuous_mod.Schema = MagicMock(name="Schema")
+
     sys.modules.update({
         "homeassistant": ha,
         "homeassistant.components": ha_components,
         "homeassistant.components.webhook": ha_webhook,
         "homeassistant.components.http": ha_components_http,
+        "homeassistant.components.repairs": ha_components_repairs,
         "homeassistant.config_entries": ha_config_entries,
         "homeassistant.core": ha_core,
         "homeassistant.helpers": ha_helpers,
         "homeassistant.helpers.typing": ha_helpers_typing,
+        "homeassistant.helpers.issue_registry": ha_helpers_issue_registry,
         "homeassistant.exceptions": ha_exceptions,
+        "homeassistant.data_entry_flow": ha_data_entry_flow,
         "aiohttp": aiohttp_mod,
         "aiohttp.web": aiohttp_web,
         "yarl": yarl_mod,
+        "voluptuous": voluptuous_mod,
     })
 
 
@@ -2388,6 +2416,75 @@ class TestOAuthProviderConstructorValidation:
                 client_secret="secret",
                 webhook_id="wh",
                 signing_key=b"too-short")
+
+
+class TestRepairsModule:
+    """Marker-file lifecycle and issue creation/deletion for the
+    "Restart Required" Repair card."""
+
+    @pytest.fixture
+    def repairs(self, tmp_path):
+        _install_runtime_stubs()
+        repairs_path = os.path.join(
+            PROXY_ADDON_DIR, "mcp_proxy", "repairs.py"
+        )
+        sys.modules.pop("mcp_proxy_repairs", None)
+        spec = importlib.util.spec_from_file_location(
+            "mcp_proxy_repairs", repairs_path
+        )
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["mcp_proxy_repairs"] = mod
+        spec.loader.exec_module(mod)
+        # Redirect the marker file into the test's tmp dir
+        mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
+        return mod
+
+    def test_marker_present_returns_false_when_file_missing(self, repairs):
+        assert repairs.marker_present() is False
+
+    def test_marker_present_returns_true_when_file_exists(self, repairs):
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "test"}')
+        assert repairs.marker_present() is True
+
+    def test_clear_marker_removes_file(self, repairs):
+        repairs.RESTART_MARKER_FILE.write_text("test")
+        repairs._clear_marker()
+        assert not repairs.RESTART_MARKER_FILE.exists()
+
+    def test_clear_marker_idempotent_when_missing(self, repairs):
+        # Should not raise
+        repairs._clear_marker()
+        assert not repairs.RESTART_MARKER_FILE.exists()
+
+    def test_maybe_create_issue_no_op_when_marker_missing(self, repairs):
+        from homeassistant.helpers import issue_registry
+        hass = MagicMock()
+        repairs.maybe_create_issue(hass, "mcp_proxy")
+        issue_registry.async_create_issue.assert_not_called()
+
+    def test_maybe_create_issue_fires_when_marker_present(self, repairs):
+        from homeassistant.helpers import issue_registry
+        issue_registry.async_create_issue.reset_mock()
+        repairs.RESTART_MARKER_FILE.write_text("test")
+        hass = MagicMock()
+        repairs.maybe_create_issue(hass, "mcp_proxy")
+        issue_registry.async_create_issue.assert_called_once()
+        # Domain + issue_id are positional args after hass
+        call_args = issue_registry.async_create_issue.call_args
+        assert call_args.args[1] == "mcp_proxy"
+        assert call_args.args[2] == "oauth_restart_required"
+        assert call_args.kwargs.get("is_fixable") is True
+
+    def test_clear_issue_deletes_marker_and_calls_delete_issue(self, repairs):
+        from homeassistant.helpers import issue_registry
+        issue_registry.async_delete_issue.reset_mock()
+        repairs.RESTART_MARKER_FILE.write_text("test")
+        hass = MagicMock()
+        repairs.clear_issue(hass, "mcp_proxy")
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        issue_registry.async_delete_issue.assert_called_once_with(
+            hass, "mcp_proxy", "oauth_restart_required"
+        )
 
 
 class TestProbeOAuthActive:

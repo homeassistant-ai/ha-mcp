@@ -75,6 +75,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     If the user has an old `mcp_proxy:` entry in configuration.yaml,
     auto-migrate to a config entry so the YAML line can be removed.
+
+    Also runs the boot-time repair-issue check: if the addon left a
+    "needs HA restart for OAuth" marker file behind, surface it as a
+    Repair card with a click-to-restart fix flow. See repairs.py for
+    the full lifecycle.
     """
     if DOMAIN in config:
         _LOGGER.info(
@@ -86,7 +91,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 DOMAIN, context={"source": "import"}
             )
         )
+    if await hass.async_add_executor_job(_marker_present):
+        from .repairs import maybe_create_issue
+        maybe_create_issue(hass, DOMAIN)
     return True
+
+
+def _marker_present() -> bool:
+    # Imported lazily so async_setup doesn't pull in repairs.py module-load
+    # cost on the no-marker happy path.
+    from .repairs import marker_present
+    return marker_present()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -243,6 +258,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass_data["oauth"] = oauth_provider
 
     hass.data[DOMAIN] = hass_data
+
+    # If we got here, the integration is set up and (if OAuth is configured)
+    # the OAuth provider's views are registered. Either way, any prior
+    # "needs HA restart for OAuth" marker is now stale — clear it so the
+    # Repair card disappears.
+    from .repairs import clear_issue
+    clear_issue(hass, DOMAIN)
 
     return True
 
