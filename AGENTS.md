@@ -423,8 +423,11 @@ docker run -d -p 8086:8086 \
 
 The standard-mode HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by
 URL-path secrecy: any request to the configured path (default `/mcp`,
-overridable via `MCP_SECRET_PATH`) is authorised. Bind to `127.0.0.1` for
-same-host LLM clients; on LAN-reachable interfaces set a 128-bit-entropy
+overridable via `MCP_SECRET_PATH`) is authorised. The MCP client must use the
+full URL including this path (e.g. `http://host:8086/private_<random>`); the
+web settings UI mounts under the same path (`<MCP_SECRET_PATH>/settings`), so
+operators reach it through the secret-prefixed URL too. Bind to `127.0.0.1`
+for same-host LLM clients; on LAN-reachable interfaces set a 128-bit-entropy
 `MCP_SECRET_PATH` (the Home Assistant add-on auto-generates one with
 `secrets.token_urlsafe(16)`). Internet-facing deployments need the OAuth
 entrypoint (`ha-mcp-oauth`) behind a TLS-terminating reverse proxy — see

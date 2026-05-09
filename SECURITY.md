@@ -29,7 +29,7 @@
   Tool visibility controls (`ENABLED_TOOL_MODULES`, group toggles) exist for this purpose.
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
   (e.g., standard-mode instance exposed to the internet without TLS, or a
-  network-reachable HTTP entrypoint without `MCP_SECRET_PATH` set).
+  network-reachable HTTP entrypoint using the default `MCP_SECRET_PATH`).
 
   **Standard-mode threat model.** The HTTP entrypoints (`ha-mcp-web`,
   `ha-mcp-sse`) authenticate by URL-path secrecy and are designed for
