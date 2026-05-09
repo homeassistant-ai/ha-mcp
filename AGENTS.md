@@ -417,7 +417,7 @@ docker run -d -p 127.0.0.1:8086:8086 \
 # HTTP mode (LAN-reachable) — set MCP_SECRET_PATH before binding to all interfaces
 docker run -d -p 8086:8086 \
   -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
-  -e MCP_SECRET_PATH="/private_$(openssl rand -hex 16)" \
+  -e MCP_SECRET_PATH="/private_$(python -c 'import secrets; print(secrets.token_urlsafe(16))')" \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
 ```
 
