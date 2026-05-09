@@ -1216,6 +1216,24 @@ class TestCategoryValidation:
         # Suggestion points at the right tool for category creation.
         suggestions_blob = " ".join(error_data["error"].get("suggestions") or [])
         assert "ha_config_set_category" in suggestions_blob
+        # R6 blocker 20: assert the upsert was NOT called — without this the
+        # R5 ordering bug (validation after upsert) was unit-invisible.
+        mock_client.upsert_scene_config.assert_not_called()
+        # R6 while-you're-in: validation must use ``scope=scene``. A regression
+        # that drops the scope filter would silently accept any category.
+        category_list_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/category_registry/list"
+        ]
+        assert category_list_calls, (
+            "_validate_category_id must hit config/category_registry/list"
+        )
+        assert all(c.get("scope") == "scene" for c in category_list_calls), (
+            f"category_registry/list payload must carry scope='scene'; "
+            f"saw {category_list_calls}"
+        )
 
     async def test_set_scene_config_mode_accepts_existing_category(
         self, tools, mock_client
@@ -1235,6 +1253,9 @@ class TestCategoryValidation:
         )
 
         assert result["success"] is True
+        # R6 while-you're-in: the happy-path upsert fires exactly once. A
+        # regression that double-calls or skips the upsert when the category
+        # gate passes would otherwise slip through.
         mock_client.upsert_scene_config.assert_called_once()
 
     async def test_python_transform_branch_rejects_phantom_category(
@@ -1272,3 +1293,311 @@ class TestCategoryValidation:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "phantom_id" in error_data["error"]["message"]
+        # R6 blocker 20: assert the upsert was NOT called — the R5 ordering
+        # bug let a phantom-category transform write through and only error
+        # afterwards.
+        mock_client.upsert_scene_config.assert_not_called()
+
+
+class TestEmptySceneIdGuard:
+    """R6 blocker 16 — empty ``scene_id`` pre-flight on all three tools.
+
+    Previously ``set_scene("", …)`` returned ``RESOURCE_NOT_FOUND`` with a
+    misleading ``entities``-related suggestion (the downstream lookup raised
+    on the empty key). The pre-flight surfaces the actual problem.
+    """
+
+    async def test_get_scene_rejects_empty_scene_id(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_scene(scene_id="")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+
+    async def test_set_scene_rejects_empty_scene_id(self, tools, mock_client):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="",
+                config={"name": "X", "entities": {"light.x": {"state": "on"}}},
+                wait=False,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+        # Critical: the guard fires BEFORE upsert reaches HA.
+        mock_client.upsert_scene_config.assert_not_called()
+
+    async def test_remove_scene_rejects_empty_scene_id(self, tools, mock_client):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_scene(scene_id="", wait=False)
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene_id must not be empty" in body["error"]["message"]
+        mock_client.delete_scene_config.assert_not_called()
+
+
+class TestPythonTransformDeleteIdLegitimate:
+    """R6 blocker 18 — a transform that ``del config['id']`` is legitimate
+    (HA treats ``id`` as optional). The R5 strict check rejected this; the
+    R6 refinement only blocks an EXPLICIT mismatched id.
+    """
+
+    async def test_transform_deleting_id_passes_through(self, tools, mock_client):
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform="del config['id']",
+            config_hash=seed_hash,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        # The upsert was called — id-deletion is legitimate.
+        mock_client.upsert_scene_config.assert_called_once()
+        sent_config = mock_client.upsert_scene_config.call_args.args[0]
+        assert "id" not in sent_config
+
+
+class TestSceneRegistryFallbackClean:
+    """R6 while-you're-in: when the registry fetch fails BUT per-id config
+    fetches succeed (B11 fallback engages and recovers), the response must
+    NOT carry ``partial: true``. Today only the "registry fails AND per-id
+    fails" path is covered; this locks the clean-fallback case.
+    """
+
+    async def test_registry_fail_per_id_succeed_no_partial(self) -> None:
+        from typing import Any
+        from unittest.mock import MagicMock as _MagicMock
+        from unittest.mock import patch as _patch
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        client = _MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.bedroom",
+                    "state": "scening",
+                    "attributes": {"friendly_name": "Bedroom"},
+                }
+            ]
+        )
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type == "config/entity_registry/list":
+                # Registry fetch FAILS → fallback engages.
+                raise RuntimeError("simulated registry outage")
+            return {"success": False}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+        # Per-id fetch SUCCEEDS — fallback recovers cleanly.
+        client.get_scene_config = AsyncMock(
+            return_value={
+                "config": {
+                    "id": "bedroom",
+                    "name": "Bedroom",
+                    "entities": {"light.bed": {"state": "on"}},
+                }
+            }
+        )
+
+        with _patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools_obj = SmartSearchTools(client=client)
+            result = await tools_obj.deep_search(
+                query="bedroom",
+                search_types=["scene"],
+                limit=10,
+            )
+
+        assert result["success"] is True
+        # Critical: no partial flag because per-id fetches succeeded even
+        # though the registry fetch failed.
+        assert "partial" not in result, (
+            f"clean per-id fallback must not surface partial=True; got {result}"
+        )
+        assert "partial_reason" not in result
+
+
+class TestSmartSearchSceneIdIsStorageKey:
+    """R6 blocker 17 — ``scene_id`` field in deep_search results must be the
+    storage key (matching ``ha_config_get_scene``'s contract), not the
+    entity_id slug derived at fetch time. A scene whose entity_id slug
+    diverges from its storage key (renamed via UI) lets the bug surface.
+    """
+
+    async def test_deep_search_scene_id_uses_storage_key(self) -> None:
+        from typing import Any
+        from unittest.mock import MagicMock as _MagicMock
+        from unittest.mock import patch as _patch
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        # Storage key: "night_light_led_desk_strip"
+        # Entity_id slug: "led_desk_strip_night_light" (HA derives from name)
+        client = _MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.led_desk_strip_night_light",
+                    "state": "scening",
+                    "attributes": {
+                        "friendly_name": "LED Desk Strip Night Light",
+                    },
+                }
+            ]
+        )
+        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type in ("config/scene/config/list", "scene/config/list"):
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "id": "night_light_led_desk_strip",  # storage key
+                            "name": "LED Desk Strip Night Light",
+                            "entities": {
+                                "light.led_desk_strip": {"state": "on"},
+                            },
+                        }
+                    ],
+                }
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.led_desk_strip_night_light",
+                            "unique_id": "night_light_led_desk_strip",
+                            "platform": "homeassistant",
+                        }
+                    ],
+                }
+            return {"success": False}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        with _patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
+            mock_settings.return_value.fuzzy_threshold = 60
+            tools_obj = SmartSearchTools(client=client)
+            result = await tools_obj.deep_search(
+                query="led desk strip",
+                search_types=["scene"],
+                limit=10,
+                include_config=True,
+            )
+
+        scenes = result.get("scenes", [])
+        assert len(scenes) == 1, f"expected 1 scene, got: {scenes}"
+        match = scenes[0]
+        # entity_id stays as the slug HA exposes.
+        assert match["entity_id"] == "scene.led_desk_strip_night_light"
+        # scene_id MUST be the storage key (matches ha_config_get_scene
+        # contract — calling get_scene with scene_id from this result must
+        # land in the same scene without a slug→storage-key remap surprise).
+        assert match["scene_id"] == "night_light_led_desk_strip", (
+            "scene_id field must carry the storage key, not the entity-id "
+            "slug — otherwise deep_search → get_scene round-trips on a "
+            "renamed scene rely on the resolver's slug-fallback rather than "
+            "the explicit storage key the caller would otherwise pass back"
+        )
+
+
+class TestResolverRetriedFlag:
+    """R6 blocker 19 — the exhausted-retry DEBUG log must only fire when the
+    retry actually happened (both list calls returned without a match), not
+    on every no-match exit. The legitimate fresh-create path that resolves
+    on first try should not emit the "retry exhausted" message.
+    """
+
+    async def test_no_log_on_first_try_match(
+        self,
+        tools,
+        mock_client,
+        caplog,
+    ) -> None:
+        import logging
+
+        # Registry returns the matching entry on the FIRST call — no retry
+        # needed, no exhaustion log.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.movie_night",
+                        "unique_id": "movie_night",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
+
+        result = await tools._resolve_scene_entity_id("movie_night")
+        assert result == "scene.movie_night"
+
+        # No "exhausted" log on the success-on-first-try path.
+        exhaust_logs = [
+            r for r in caplog.records if "registry retry exhausted" in r.message.lower()
+        ]
+        assert not exhaust_logs, (
+            "exhausted-retry log must not fire on first-try-success path; "
+            f"got {[r.message for r in exhaust_logs]}"
+        )
+
+    async def test_log_only_after_retry_no_match(
+        self,
+        tools,
+        mock_client,
+        caplog,
+    ) -> None:
+        import logging
+
+        # Registry returns NO match across both attempts — retry happens,
+        # log fires.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "scene.unrelated",
+                        "unique_id": "unrelated",
+                        "platform": "homeassistant",
+                    }
+                ],
+            }
+        )
+
+        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
+
+        result = await tools._resolve_scene_entity_id("missing_scene")
+        assert result == "scene.missing_scene"
+
+        exhaust_logs = [
+            r for r in caplog.records if "registry retry exhausted" in r.message.lower()
+        ]
+        assert exhaust_logs, (
+            f"exhausted-retry log must fire after the retry exits without "
+            f"a match; got {[r.message for r in caplog.records]}"
+        )

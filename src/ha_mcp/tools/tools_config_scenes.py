@@ -87,6 +87,7 @@ class ConfigSceneTools:
         on fallback. Mirrors ``rest_client.resolve_scene_id`` ergonomics.
         """
         scene_id = scene_id.removeprefix("scene.")
+        retried = False
         for attempt in range(2):
             try:
                 result = await self._client.send_websocket_message(
@@ -117,13 +118,17 @@ class ConfigSceneTools:
                 # one short retry catches the common case before falling
                 # back to the naive entity_id.
                 await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
-        # Issue #1168 R5 blocker 13: surface the exhausted-retry exit so
-        # the downstream phantom-404 warning has a correlating log entry
-        # the operator can grep for.
-        logger.debug(
-            f"_resolve_scene_entity_id: registry retry exhausted for "
-            f"scene_id={scene_id!r}, falling back to scene.{scene_id}"
-        )
+                retried = True
+        # Issue #1168 R5 blocker 13 (refined per R6 blocker 19): only log on
+        # the genuine exhausted-retry exit (both list calls succeeded, neither
+        # matched). The first-pass-success path also falls through here on the
+        # legitimate "registry caught up before retry" case, but that path
+        # never sets ``retried``; gating on it stops the phantom-noise.
+        if retried:
+            logger.debug(
+                f"_resolve_scene_entity_id: registry retry exhausted for "
+                f"scene_id={scene_id!r}, falling back to scene.{scene_id}"
+            )
         return f"scene.{scene_id}"
 
     async def _validate_category_id(self, category: str) -> None:
@@ -212,6 +217,23 @@ class ConfigSceneTools:
         For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
         """
         try:
+            # Issue #1168 R6 blocker 16: empty ``scene_id`` previously
+            # surfaced as ``RESOURCE_NOT_FOUND`` with a misleading
+            # `entities`-related suggestion. Pre-flight here so the caller
+            # gets the actual problem.
+            if not scene_id:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "scene_id must not be empty",
+                        suggestions=[
+                            "Pass a non-empty scene identifier (e.g. 'movie_night')",
+                            "Use ha_search_entities(domain_filter='scene') "
+                            "to find existing scene_ids",
+                        ],
+                        context={"scene_id": scene_id},
+                    )
+                )
             # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
             # so the response carries the scene body directly (no nested
             # `success`/`scene_id`/`config` chain), and use the storage key
@@ -494,6 +516,22 @@ class ConfigSceneTools:
         For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
         """
         try:
+            # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
+            # any config dispatch — keeps the error code/message aligned with
+            # the actual problem rather than the misleading
+            # ``RESOURCE_NOT_FOUND`` from a downstream lookup.
+            if not scene_id:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "scene_id must not be empty",
+                        suggestions=[
+                            "Pass a non-empty scene identifier (e.g. 'movie_night')",
+                            "For a fresh create, use a name-derived slug",
+                        ],
+                        context={"scene_id": scene_id},
+                    )
+                )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(
@@ -611,8 +649,14 @@ class ConfigSceneTools:
                 # accepts the mismatched-id upsert silently. Reject the
                 # rename here — renaming a scene means delete-old +
                 # create-new through the explicit tools, not an in-place
-                # ``id`` rebind.
-                if transformed_config.get("id") != resolved_id:
+                # ``id`` rebind. R6 blocker 18: only reject an explicit
+                # mismatched id; a transform that ``del config['id']`` is
+                # legitimate (HA treats ``id`` as optional) and should pass
+                # through.
+                if (
+                    "id" in transformed_config
+                    and transformed_config["id"] != resolved_id
+                ):
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
@@ -653,6 +697,15 @@ class ConfigSceneTools:
                         k: v for k, v in metadata.items() if k in valid_keys
                     }
 
+                # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
+                # the upsert commits. Validating after the write produced the
+                # exact partial-state-mutation pattern this PR's auto-attach
+                # contract was meant to eliminate — scene was rewritten,
+                # caller saw VALIDATION_INVALID_PARAMETER on a phantom
+                # category, and the storage state had already moved.
+                if category:
+                    await self._validate_category_id(category)
+
                 result = await self._client.upsert_scene_config(
                     transformed_config, resolved_id
                 )
@@ -687,10 +740,8 @@ class ConfigSceneTools:
                             f"Scene updated but verification failed: {e}"
                         )
                 if category and entity_id:
-                    # Issue #1168 R5 blocker 9: pre-validate the category
-                    # ID against the live category registry — HA accepts
-                    # phantom IDs silently otherwise.
-                    await self._validate_category_id(category)
+                    # Pre-validation of ``category`` already ran before the
+                    # upsert (R6 blocker 15) — apply directly here.
                     await apply_entity_category(
                         self._client,
                         entity_id,
@@ -735,6 +786,13 @@ class ConfigSceneTools:
                 scene_id,
                 category,
             )
+
+            # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
+            # the hash check + upsert commits. Same partial-state hazard as
+            # the python_transform branch — a phantom category must not
+            # rewrite the scene before erroring.
+            if effective_category:
+                await self._validate_category_id(effective_category)
 
             # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
             # honor the optimistic-locking semantics promised by the field
@@ -790,10 +848,8 @@ class ConfigSceneTools:
 
             # Apply category to entity registry if provided.
             if effective_category and entity_id:
-                # Issue #1168 R5 blocker 9: pre-validate the category
-                # ID against the live category registry — HA accepts
-                # phantom IDs silently otherwise.
-                await self._validate_category_id(effective_category)
+                # Pre-validation of ``effective_category`` already ran before
+                # the upsert (R6 blocker 15) — apply directly here.
                 await apply_entity_category(
                     self._client,
                     entity_id,
@@ -871,6 +927,22 @@ class ConfigSceneTools:
         (via ``scene.turn_on``) may cause those to fail.
         """
         try:
+            # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
+            # the resolver — keeps the error code/message aligned with the
+            # actual problem.
+            if not scene_id:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "scene_id must not be empty",
+                        suggestions=[
+                            "Pass a non-empty scene identifier (e.g. 'old_scene')",
+                            "Use ha_search_entities(domain_filter='scene') "
+                            "to find existing scene_ids",
+                        ],
+                        context={"scene_id": scene_id},
+                    )
+                )
             # Issue #1168 R3 blocker 6: resolve once up-front so every later
             # callsite (entity_id resolver, delete call, response) uses the
             # storage key consistently — outer ``scene_id`` matches the

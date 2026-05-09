@@ -1449,10 +1449,24 @@ class SmartSearchTools:
                     )
 
                     if total_score >= threshold:
+                        # Issue #1168 R6 blocker 17: ``scene_id`` here must
+                        # be the storage key (matching the contract used by
+                        # ``ha_config_get_scene`` / ``ha_config_set_scene``),
+                        # not the entity_id-slug derived at fetch time. The
+                        # bulk-fetched config carries the storage key as its
+                        # ``id`` field; fall back to the slug only when no
+                        # config was fetched (Phase-3-without-config-data
+                        # path).
+                        storage_id = (
+                            scene_config["id"]
+                            if isinstance(scene_config, dict)
+                            and isinstance(scene_config.get("id"), str)
+                            else scene_id
+                        )
                         results["scenes"].append(
                             {
                                 "entity_id": entity_id,
-                                "scene_id": scene_id,
+                                "scene_id": storage_id,
                                 "friendly_name": friendly_name,
                                 "score": total_score,
                                 "match_in_name": match_in_name,
