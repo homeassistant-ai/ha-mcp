@@ -153,3 +153,115 @@ class TestSetDashboardMetadataUpdate:
         meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
         assert meta_call["require_admin"] is False
         assert meta_call["show_in_sidebar"] is False
+
+
+class TestSetDashboardListCallDedup:
+    """Issue #1085: when the pre-resolver fires (internal-id branch),
+    the existence-check site reuses the pre-fetched dashboards list
+    rather than issuing a second ``lovelace/dashboards/list`` round-trip.
+
+    The other-branch tests act as regression guards so a future change
+    that re-introduces a redundant list call (or accidentally drops the
+    one fetch on the canonical-url_path branch) is caught here."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_tool(self, mock_mcp, mock_client):
+        from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
+
+        register_config_dashboard_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_set_dashboard"]
+
+    @staticmethod
+    def _list_call_count(mock_client) -> int:
+        return sum(
+            1
+            for c in mock_client.send_websocket_message.call_args_list
+            if c.args and c.args[0].get("type") == "lovelace/dashboards/list"
+        )
+
+    @pytest.mark.asyncio
+    async def test_internal_id_branch_calls_list_only_once(
+        self, set_tool, mock_client
+    ):
+        """Pre-resolver fires (hyphenless ``my_dash``) and matches; the
+        existence-check site MUST reuse that list instead of fetching
+        again. Total ``lovelace/dashboards/list`` calls = 1."""
+        dashboards_list = {"result": [{"url_path": "my-dash", "id": "my_dash"}]}
+        mock_client.send_websocket_message.side_effect = [
+            dashboards_list,  # pre-resolver fetch
+            {"success": True},  # metadata update
+        ]
+
+        result = await set_tool(url_path="my_dash", title="Renamed")
+
+        assert self._list_call_count(mock_client) == 1, (
+            "internal-id branch must reuse the pre-resolver's dashboards "
+            "list — second lovelace/dashboards/list round-trip is the "
+            "regression issue #1085 closes"
+        )
+        assert result["success"] is True
+        # Pre-resolver rewrote my_dash -> my-dash; surface marker stays.
+        assert result.get("resolved_from") == "my_dash"
+        # Metadata update did fire on the canonical url_path.
+        meta_call = mock_client.send_websocket_message.call_args_list[1].args[0]
+        assert meta_call["type"] == "lovelace/dashboards/update"
+        assert meta_call["dashboard_id"] == "my_dash"
+
+    @pytest.mark.asyncio
+    async def test_canonical_url_path_branch_still_calls_list_once(
+        self, set_tool, mock_client
+    ):
+        """Already-canonical ``my-dash`` (hyphen present) skips the
+        pre-resolver; the existence-check site still fetches once.
+        Regression guard: total list calls = 1, not 0 (pre-resolver
+        didn't fire) and not 2 (no redundant fetch)."""
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "my-dash", "id": "my_dash"}]},
+            {"success": True},
+        ]
+
+        result = await set_tool(url_path="my-dash", title="Renamed")
+
+        assert self._list_call_count(mock_client) == 1
+        assert result["success"] is True
+        assert result.get("resolved_from") is None
+
+    @pytest.mark.asyncio
+    async def test_internal_id_no_match_falls_through_to_hyphen_check(
+        self, set_tool, mock_client
+    ):
+        """Hyphenless identifier with no matching dashboard: pre-resolver
+        fetches the list, finds no match, ``url_path`` stays
+        unchanged, then fails the hyphen-validation check before any
+        existence-check fetch can fire. Total list calls = 1."""
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "other-dash", "id": "other_dash"}]},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="ghost", title="X")
+
+        body = json.loads(str(exc_info.value))
+        assert "url_path must contain a hyphen" in body["error"]["message"]
+        assert self._list_call_count(mock_client) == 1
