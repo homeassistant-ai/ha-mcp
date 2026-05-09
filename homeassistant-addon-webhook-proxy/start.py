@@ -466,12 +466,13 @@ def _read_integration_domain() -> str | None:
         # Dev fork-variant places the integration source at /opt/mcp_proxy_dev
         src_manifest = Path("/opt/mcp_proxy_dev/manifest.json")
     try:
-        return json.loads(src_manifest.read_text()).get("domain")
+        domain = json.loads(src_manifest.read_text()).get("domain")
     except (OSError, json.JSONDecodeError) as e:
         log_error(
             f"Could not read integration manifest ({type(e).__name__}): {e}"
         )
         return None
+    return domain if isinstance(domain, str) else None
 
 
 def _probe_oauth_active() -> bool:
