@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .._version import is_running_in_addon
+from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 
 
@@ -543,7 +543,7 @@ class HomeAssistantClient:
                 "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
             )
 
-        url = f"http://supervisor/{path}/logs"
+        url = f"{get_supervisor_base_url()}/{path}/logs"
         logger.debug("Fetching %s via Supervisor direct", url)
 
         try:

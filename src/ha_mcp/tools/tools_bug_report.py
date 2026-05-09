@@ -20,6 +20,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
+from .._version import get_supervisor_base_url
 from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -357,7 +358,7 @@ async def _fetch_addon_logs() -> str:
             timeout=10.0, verify=get_global_settings().verify_ssl
         ) as http_client:
             resp = await http_client.get(
-                "http://supervisor/addons/self/logs",
+                f"{get_supervisor_base_url()}/addons/self/logs",
                 headers={"Authorization": f"Bearer {token}"},
             )
             if resp.status_code != 200:

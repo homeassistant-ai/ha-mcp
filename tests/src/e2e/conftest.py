@@ -45,6 +45,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
+from .utilities.supervisor_mock import supervisor_mock  # noqa: F401  (re-exported fixture)
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
