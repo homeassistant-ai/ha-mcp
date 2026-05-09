@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 from collections.abc import Iterator
@@ -130,40 +129,45 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture(scope="session")
-def supervisor_mock() -> Iterator[str]:
-    """Run the mock Supervisor on localhost and patch env vars to point at it.
+def _supervisor_mock_server() -> Iterator[str]:
+    """Start the mock Supervisor server once per session; yield its base URL.
 
-    Yields the base URL (``http://127.0.0.1:<port>``). Tests that depend on
-    this fixture have ``SUPERVISOR_TOKEN`` and ``SUPERVISOR_BASE_URL`` set
-    for their entire session; tests that don't depend on it are unaffected.
+    Server lifecycle only — does NOT touch ``os.environ``. Env-var patching
+    lives in the function-scoped ``supervisor_mock`` fixture so addon-mode
+    state doesn't leak across tests on the same xdist worker.
     """
     server = ThreadingHTTPServer(("127.0.0.1", 0), _SupervisorMockHandler)
-    port = server.server_address[1]
-    base_url = f"http://127.0.0.1:{port}"
-
-    thread = threading.Thread(
-        target=server.serve_forever, name="supervisor-mock", daemon=True
-    )
-    thread.start()
-
-    prior_token = os.environ.get("SUPERVISOR_TOKEN")
-    prior_url = os.environ.get("SUPERVISOR_BASE_URL")
-    os.environ["SUPERVISOR_TOKEN"] = MOCK_SUPERVISOR_TOKEN
-    os.environ["SUPERVISOR_BASE_URL"] = base_url
-
-    logger.info("🪞 Supervisor mock listening on %s", base_url)
     try:
-        yield base_url
+        port = server.server_address[1]
+        base_url = f"http://127.0.0.1:{port}"
+        thread = threading.Thread(
+            target=server.serve_forever, name="supervisor-mock", daemon=True
+        )
+        thread.start()
+        logger.info("🪞 Supervisor mock listening on %s", base_url)
+        try:
+            yield base_url
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            logger.info("🪞 Supervisor mock stopped")
     finally:
-        if prior_token is None:
-            os.environ.pop("SUPERVISOR_TOKEN", None)
-        else:
-            os.environ["SUPERVISOR_TOKEN"] = prior_token
-        if prior_url is None:
-            os.environ.pop("SUPERVISOR_BASE_URL", None)
-        else:
-            os.environ["SUPERVISOR_BASE_URL"] = prior_url
-        server.shutdown()
+        # server_close() is idempotent and safe to call after shutdown — kept in
+        # an outer try so the listening socket is released even if thread setup
+        # fails between server creation and serve_forever.
         server.server_close()
-        thread.join(timeout=5)
-        logger.info("🪞 Supervisor mock stopped")
+
+
+@pytest.fixture
+def supervisor_mock(
+    _supervisor_mock_server: str, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Patch addon-mode env vars to point at the mock for one test.
+
+    Function-scoped so ``SUPERVISOR_TOKEN`` and ``SUPERVISOR_BASE_URL`` are
+    cleaned up after each test — preventing other E2E tests on the same
+    xdist worker from accidentally taking the addon-mode branch.
+    """
+    monkeypatch.setenv("SUPERVISOR_TOKEN", MOCK_SUPERVISOR_TOKEN)
+    monkeypatch.setenv("SUPERVISOR_BASE_URL", _supervisor_mock_server)
+    return _supervisor_mock_server

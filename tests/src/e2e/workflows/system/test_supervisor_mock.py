@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 import httpx
 import pytest
@@ -128,7 +127,7 @@ class TestSettingsUiRestart:
     """
 
     async def test_restart_request_succeeds(self, supervisor_mock):
-        url = f"{os.environ['SUPERVISOR_BASE_URL']}/addons/self/restart"
+        url = f"{supervisor_mock}/addons/self/restart"
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 url,
@@ -138,7 +137,7 @@ class TestSettingsUiRestart:
         assert resp.json() == {"result": "ok", "data": {}}
 
     async def test_restart_request_rejects_bad_token(self, supervisor_mock):
-        url = f"{os.environ['SUPERVISOR_BASE_URL']}/addons/self/restart"
+        url = f"{supervisor_mock}/addons/self/restart"
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 url, headers={"Authorization": "Bearer wrong-token"}
