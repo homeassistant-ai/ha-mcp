@@ -101,7 +101,8 @@ def _supervisor_post(path: str, data: dict) -> bool:
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return 200 <= resp.status < 300
+            status: int = resp.status
+            return 200 <= status < 300
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
         log_error(f"Supervisor API POST {path}: {e}")
         return False
