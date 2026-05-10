@@ -15,11 +15,12 @@ from typing import Annotated, Any
 from urllib.parse import quote_plus
 
 import httpx
+from fastmcp import Context
 from pydantic import Field
 
 from ha_mcp import __version__
 
-from ..config import get_global_settings
+from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
     get_recent_logs,
@@ -31,8 +32,12 @@ from .util_helpers import ANSI_ESCAPE_RE
 logger = logging.getLogger(__name__)
 
 # GitHub issue template URLs
-RUNTIME_BUG_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
-AGENT_BEHAVIOR_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
+RUNTIME_BUG_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+)
+AGENT_BEHAVIOR_URL = (
+    "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
+)
 
 # Max characters to include from addon container logs.
 # 3000 chars ≈ 750 LLM tokens — keeps the tool response well below context budgets
@@ -102,6 +107,172 @@ def _detect_platform() -> dict[str, str]:
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
     }
+
+
+# Tool-surface-shaping toggles surfaced in bug reports. The set is small on
+# purpose: only flags that materially change which tools the agent sees, since
+# the same bug report behaves very differently depending on these. New
+# tool-shaping toggles should be added here so triage doesn't have to ask.
+_CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
+    "enable_websocket",
+    "enable_dashboard_partial_tools",
+    "enable_tool_search",
+    "tool_search_max_results",
+    "enable_yaml_config_editing",
+    "enable_code_mode",
+    "enabled_tool_modules",
+)
+
+
+def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
+    """Read tool-surface-shaping config toggles from Settings.
+
+    Defaults to the global settings singleton; tests can pass a fake Settings
+    instance instead. Returns an empty dict on any failure (Settings
+    construction, attribute coercion, list-field split) so a misconfigured
+    environment can't break the bug report path itself.
+    """
+    try:
+        s = settings if settings is not None else get_global_settings()
+
+        toggles: dict[str, Any] = {}
+        for field in _CONFIG_TOGGLE_FIELDS:
+            value = getattr(s, field, None)
+            if value is None:
+                continue
+            toggles[field] = value
+
+        # Summarize list-shaped seeds as counts rather than dumping the full
+        # strings — they can be very long, and listing the exact tools the
+        # user disabled isn't useful for triage.
+        for list_field in ("disabled_tools", "pinned_tools"):
+            raw = getattr(s, list_field, "") or ""
+            count = len([item for item in raw.split(",") if item.strip()])
+            toggles[f"{list_field}_count"] = count
+
+        return toggles
+    except Exception as e:
+        logger.warning(
+            "Failed to read settings for bug report toggles: %s (%s)",
+            e,
+            type(e).__name__,
+        )
+        return {}
+
+
+def _extract_client_info(ctx: Context | None) -> dict[str, str]:
+    """Pull the connecting MCP client's self-identification off the request context.
+
+    The MCP ``initialize`` handshake carries a ``clientInfo`` Implementation
+    object (``name``/``version``/optional ``title``). FastMCP exposes the
+    underlying server session as ``ctx.session``; the MCP SDK's
+    ``ServerSession`` keeps the parsed initialize params on ``client_params``.
+    The attribute name on the parsed Pydantic model is ``clientInfo`` in
+    ``mcp`` 1.24.x (the version this project pins) — we also fall back to
+    ``client_info`` to stay forward-compatible with SDK versions that switch
+    to snake_case.
+
+    Returns ``{"name": ..., "version": ..., "title": ...}``. ``name`` and
+    ``version`` fall back to ``"unknown"`` when the client didn't send them;
+    ``title`` falls back to the empty string so callers can distinguish "not
+    sent" from a real title without false-positive aside rendering.
+
+    Returns an empty dict if no context is available (tool invoked outside an
+    MCP request, e.g. unit tests) so the bug-report path stays robust. The
+    log level is intentionally INFO, not DEBUG: this catch is the only signal
+    we'd get if FastMCP/MCP SDK shape drifts in a future release, and silent
+    drift would hide a regression for months.
+    """
+    if ctx is None:
+        return {}
+    try:
+        session = getattr(ctx, "session", None)
+        params = (
+            getattr(session, "client_params", None) if session is not None else None
+        )
+        if params is None:
+            return {}
+        # Try the camelCase attribute (mcp 1.24.x) first, then snake_case so
+        # we keep working if the SDK switches the alias direction.
+        client = getattr(params, "clientInfo", None) or getattr(
+            params, "client_info", None
+        )
+        if client is None:
+            return {}
+        return {
+            "name": getattr(client, "name", None) or "unknown",
+            "version": getattr(client, "version", None) or "unknown",
+            "title": getattr(client, "title", None) or "",
+        }
+    except Exception as e:
+        logger.info(
+            "Failed to read MCP client info from context: %s (%s)",
+            e,
+            type(e).__name__,
+        )
+        return {}
+
+
+def _format_client_info_for_template(info: dict[str, str]) -> str:
+    """Render the MCP client identification as a single human-readable line.
+
+    Falls back to ``unknown (client did not advertise itself)`` when no
+    client info was available — this happens for direct MCP clients that
+    skip the optional ``clientInfo`` field, or when the bug report tool
+    runs outside a live request. Phrasing is deliberately observable
+    rather than naming the underlying API field (which may be renamed).
+    """
+    if not info:
+        return "unknown (client did not advertise itself)"
+    name = info.get("name") or "unknown"
+    version = info.get("version") or "unknown"
+    title = info.get("title") or ""
+    base = f"{name} {version}"
+    if title and title != name:
+        return f"{base} _(advertised title: {title})_"
+    return base
+
+
+def _detect_mcp_transport() -> str:
+    """Best-effort MCP transport detection.
+
+    Returns ``stdio`` / ``http`` / ``sse`` / ``unknown``. We can't observe the
+    transport perfectly from a tool call, so we look at the entrypoint name
+    and well-known env hints. The result is informational — the bug template
+    surfaces it as an auto-detect that the agent or user can override.
+    """
+    # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP, ``ha-mcp-sse``
+    # for SSE; pyproject.toml's [project.scripts] is the source of truth).
+    argv0 = (sys.argv[0] if sys.argv else "").lower()
+    basename = os.path.basename(argv0)
+    if basename.endswith("-web"):
+        return "http"
+    if basename.endswith("-sse"):
+        return "sse"
+
+    # Env hints set by HTTP wrappers / supervisors. ``streamable-http`` is the
+    # documented FastMCP variant; collapse it to ``http`` since the
+    # distinction doesn't change triage decisions.
+    transport_env = os.environ.get("FASTMCP_TRANSPORT", "").strip().lower()
+    if transport_env in {"http", "stdio", "sse"}:
+        return transport_env
+    if transport_env == "streamable-http":
+        return "http"
+    if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
+        return "http"
+
+    # If stdin is piped (not a TTY), ha-mcp was launched by an MCP host on
+    # stdio. If it IS a TTY, this is a manual / interactive run with no
+    # other transport hints — fall through to ``unknown``.
+    try:
+        if not sys.stdin.isatty():
+            return "stdio"
+    except (AttributeError, OSError, ValueError):
+        # ``sys.stdin`` can be None or detached (pythonw, daemonized
+        # contexts, certain test harnesses). Treat as no signal.
+        pass
+
+    return "unknown"
 
 
 def _sanitize_log_text(text: str) -> str:
@@ -190,9 +361,7 @@ async def _fetch_addon_logs() -> str:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if resp.status_code != 200:
-                logger.info(
-                    "Addon log fetch returned HTTP %s", resp.status_code
-                )
+                logger.info("Addon log fetch returned HTTP %s", resp.status_code)
                 return ""
 
             # Strip ANSI escape codes first, then sanitize, then truncate.
@@ -221,8 +390,8 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Report Issue or Feedback"
-        }
+            "title": "Report Issue or Feedback",
+        },
     )
     @log_tool_usage
     async def ha_report_issue(
@@ -240,6 +409,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = 10,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Collect diagnostic information for filing issue reports or feedback.
@@ -279,14 +449,20 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           empty string otherwise)
         - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
         """
-        # Detect installation method and platform
+        # Detect installation method, platform, and runtime config.
         install_method = _detect_installation_method()
         platform_info = _detect_platform()
+        config_toggles = _get_config_toggles()
+        mcp_transport = _detect_mcp_transport()
+        client_info = _extract_client_info(ctx)
 
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
             "installation_method": install_method,
             "platform": platform_info,
+            "mcp_transport": mcp_transport,
+            "mcp_client_info": client_info,
+            "config_toggles": config_toggles,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
             "entity_count": 0,
@@ -296,9 +472,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         try:
             config = await client.get_config()
             diagnostic_info["connection_status"] = "Connected"
-            diagnostic_info["home_assistant_version"] = config.get(
-                "version", "Unknown"
-            )
+            diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
             diagnostic_info["location_name"] = config.get("location_name", "Unknown")
             diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
         except Exception as e:
@@ -336,7 +510,9 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "",
             f"ha-mcp Version: {diagnostic_info['ha_mcp_version']}",
             f"Installation Method: {diagnostic_info['installation_method']}",
-            f"Platform: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
+            f"MCP Transport: {mcp_transport}",
+            f"MCP Client: {_format_client_info_for_template(client_info)}",
+            f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
             f"Python Version: {platform_info['python_version']}",
             f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
             f"Connection Status: {diagnostic_info['connection_status']}",
@@ -349,44 +525,69 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if "time_zone" in diagnostic_info:
             report_lines.append(f"Time Zone: {diagnostic_info['time_zone']}")
 
+        if config_toggles:
+            report_lines.extend(["", "=== ha-mcp Config Toggles ==="])
+            for key, value in config_toggles.items():
+                report_lines.append(f"  {key}: {value}")
+
         if startup_logs:
-            report_lines.extend([
-                "",
-                f"=== Startup Logs ({len(startup_logs)} entries) ===",
-                startup_log_summary,
-            ])
+            report_lines.extend(
+                [
+                    "",
+                    f"=== Startup Logs ({len(startup_logs)} entries) ===",
+                    startup_log_summary,
+                ]
+            )
 
         if recent_logs:
-            report_lines.extend([
-                "",
-                f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
-                log_summary,
-            ])
+            report_lines.extend(
+                [
+                    "",
+                    f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
+                    log_summary,
+                ]
+            )
 
         if addon_logs:
-            report_lines.extend([
-                "",
-                "=== Add-on Container Logs ===",
-                addon_logs,
-            ])
+            report_lines.extend(
+                [
+                    "",
+                    "=== Add-on Container Logs ===",
+                    addon_logs,
+                ]
+            )
 
         formatted_report = "\n".join(report_lines)
 
+        # Generate suggested title up-front so it can be folded into the
+        # submission URLs as a `&title=` query param. This auto-fills the
+        # GitHub issue title field — without it, users routinely submit reports
+        # titled just "[BUG]".
+        suggested_title = _generate_bug_title(diagnostic_info, recent_logs)
+        title_query = quote_plus(suggested_title)
+        runtime_bug_submit_url = f"{RUNTIME_BUG_URL}&title={title_query}"
+        agent_behavior_submit_url = f"{AGENT_BEHAVIOR_URL}&title={title_query}"
+
         # Generate BOTH templates
         runtime_bug_template = _generate_runtime_bug_template(
-            diagnostic_info, log_summary, startup_log_summary, recent_logs, startup_logs,
+            diagnostic_info,
+            log_summary,
+            startup_log_summary,
+            recent_logs,
+            startup_logs,
             addon_logs=addon_logs,
+            submit_url=runtime_bug_submit_url,
         )
 
         agent_behavior_template = _generate_agent_behavior_template(
-            diagnostic_info, log_summary, recent_logs
+            diagnostic_info,
+            log_summary,
+            recent_logs,
+            submit_url=agent_behavior_submit_url,
         )
 
         # Anonymization instructions
         anonymization_guide = _generate_anonymization_guide()
-
-        # Generate suggested title
-        suggested_title = _generate_bug_title(diagnostic_info, recent_logs)
 
         # Generate search keywords and URLs for duplicate check
         search_keywords = _generate_search_keywords(diagnostic_info, recent_logs)
@@ -408,12 +609,14 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "agent_behavior_template": agent_behavior_template,
             "anonymization_guide": anonymization_guide,
             "suggested_title": suggested_title,
+            "runtime_bug_submit_url": runtime_bug_submit_url,
+            "agent_behavior_submit_url": agent_behavior_submit_url,
             "duplicate_check_urls": duplicate_check_urls,
             "instructions": (
                 "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
                 "1. **Check for duplicates FIRST** (before presenting the template):\n"
                 "   - Use the duplicate_check_urls to search for similar issues\n"
-                "   - If gh CLI is available: use `gh issue list --search \"keyword\"`\n"
+                '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
                 "   - Otherwise: inform user to check the duplicate_check_urls\n"
                 "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
                 "2. **Determine which template to present**:\n"
@@ -435,18 +638,47 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "   d. Verify no tokens, passwords, or IPs are visible\n"
                 "   e. Keep entity domains, error messages, and technical details\n"
                 "   See anonymization_guide for full details.\n\n"
-                "4. **Present the anonymized report to the user**:\n"
-                "   a. Show the suggested_title (user can edit if needed)\n"
+                "4. **Fill in the self-reported fields BEFORE presenting**:\n"
+                "   - `**AI Model:**` — write your identity on this line (provider/family + the\n"
+                "     most specific version you know, in whatever form you'd describe yourself).\n"
+                "     Do not invent a version number. If you don't know it, say so or omit the\n"
+                "     version. There are no options to pick from — just answer honestly.\n"
+                "   - `**Triggering Prompt & Tool Call:** <fill in>` — the EXACT user message\n"
+                "     and the tool call(s) that produced the bug, copy-pasted verbatim. Truncate\n"
+                "     long inputs only after anonymization. This is the single most useful field\n"
+                "     for triage — do not skip it.\n"
+                "   `MCP Transport` and `MCP Client` are auto-detected by the server (the latter\n"
+                "   from the MCP `initialize` handshake); leave both as-is unless they're clearly\n"
+                "   wrong.\n\n"
+                "5. **Present the anonymized report to the user**:\n"
+                "   a. Show the suggested_title (user can edit if needed) and tell them GitHub's\n"
+                "      title field is now pre-filled via the submission URL — they don't need to\n"
+                "      retype it.\n"
                 "   b. Present the chosen ANONYMIZED template IN A MARKDOWN CODE BLOCK (```markdown...```) for easy copy/paste\n"
-                "   c. PROMINENTLY display the submission URL at the top:\n"
-                f"      - Runtime bugs: {RUNTIME_BUG_URL}\n"
-                f"      - Agent behavior: {AGENT_BEHAVIOR_URL}\n"
+                "   c. PROMINENTLY display the submission URL at the top — these include the\n"
+                "      pre-filled title:\n"
+                "      - Runtime bugs: see runtime_bug_submit_url\n"
+                "      - Agent behavior: see agent_behavior_submit_url\n"
                 "   d. Ask them to fill in the description sections\n"
                 "   e. For HA add-on installs, the runtime bug template includes a collapsible '📦 Add-on Container Logs' section auto-filled from addon_logs — keep it as-is\n"
                 "   f. Remind them to review for any remaining personal information before submitting\n\n"
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
+
+
+def _format_config_toggles_for_template(toggles: dict[str, Any]) -> str:
+    """Render config toggle snapshot as a markdown bullet list.
+
+    Returns a placeholder line when no toggles were collected (e.g. Settings
+    construction failed) so the template stays consistent.
+    """
+    if not toggles:
+        return "_(config toggles unavailable)_"
+    lines = []
+    for key, value in toggles.items():
+        lines.append(f"- **{key}:** `{value}`")
+    return "\n".join(lines)
 
 
 def _format_logs_for_report(logs: list[dict[str, Any]]) -> str:
@@ -564,7 +796,9 @@ def _generate_search_keywords(
     keywords = set()
 
     # Find the most recent error from logs
-    last_error_log = next((log for log in reversed(recent_logs) if log.get("error_message")), None)
+    last_error_log = next(
+        (log for log in reversed(recent_logs) if log.get("error_message")), None
+    )
 
     if last_error_log:
         tool_name = last_error_log.get("tool_name")
@@ -602,6 +836,7 @@ def _generate_runtime_bug_template(
     startup_logs: list[dict[str, Any]],
     *,
     addon_logs: str = "",
+    submit_url: str = RUNTIME_BUG_URL,
 ) -> str:
     """
     Generate a runtime bug report template matching runtime_bug.md format.
@@ -610,10 +845,19 @@ def _generate_runtime_bug_template(
     copy-paste without format conflicts.
     """
     platform_info = diagnostic_info.get("platform", {})
+    config_toggles = diagnostic_info.get("config_toggles") or {}
+    mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
+    client_info = diagnostic_info.get("mcp_client_info") or {}
 
     # Extract error messages from recent logs
     error_messages = _extract_error_messages(recent_logs)
-    error_section = "\n".join(error_messages) if error_messages else "<!-- No errors detected in recent logs -->"
+    error_section = (
+        "\n".join(error_messages)
+        if error_messages
+        else "<!-- No errors detected in recent logs -->"
+    )
+
+    config_toggles_section = _format_config_toggles_for_template(config_toggles)
 
     # Show startup logs section only if they exist
     startup_section = ""
@@ -657,7 +901,9 @@ def _generate_runtime_bug_template(
 > All environment info and logs below were collected automatically.
 
 **Submit this report at:**
-{RUNTIME_BUG_URL}
+{submit_url}
+
+(The submission link above pre-fills the issue title — you don't need to retype it.)
 
 ---
 
@@ -682,15 +928,47 @@ def _generate_runtime_bug_template(
 
 ---
 
+## 💬 Triggering Prompt & Tool Call
+
+<!-- The calling AI agent fills this in. Paste, verbatim, the user message that
+     triggered this bug AND the tool call(s) that produced it. Truncate only
+     after anonymizing tokens / personal names. This is the highest-leverage
+     field for triage. -->
+
+**User prompt:** <fill in>
+
+**Tool call(s):**
+```
+<fill in — name + arguments + (truncated) response, e.g.:
+ha_call_service(domain="light", service="turn_on", entity_id="light.example")
+→ ToolError: Service not found
+>
+```
+
+---
+
 ## 🔧 Environment
 
-- **ha-mcp Version:** {diagnostic_info.get('ha_mcp_version', 'Unknown')}
-- **Installation Method:** {diagnostic_info.get('installation_method', 'Unknown')}
-- **Platform:** {platform_info.get('os', 'Unknown')} {platform_info.get('os_release', '')} ({platform_info.get('architecture', 'Unknown')})
-- **Python Version:** {platform_info.get('python_version', 'Unknown')}
-- **Home Assistant Version:** {diagnostic_info.get('home_assistant_version', 'Unknown')}
-- **Connection Status:** {diagnostic_info.get('connection_status', 'Unknown')}
-- **Entity Count:** {diagnostic_info.get('entity_count', 0)}
+- **ha-mcp Version:** {diagnostic_info.get("ha_mcp_version", "Unknown")}
+- **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
+- **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
+- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **AI Model:**
+- **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
+- **Python Version:** {platform_info.get("python_version", "Unknown")}
+- **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Connection Status:** {diagnostic_info.get("connection_status", "Unknown")}
+- **Entity Count:** {diagnostic_info.get("entity_count", 0)}
+
+---
+
+## ⚙️ ha-mcp Configuration
+
+These flags shape which tools the agent sees, so the same report can mean
+different things depending on toggle state. Auto-collected from the running
+server:
+
+{config_toggles_section}
 
 ---
 
@@ -734,13 +1012,23 @@ def _generate_agent_behavior_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
     recent_logs: list[dict[str, Any]],
+    *,
+    submit_url: str = AGENT_BEHAVIOR_URL,
 ) -> str:
     """
     Generate an agent behavior feedback template matching agent_behavior_feedback.md format.
 
     This template focuses on AI agent tool usage patterns and inefficiencies.
     """
-    platform_info = diagnostic_info.get("platform", {})
+    config_toggles = diagnostic_info.get("config_toggles") or {}
+    mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
+    client_info = diagnostic_info.get("mcp_client_info") or {}
+    config_toggles_section = _format_config_toggles_for_template(config_toggles)
+
+    # _extract_error_messages and recent_logs are unused in the agent template;
+    # tool sequence already lives in log_summary. Kept in the signature so
+    # callers don't have to remember which template needs which arg.
+    del recent_logs
 
     return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
 
@@ -748,7 +1036,9 @@ def _generate_agent_behavior_template(
 > Tool call history was collected automatically to help analyze agent behavior.
 
 **Submit this feedback at:**
-{AGENT_BEHAVIOR_URL}
+{submit_url}
+
+(The submission link above pre-fills the issue title — you don't need to retype it.)
 
 ---
 
@@ -773,6 +1063,21 @@ def _generate_agent_behavior_template(
 <!-- Provide context about what you were trying to do -->
 <!-- Example: "I asked the agent to create an automation that..." -->
 
+
+---
+
+## 💬 Triggering Prompt & Tool Call
+
+<!-- The AI agent fills this in. Paste, verbatim, the user message that
+     prompted the questionable behavior AND the tool call(s) the agent made
+     in response. Truncate only after anonymizing tokens / personal names. -->
+
+**User prompt:** <fill in>
+
+**Tool call(s) the agent chose:**
+```
+<fill in — name + arguments + (truncated) response>
+```
 
 ---
 
@@ -806,11 +1111,23 @@ def _generate_agent_behavior_template(
 
 ---
 
-## 📊 Environment (Optional)
+## 📊 Environment
 
-- **ha-mcp Version:** {diagnostic_info.get('ha_mcp_version', 'Unknown')}
-- **AI Client:** (Claude Desktop / Claude Code / Other)
-- **Home Assistant Version:** {diagnostic_info.get('home_assistant_version', 'Unknown')}
+- **ha-mcp Version:** {diagnostic_info.get("ha_mcp_version", "Unknown")}
+- **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
+- **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
+- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **AI Model:**
+- **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+
+---
+
+## ⚙️ ha-mcp Configuration
+
+These flags shape which tools the agent sees, so the same behavior may be
+expected vs. surprising depending on toggle state:
+
+{config_toggles_section}
 
 ---
 

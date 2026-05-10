@@ -1,5 +1,6 @@
 """Unit tests for the bug report tool (ha_report_issue)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -7,9 +8,14 @@ import pytest
 
 from ha_mcp import __version__
 from ha_mcp.tools.tools_bug_report import (
+    _detect_mcp_transport,
+    _extract_client_info,
     _fetch_addon_logs,
+    _format_client_info_for_template,
+    _format_config_toggles_for_template,
     _format_logs_for_report,
     _format_startup_logs,
+    _get_config_toggles,
     _sanitize_log_text,
     register_bug_report_tools,
 )
@@ -120,7 +126,10 @@ class TestBugReportTool:
         assert "🔄 Steps to Reproduce" in runtime_template
         assert "✅ Expected vs ❌ Actual Behavior" in runtime_template
         assert "🔧 Environment" in runtime_template
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml" in runtime_template
+        assert (
+            "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+            in runtime_template
+        )
 
         # Check agent behavior template
         agent_template = result["agent_behavior_template"]
@@ -128,7 +137,10 @@ class TestBugReportTool:
         assert "🤖 What Did the AI Agent Do?" in agent_template
         assert "🎯 What Should the Agent Have Done?" in agent_template
         assert "🔧 Tool Calls Made" in agent_template
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml" in agent_template
+        assert (
+            "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
+            in agent_template
+        )
 
         # Check anonymization guide
         anon_guide = result["anonymization_guide"]
@@ -201,8 +213,14 @@ class TestBugReportTool:
         result = await actual_func()
 
         # Check both templates have correct URLs
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml" in result["runtime_bug_template"]
-        assert "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml" in result["agent_behavior_template"]
+        assert (
+            "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+            in result["runtime_bug_template"]
+        )
+        assert (
+            "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
+            in result["agent_behavior_template"]
+        )
 
     @pytest.mark.asyncio
     async def test_bug_report_no_timezone(self, registered_tools, mock_client):
@@ -239,9 +257,7 @@ class TestBugReportTool:
 
         # Mock get_recent_logs to verify it's called with correct max_entries
         # Formula: AVG_LOG_ENTRIES_PER_TOOL (3) * 2 * tool_call_count
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_recent_logs"
-        ) as mock_get_logs:
+        with patch("ha_mcp.tools.tools_bug_report.get_recent_logs") as mock_get_logs:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00",
@@ -279,9 +295,7 @@ class TestBugReportTool:
         while hasattr(actual_func, "__wrapped__"):
             actual_func = actual_func.__wrapped__
 
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_recent_logs"
-        ) as mock_get_logs:
+        with patch("ha_mcp.tools.tools_bug_report.get_recent_logs") as mock_get_logs:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00.123456",
@@ -340,9 +354,7 @@ class TestBugReportTool:
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
 
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_recent_logs"
-        ) as mock_get_logs:
+        with patch("ha_mcp.tools.tools_bug_report.get_recent_logs") as mock_get_logs:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00",
@@ -372,9 +384,7 @@ class TestBugReportTool:
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
 
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_recent_logs"
-        ) as mock_get_logs:
+        with patch("ha_mcp.tools.tools_bug_report.get_recent_logs") as mock_get_logs:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00",
@@ -394,14 +404,14 @@ class TestBugReportTool:
             assert len(title) <= 60
 
     @pytest.mark.asyncio
-    async def test_bug_report_duplicate_check_urls(self, ha_report_issue_func, mock_client):
+    async def test_bug_report_duplicate_check_urls(
+        self, ha_report_issue_func, mock_client
+    ):
         """Test that duplicate check URLs are generated with correct keywords."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
         mock_client.get_states.return_value = []
 
-        with patch(
-            "ha_mcp.tools.tools_bug_report.get_recent_logs"
-        ) as mock_get_logs:
+        with patch("ha_mcp.tools.tools_bug_report.get_recent_logs") as mock_get_logs:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00",
@@ -801,3 +811,467 @@ class TestFormatStartupLogsSanitization:
 
         assert "eyJhbG" not in formatted
         assert "[REDACTED_JWT]" in formatted
+
+
+class TestGetConfigToggles:
+    """Tests for _get_config_toggles."""
+
+    def test_collects_known_toggles_from_settings(self):
+        # Use SimpleNamespace as a stand-in for Settings to avoid touching the
+        # real env-driven singleton. Only fields present on the namespace are
+        # collected; missing fields fall through (None).
+        fake = SimpleNamespace(
+            enable_websocket=True,
+            enable_dashboard_partial_tools=True,
+            enable_tool_search=False,
+            tool_search_max_results=5,
+            enable_yaml_config_editing=False,
+            enable_code_mode=False,
+            enabled_tool_modules="all",
+            disabled_tools="ha_foo,ha_bar",
+            pinned_tools="",
+        )
+        toggles = _get_config_toggles(fake)
+        assert toggles["enable_tool_search"] is False
+        assert toggles["tool_search_max_results"] == 5
+        assert toggles["enabled_tool_modules"] == "all"
+        # Lists are summarized, not dumped — count of comma-separated entries.
+        assert toggles["disabled_tools_count"] == 2
+        assert toggles["pinned_tools_count"] == 0
+
+    def test_returns_empty_dict_when_settings_construction_fails(self):
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_global_settings",
+            side_effect=RuntimeError("env missing"),
+        ):
+            assert _get_config_toggles() == {}
+
+
+class TestDetectMcpTransport:
+    """Tests for _detect_mcp_transport."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_transport_env(self, monkeypatch):
+        """Drop any env vars that could otherwise leak between tests."""
+        for var in ("FASTMCP_TRANSPORT", "MCP_HTTP_PORT", "FASTMCP_PORT"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_http_argv0(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-web"])
+        assert _detect_mcp_transport() == "http"
+
+    def test_sse_argv0(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-sse"])
+        assert _detect_mcp_transport() == "sse"
+
+    def test_argv0_wins_over_env(self, monkeypatch):
+        # Real precedence test: argv0 ending in -web returns "http" early,
+        # before the FASTMCP_TRANSPORT env check would otherwise force "stdio".
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp-web"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "stdio")
+        assert _detect_mcp_transport() == "http"
+
+    def test_env_picks_up_when_argv0_is_neutral(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "http")
+        assert _detect_mcp_transport() == "http"
+
+    def test_env_streamable_http_collapses_to_http(self, monkeypatch):
+        # FastMCP documents "streamable-http" as a valid transport literal.
+        # We collapse it to "http" — the distinction doesn't change triage.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_TRANSPORT", "streamable-http")
+        assert _detect_mcp_transport() == "http"
+
+    def test_env_port_implies_http(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("MCP_HTTP_PORT", "8086")
+        assert _detect_mcp_transport() == "http"
+
+    def test_fastmcp_port_implies_http(self, monkeypatch):
+        # Cover the second half of the port-env clause that previously had no test.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        monkeypatch.setenv("FASTMCP_PORT", "8086")
+        assert _detect_mcp_transport() == "http"
+
+    def test_piped_stdin_is_stdio(self, monkeypatch):
+        # The most common production deployment shape (Claude Desktop launching
+        # ha-mcp via stdio pipe). Without this test the stdio branch is dead
+        # from the suite — a regression there would silently mislabel every
+        # Desktop bug report's transport as "unknown".
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        fake_stdin = SimpleNamespace(isatty=lambda: False)
+        monkeypatch.setattr("sys.stdin", fake_stdin)
+        assert _detect_mcp_transport() == "stdio"
+
+    def test_tty_stdin_with_no_hints_returns_unknown(self, monkeypatch):
+        # Manual / interactive run with no transport hints whatsoever.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+        fake_stdin = SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr("sys.stdin", fake_stdin)
+        assert _detect_mcp_transport() == "unknown"
+
+    def test_detached_stdin_falls_through_to_unknown(self, monkeypatch):
+        # ``sys.stdin.isatty()`` can raise OSError when stdin is detached
+        # (pythonw, daemonized contexts). The except clause must not let
+        # the helper crash.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/ha-mcp"])
+
+        def boom():
+            raise OSError("stdin closed")
+
+        monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=boom))
+        assert _detect_mcp_transport() == "unknown"
+
+
+class TestFormatConfigTogglesForTemplate:
+    """Tests for _format_config_toggles_for_template."""
+
+    def test_empty_returns_placeholder(self):
+        assert (
+            _format_config_toggles_for_template({}) == "_(config toggles unavailable)_"
+        )
+
+    def test_renders_bullets_with_value(self):
+        rendered = _format_config_toggles_for_template(
+            {"enable_tool_search": False, "tool_search_max_results": 5}
+        )
+        assert "- **enable_tool_search:** `False`" in rendered
+        assert "- **tool_search_max_results:** `5`" in rendered
+
+
+class TestExtractClientInfo:
+    """Tests for _extract_client_info — pulls clientInfo off the MCP context."""
+
+    def test_returns_empty_when_ctx_is_none(self):
+        # Tool can be invoked outside an MCP request (unit tests, scripts).
+        # The bug-report path must not blow up — empty dict is the contract.
+        assert _extract_client_info(None) == {}
+
+    def test_returns_empty_when_session_has_no_client_params(self):
+        # Some transports / direct callers won't have completed an initialize
+        # handshake yet. _extract_client_info should treat that as "no info".
+        ctx = SimpleNamespace(session=SimpleNamespace(client_params=None))
+        assert _extract_client_info(ctx) == {}
+
+    def test_reads_name_version_title_off_initialize_params(self):
+        # Mirrors the shape of mcp.types.InitializeRequestParams.clientInfo
+        # (an Implementation: name + version, optional title) without pulling
+        # the real types into the test.
+        client_info_obj = SimpleNamespace(
+            name="Claude Desktop",
+            version="0.7.42",
+            title="Claude Desktop (claude.ai integration)",
+        )
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(clientInfo=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info == {
+            "name": "Claude Desktop",
+            "version": "0.7.42",
+            "title": "Claude Desktop (claude.ai integration)",
+        }
+
+    def test_missing_optional_title_falls_back_to_empty_string(self):
+        client_info_obj = SimpleNamespace(name="Cursor", version="0.42", title=None)
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(clientInfo=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info["name"] == "Cursor"
+        assert info["version"] == "0.42"
+        assert info["title"] == ""
+
+    def test_missing_version_falls_back_to_unknown(self):
+        # Pin the docstring promise: name/version default to "unknown" when
+        # the client didn't send them. If the future SDK refactor stops
+        # sending `version`, the f"{name} {version}" downstream rendering
+        # must not produce "Cursor None".
+        client_info_obj = SimpleNamespace(name="Cursor", version=None, title=None)
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(clientInfo=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info == {"name": "Cursor", "version": "unknown", "title": ""}
+
+    def test_snake_case_client_info_attribute_is_picked_up(self):
+        # ha-mcp pins mcp 1.24.x where the attribute is `clientInfo`. Future
+        # SDK versions may switch to `client_info` (snake_case). The helper
+        # falls back to the snake_case attribute name so we keep working
+        # across the rename.
+        client_info_obj = SimpleNamespace(
+            name="Future Client", version="9.9.9", title=None
+        )
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(client_info=client_info_obj)
+            )
+        )
+        info = _extract_client_info(ctx)
+        assert info == {"name": "Future Client", "version": "9.9.9", "title": ""}
+
+    def test_swallows_exceptions_and_returns_empty(self):
+        # If the context shape is unexpected (future MCP / FastMCP API churn),
+        # we'd rather degrade silently than fail the bug report.
+        class Boom:
+            def __getattr__(self, _name):
+                raise RuntimeError("unexpected ctx shape")
+
+        assert _extract_client_info(Boom()) == {}
+
+
+class TestFormatClientInfoForTemplate:
+    """Tests for _format_client_info_for_template."""
+
+    def test_empty_renders_unknown_placeholder(self):
+        rendered = _format_client_info_for_template({})
+        assert "unknown" in rendered
+        # Phrasing describes the observable, not the underlying API field name,
+        # so the message stays accurate if MCP renames the attribute.
+        assert "did not advertise" in rendered
+
+    def test_name_and_version_render_as_single_line(self):
+        rendered = _format_client_info_for_template(
+            {"name": "Claude Desktop", "version": "0.7.42", "title": ""}
+        )
+        assert rendered == "Claude Desktop 0.7.42"
+
+    def test_distinct_title_appears_as_aside(self):
+        rendered = _format_client_info_for_template(
+            {
+                "name": "ClaudeDesktop",
+                "version": "0.7.42",
+                "title": "Claude Desktop (claude.ai integration)",
+            }
+        )
+        assert "ClaudeDesktop 0.7.42" in rendered
+        assert "Claude Desktop (claude.ai integration)" in rendered
+
+    def test_title_matching_name_is_not_repeated(self):
+        # Many clients send title == name; don't print the same string twice.
+        rendered = _format_client_info_for_template(
+            {"name": "Cursor", "version": "0.42", "title": "Cursor"}
+        )
+        assert rendered == "Cursor 0.42"
+
+
+class TestBugReportNewIdentityFields:
+    """End-to-end checks that the new self-reported placeholders + auto fields
+    land in both templates and the response payload."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        mcp._tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                mcp._tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"version": "2024.12.0"})
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def ha_report_issue_func(self, mock_mcp, mock_client):
+        register_bug_report_tools(mock_mcp, mock_client)
+        func = mock_mcp._tools["ha_report_issue"]
+        while hasattr(func, "__wrapped__"):
+            func = func.__wrapped__
+        return func
+
+    @pytest.mark.asyncio
+    async def test_self_reported_placeholders_in_runtime_template(
+        self, ha_report_issue_func
+    ):
+        result = await ha_report_issue_func()
+        runtime = result["runtime_bug_template"]
+        # All three self-report fields and the auto-detected transport row
+        # are present, with the "fill in" sentinel still visible — this is
+        # what the agent populates before showing it to the user.
+        # AI Model is collected, but as a bare label with no placeholder
+        # examples to bias the agent — the instructions block straight-up
+        # asks the agent to write its identity. Old multi-axis placeholders
+        # (Model family / Model version / Client application) are gone.
+        assert "**AI Model:**" in runtime
+        assert "**Model family:**" not in runtime
+        assert "**Model version:**" not in runtime
+        assert "**Client application:**" not in runtime
+        # No vendor enumeration in the template body — that's exactly the
+        # hallucination-bait we removed.
+        for vendor in ("Claude, Gemini", "Gemini, GPT", "GPT, Llama"):
+            assert vendor not in runtime
+        assert "**MCP Client:**" in runtime
+        assert "**MCP Transport:**" in runtime
+        assert "<fill in" in runtime
+        # Triggering prompt + tool call section is present and asks for the
+        # exact user message + tool call.
+        assert "Triggering Prompt & Tool Call" in runtime
+        assert "**User prompt:**" in runtime
+
+    @pytest.mark.asyncio
+    async def test_self_reported_placeholders_in_agent_template(
+        self, ha_report_issue_func
+    ):
+        result = await ha_report_issue_func()
+        agent = result["agent_behavior_template"]
+        assert "**AI Model:**" in agent
+        assert "**Model family:**" not in agent
+        assert "**Model version:**" not in agent
+        assert "**Client application:**" not in agent
+        for vendor in ("Claude, Gemini", "Gemini, GPT", "GPT, Llama"):
+            assert vendor not in agent
+        assert "**MCP Client:**" in agent
+        assert "**MCP Transport:**" in agent
+        assert "Triggering Prompt & Tool Call" in agent
+
+    @pytest.mark.asyncio
+    async def test_config_toggles_section_renders_in_templates(
+        self, ha_report_issue_func
+    ):
+        # Use a fake Settings so we don't depend on real env vars.
+        fake = SimpleNamespace(
+            enable_websocket=True,
+            enable_dashboard_partial_tools=True,
+            enable_tool_search=True,
+            tool_search_max_results=7,
+            enable_yaml_config_editing=False,
+            enable_code_mode=False,
+            enabled_tool_modules="all",
+            disabled_tools="",
+            pinned_tools="",
+        )
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_global_settings", return_value=fake
+        ):
+            result = await ha_report_issue_func()
+
+        for template in (
+            result["runtime_bug_template"],
+            result["agent_behavior_template"],
+        ):
+            # Section header surfaces the toggle block.
+            assert "ha-mcp Configuration" in template
+            # At least one known toggle ends up in the rendered section.
+            assert "enable_tool_search" in template
+
+        # The plain-text formatted_report body (separate output from the
+        # markdown templates, returned to callers as a triage-readable
+        # summary) must mirror the new auto-detected rows. A future refactor
+        # that drops them from formatted_report while keeping the templates
+        # correct would silently regress the plain-text output.
+        report = result["formatted_report"]
+        assert "MCP Transport:" in report
+        assert "MCP Client:" in report
+        # Renamed from "Platform" to "Operating System" in this PR — pin it.
+        assert "Operating System:" in report
+        assert "=== ha-mcp Config Toggles ===" in report
+        assert "enable_tool_search" in report
+
+        # The diagnostic dict carries the structured value too.
+        toggles = result["diagnostic_info"]["config_toggles"]
+        assert toggles["enable_tool_search"] is True
+        assert toggles["tool_search_max_results"] == 7
+
+    @pytest.mark.asyncio
+    async def test_submit_urls_include_prefilled_title(self, ha_report_issue_func):
+        # The runtime/agent submit URLs append &title=<urlencoded suggested_title>
+        # so GitHub auto-fills the issue title field. This addresses bare-`[BUG]`
+        # title submissions seen in #1095.
+        result = await ha_report_issue_func()
+        suggested = result["suggested_title"]
+        assert suggested  # always non-empty
+        assert "&title=" in result["runtime_bug_submit_url"]
+        assert "&title=" in result["agent_behavior_submit_url"]
+        assert result["runtime_bug_submit_url"].startswith(
+            "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
+        )
+        # Verify the title is actually URL-encoded — a regression that drops
+        # the quote_plus call would leak raw spaces / brackets into the
+        # query, which GitHub mangles.
+        title_query = result["runtime_bug_submit_url"].split("&title=", 1)[1]
+        assert " " not in title_query, (
+            f"Title query must be URL-encoded; got raw space in {title_query!r}"
+        )
+        # The submit URL is the one printed inside the rendered template body.
+        assert result["runtime_bug_submit_url"] in result["runtime_bug_template"]
+        assert result["agent_behavior_submit_url"] in result["agent_behavior_template"]
+
+    @pytest.mark.asyncio
+    async def test_diagnostic_info_carries_transport_and_toggles(
+        self, ha_report_issue_func
+    ):
+        result = await ha_report_issue_func()
+        diag = result["diagnostic_info"]
+        # New top-level diagnostic fields requested by issue #1095.
+        assert "mcp_transport" in diag
+        assert "config_toggles" in diag
+        assert "mcp_client_info" in diag
+        assert isinstance(diag["config_toggles"], dict)
+        assert isinstance(diag["mcp_client_info"], dict)
+
+    @pytest.mark.asyncio
+    async def test_ctx_client_info_populates_mcp_client_row(self, ha_report_issue_func):
+        # When ha_report_issue is called from inside an MCP request, the
+        # FastMCP-injected Context exposes the initialize handshake's
+        # clientInfo. Verify the helper picks it up and the rendered template
+        # surfaces it on the `MCP Client:` row — no agent self-report needed.
+        client_info_obj = SimpleNamespace(
+            name="Claude Desktop",
+            version="0.7.42",
+            title=None,
+        )
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(clientInfo=client_info_obj)
+            )
+        )
+        result = await ha_report_issue_func(ctx=ctx)
+
+        # Diagnostic dict carries the structured value.
+        assert result["diagnostic_info"]["mcp_client_info"] == {
+            "name": "Claude Desktop",
+            "version": "0.7.42",
+            "title": "",
+        }
+        # And both rendered templates show the formatted line on the
+        # `MCP Client:` row.
+        for key in ("runtime_bug_template", "agent_behavior_template"):
+            template = result[key]
+            assert "**MCP Client:** Claude Desktop 0.7.42" in template
+
+    @pytest.mark.asyncio
+    async def test_instructions_describe_all_self_report_fields(
+        self, ha_report_issue_func
+    ):
+        result = await ha_report_issue_func()
+        instructions = result["instructions"]
+        # The instructions block must straight-up ASK the agent for both
+        # self-reported fields (no enumerated options to pick from — that's
+        # what biases agents and invites hallucinations).
+        assert "**AI Model:**" in instructions
+        assert "**Triggering Prompt & Tool Call:**" in instructions
+        # The old multi-axis identity placeholders are gone.
+        assert "**Model family:**" not in instructions
+        assert "**Model version:**" not in instructions
+        assert "**Client application:**" not in instructions
+        # And the instructions must NOT enumerate vendor lists — that's the
+        # hallucination bait we removed.
+        for vendor in ("Claude, Gemini", "Gemini, GPT", "GPT, Llama"):
+            assert vendor not in instructions
