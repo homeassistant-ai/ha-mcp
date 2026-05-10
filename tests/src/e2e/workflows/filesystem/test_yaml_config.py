@@ -689,7 +689,6 @@ class TestYamlModeDashboardRegistration:
         """
         yaml_path = f"lovelace.dashboards.{self.URL_PATH}"
 
-        # Register the dashboard entry.
         add_data = await safe_call_tool(
             mcp_client_with_yaml_config,
             TOOL_NAME,
@@ -719,7 +718,6 @@ class TestYamlModeDashboardRegistration:
         # lovelace.mode must NOT be introduced as a sibling of dashboards
         assert "lovelace:\n  mode:" not in read["content"]
 
-        # Remove the dashboard entry.
         remove_data = await safe_call_tool(
             mcp_client_with_yaml_config,
             TOOL_NAME,
@@ -785,31 +783,41 @@ class TestYamlModeDashboardRegistration:
 class TestDashboardsDirectoryAllowlist:
     """E2E: the dashboards/ directory is in the read/write allowlist."""
 
-    async def test_write_dashboard_yaml_file(self, mcp_client_with_yaml_config):
-        data = await safe_call_tool(
+    async def test_write_read_delete_dashboard_yaml_file(
+        self, mcp_client_with_yaml_config
+    ):
+        """Exercise the write + read + delete lifecycle for a dashboard YAML file.
+
+        Combined into a single test rather than three siblings sharing
+        ``dashboards/ha_mcp_test_view.yaml`` so the test does not depend on
+        the pytest-xdist worker distribution preserving sibling-test
+        ordering. Same race shape as TestYamlModeDashboardRegistration —
+        see #1196.
+        """
+        path = "dashboards/ha_mcp_test_view.yaml"
+
+        write_data = await safe_call_tool(
             mcp_client_with_yaml_config,
             "ha_write_file",
             {
-                "path": "dashboards/ha_mcp_test_view.yaml",
+                "path": path,
                 "content": "title: HA MCP Test\nviews:\n  - title: Home\n    cards: []\n",
                 "overwrite": True,
             },
         )
-        assert data.get("success") is True, data
+        assert write_data.get("success") is True, write_data
 
-    async def test_read_dashboard_yaml_file(self, mcp_client_with_yaml_config):
-        data = await safe_call_tool(
+        read_data = await safe_call_tool(
             mcp_client_with_yaml_config,
             READ_TOOL,
-            {"path": "dashboards/ha_mcp_test_view.yaml"},
+            {"path": path},
         )
-        assert data.get("success") is True
-        assert "HA MCP Test" in data["content"]
+        assert read_data.get("success") is True
+        assert "HA MCP Test" in read_data["content"]
 
-    async def test_delete_dashboard_yaml_file(self, mcp_client_with_yaml_config):
-        data = await safe_call_tool(
+        delete_data = await safe_call_tool(
             mcp_client_with_yaml_config,
             "ha_delete_file",
-            {"path": "dashboards/ha_mcp_test_view.yaml", "confirm": True},
+            {"path": path, "confirm": True},
         )
-        assert data.get("success") is True
+        assert delete_data.get("success") is True, delete_data
