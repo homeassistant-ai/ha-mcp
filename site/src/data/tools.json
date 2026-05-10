@@ -2,7 +2,7 @@
   {
     "name": "ha_get_addon",
     "title": "Get Add-ons",
-    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, state,\nand (when the add-on exposes one) a top-level ``log_level`` reflecting the\ncurrent Supervisor option — useful for confirming ha_manage_addon log_level changes.\nUseful for discovering what APIs an add-on exposes before calling ha_manage_addon.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"a0d7b954_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
+    "description": "Get Home Assistant add-ons - list installed, available, or get details for one.\n\nThis tool retrieves add-on information based on the parameters:\n- slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)\n- source='installed' (default): Lists currently installed add-ons\n- source='available': Lists add-ons available in the add-on store\n\n**Note:** This tool only works with Home Assistant OS or Supervised installations.\n\n**SINGLE ADD-ON (slug provided):**\nReturns comprehensive details including ingress entry, ports, options, state,\nand (when the add-on exposes one) a top-level ``log_level`` reflecting the\ncurrent Supervisor option — useful for confirming ha_manage_addon log_level changes.\nUseful for discovering what APIs an add-on exposes before calling ha_manage_addon.\n\n**INSTALLED ADD-ONS (source='installed'):**\nReturns add-ons with version, state (started/stopped), and update availability.\n- include_stats: Optionally include CPU/memory usage statistics\n\n**AVAILABLE ADD-ONS (source='available'):**\nReturns add-ons from official and custom repositories that can be installed.\n- repository: Filter by repository slug (e.g., 'core', 'community')\n- query: Search by name or description (case-insensitive)\n\n**Example Usage:**\n- List installed add-ons: ha_get_addon()\n- Get Node-RED details: ha_get_addon(slug=\"<prefix>_nodered\")\n- List with resource usage: ha_get_addon(include_stats=True)\n- List available add-ons: ha_get_addon(source=\"available\")\n- Search for MQTT: ha_get_addon(source=\"available\", query=\"mqtt\")",
     "inputSchema": {
       "properties": {
         "source": {
@@ -10,7 +10,7 @@
           "default": null
         },
         "slug": {
-          "type": "Annotated[str | None, Field(description=\"Add-on slug for detailed info (e.g., 'a0d7b954_nodered'). Omit to list all add-ons.\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Add-on slug for detailed info (e.g., '<prefix>_nodered'). Slug prefixes vary by add-on repository — omit to list all add-ons and discover the actual installed slug.\", default=None)]",
           "default": null
         },
         "include_stats": {
@@ -43,7 +43,7 @@
     "inputSchema": {
       "properties": {
         "slug": {
-          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). Use ha_get_addon() to find installed add-on slugs.\")]"
+          "type": "Annotated[str, Field(description=\"Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). Slug prefixes vary by add-on repository — call ha_get_addon() to discover the actual installed slug.\")]"
         },
         "path": {
           "type": "Annotated[str | None, Field(description=\"Proxy mode: API path relative to the add-on root (e.g., '/flows', '/api/events', '/api/stats'). Required for proxy mode; mutually exclusive with config parameters.\", default=None)]",
