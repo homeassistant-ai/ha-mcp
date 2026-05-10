@@ -111,7 +111,9 @@ for view in config['views']:
 
     def test_generator_expression_executes(self):
         """`sum(x for x in ...)` validates AND runs."""
-        config = {"views": [{"cards": [{"type": "tile"}, {"type": "btn"}, {"type": "tile"}]}]}
+        config = {
+            "views": [{"cards": [{"type": "tile"}, {"type": "btn"}, {"type": "tile"}]}]
+        }
         expr = "config['count'] = sum(1 for c in config['views'][0]['cards'] if c.get('type') == 'tile')"
         result = safe_execute(expr, config)
         assert result["count"] == 2
@@ -523,9 +525,7 @@ class TestSafeExecuteExpression:
     def test_missing_result_key_raises(self):
         """If result_key is not in variables, raise PythonSandboxValidationError up front."""
         with pytest.raises(PythonSandboxValidationError, match="result_key"):
-            safe_execute_expression(
-                "response = 1", {"other": 1}, "response"
-            )
+            safe_execute_expression("response = 1", {"other": 1}, "response")
 
     def test_validation_failure_raises(self):
         """Invalid expressions raise PythonSandboxValidationError."""
@@ -559,18 +559,14 @@ class TestSafeExecuteExpression:
             "response = [m for m in response "
             "if isinstance(m, dict) and m.get('level') == 'ERROR']"
         )
-        result = safe_execute_expression(
-            expr, {"response": messages}, "response"
-        )
+        result = safe_execute_expression(expr, {"response": messages}, "response")
         assert result == [{"level": "ERROR", "text": "Boom"}]
 
     def test_str_coercion_available(self):
         """str() is in the safe builtins for text-content matching."""
         messages = [{"level": "ERROR"}, "plain string", 42]
         expr = "response = [m for m in response if 'ERROR' in str(m)]"
-        result = safe_execute_expression(
-            expr, {"response": messages}, "response"
-        )
+        result = safe_execute_expression(expr, {"response": messages}, "response")
         assert result == [{"level": "ERROR"}]
 
     def test_builtins_do_not_include_open(self):
@@ -673,9 +669,7 @@ class TestSandboxErrorSubclasses:
                 ),
                 pytest.raises(type(infra_exc)),
             ):
-                safe_execute_expression(
-                    "response = 1", {"response": 0}, "response"
-                )
+                safe_execute_expression("response = 1", {"response": 0}, "response")
 
 
 class TestFormatSandboxError:
@@ -720,9 +714,7 @@ class TestFormatSandboxError:
         """The default `config` callers don't get a redundant variable-name hint."""
         err = PythonSandboxValidationError("Forbidden node type: Try")
         _, suggestions = format_sandbox_error(err, "try: pass\nexcept: pass")
-        assert not any(
-            "Operate on the" in s and "variable" in s for s in suggestions
-        )
+        assert not any("Operate on the" in s and "variable" in s for s in suggestions)
 
     def test_non_default_variable_name_prepends_hint(self):
         """A non-`config` caller (e.g. addons with `response`) gets a leading
@@ -735,3 +727,43 @@ class TestFormatSandboxError:
         assert suggestions[0] == (
             "Operate on the `response` variable (in-place or reassign)"
         )
+
+    def test_line_continuation_error_gets_specific_hint(self):
+        """Issue #1197 — a backslash-escape mistake outside string literals
+        should produce a targeted hint that comes BEFORE the generic
+        'Check expression syntax' so the agent recovers on the first retry
+        instead of guessing."""
+        err = PythonSandboxValidationError(
+            "Syntax error: unexpected character after line continuation "
+            "character (<unknown>, line 1)"
+        )
+        _, suggestions = format_sandbox_error(err, 'config["k"] = \\"v\\"')
+        # Hint must be present
+        assert any("line-continuation" in s.lower() for s in suggestions)
+        # ...and must come BEFORE the generic syntax suggestion
+        hint_idx = next(
+            i for i, s in enumerate(suggestions) if "line-continuation" in s.lower()
+        )
+        generic_idx = next(
+            i
+            for i, s in enumerate(suggestions)
+            if "check expression syntax" in s.lower()
+        )
+        assert hint_idx < generic_idx
+
+    def test_line_continuation_with_response_variable_orders_correctly(self):
+        """When BOTH the variable-name prepend AND the line-continuation hint
+        fire (addon caller passes `response` and emits a backslash-escape),
+        the variable-name hint must remain at index 0 — agents need the
+        target-variable framing before the diagnostic."""
+        err = PythonSandboxValidationError(
+            "Syntax error: unexpected character after line continuation "
+            "character (<unknown>, line 1)"
+        )
+        _, suggestions = format_sandbox_error(
+            err, 'response["k"] = \\"v\\"', variable_name="response"
+        )
+        assert suggestions[0] == (
+            "Operate on the `response` variable (in-place or reassign)"
+        )
+        assert "line-continuation" in suggestions[1].lower()
