@@ -89,10 +89,7 @@ class TestShouldLazyResolve:
 
 
 class TestResolveDashboard:
-    """``_resolve_dashboard`` returns ``(match, dashboards)``: the match
-    (or ``None``) plus the raw dashboards list (or ``None`` on
-    unexpected shape). The list is what enables list-call dedup at the
-    pre-resolver call site (issue #1085); test both arms here."""
+    """Tests both arms of ``_resolve_dashboard``: matched and unexpected-shape."""
 
     async def test_match_by_url_path(self, fake_client):
         dashboards_list = [

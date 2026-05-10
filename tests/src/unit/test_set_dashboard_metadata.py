@@ -21,6 +21,7 @@ class TestSetDashboardMetadataUpdate:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -156,9 +157,9 @@ class TestSetDashboardMetadataUpdate:
 
 
 class TestSetDashboardListCallDedup:
-    """Issue #1085: when the pre-resolver fires (internal-id branch),
-    the existence-check site reuses the pre-fetched dashboards list
-    rather than issuing a second ``lovelace/dashboards/list`` round-trip.
+    """When the pre-resolver fires (internal-id branch), the existence-check
+    site reuses the pre-fetched dashboards list rather than issuing a second
+    ``lovelace/dashboards/list`` round-trip.
 
     The other-branch tests act as regression guards so a future change
     that re-introduces a redundant list call (or accidentally drops the
@@ -201,9 +202,7 @@ class TestSetDashboardListCallDedup:
         )
 
     @pytest.mark.asyncio
-    async def test_internal_id_branch_calls_list_only_once(
-        self, set_tool, mock_client
-    ):
+    async def test_internal_id_branch_calls_list_only_once(self, set_tool, mock_client):
         """Pre-resolver fires (hyphenless ``my_dash``) and matches; the
         existence-check site MUST reuse that list instead of fetching
         again. Total ``lovelace/dashboards/list`` calls = 1."""
@@ -216,9 +215,7 @@ class TestSetDashboardListCallDedup:
         result = await set_tool(url_path="my_dash", title="Renamed")
 
         assert self._list_call_count(mock_client) == 1, (
-            "internal-id branch must reuse the pre-resolver's dashboards "
-            "list — second lovelace/dashboards/list round-trip is the "
-            "regression issue #1085 closes"
+            "internal-id branch must reuse the pre-resolver's dashboards list"
         )
         assert result["success"] is True
         # Pre-resolver rewrote my_dash -> my-dash; surface marker stays.

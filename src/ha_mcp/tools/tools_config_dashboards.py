@@ -282,7 +282,7 @@ async def _resolve_dashboard(
 
     Returning ``dashboards`` alongside ``match`` lets callers reuse the
     list for follow-on checks (existence, id lookup) instead of paying
-    a second ``lovelace/dashboards/list`` round-trip — see issue #1085.
+    a second ``lovelace/dashboards/list`` round-trip.
 
     Three call sites:
     - **Lazy fallback** (``_lazy_resolve_and_retry``): only invoked after
@@ -391,8 +391,6 @@ async def _lazy_resolve_and_retry(
         return url_path, response
 
     try:
-        # Lazy fallback only needs the resolution; the dashboards list
-        # is not reused on this path.
         resolved, _ = await _resolve_dashboard(client, url_path)
     except Exception as resolver_exc:
         # Resolver itself raised (timeout, network blip, etc.). Don't let
@@ -961,7 +959,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
             # has already fetched ``lovelace/dashboards/list``. Capture that list
             # so the existence-check site below can reuse it instead of paying
-            # a second round-trip (issue #1085).
+            # a second round-trip.
             pre_fetched_dashboards: list[dict[str, Any]] | None = None
             if "-" not in url_path and url_path != "lovelace":
                 resolved, dashboards = await _resolve_dashboard(client, url_path)
@@ -1156,7 +1154,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # and matched (internal-id branch), reuse its already-fetched
             # ``lovelace/dashboards/list`` response to skip a redundant
             # round-trip — the matched dashboard is guaranteed present in
-            # that list (issue #1085).
+            # that list.
             if pre_fetched_dashboards is not None:
                 existing_dashboards = pre_fetched_dashboards
             else:
@@ -1446,8 +1444,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            # Delete-path doesn't need the dashboards list — only the
-            # resolved id is forwarded to lovelace/dashboards/delete.
             resolved, _ = await _resolve_dashboard(client, url_path)
             if resolved is None:
                 raise_tool_error(
