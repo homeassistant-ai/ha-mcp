@@ -52,9 +52,11 @@ async def test_get_entities_by_area_bridge_strips_internal_fields():
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
     # Construct without going through __init__ (heavy startup). The
-    # bridge only touches self.smart_tools.
+    # bridge only touches self.smart_tools, which is a lazy-init
+    # property backed by ``_smart_tools`` — set the backing field
+    # directly so the property short-circuits to our fake.
     instance = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    instance.smart_tools = fake_smart_tools
+    instance._smart_tools = fake_smart_tools
 
     result = await instance.get_entities_by_area("kitchen")
 
