@@ -126,18 +126,23 @@ class SmartSearchTools:
             domain_filter: Optional domain to filter entities before search (e.g., "light", "sensor")
             include_hidden: When False (default), entities with
                 ``hidden_by`` set in the entity registry are skipped before
-                fuzzy search runs (#1170 finding 9). Pass True to include
-                them — typically for diagnostics or service workflows.
+                fuzzy search runs. Pass True to include them — typically
+                for diagnostics or service workflows.
 
         Returns:
             Dictionary with search results and metadata
         """
         try:
+            # HA domains are canonically lowercase; defend the service
+            # layer so internal callers get the same normalization the
+            # tool layer applies.
+            if domain_filter:
+                domain_filter = domain_filter.lower()
             # Fetch states + entity registry list in parallel. The slim
             # ``list`` view gives us ``hidden_by`` (used to filter
-            # UI-hidden entities by default; #1170 finding 9) and the
-            # entity_ids we need to feed into ``get_entries`` for the
-            # full-fidelity data (#1170 finding 8 / closes #1166).
+            # UI-hidden entities by default) and the entity_ids we need
+            # to feed into ``get_entries`` for the full-fidelity data
+            # (aliases live only in get_entries, not the slim list).
             entities_task = self.client.get_states()
             entity_registry_task = self.client.send_websocket_message(
                 {"type": "config/entity_registry/list"}
@@ -147,7 +152,7 @@ class SmartSearchTools:
             )
             # States-fetch failure is fatal — auth/connection errors must
             # propagate so the caller sees the real cause instead of a
-            # bogus "zero matches" with success=True (#1170).
+            # bogus "zero matches" with success=True.
             if isinstance(results[0], BaseException):
                 raise results[0]
             entities = results[0]
@@ -181,7 +186,7 @@ class SmartSearchTools:
             # Second pass: batch-fetch full registry entries for aliases.
             # ``config/entity_registry/list`` deliberately omits
             # ``aliases``; ``get_entries`` includes them. One extra
-            # round-trip closes #1166 without N+1 fan-out.
+            # round-trip enriches the survivor set without N+1 fan-out.
             aliases_map: dict[str, list[str]] = {}
             if survivor_ids:
                 try:
@@ -198,10 +203,18 @@ class SmartSearchTools:
                         ).items():
                             if isinstance(entry, dict):
                                 aliases_map[eid] = entry.get("aliases", []) or []
+                    else:
+                        logger.warning(
+                            "alias_enrichment_failed: get_entries returned "
+                            "non-success for %d entities (resp=%r)",
+                            len(survivor_ids),
+                            entries_resp,
+                        )
                 except (KeyError, TypeError, AttributeError) as alias_err:
                     logger.warning(
-                        "config/entity_registry/get_entries returned "
-                        "malformed payload; aliases unavailable: %s",
+                        "alias_enrichment_failed: malformed payload for "
+                        "%d entities (err=%r)",
+                        len(survivor_ids),
                         alias_err,
                     )
 
@@ -218,8 +231,6 @@ class SmartSearchTools:
                     "_hidden_by": slim.get("hidden_by"),
                 })
 
-            # Filter by domain BEFORE fuzzy search if domain_filter provided
-            # This ensures fuzzy search only looks at entities in the target domain
             entities = enriched
             if domain_filter:
                 entities = [
@@ -318,8 +329,7 @@ class SmartSearchTools:
             group_by_domain: Whether to group results by domain within each area
             include_hidden: When False (default), entities with
                 ``hidden_by`` set in the entity registry are excluded
-                from per-area results (#1170 finding 9). Pass True to
-                include them.
+                from per-area results. Pass True to include them.
 
         Returns:
             Dictionary with area-grouped entities
@@ -377,8 +387,8 @@ class SmartSearchTools:
 
             # Fuzzy match area_query against known area names, IDs, and aliases.
             # Aliases (set per-area in the area registry, used by HA voice
-            # config) were previously ignored — closing #1166 for areas in
-            # parallel with the entity-side fix in smart_entity_search.
+            # config) are searched alongside name+id, mirroring the
+            # entity-side alias enrichment in smart_entity_search.
             area_query_lower = area_query.lower().strip()
             matched_area_ids: set[str] = set()
 
@@ -428,7 +438,7 @@ class SmartSearchTools:
 
             # Build entity_id -> resolved area_id mapping.
             # Priority: entity direct area_id > device area_id.
-            # Hidden entities are skipped by default (#1170 finding 9).
+            # Hidden entities are skipped unless include_hidden is True.
             entity_area_resolved: dict[str, str] = {}
             for entity_id, reg_info in entity_reg_map.items():
                 if (

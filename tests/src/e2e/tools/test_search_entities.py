@@ -1244,6 +1244,20 @@ async def test_area_only_aggregates_all_matched_areas_issue_1170(
         f"{set(fixture['helpers']) - entity_ids}; got {entity_ids}"
     )
 
+    # Determinism: same query twice must yield the same area ordering.
+    # The pre-fix code iterated a `set` which left ordering at CPython's
+    # hash-randomization mercy. Asserting equality across two calls is
+    # the only way to lock in the sorted-iteration fix.
+    res2 = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
+    )
+    data2 = assert_mcp_success(res2, "two-area aggregation rerun").get("data", {})
+    assert data["area_names"] == data2["area_names"], (
+        f"area_names ordering must be deterministic across calls: "
+        f"{data['area_names']!r} vs {data2['area_names']!r}"
+    )
+
 
 @pytest.fixture
 async def helper_with_alias(mcp_client):
@@ -1271,6 +1285,106 @@ async def helper_with_alias(mcp_client):
         )
     except Exception as exc:  # pragma: no cover
         logger.warning(f"Cleanup of {eid} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_search_concat_token_elision_issue_1170(mcp_client):
+    """End-to-end pipeline preserves the BM25 concat-token enrichment so
+    a separator-elided query (``bedlight``) lands on its target
+    (``light.bed_light``). Unit coverage exists in
+    ``test_bm25_search.TestFuzzySearcherIssue1170::
+    test_finding_2_elided_separator_query_finds_target_uniquely``;
+    this E2E variant catches a regression where alias-batch enrichment
+    or the hidden-filter survivor pass strips the concat token between
+    layers."""
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "bedlight", "exact_match": False, "limit": 10},
+    )
+    data = assert_mcp_success(res, "concat-token elision").get("data", {})
+    entity_ids = [r["entity_id"] for r in data.get("results", [])]
+    # `light.bed_light` is part of the initial_test_state seed.
+    assert "light.bed_light" in entity_ids, (
+        f"separator-elided query 'bedlight' should match light.bed_light: "
+        f"{entity_ids}"
+    )
+
+
+@pytest.fixture
+async def area_with_alias(mcp_client):
+    """Create an area with a unique alias plus a helper assigned to it."""
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"e2e_1170_areaalias_{suffix}"
+    area_alias = f"e2e1170areaalias{suffix}"
+    area_res = await mcp_client.call_tool(
+        "ha_set_area_or_floor",
+        {"kind": "area", "name": area_name, "aliases": [area_alias]},
+    )
+    area_data = assert_mcp_success(area_res, "Create area with alias")
+    area_id = area_data["area_id"]
+
+    h_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": f"e2e 1170 areaalias {suffix}",
+            "area_id": area_id,
+        },
+    )
+    h_data = assert_mcp_success(h_res, "Create helper in alias-area")
+    eid = h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+
+    try:
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search_entities",
+            arguments={"area_filter": area_id, "limit": 10},
+            predicate=lambda d: any(
+                r.get("entity_id") == eid
+                for r in d.get("data", d).get("results", [])
+            ),
+            description="helper visible in alias-area",
+        )
+        yield {
+            "area_id": area_id,
+            "alias": area_alias,
+            "entity_id": eid,
+        }
+    finally:
+        try:
+            await mcp_client.call_tool(
+                "ha_delete_helpers_integrations",
+                {"target": eid, "helper_type": "input_boolean", "confirm": True},
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of {eid} failed: {exc}")
+        try:
+            await mcp_client.call_tool(
+                "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of area {area_id} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_area_filter_resolves_by_area_alias_issue_1170(
+    mcp_client, area_with_alias
+):
+    """Area-registry aliases are honoured by ``area_filter``. Without
+    this, an area whose primary identity is ``Primary Suite`` and whose
+    voice alias is ``Guest Quarters`` would resolve only via the primary
+    name, defeating the alias's purpose. Locks down the area-side half
+    of the fix that the entity-side alias test does not cover."""
+    fixture = area_with_alias
+    res = await mcp_client.call_tool(
+        "ha_search_entities", {"area_filter": fixture["alias"], "limit": 10}
+    )
+    data = assert_mcp_success(res, "search by area alias").get("data", {})
+    assert data["search_type"] == "area_only"
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["entity_id"] in entity_ids, (
+        f"area_filter by alias did not resolve to the aliased area: {data}"
+    )
 
 
 @pytest.mark.asyncio
@@ -1518,42 +1632,53 @@ class TestSearchEntitiesSeededAreasIssue1170:
     @pytest.fixture
     async def seeded_bedroom(self, mcp_client):
         """Assign 4 entities of 3 different domains to the seeded
-        ``bedroom`` area, then unassign on teardown."""
-        for eid, area_id in self.SEED_ASSIGNMENTS:
-            try:
-                await mcp_client.call_tool(
-                    "ha_set_entity", {"entity_id": eid, "area_id": area_id}
-                )
-            except Exception as exc:
-                pytest.skip(f"Seed entity {eid} unavailable: {exc}")
-        # Wait until all 4 are visible in the bedroom area
-        expected = {eid for eid, _ in self.SEED_ASSIGNMENTS}
-        await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_search_entities",
-            arguments={"area_filter": "bedroom", "limit": 50},
-            predicate=lambda d: expected.issubset(
-                {
-                    r.get("entity_id")
-                    for r in d.get("data", d).get("results", [])
-                }
-            ),
-            description="all seed assignments visible under bedroom",
-        )
-        yield {
-            "area_id": "bedroom",
-            "entity_ids": [eid for eid, _ in self.SEED_ASSIGNMENTS],
-        }
-        # Cleanup: clear area assignment. ha_set_entity requires at least
-        # one update field, so we set area_id to empty-string (which the
-        # tool maps to "no area") rather than None.
-        for eid, _ in self.SEED_ASSIGNMENTS:
-            try:
-                await mcp_client.call_tool(
-                    "ha_set_entity", {"entity_id": eid, "area_id": ""}
-                )
-            except Exception as exc:  # pragma: no cover — cleanup best-effort
-                logger.warning(f"Cleanup of area assignment for {eid} failed: {exc}")
+        ``bedroom`` area, then unassign on teardown.
+
+        Cleanup is wrapped in try/finally so an unexpected fixture-body
+        failure (e.g. wait_for_tool_result timing out) still unwinds the
+        seed-area assignments — otherwise subsequent tests inherit the
+        leaked assignment.
+        """
+        try:
+            for eid, area_id in self.SEED_ASSIGNMENTS:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_set_entity", {"entity_id": eid, "area_id": area_id}
+                    )
+                except Exception as exc:
+                    pytest.skip(f"Seed entity {eid} unavailable: {exc}")
+            # Wait until all 4 are visible in the bedroom area
+            expected = {eid for eid, _ in self.SEED_ASSIGNMENTS}
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_search_entities",
+                arguments={"area_filter": "bedroom", "limit": 50},
+                predicate=lambda d: expected.issubset(
+                    {
+                        r.get("entity_id")
+                        for r in d.get("data", d).get("results", [])
+                    }
+                ),
+                description="all seed assignments visible under bedroom",
+            )
+            yield {
+                "area_id": "bedroom",
+                "entity_ids": [eid for eid, _ in self.SEED_ASSIGNMENTS],
+            }
+        finally:
+            # Cleanup runs even on pytest.skip or fixture-body exceptions.
+            # ha_set_entity requires at least one update field, so we set
+            # area_id to empty-string (which the tool maps to "no area")
+            # rather than None.
+            for eid, _ in self.SEED_ASSIGNMENTS:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_set_entity", {"entity_id": eid, "area_id": ""}
+                    )
+                except Exception as exc:  # pragma: no cover — cleanup best-effort
+                    logger.warning(
+                        f"Cleanup of area assignment for {eid} failed: {exc}"
+                    )
 
     @pytest.mark.asyncio
     async def test_area_only_returns_all_assigned_domains(

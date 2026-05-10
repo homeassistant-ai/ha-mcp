@@ -56,8 +56,8 @@ async def _exact_match_search(
     Used both as the ``exact_match=True`` primary path and as the
     fallback when fuzzy search raises. In addition to ``client.get_states()``,
     also queries the entity registry via WebSocket to honor
-    ``include_hidden`` (#1170): when False, entities with
-    ``hidden_by != null`` are skipped.
+    ``include_hidden``: when False, entities with ``hidden_by != null``
+    are skipped.
     """
     # Fetch states + entity registry in parallel. Registry-list failure
     # is tolerated (we just lose the hidden filter); states-fetch failure
@@ -230,7 +230,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
         # HA domains are canonically lowercase; agents that capitalize from a
         # user phrase ("turn on the Lights") would otherwise hit a silent
-        # zero-result. Issue #1170 finding 1.
+        # zero-result.
         if domain_filter:
             domain_filter = domain_filter.lower()
         # Coerce boolean parameter that may come as string from XML-style calls
@@ -273,11 +273,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for domain_entities in entities.values():
                                 all_area_entities.extend(domain_entities)
 
-                    # Batch-fetch aliases for the surviving entity_ids
-                    # so the fuzzy haystack includes them (#1170 closes
-                    # #1166). Aliases live only in get_entries (not the
-                    # slim list endpoint), so this is a single bounded
-                    # round-trip on top of get_entities_by_area's calls.
+                    # Batch-fetch aliases for the surviving entity_ids so
+                    # the fuzzy haystack includes them. Aliases live only
+                    # in get_entries (not the slim list endpoint), so
+                    # this is a single bounded round-trip on top of
+                    # get_entities_by_area's calls.
                     area_entity_ids = sorted(
                         e.get("entity_id", "")
                         for e in all_area_entities
@@ -301,11 +301,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                         aliases_map[eid] = (
                                             entry.get("aliases", []) or []
                                         )
+                            else:
+                                logger.warning(
+                                    "alias_enrichment_failed: get_entries "
+                                    "returned non-success for %d area "
+                                    "entities (resp=%r)",
+                                    len(area_entity_ids),
+                                    entries_resp,
+                                )
                         except (KeyError, TypeError, AttributeError) as alias_err:
                             logger.warning(
-                                "config/entity_registry/get_entries returned "
-                                "malformed payload; aliases unavailable for "
-                                "area+query result set: %s",
+                                "alias_enrichment_failed: malformed payload "
+                                "for %d area entities (err=%r)",
+                                len(area_entity_ids),
                                 alias_err,
                             )
 
@@ -314,9 +322,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 
-                    # Convert to format expected by fuzzy searcher.
-                    # Inject `_aliases` so the fuzzy haystack includes
-                    # per-entity aliases.
                     entities_for_search = [
                         {
                             "entity_id": entity.get("entity_id", ""),
@@ -336,9 +341,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
                     # Format matches similar to smart_entity_search.
-                    # Top-level `area_filter` already carries this context for
-                    # the caller; per-result echo was redundant and
-                    # asymmetric vs the other branches (#1170 finding 4).
+                    # Top-level `area_filter` already carries this
+                    # context for the caller; per-result echo would be
+                    # redundant and asymmetric vs the other branches.
                     results = [
                         {
                             "entity_id": match["entity_id"],
@@ -384,9 +389,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         # area but one — a query like area_filter="bedroom"
                         # against ["bedroom","bedroom_kids"] would return
                         # only one area's entities and miss the user's
-                        # intended one entirely. The with-query branch
-                        # already iterated all matches, so the two paths
-                        # diverged. (#1170 finding 7.)
+                        # intended one entirely. Match the with-query
+                        # branch by iterating all matched areas.
                         all_results: list[dict[str, Any]] = []
                         area_names_matched: list[str] = []
                         # Sort area_id keys to make iteration deterministic;
@@ -404,13 +408,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     continue
                                 # `{**entity, ...}` avoids mutating dicts
                                 # owned by the smart_search helper.
-                                # Add score+match_type so the response shape
-                                # matches the other four search-type
-                                # branches (#1170 finding 3). Score=100
-                                # because area membership is exact, not
-                                # fuzzy. Strip leading-underscore internal
-                                # fields (e.g. `_aliases`) so the response
-                                # only contains public-API fields.
+                                # Add score+match_type so the response
+                                # shape matches the other four
+                                # search-type branches. Score=100 because
+                                # area membership is exact, not fuzzy.
+                                # Strip leading-underscore internal
+                                # fields (e.g. `_aliases`) so the
+                                # response only contains public-API
+                                # fields.
                                 all_results.extend(
                                     {
                                         **{
@@ -438,7 +443,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             # `area_names` lists every matched area;
                             # `area_name` (singular) is kept for backward
                             # compatibility with existing callers — new
-                            # callers should read `area_names` (#1170).
+                            # callers should read `area_names`.
                             "area_names": area_names_matched,
                             "area_name": (
                                 area_names_matched[0]
@@ -459,10 +464,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             area_search_data["by_domain"] = paginated_by_domain
                         return await add_timezone_metadata(client, area_search_data)
                     else:
-                        # Empty match: still emit `area_names: []` so callers
-                        # don't KeyError when they read the field on a
-                        # zero-match response. Symmetry with the populated
-                        # branch (#1170 finding 7).
+                        # Empty match: still emit `area_names: []` so
+                        # callers don't KeyError when they read the
+                        # field on a zero-match response. Symmetry with
+                        # the populated branch.
                         empty_area_data: dict[str, Any] = {
                             "success": True,
                             "area_filter": area_filter,
@@ -485,7 +490,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # failure is tolerated (we just lose the hidden filter);
                 # states-fetch failure is fatal — auth/connection errors
                 # must propagate so the agent sees the real cause instead
-                # of silently ranked-zero results (#1170).
+                # of silently ranked-zero results.
                 states_task = client.get_states()
                 registry_task = client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
@@ -554,12 +559,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # - exact_match=True: substring match
             # - exact_match=False: fuzzy first, fall back to substring on failure
             #
-            # The legacy `partial_listing` last-resort dump was removed
-            # (#1170 finding 6): it returned every entity at score=0 with
-            # `partial: True`, which masked the underlying error and gave
-            # the agent a noise pile that was strictly worse than a clean
-            # error. If both real strategies fail we now propagate the
-            # exception so callers see why.
+            # If both real strategies fail we propagate the exception so
+            # callers see why; we deliberately do NOT fall back to a
+            # zero-scored entity dump (a clean error is strictly more
+            # useful to an agent than a noise pile flagged
+            # `partial: True`).
 
             result: dict[str, Any]
             warning: str | None = None
@@ -590,6 +594,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                     search_type = "fuzzy_search"
                 except asyncio.CancelledError:
+                    raise
+                except ToolError:
+                    # Auth/connection/structured failures must propagate; the
+                    # substring fallback below is for fuzzy-engine bugs only.
                     raise
                 except Exception as fuzzy_error:
                     logger.warning(

@@ -35,7 +35,7 @@ def _strip_separators(text: str) -> str:
     """Strip ``.``, ``_``, ``-``, whitespace from *text* and lowercase.
 
     Used to add elided-separator forms to the BM25 corpus so queries
-    like ``bedlight`` match tokens like ``bed_light`` (#1170).
+    like ``bedlight`` match tokens like ``bed_light``.
     """
     return _SPLIT_RE.sub("", text.lower())
 
@@ -252,7 +252,7 @@ class FuzzyEntitySearcher:
                 # If any query token matched only on the alias haystack,
                 # surface that to the caller via match_type — useful both
                 # for telemetry and for the agent to know the friendly_name
-                # alone wouldn't have led it here. (#1170 finding 8.)
+                # alone wouldn't have led it here.
                 hit_alias_tokens = query_token_set & alias_hit[i]
                 if hit_alias_tokens:
                     match_type = "alias_match"
@@ -297,9 +297,9 @@ class FuzzyEntitySearcher:
         For multi-token queries, additionally requires coverage:
         at least half of the distinct query tokens must each have *some*
         doc token they ratio-match. Without this, a single-token
-        accidental hit (e.g. ``garbage`` ≈ ``garage``) was enough to
-        surface unrelated entities at score 92 from queries like
-        ``xyz_irrelevant_garbage``. (#1170 finding 5.)
+        accidental hit (e.g. ``garbage`` ≈ ``garage``) is enough to
+        surface unrelated entities at score 92 from a 3-token query
+        whose other two tokens have no doc relationship.
         """
         del query_lower  # parameter kept for API compatibility
         results: list[dict[str, Any]] = []

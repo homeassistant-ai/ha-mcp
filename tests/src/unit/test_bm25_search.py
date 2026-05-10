@@ -378,8 +378,13 @@ class TestFuzzySearcherIssue1170:
         on single-token queries — that would be too aggressive)."""
         searcher = FuzzyEntitySearcher()
         results, total = searcher.search_entities(lights_corpus, "ligth", limit=10)
-        # Should still find at least the *_lights entities via typo_fallback.
+        # Should still find a real light.* entity via typo_fallback — not
+        # just *something*.
         assert total >= 1, f"single-token typo recall regressed: {results}"
+        assert any(r["entity_id"].startswith("light.") for r in results), (
+            f"coverage gate falsely rejected legitimate single-token typo: "
+            f"{[r['entity_id'] for r in results]}"
+        )
 
     def test_finding_8_alias_search_with_match_type_label(self, lights_corpus):
         """Aliases are searchable when the caller supplies them on the
@@ -417,7 +422,7 @@ class TestFuzzySearcherIssue1170:
         as ``alias_match``. A future code change that swapped the
         precedence (or used a too-broad set intersection) would surface
         as a confused match_type for queries that obviously matched on
-        the entity's primary identity. (#1170)"""
+        the entity's primary identity."""
         # alias contains "bed" (which also tokenizes from "Bed Light")
         # plus a unique alias-only token "lullaby".
         enriched = []
@@ -430,9 +435,45 @@ class TestFuzzySearcherIssue1170:
         results, total = searcher.search_entities(enriched, "bed", limit=10)
         assert total >= 1
         target = next(r for r in results if r["entity_id"] == "light.bed_light")
-        # "bed" is in id+name AND in alias — match_type should reflect
-        # the primary id/name match, not the alias overlap.
-        assert target["match_type"] != "alias_match", (
-            f"query token also in id/name should not be labeled alias_match: "
-            f"{target}"
+        # "bed" is a substring of "light.bed_light", so _get_match_type
+        # returns "partial_id". Asserting the specific value (not just
+        # !="alias_match") locks in the precedence: id/name path wins
+        # over alias_match labeling whenever the query token has *any*
+        # primary-identity hit.
+        assert target["match_type"] == "partial_id", (
+            f"query 'bed' should be labeled partial_id (entity_id contains "
+            f"'bed'), got: {target}"
         )
+
+
+class TestSmartEntitySearchPropagation:
+    """Lock down the finding-6 fix at the service layer: a fatal
+    ``get_states`` failure must propagate as a ``ToolError`` rather
+    than being swallowed into a zero-result dump.
+
+    The pre-fix code masked auth/connection failures by emitting a
+    ``partial_listing`` of every entity at score 0 with
+    ``partial: True`` — agents that read ``success: True`` would
+    silently accept the noise pile. After the fix, the failure surfaces
+    as ``isError=true`` so the caller can act on it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_states_failure_propagates_as_tool_error(self):
+        from unittest.mock import AsyncMock
+
+        from fastmcp.exceptions import ToolError
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        mock_client = AsyncMock()
+        mock_client.get_states = AsyncMock(
+            side_effect=RuntimeError("simulated transport failure")
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+        smart_tools = SmartSearchTools(client=mock_client, fuzzy_threshold=60)
+
+        with pytest.raises(ToolError):
+            await smart_tools.smart_entity_search("anything", limit=5)
