@@ -1,4 +1,4 @@
-"""Locks down the `server.HASmartMCPServer.get_entities_by_area`
+"""Locks down the `server.HomeAssistantSmartMCPServer.get_entities_by_area`
 bridge's invocation of `strip_internal_fields` on its return value.
 
 The bridge is a public method that wraps `smart_tools.get_entities_by_area`
@@ -15,8 +15,8 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_get_entities_by_area_bridge_strips_internal_fields(monkeypatch):
-    # Stub the minimal HASmartMCPServer surface needed for the bridge:
+async def test_get_entities_by_area_bridge_strips_internal_fields():
+    # Stub the minimal HomeAssistantSmartMCPServer surface needed for the bridge:
     # the bridge just delegates to `self.smart_tools.get_entities_by_area`
     # and then strips internals.
     fake_smart_tools = SimpleNamespace()
@@ -49,11 +49,11 @@ async def test_get_entities_by_area_bridge_strips_internal_fields(monkeypatch):
 
     # Import after monkeypatch path setup — server.py pulls in fastmcp
     # which is heavy but available in the test env.
-    from ha_mcp.server import HASmartMCPServer
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
     # Construct without going through __init__ (heavy startup). The
     # bridge only touches self.smart_tools.
-    instance = HASmartMCPServer.__new__(HASmartMCPServer)
+    instance = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
     instance.smart_tools = fake_smart_tools
 
     result = await instance.get_entities_by_area("kitchen")
