@@ -32,15 +32,10 @@ def tokenize(text: str) -> list[str]:
 
 
 def _strip_separators(text: str) -> str:
-    """Return *text* lowercased with all `._-\\s` removed.
+    """Lowercase ``text`` and remove `.`, `_`, `-`, whitespace.
 
-    Used to expose elided-separator forms in the BM25 corpus so a query
-    like `bedlight` can directly match the doc token built from
-    `light.bed_light`'s tail (`bed_light` → `bedlight`). Without this,
-    BM25 finds nothing and falls through to typo_fallback, which then
-    ties unrelated `*_lights` entities at the same score because each
-    of them has a single token (`light`) that fuzzy-matches part of
-    the query. (#1170 finding 2.)
+    Used to add elided-separator forms to the BM25 corpus so queries
+    like ``bedlight`` match tokens like ``bed_light`` (#1170).
     """
     return _SPLIT_RE.sub("", text.lower())
 
@@ -196,9 +191,7 @@ class FuzzyEntitySearcher:
             tokens = list(id_tokens + name_tokens)
 
             # Separator-stripped forms (concat tokens) so queries that
-            # elide separators match. We add the entity_id tail (after
-            # the first dot) and the friendly_name to handle the common
-            # `bedlight` → `light.bed_light` / `Bed Light` case.
+            # elide separators match — e.g. `bedlight` finds `light.bed_light`.
             tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
             tail_concat = _strip_separators(tail)
             if tail_concat:
@@ -208,20 +201,28 @@ class FuzzyEntitySearcher:
                 tokens.append(name_concat)
 
             # Aliases (entity registry). Each alias contributes both its
-            # tokenized form and its separator-stripped concat. Track the
-            # token set so we can label the result `alias_match` later
-            # without re-checking every alias against the query.
+            # tokenized form and its separator-stripped concat. We track
+            # only the alias tokens that *aren't* already in id+name —
+            # otherwise a query like `bed` would mislabel a friendly_name
+            # match as `alias_match` whenever the entity also has a
+            # `bed`-containing alias.
+            id_name_tokens = set(id_tokens) | set(name_tokens)
+            id_name_tokens.add(tail_concat)
+            id_name_tokens.add(name_concat)
             entity_alias_tokens: set[str] = set()
             for alias in entity.get("_aliases", []) or []:
                 if not isinstance(alias, str):
                     continue
                 a_tokens = tokenize(alias)
                 tokens.extend(a_tokens)
-                entity_alias_tokens.update(a_tokens)
+                for t in a_tokens:
+                    if t not in id_name_tokens:
+                        entity_alias_tokens.add(t)
                 a_concat = _strip_separators(alias)
                 if a_concat:
                     tokens.append(a_concat)
-                    entity_alias_tokens.add(a_concat)
+                    if a_concat not in id_name_tokens:
+                        entity_alias_tokens.add(a_concat)
 
             docs.append(tokens)
             meta.append((entity_id, friendly_name, domain, attributes, state))

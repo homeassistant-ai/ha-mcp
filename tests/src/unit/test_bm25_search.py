@@ -410,3 +410,29 @@ class TestFuzzySearcherIssue1170:
             lights_corpus, "lullaby", limit=10
         )
         assert total == 0, f"no alias data → no match: {results}"
+
+    def test_finding_8_alias_does_not_overshadow_name_match(self, lights_corpus):
+        """When a query token matches BOTH the friendly_name and an alias,
+        the result keeps a name-driven match_type rather than mislabeling
+        as ``alias_match``. A future code change that swapped the
+        precedence (or used a too-broad set intersection) would surface
+        as a confused match_type for queries that obviously matched on
+        the entity's primary identity. (#1170)"""
+        # alias contains "bed" (which also tokenizes from "Bed Light")
+        # plus a unique alias-only token "lullaby".
+        enriched = []
+        for e in lights_corpus:
+            e2 = dict(e)
+            if e2["entity_id"] == "light.bed_light":
+                e2["_aliases"] = ["bed lullaby"]
+            enriched.append(e2)
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(enriched, "bed", limit=10)
+        assert total >= 1
+        target = next(r for r in results if r["entity_id"] == "light.bed_light")
+        # "bed" is in id+name AND in alias — match_type should reflect
+        # the primary id/name match, not the alias overlap.
+        assert target["match_type"] != "alias_match", (
+            f"query token also in id/name should not be labeled alias_match: "
+            f"{target}"
+        )

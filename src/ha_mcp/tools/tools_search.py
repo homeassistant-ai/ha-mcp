@@ -51,14 +51,16 @@ async def _exact_match_search(
     include_hidden: bool = False,
 ) -> dict[str, Any]:
     """
-    Fallback exact match search when fuzzy search fails.
-
-    Performs simple substring matching on entity_id and friendly_name.
-    Honors ``include_hidden`` (#1170 finding 9) by consulting the entity
-    registry and skipping ``hidden_by != null`` entries when False.
+    Substring search across entity_id + friendly_name; used both as the
+    ``exact_match=True`` primary path and as the fallback when fuzzy
+    search raises. In addition to ``client.get_states()``, also queries
+    the entity registry via WebSocket to honor ``include_hidden``
+    (#1170): when False, entities with ``hidden_by != null`` are skipped.
     """
-    # Fetch states + entity registry in parallel; tolerate registry
-    # failure (we just lose the hidden filter, search still works).
+    # Fetch states + entity registry in parallel. Registry-list failure
+    # is tolerated (we just lose the hidden filter); states-fetch failure
+    # is fatal — auth/connection errors must propagate so the agent sees
+    # "your token is invalid" instead of "zero entities matched".
     entities_task = client.get_states()
     registry_task = client.send_websocket_message(
         {"type": "config/entity_registry/list"}
@@ -68,9 +70,9 @@ async def _exact_match_search(
     )
     state_result: Any = gather_results[0]
     registry_result: Any = gather_results[1]
-    all_entities = (
-        state_result if not isinstance(state_result, Exception) else []
-    )
+    if isinstance(state_result, BaseException):
+        raise state_result
+    all_entities = state_result
     hidden_ids: set[str] = set()
     if (
         not include_hidden
@@ -157,7 +159,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 default=None,
-                description="Limit to a single domain (e.g. 'light', 'sensor', 'calendar').",
+                description=(
+                    "Limit to a single domain (e.g. 'light', 'sensor', "
+                    "'calendar'). Case-insensitive — values are normalized "
+                    "to lowercase before matching."
+                ),
             ),
         ] = None,
         area_filter: Annotated[
@@ -253,9 +259,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Collect entities from all matched areas, applying
                     # domain_filter if present. get_entities_by_area is called
                     # with group_by_domain=True above, so entities is always a
-                    # dict keyed by domain.
+                    # dict keyed by domain. Iterate sorted area_id keys so
+                    # the order matches the area_only branch.
                     all_area_entities = []
-                    for area_data in area_result.get("areas", {}).values():
+                    for area_id in sorted(area_result.get("areas", {})):
+                        area_data = area_result["areas"][area_id]
                         entities = area_data.get("entities") or {}
                         if domain_filter:
                             all_area_entities.extend(entities.get(domain_filter, []))
@@ -263,16 +271,50 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for domain_entities in entities.values():
                                 all_area_entities.extend(domain_entities)
 
+                    # Batch-fetch aliases for the surviving entity_ids
+                    # so the fuzzy haystack includes them (#1170 closes
+                    # #1166). Aliases live only in get_entries (not the
+                    # slim list endpoint), so this is a single bounded
+                    # round-trip on top of get_entities_by_area's calls.
+                    area_entity_ids = sorted(
+                        e.get("entity_id", "")
+                        for e in all_area_entities
+                        if e.get("entity_id")
+                    )
+                    aliases_map: dict[str, list[str]] = {}
+                    if area_entity_ids:
+                        try:
+                            entries_resp = await client.send_websocket_message({
+                                "type": "config/entity_registry/get_entries",
+                                "entity_ids": area_entity_ids,
+                            })
+                            if (
+                                isinstance(entries_resp, dict)
+                                and entries_resp.get("success")
+                            ):
+                                for eid, entry in (
+                                    entries_resp.get("result", {}) or {}
+                                ).items():
+                                    if isinstance(entry, dict):
+                                        aliases_map[eid] = (
+                                            entry.get("aliases", []) or []
+                                        )
+                        except (KeyError, TypeError, AttributeError) as alias_err:
+                            logger.warning(
+                                "config/entity_registry/get_entries returned "
+                                "malformed payload; aliases unavailable for "
+                                "area+query result set: %s",
+                                alias_err,
+                            )
+
                     # Apply fuzzy search to area entities
                     from ..utils.fuzzy_search import create_fuzzy_searcher
 
                     fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 
                     # Convert to format expected by fuzzy searcher.
-                    # Pass through `_aliases` (populated by
-                    # get_entities_by_area) so the fuzzy haystack
-                    # includes per-entity aliases — closes #1166 for
-                    # the area+query branch alongside the non-area path.
+                    # Inject `_aliases` so the fuzzy haystack includes
+                    # per-entity aliases.
                     entities_for_search = [
                         {
                             "entity_id": entity.get("entity_id", ""),
@@ -280,7 +322,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 "friendly_name": entity.get("friendly_name", "")
                             },
                             "state": entity.get("state", "unknown"),
-                            "_aliases": entity.get("_aliases", []),
+                            "_aliases": aliases_map.get(
+                                entity.get("entity_id", ""), []
+                            ),
                         }
                         for entity in all_area_entities
                     ]
@@ -389,11 +433,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ),
                             "results": paginated,
                             "search_type": "area_only",
-                            # Public-API change: `area_names` is now a list
-                            # so callers can see when their filter matched
-                            # multiple areas (#1170 finding 7). The legacy
-                            # `area_name` is preserved as the first match
-                            # for one minor version to ease migration.
+                            # `area_names` lists every matched area;
+                            # `area_name` (singular) is kept for backward
+                            # compatibility with existing callers — new
+                            # callers should read `area_names` (#1170).
                             "area_names": area_names_matched,
                             "area_name": (
                                 area_names_matched[0]
@@ -414,12 +457,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             area_search_data["by_domain"] = paginated_by_domain
                         return await add_timezone_metadata(client, area_search_data)
                     else:
+                        # Empty match: still emit `area_names: []` so callers
+                        # don't KeyError when they read the field on a
+                        # zero-match response. Symmetry with the populated
+                        # branch (#1170 finding 7).
                         empty_area_data: dict[str, Any] = {
                             "success": True,
                             "area_filter": area_filter,
                             **_build_pagination_metadata(0, offset, limit, []),
                             "results": [],
                             "search_type": "area_only",
+                            "area_names": [],
                             "message": f"No entities found in area: {area_filter}",
                         }
                         if domain_filter:
@@ -431,9 +479,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
             if domain_filter and (not query or not query.strip()):
-                # Fetch states + registry list in parallel so we can drop
-                # hidden entities (#1170 finding 9). Registry failure is
-                # tolerated: we just lose the hidden filter.
+                # Fetch states + registry list in parallel. Registry-list
+                # failure is tolerated (we just lose the hidden filter);
+                # states-fetch failure is fatal — auth/connection errors
+                # must propagate so the agent sees the real cause instead
+                # of silently ranked-zero results (#1170).
                 states_task = client.get_states()
                 registry_task = client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
@@ -443,11 +493,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
                 states_result: Any = gather_results[0]
                 registry_result: Any = gather_results[1]
-                all_entities = (
-                    states_result
-                    if not isinstance(states_result, Exception)
-                    else []
-                )
+                if isinstance(states_result, BaseException):
+                    raise states_result
+                all_entities = states_result
                 hidden_ids: set[str] = set()
                 if (
                     not include_hidden_bool

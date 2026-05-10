@@ -145,10 +145,15 @@ class SmartSearchTools:
             results = await asyncio.gather(
                 entities_task, entity_registry_task, return_exceptions=True
             )
-            entities = results[0] if not isinstance(results[0], Exception) else []
+            # States-fetch failure is fatal — auth/connection errors must
+            # propagate so the caller sees the real cause instead of a
+            # bogus "zero matches" with success=True (#1170).
+            if isinstance(results[0], BaseException):
+                raise results[0]
+            entities = results[0]
 
-            # Build entity_id -> slim registry entry map. We tolerate
-            # registry fetch failure: the search continues without alias /
+            # Build entity_id -> slim registry entry map. Registry-list
+            # failure is tolerated: search continues without alias /
             # hidden awareness rather than failing the whole call.
             registry_slim: dict[str, dict[str, Any]] = {}
             if isinstance(results[1], dict) and results[1].get("success"):
@@ -193,10 +198,10 @@ class SmartSearchTools:
                         ).items():
                             if isinstance(entry, dict):
                                 aliases_map[eid] = entry.get("aliases", []) or []
-                except Exception as alias_err:
+                except (KeyError, TypeError, AttributeError) as alias_err:
                     logger.warning(
-                        "config/entity_registry/get_entries failed; "
-                        "aliases will not be searchable: %s",
+                        "config/entity_registry/get_entries returned "
+                        "malformed payload; aliases unavailable: %s",
                         alias_err,
                     )
 
@@ -445,42 +450,12 @@ class SmartSearchTools:
                 if eid:
                     state_map[eid] = entity
 
-            # Batch-fetch aliases for entities in matched areas. The slim
-            # entity_registry/list above does not return aliases; the
-            # get_entries endpoint does. Surface them as `_aliases` so the
-            # caller (tools_search.area_filtered_query branch) can fold
-            # them into its fuzzy haystack — closes #1166 for the
-            # area+query path. Fetch failure leaves _aliases empty.
-            area_entity_ids = sorted(
-                eid
-                for eid, resolved_area in entity_area_resolved.items()
-                if resolved_area in matched_area_ids
-            )
-            aliases_map: dict[str, list[str]] = {}
-            if area_entity_ids:
-                try:
-                    entries_resp = await self.client.send_websocket_message({
-                        "type": "config/entity_registry/get_entries",
-                        "entity_ids": area_entity_ids,
-                    })
-                    if (
-                        isinstance(entries_resp, dict)
-                        and entries_resp.get("success")
-                    ):
-                        for eid, entry in (
-                            entries_resp.get("result", {}) or {}
-                        ).items():
-                            if isinstance(entry, dict):
-                                aliases_map[eid] = entry.get("aliases", []) or []
-                except Exception as alias_err:
-                    logger.warning(
-                        "config/entity_registry/get_entries failed in area "
-                        "search; aliases will not be searchable for this "
-                        "result set: %s",
-                        alias_err,
-                    )
-
-            # Collect entities belonging to matched areas
+            # Collect entities belonging to matched areas. Alias data is
+            # NOT enriched here — exposing private `_aliases` on a public
+            # method would leak through any caller that round-trips this
+            # response (e.g. server.py:get_entities_by_area). The
+            # area+query consumer in tools_search.py fetches aliases on
+            # its own when needed.
             formatted_areas: dict[str, dict[str, Any]] = {}
             total_entities = 0
 
@@ -516,7 +491,6 @@ class SmartSearchTools:
                                     "friendly_name", entity_id
                                 ),
                                 "state": state_info.get("state", "unknown"),
-                                "_aliases": aliases_map.get(entity_id, []),
                             }
                         )
                     area_data["entities"] = domains
@@ -531,7 +505,6 @@ class SmartSearchTools:
                             .get("friendly_name", entity_id),
                             "domain": entity_id.split(".")[0],
                             "state": state_info.get("state", "unknown"),
-                            "_aliases": aliases_map.get(entity_id, []),
                         }
                         for entity_id in area_entities
                     ]

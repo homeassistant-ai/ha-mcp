@@ -1357,6 +1357,142 @@ async def test_search_include_hidden_opt_in_issue_1170(mcp_client, hidden_helper
     )
 
 
+@pytest.mark.asyncio
+async def test_search_fuzzy_mode_excludes_hidden_issue_1170(
+    mcp_client, hidden_helper
+):
+    """Fuzzy mode (``exact_match=False``) also honors the hidden filter.
+
+    Default-True ``exact_match`` and the fuzzy path are SEPARATE code
+    paths in tools_search.py — substring matching vs ``smart_entity_search``
+    (BM25). Both must filter hidden entities or one path silently
+    regresses while the other test passes.
+    """
+    fixture = hidden_helper
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "query": fixture["distinctive"],
+            "exact_match": False,
+            "limit": 5,
+        },
+    )
+    data = assert_mcp_success(res, "fuzzy mode hidden filter").get("data", {})
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["entity_id"] not in entity_ids, (
+        f"fuzzy mode leaked hidden entity: {data}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_area_only_excludes_hidden_issue_1170(mcp_client):
+    """Area branch (``area_filter`` only, no query) honors the hidden
+    filter. The area resolver uses the entity registry's ``area_id``;
+    we must skip ``hidden_by`` entries before composing the per-area
+    list. Otherwise a UI-hidden entity assigned to an area still
+    surfaces under ``area_filter=<that-area>``."""
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"e2e_1170_areahidden_{suffix}"
+
+    # Create area + a helper assigned to it; then hide the helper.
+    area_res = await mcp_client.call_tool(
+        "ha_set_area_or_floor", {"kind": "area", "name": area_name}
+    )
+    area_data = assert_mcp_success(area_res, "Create area")
+    area_id = area_data["area_id"]
+
+    h_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": f"e2e 1170 areahidden {suffix}",
+            "area_id": area_id,
+        },
+    )
+    h_data = assert_mcp_success(h_res, "Create helper")
+    eid = h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+
+    try:
+        # Wait for helper to be visible in the area before hiding it.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search_entities",
+            arguments={"area_filter": area_id, "limit": 10},
+            predicate=lambda d: any(
+                r.get("entity_id") == eid
+                for r in d.get("data", d).get("results", [])
+            ),
+            description="area entity visible before hide",
+        )
+        await mcp_client.call_tool(
+            "ha_set_entity", {"entity_id": eid, "hidden": True}
+        )
+
+        # Default include_hidden=False
+        res = await mcp_client.call_tool(
+            "ha_search_entities", {"area_filter": area_id, "limit": 10}
+        )
+        data = assert_mcp_success(res, "area_only default hidden").get("data", {})
+        entity_ids = [r["entity_id"] for r in data["results"]]
+        assert eid not in entity_ids, (
+            f"area_only branch leaked hidden entity: {data}"
+        )
+
+        # include_hidden=True surfaces it again
+        res2 = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"area_filter": area_id, "include_hidden": True, "limit": 10},
+        )
+        data2 = assert_mcp_success(res2, "area_only include_hidden").get(
+            "data", {}
+        )
+        entity_ids2 = [r["entity_id"] for r in data2["results"]]
+        assert eid in entity_ids2, (
+            f"include_hidden=True did not surface hidden entity in area: {data2}"
+        )
+    finally:
+        # Cleanup
+        try:
+            await mcp_client.call_tool(
+                "ha_delete_helpers_integrations",
+                {"target": eid, "helper_type": "input_boolean", "confirm": True},
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of {eid} failed: {exc}")
+        try:
+            await mcp_client.call_tool(
+                "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of area {area_id} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_area_only_total_matches_aggregates_issue_1170(
+    mcp_client, two_areas_with_shared_prefix
+):
+    """``total_matches`` in the area_only branch reflects the FULL
+    multi-area aggregate, not a single area's count. Locks down the
+    finding-7 fix at the pagination metadata layer — a future change
+    that paginated per-area instead of the flattened all_results would
+    silently drop the cross-area count."""
+    fixture = two_areas_with_shared_prefix
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
+    )
+    data = assert_mcp_success(res, "multi-area total").get("data", {})
+    # Each fixture area has exactly 1 helper; total_matches must be
+    # at least 2 (could be more if the seed Bedroom area also matched
+    # the prefix and has assigned entities, but never less).
+    assert data["total_matches"] >= 2, (
+        f"total_matches did not aggregate across matched areas: {data}"
+    )
+    assert data["count"] == data["total_matches"] or data["has_more"], (
+        f"count/has_more inconsistent with total_matches: {data}"
+    )
+
+
 # ============================================================================
 # Issue #1170 finding 10: e2e coverage at realistic seeded-area populations
 # ============================================================================
