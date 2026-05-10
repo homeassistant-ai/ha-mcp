@@ -243,11 +243,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parameter="query",
                 )
             )
-        # HA domains are canonically lowercase; agents that capitalize from a
-        # user phrase ("turn on the Lights") would otherwise hit a silent
-        # zero-result.
+        # HA domains are canonically lowercase, no whitespace; agents that
+        # capitalize ("Lights") or pad ("  light  ") would otherwise hit a
+        # silent zero-result against the prefix match downstream. Strip
+        # before lowercasing so the canonical value flows through the
+        # response echo and the operator-facing note message.
         if domain_filter:
-            domain_filter = domain_filter.lower()
+            domain_filter = domain_filter.strip().lower()
 
         try:
             # Param coercion stays inside try/except so a malformed

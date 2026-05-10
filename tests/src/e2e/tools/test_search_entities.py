@@ -1643,8 +1643,14 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
     )
     area_id = assert_mcp_success(area_res, "Create area")["area_id"]
 
-    visible_name = f"e2e1170afqvis{suffix}"
-    hidden_name = f"e2e1170afqhid{suffix}"
+    # Distinctive token that BM25 will hit directly. Using spaces in
+    # the name ensures HA tokenizes the helper name into separate
+    # tokens (entity_id is slugified to contain ``afqtoken<suffix>``
+    # as its own token), so a single-token fuzzy query lands on it
+    # at score 100.
+    distinctive = f"afqtoken{suffix}"
+    visible_name = f"{distinctive} visible"
+    hidden_name = f"{distinctive} hidden"
     v_res = await mcp_client.call_tool(
         "ha_config_set_helper",
         {
@@ -1653,7 +1659,11 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
             "area_id": area_id,
         },
     )
-    v_eid = assert_mcp_success(v_res, "create visible").get("entity_id")
+    v_data = assert_mcp_success(v_res, "create visible")
+    v_eid = (
+        v_data.get("entity_id")
+        or f"input_boolean.{v_data['helper_data']['id']}"
+    )
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
         {
@@ -1662,21 +1672,25 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
             "area_id": area_id,
         },
     )
-    h_eid = assert_mcp_success(h_res, "create hidden-target").get("entity_id")
+    h_data = assert_mcp_success(h_res, "create hidden-target")
+    h_eid = (
+        h_data.get("entity_id")
+        or f"input_boolean.{h_data['helper_data']['id']}"
+    )
 
     try:
         # Hide the second helper.
         await mcp_client.call_tool(
             "ha_set_entity", {"entity_id": h_eid, "hidden": True}
         )
-        # Both helpers share the prefix "e2e1170afq" — query on that
-        # prefix matches both within the same area.
+        # Both helpers share the distinctive token — query on it
+        # matches both within the same area.
         await wait_for_tool_result(
             mcp_client,
             tool_name="ha_search_entities",
             arguments={
                 "area_filter": area_id,
-                "query": "e2e1170afq",
+                "query": distinctive,
                 "exact_match": False,
                 "limit": 20,
             },
@@ -1690,7 +1704,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
             "ha_search_entities",
             {
                 "area_filter": area_id,
-                "query": "e2e1170afq",
+                "query": distinctive,
                 "exact_match": False,
                 "limit": 20,
             },
@@ -1748,12 +1762,20 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
         "ha_config_set_helper",
         {"helper_type": "input_boolean", "name": visible_name},
     )
-    v_eid = assert_mcp_success(v_res, "create visible dl").get("entity_id")
+    v_data = assert_mcp_success(v_res, "create visible dl")
+    v_eid = (
+        v_data.get("entity_id")
+        or f"input_boolean.{v_data['helper_data']['id']}"
+    )
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
         {"helper_type": "input_boolean", "name": hidden_name},
     )
-    h_eid = assert_mcp_success(h_res, "create hidden dl").get("entity_id")
+    h_data = assert_mcp_success(h_res, "create hidden dl")
+    h_eid = (
+        h_data.get("entity_id")
+        or f"input_boolean.{h_data['helper_data']['id']}"
+    )
 
     try:
         await mcp_client.call_tool(

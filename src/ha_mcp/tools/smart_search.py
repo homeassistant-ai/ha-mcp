@@ -133,11 +133,12 @@ class SmartSearchTools:
             Dictionary with search results and metadata
         """
         try:
-            # HA domains are canonically lowercase; defend the service
-            # layer so internal callers get the same normalization the
-            # tool layer applies.
+            # HA domains are canonically lowercase and unpadded; defend
+            # the service layer so internal callers get the same
+            # normalization the tool layer applies (strip + lowercase
+            # before the prefix match downstream).
             if domain_filter:
-                domain_filter = domain_filter.lower()
+                domain_filter = domain_filter.strip().lower()
             # Fetch states + entity registry list in parallel. The slim
             # ``list`` view gives us ``hidden_by`` (used to filter
             # UI-hidden entities by default) and the entity_ids we need
