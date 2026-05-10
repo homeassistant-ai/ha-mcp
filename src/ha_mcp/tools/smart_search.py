@@ -264,19 +264,12 @@ class SmartSearchTools:
 
                 if include_attributes:
                     result["attributes"] = match["attributes"]
-                else:
-                    # Include only essential attributes
-                    attrs = match["attributes"]
-                    essential_attrs = {}
-                    for key in [
-                        "unit_of_measurement",
-                        "device_class",
-                        "icon",
-                        "area_id",
-                    ]:
-                        if key in attrs:
-                            essential_attrs[key] = attrs[key]
-                    result["essential_attributes"] = essential_attrs
+                # No ``essential_attributes`` fallback — the other four
+                # search-type branches (exact_match, area_only,
+                # area_filtered_query, domain_listing) never emit it, so
+                # surfacing it only from fuzzy_search was a shape
+                # asymmetry. Callers needing full state should follow
+                # up with ``ha_get_state``.
 
                 results.append(result)
 
@@ -392,12 +385,18 @@ class SmartSearchTools:
                     if device_id:
                         device_area_map[device_id] = device.get("area_id")
 
-            # Fuzzy match area_query against known area names, IDs, and aliases.
-            # Aliases (set per-area in the area registry, used by HA voice
-            # config) are searched alongside name+id, mirroring the
-            # entity-side alias enrichment in smart_entity_search.
+            # Two-pass area resolution. Pass 1 collects exact id / name /
+            # alias matches; if any are found, fuzzy aggregation is
+            # skipped entirely. This makes ``area_filter`` honor a
+            # literal area_id from ``ha_config_list_areas`` — pre-fix a
+            # query like ``"bedroom_kids"`` would also fuzzy-match its
+            # parent ``"bedroom"`` (partial_ratio=100) and aggregate
+            # sibling areas' entities. Aliases (per-area registry, used
+            # by HA voice config) mirror the entity-side enrichment in
+            # smart_entity_search.
             area_query_lower = area_query.lower().strip()
-            matched_area_ids: set[str] = set()
+            exact_area_ids: set[str] = set()
+            fuzzy_area_ids: set[str] = set()
 
             for area_id, area_info in area_registry.items():
                 area_name = area_info.get("name", "")
@@ -412,7 +411,7 @@ class SmartSearchTools:
                         if isinstance(a, str)
                     )
                 ):
-                    matched_area_ids.add(area_id)
+                    exact_area_ids.add(area_id)
                     continue
                 # Fuzzy match on area name, id, or any alias
                 name_score = calculate_partial_ratio(
@@ -429,7 +428,11 @@ class SmartSearchTools:
                 )
                 best_score = max(name_score, id_score, alias_score)
                 if best_score >= 80:
-                    matched_area_ids.add(area_id)
+                    fuzzy_area_ids.add(area_id)
+
+            # Exact matches win — fuzzy aggregation only runs when no
+            # area_query_lower is itself an area_id / name / alias.
+            matched_area_ids = exact_area_ids or fuzzy_area_ids
 
             if not matched_area_ids:
                 return {

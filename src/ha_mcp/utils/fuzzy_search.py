@@ -342,6 +342,16 @@ class FuzzyEntitySearcher:
         results: list[dict[str, Any]] = []
         distinct_query_tokens = list(dict.fromkeys(query_tokens))
         n_distinct = len(distinct_query_tokens)
+        # Single-token min-length gate: short queries like ``lit`` (3
+        # chars) match too generously via partial overlap (every
+        # ``*_lite*`` entity surfaces at score 85). The multi-token
+        # coverage gate above doesn't help here (n_distinct == 1).
+        # Suppress the fallback entirely for short single-token
+        # queries — they almost never represent a typo, and the BM25
+        # path above already serves substring intent at a higher
+        # score floor.
+        if n_distinct == 1 and len(query_tokens[0]) < 4:
+            return results
         for i, doc_tokens in enumerate(docs):
             best_token_score = 0
             for qt in query_tokens:

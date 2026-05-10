@@ -504,6 +504,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
+                        # Mirror the empty-area branch's message when
+                        # the area resolved but a domain_filter wiped
+                        # out every entity in it — otherwise the caller
+                        # sees total_matches=0 with no hint as to which
+                        # filter caused it.
+                        if not all_results and domain_filter:
+                            area_search_data["message"] = (
+                                f"No {domain_filter} entities found in area: "
+                                f"{area_filter}"
+                            )
                         if group_by_domain_bool:
                             # Group the paginated slice (not all_results) so
                             # by_domain and results stay in sync.
@@ -731,6 +741,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
+        except ValueError as e:
+            # coerce_bool_param / coerce_int_param raise ValueError on
+            # bad input. These are param-validation failures, not
+            # operational ones — surface them as VALIDATION_FAILED with
+            # the helper's own message and NO generic operational
+            # suggestions (those would just be misleading boilerplate
+            # next to an unrelated message like "limit must be at least
+            # 1, got 0").
+            raise_tool_error(
+                create_validation_error(
+                    str(e),
+                    context={
+                        "query": query,
+                        "domain_filter": domain_filter,
+                        "area_filter": area_filter,
+                    },
+                )
+            )
         except Exception as e:
             exception_to_structured_error(
                 e,

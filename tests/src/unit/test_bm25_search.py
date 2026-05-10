@@ -392,6 +392,54 @@ class TestFuzzySearcherIssue1170:
             f"{[r['entity_id'] for r in results]}"
         )
 
+    def test_typo_fallback_short_single_token_returns_empty(self):
+        """Locks down the single-token min-length gate. A 3-char single
+        token (``lit``) used to surface unrelated entities like
+        ``u7_lite_*`` and ``shopping_list`` via partial overlap at score
+        85. The coverage gate from finding 5 only handles multi-token
+        garbage — short single-token queries needed their own gate."""
+        entities = [
+            {
+                "entity_id": "button.u7_lite_restart",
+                "attributes": {"friendly_name": "U7 Lite Restart"},
+                "state": "off",
+            },
+            {
+                "entity_id": "light.u7_lite_led",
+                "attributes": {"friendly_name": "U7 Lite LED"},
+                "state": "on",
+            },
+            {
+                "entity_id": "todo.shopping_list",
+                "attributes": {"friendly_name": "Shopping List"},
+                "state": "1",
+            },
+        ]
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(entities, "lit", limit=10)
+        assert total == 0, (
+            f"short single-token typo query should not surface sub-word "
+            f"noise: {results}"
+        )
+
+    def test_typo_fallback_four_char_single_token_still_fires(self):
+        """Boundary: 4-char single token still triggers typo_fallback so
+        common typos like ``ligth``→``light`` survive the new gate."""
+        entities = [
+            {
+                "entity_id": "light.kitchen",
+                "attributes": {"friendly_name": "Kitchen"},
+                "state": "on",
+            },
+        ]
+        searcher = FuzzyEntitySearcher()
+        # 5-char typo of "light" — the 4-char gate should not block this.
+        results, total = searcher.search_entities(entities, "ligth", limit=10)
+        assert total >= 1, (
+            f"4+ char single-token typo should still fire typo_fallback: "
+            f"{results}"
+        )
+
     def test_finding_8_alias_search_with_match_type_label(self, lights_corpus):
         """Aliases are searchable when the caller supplies them on the
         entity dict via ``_aliases``. Matches surface as

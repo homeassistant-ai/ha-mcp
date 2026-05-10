@@ -1208,6 +1208,97 @@ async def test_fuzzy_rejects_low_coverage_garbage_issue_1170(mcp_client):
     )
 
 
+@pytest.mark.asyncio
+async def test_result_shape_consistent_across_branches(mcp_client):
+    """Every result dict, regardless of search_type, carries the same
+    base keys and NO ``essential_attributes`` field. Pre-fix
+    ``fuzzy_search`` alone surfaced ``essential_attributes`` while the
+    other four branches omitted it — a shape asymmetry that complicates
+    caller code."""
+    base_keys = {"entity_id", "friendly_name", "domain", "state", "score", "match_type"}
+    forbidden = {"essential_attributes"}
+    calls = [
+        ({"domain_filter": "light", "limit": 1}, "domain_listing"),
+        ({"query": "light", "exact_match": True, "limit": 1}, "exact_match"),
+        ({"query": "light", "exact_match": False, "limit": 1}, "fuzzy_search"),
+        ({"area_filter": "kitchen", "limit": 1}, "area_only"),
+        (
+            {"area_filter": "kitchen", "query": "light", "exact_match": False, "limit": 1},
+            "area_filtered_query",
+        ),
+    ]
+    for params, expected_type in calls:
+        res = await mcp_client.call_tool("ha_search_entities", params)
+        data = assert_mcp_success(res, f"shape check {expected_type}").get(
+            "data", {}
+        )
+        assert data["search_type"] == expected_type, (
+            f"unexpected search_type for {params}: {data}"
+        )
+        if not data["results"]:
+            continue
+        result_keys = set(data["results"][0].keys())
+        assert base_keys.issubset(result_keys), (
+            f"{expected_type} missing base keys: "
+            f"{base_keys - result_keys} (have {result_keys})"
+        )
+        assert not (forbidden & result_keys), (
+            f"{expected_type} surfaced forbidden keys: "
+            f"{forbidden & result_keys}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_validation_error_carries_no_generic_suggestions(mcp_client):
+    """``VALIDATION_FAILED`` from parameter coercion (e.g. limit=0)
+    must NOT carry generic operational suggestions like ``Check Home
+    Assistant connection`` — those are misleading boilerplate next to a
+    message like ``limit must be at least 1, got 0``."""
+    data = await safe_call_tool(
+        mcp_client, "ha_search_entities", {"query": "light", "limit": 0}
+    )
+    inner = data.get("data", data)
+    assert inner.get("success") is False, f"expected failure: {inner}"
+    error = inner.get("error", {})
+    assert error.get("code") == "VALIDATION_FAILED", f"expected VALIDATION_FAILED: {inner}"
+    # No misleading "Check Home Assistant connection" boilerplate.
+    suggestions = error.get("suggestions") or []
+    if isinstance(error.get("suggestion"), str):
+        suggestions = list(suggestions) + [error["suggestion"]]
+    leakers = {"Check Home Assistant connection", "Try simpler search terms"}
+    assert not (set(suggestions) & leakers), (
+        f"validation error leaked generic operational suggestions: {error}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_with_domain_filter_zero_overlap_has_message(
+    mcp_client,
+):
+    """When ``area_filter`` resolves to areas with entities but
+    ``domain_filter`` filters them all out, the response carries an
+    explanatory ``message`` field. Pre-fix the empty-area branch had
+    one but this populated-but-domain-filtered-empty branch was silent
+    — leaving the caller to guess which filter wiped out the result."""
+    # Find an area that exists and a domain that doesn't intersect with it
+    # — use a real area name (kitchen) with a domain that's unlikely to
+    # be assigned to it (zone is global, never per-area).
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": "kitchen", "domain_filter": "zone", "limit": 5},
+    )
+    data = assert_mcp_success(res, "area+domain zero-overlap").get("data", {})
+    assert data["total_matches"] == 0, (
+        f"setup: area+domain combination should be empty: {data}"
+    )
+    assert "message" in data, (
+        f"empty populated+domain-filtered branch missing message: {data}"
+    )
+    assert data["message"].startswith("No zone entities found in area:"), (
+        f"message should call out the domain_filter: {data['message']}"
+    )
+
+
 @pytest.fixture
 async def two_areas_with_shared_prefix(mcp_client):
     """Create two areas sharing a prefix (``bedroom_X_*``, ``bedroom_Y_*``)
@@ -1261,6 +1352,37 @@ async def two_areas_with_shared_prefix(mcp_client):
             )
         except Exception as exc:  # pragma: no cover
             logger.warning(f"Cleanup of area {area} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_exact_area_id_short_circuits_fuzzy_aggregation(
+    mcp_client, two_areas_with_shared_prefix
+):
+    """When ``area_filter`` is a literal area_id from
+    ``ha_config_list_areas``, exact match wins — fuzzy aggregation of
+    sibling areas is suppressed. Pre-fix a query like
+    ``bedroom_y_<suffix>`` would also partial_ratio-match its sibling
+    ``bedroom_x_<suffix>`` (and the seeded ``bedroom`` area), surfacing
+    every sibling area's entities under the supposedly-specific id."""
+    fixture = two_areas_with_shared_prefix
+    target_area_id = fixture["areas"][0]
+    target_helper = fixture["helpers"][0]
+    sibling_helper = fixture["helpers"][1]
+    res = await mcp_client.call_tool(
+        "ha_search_entities", {"area_filter": target_area_id, "limit": 50}
+    )
+    data = assert_mcp_success(res, "exact area_id resolution").get("data", {})
+    entity_ids = {r["entity_id"] for r in data["results"]}
+    assert target_helper in entity_ids, (
+        f"target area's helper missing: {data}"
+    )
+    assert sibling_helper not in entity_ids, (
+        f"sibling area's helper leaked into exact-id resolution: {data}"
+    )
+    assert len(data["area_names"]) == 1, (
+        f"exact area_id should resolve to exactly one area, got "
+        f"{data['area_names']}"
+    )
 
 
 @pytest.mark.asyncio
