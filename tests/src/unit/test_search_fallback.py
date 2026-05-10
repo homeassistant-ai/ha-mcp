@@ -220,3 +220,25 @@ class TestSearchFallbackResponse:
         assert "success" in result
         assert "results" in result
         assert result["success"] is True
+
+
+class TestExactMatchSearchCancelledPropagation:
+    """Lock down the CancelledError re-raise added to _exact_match_search
+    after asyncio.gather(return_exceptions=True). Pre-fix the captured
+    cancellation hit the `hidden_filter_unavailable:` log path and the
+    function continued — the canceller waited forever.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancelled_on_registry_task_propagates(self):
+        import asyncio
+
+        class CancellingClient:
+            async def get_states(self):
+                return []
+
+            async def send_websocket_message(self, payload):
+                raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await _exact_match_search(CancellingClient(), "x", None, 10)

@@ -656,3 +656,59 @@ class TestHiddenScorePenalty:
             f"penalty must still apply (100→80) to the surfaced hit: "
             f"{results[0]}"
         )
+
+    def test_score_ties_break_on_entity_id_ascending(self):
+        """Locks down the tie-breaker on the BM25 search-result sort.
+        When two entities share a score (very common — visible@100,
+        hidden@80, BM25's coarse buckets), the paginated order must be
+        stable across calls. A regression that drops the secondary key
+        flips this assertion."""
+        # Three entities that all match a single-token query at the
+        # same raw BM25 score. With score-only sort their relative
+        # order would depend on dict iteration; with the (-score,
+        # entity_id) tie-breaker they sort ascending by entity_id.
+        entities = [
+            {
+                "entity_id": "light.tie_b",
+                "attributes": {"friendly_name": "match"},
+                "state": "on",
+            },
+            {
+                "entity_id": "light.tie_a",
+                "attributes": {"friendly_name": "match"},
+                "state": "on",
+            },
+            {
+                "entity_id": "light.tie_c",
+                "attributes": {"friendly_name": "match"},
+                "state": "on",
+            },
+        ]
+        searcher = FuzzyEntitySearcher()
+        results, _ = searcher.search_entities(entities, "match", limit=10)
+        ids = [r["entity_id"] for r in results if r["score"] == results[0]["score"]]
+        assert ids == sorted(ids), (
+            f"tied-score results should sort by entity_id ascending: {ids}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_propagates_from_registry_gather(self):
+        """Pre-fix `asyncio.gather(return_exceptions=True)` captured
+        CancelledError on the registry task and the search continued
+        with `hidden_filter_unavailable:` logged. After the fix the
+        cancellation must propagate — otherwise the caller waits
+        forever for a task that was already cancelled."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from ha_mcp.tools.smart_search import SmartSearchTools
+
+        mock_client = AsyncMock()
+        mock_client.get_states = AsyncMock(return_value=[])
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=asyncio.CancelledError()
+        )
+        smart_tools = SmartSearchTools(client=mock_client, fuzzy_threshold=60)
+
+        with pytest.raises(asyncio.CancelledError):
+            await smart_tools.smart_entity_search("anything", limit=5)
