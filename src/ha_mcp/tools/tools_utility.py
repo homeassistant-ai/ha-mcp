@@ -12,7 +12,11 @@ from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
@@ -755,6 +759,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
+        except HomeAssistantAuthError as e:
+            # Listed before HomeAssistantAPIError because AuthError is a sibling,
+            # not a subclass — without this explicit clause the 401 from
+            # _supervisor_logs_get propagates raw to FastMCP and surfaces
+            # without a structured `code` field.
+            exception_to_structured_error(
+                e,
+                context={"source": "supervisor", "slug": slug},
+                suggestions=[
+                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
+                    "Reinstall the add-on if the token may have rotated",
+                ],
+            )
         except HomeAssistantAPIError as e:
             status = getattr(e, "status_code", None)
             if status == 400:
@@ -857,6 +874,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         except ToolError:
             raise
+        except HomeAssistantAuthError as e:
+            # Listed before HomeAssistantAPIError because AuthError is a sibling,
+            # not a subclass — without this explicit clause the 401 from
+            # _supervisor_logs_get propagates raw to FastMCP and surfaces
+            # without a structured `code` field.
+            exception_to_structured_error(
+                e,
+                context={"source": "system_service", "slug": service},
+                suggestions=[
+                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
+                    "Reinstall the add-on if the token may have rotated",
+                ],
+            )
         except HomeAssistantAPIError as e:
             status = getattr(e, "status_code", None)
             if status == 403:

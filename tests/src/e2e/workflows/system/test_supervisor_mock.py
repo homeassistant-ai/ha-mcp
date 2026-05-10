@@ -3,8 +3,8 @@
 Closes the coverage gap from issue #1129: prior to this, the three call sites
 that hit ``http://supervisor`` directly (logs via rest_client, bug-report addon
 log fetch, settings_ui addon self-restart) had only mock-based unit tests. Now
-they exercise the real socket path against an aiohttp sidecar via the
-``supervisor_mock`` fixture (see ``tests/src/e2e/utilities/supervisor_mock.py``).
+they exercise the real socket path against a stdlib ``http.server`` sidecar
+served from ``tests/src/e2e/utilities/supervisor_mock.py``.
 
 Out of scope (intentional): the WS-proxy ``supervisor/api`` path used by
 ``tools_addons.py``. See #1129 for why that's deferred.
@@ -214,13 +214,15 @@ class TestMockResilience:
     async def test_unauthorized_supervisor_call_surfaces_as_tool_error(
         self, mcp_client, supervisor_mock, monkeypatch
     ):
-        """Wrong token → 401 from mock → tool surfaces a meaningful failure.
+        """Wrong token → 401 → AUTH_INVALID_TOKEN with SUPERVISOR_TOKEN hint.
 
         Exercises the auth-failure path through the full ha_get_logs →
-        _supervisor_logs_get → mock chain. Asserts the underlying
-        "Invalid Supervisor token" message AND the failing endpoint path
-        reach the caller — locks in that the path identifier survives the
-        wrap, not just any auth failure.
+        _supervisor_logs_get → mock chain. The explicit
+        ``except HomeAssistantAuthError`` clause in
+        ``_get_system_service_log`` (added alongside this PR) routes the
+        401 through ``exception_to_structured_error`` so callers get a
+        structured ``code`` + remediation suggestions instead of the raw
+        FastMCP wrap they used to get.
         """
         monkeypatch.setenv("SUPERVISOR_TOKEN", "wrong-token-on-purpose")
         result = await safe_call_tool(
@@ -229,13 +231,15 @@ class TestMockResilience:
             {"source": "system_service", "slug": "core"},
         )
         assert result.get("success") is False
-        message = result.get("error", {}).get("message", "")
-        assert "Invalid Supervisor token" in message, (
-            f"Expected 401 to surface in tool error message, got: {message!r}"
+        error = result.get("error", {})
+        assert error.get("code") == "AUTH_INVALID_TOKEN", (
+            f"Expected AUTH_INVALID_TOKEN, got code={error.get('code')!r}, "
+            f"full error={error!r}"
         )
-        # Locks in that the failing endpoint identifier survives the wrap.
-        assert "/core/logs" in message, (
-            f"Expected failing path '/core/logs' in error message, got: {message!r}"
+        suggestions = error.get("suggestions", [])
+        assert any("SUPERVISOR_TOKEN" in s for s in suggestions), (
+            f"Expected SUPERVISOR_TOKEN remediation suggestion, "
+            f"got suggestions={suggestions!r}"
         )
 
     async def test_insufficient_role_supervisor_call_surfaces_403(
@@ -243,18 +247,19 @@ class TestMockResilience:
     ):
         """Valid token but addon hassio_role too low → 403 → structured tool error.
 
-        Covers the role-mismatch branch in rest_client.py added alongside
-        the #1116 fix (the addon's hassio_role bump from 'default' →
-        'manager' was the matching production change). Without this E2E
-        the 403-handling path has no real-socket coverage.
+        Covers the role-mismatch branch in ``_get_system_service_log`` added
+        alongside the #1116 fix (the addon's ``hassio_role`` bump from
+        ``default`` → ``manager`` was the matching production change). Without
+        this E2E the 403-handling path has no real-socket coverage.
 
         Asserts both:
           - the error code is AUTH_INVALID_TOKEN (today _classify_api_status
-            maps both 401 and 403 to this — see #1129 follow-up notes), and
-          - the role-specific suggestion ("hassio_role must be 'manager'")
-            from the _get_system_service_log 403 branch reaches the caller.
+            maps both 401 and 403 to this — distinguishing them would need a
+            new ErrorCode), and
+          - the role-specific suggestion (``hassio_role must be 'manager'``)
+            from the 403 branch reaches the caller.
         The second assertion is what proves the 403 branch fired specifically,
-        not the generic 401 path.
+        not the 401 branch (which has a different suggestion set).
         """
         monkeypatch.setenv("SUPERVISOR_TOKEN", MOCK_INSUFFICIENT_ROLE_TOKEN)
         result = await safe_call_tool(
