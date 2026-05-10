@@ -251,15 +251,20 @@ class TestGetAddonLogsViaSupervisor:
         assert "addon log line 1" in result
         inner_client.get.assert_awaited_once()
         args, kwargs = inner_client.get.call_args
-        assert args[0] == "http://supervisor/addons/81f33d0f_ha_mcp/logs"
-        assert kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
+        # After the supervisor_client refactor (#1130), absolute-URL +
+        # per-call Authorization split into base_url + Bearer header on the
+        # constructor; only Accept stays per-call.
+        assert args[0] == "/addons/81f33d0f_ha_mcp/logs"
         assert kwargs["headers"]["Accept"] == "text/plain"
-        # Constructor kwargs (verify_ssl + timeout) propagated from the client
-        # instance — guards against a regression that hard-codes either
-        # (#1126 review item 13).
+        assert "Authorization" not in kwargs.get("headers", {})
+        # Constructor kwargs propagated — guards against a regression that
+        # hard-codes verify, timeout, base_url, or the Bearer token (#1126
+        # review item 13, #1130 helper extraction).
         ctor_kwargs = client_class.call_args.kwargs
         assert ctor_kwargs["verify"] is True  # mirrors mock_client.verify_ssl
         assert isinstance(ctor_kwargs["timeout"], httpx.Timeout)
+        assert ctor_kwargs["base_url"] == "http://supervisor"
+        assert ctor_kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
         # The HA-Core-proxy path must NOT have been touched.
         mock_client.httpx_client.request.assert_not_called()
 
@@ -571,12 +576,16 @@ class TestGetSystemServiceLogs:
 
         assert "supervisor service log line" in result
         args, kwargs = inner_client.get.call_args
-        assert args[0] == "http://supervisor/supervisor/logs"
-        assert kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
+        # After the supervisor_client refactor (#1130): relative path on the
+        # call, base_url + Authorization on the constructor.
+        assert args[0] == "/supervisor/logs"
+        assert "Authorization" not in kwargs.get("headers", {})
         # Constructor kwargs propagated (parity with addon-logs branch).
         ctor_kwargs = client_class.call_args.kwargs
         assert ctor_kwargs["verify"] is True
         assert isinstance(ctor_kwargs["timeout"], httpx.Timeout)
+        assert ctor_kwargs["base_url"] == "http://supervisor"
+        assert ctor_kwargs["headers"]["Authorization"] == "Bearer supervisor-token-test"
 
     @pytest.mark.asyncio
     async def test_raises_auth_error_on_empty_supervisor_token(

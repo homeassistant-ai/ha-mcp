@@ -20,7 +20,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
-from .._version import get_supervisor_base_url
+from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
@@ -349,18 +349,14 @@ async def _fetch_addon_logs() -> str:
     """
     # Redundant with the caller's `install_method == "addon"` gate, but kept
     # as a defensive guard for any direct callers added later.
-    token = os.environ.get("SUPERVISOR_TOKEN", "")
-    if not token:
+    if not os.environ.get("SUPERVISOR_TOKEN"):
         return ""
 
     try:
-        async with httpx.AsyncClient(
+        async with make_supervisor_httpx_client(
             timeout=10.0, verify=get_global_settings().verify_ssl
         ) as http_client:
-            resp = await http_client.get(
-                f"{get_supervisor_base_url()}/addons/self/logs",
-                headers={"Authorization": f"Bearer {token}"},
-            )
+            resp = await http_client.get("/addons/self/logs")
             if resp.status_code != 200:
                 logger.info("Addon log fetch returned HTTP %s", resp.status_code)
                 return ""
