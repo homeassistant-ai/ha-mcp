@@ -19,7 +19,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from ._version import is_running_in_addon
+from ._version import get_supervisor_base_url, is_running_in_addon
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -910,7 +910,7 @@ def register_settings_routes(
                 timeout=5.0, verify=server.settings.verify_ssl
             ) as client:
                 resp = await client.post(
-                    "http://supervisor/addons/self/restart",
+                    f"{get_supervisor_base_url()}/addons/self/restart",
                     headers={"Authorization": f"Bearer {token}"},
                 )
         except (httpx.ReadError, httpx.RemoteProtocolError):

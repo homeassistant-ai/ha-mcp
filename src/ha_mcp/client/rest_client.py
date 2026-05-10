@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .._version import is_running_in_addon
+from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 
 
@@ -41,7 +41,19 @@ class HomeAssistantConnectionError(HomeAssistantError):
 
 
 class HomeAssistantAuthError(HomeAssistantError):
-    """Authentication error with Home Assistant."""
+    """Authentication error with Home Assistant.
+
+    Sibling of ``HomeAssistantAPIError`` (not a subclass). The codebase has
+    18 ``except HomeAssistantAPIError`` sites (util_helpers polling,
+    tools_integrations registry lookups, etc.) that deliberately rely on
+    auth errors NOT matching so they can propagate to a paired
+    ``except (HomeAssistantConnectionError, HomeAssistantAuthError): raise``
+    block. Subclassing AuthError under APIError silently swallowed those
+    auth errors as part of the local "this entity is not registered yet"
+    polling logic. Sites that specifically need to catch both must list
+    them explicitly (see ``_get_supervisor_log`` and
+    ``_get_system_service_log`` in ``tools_utility.py``).
+    """
 
 
 class HomeAssistantAPIError(HomeAssistantError):
@@ -543,7 +555,7 @@ class HomeAssistantClient:
                 "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
             )
 
-        url = f"http://supervisor/{path}/logs"
+        url = f"{get_supervisor_base_url()}/{path}/logs"
         logger.debug("Fetching %s via Supervisor direct", url)
 
         try:
@@ -1300,7 +1312,6 @@ class HomeAssistantClient:
                     status_code=405,
                 ) from e
             raise
-
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """
