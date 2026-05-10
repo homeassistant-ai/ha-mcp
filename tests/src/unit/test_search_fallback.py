@@ -138,8 +138,14 @@ class TestExactMatchSearch:
         assert scores == sorted(scores, reverse=True)
 
     @pytest.mark.asyncio
-    async def test_exact_match_excludes_hidden_by_default(self, sample_entities):
-        """Hidden entities are filtered out by default (#1170 finding 9)."""
+    async def test_exact_match_includes_hidden_with_penalty_by_default(
+        self, sample_entities
+    ):
+        """Hidden entities surface in default results with a score
+        penalty (option c from issue #1170 finding 9). The penalty
+        ensures visible matches sort above hidden ones without
+        excluding the hidden entries entirely.
+        """
 
         class HidingClient(MockClient):
             async def send_websocket_message(self, payload):
@@ -152,12 +158,30 @@ class TestExactMatchSearch:
 
         client = HidingClient(sample_entities)
         result = await _exact_match_search(client, "bedroom", None, 10)
-        entity_ids = [r["entity_id"] for r in result["results"]]
-        assert "light.bedroom" not in entity_ids
+        by_id = {r["entity_id"]: r for r in result["results"]}
+        assert "light.bedroom" in by_id, (
+            "hidden entity should be in default results (option c)"
+        )
+        assert by_id["light.bedroom"]["score"] < 100, (
+            f"hidden entity should carry penalty: {by_id['light.bedroom']}"
+        )
+        # If a visible "bedroom" match exists at score 100, it must outrank
+        # the penalised hidden entry.
+        visible_bedroom = next(
+            (
+                r for eid, r in by_id.items()
+                if eid != "light.bedroom" and "bedroom" in eid.lower()
+            ),
+            None,
+        )
+        if visible_bedroom is not None:
+            assert visible_bedroom["score"] >= by_id["light.bedroom"]["score"], (
+                f"visible match must rank ≥ hidden: {by_id}"
+            )
 
     @pytest.mark.asyncio
-    async def test_exact_match_include_hidden_opt_in(self, sample_entities):
-        """include_hidden=True surfaces hidden entities (#1170 finding 9)."""
+    async def test_exact_match_include_hidden_false_filters(self, sample_entities):
+        """``include_hidden=False`` filters hidden entities out entirely."""
 
         class HidingClient(MockClient):
             async def send_websocket_message(self, payload):
@@ -170,10 +194,10 @@ class TestExactMatchSearch:
 
         client = HidingClient(sample_entities)
         result = await _exact_match_search(
-            client, "bedroom", None, 10, include_hidden=True
+            client, "bedroom", None, 10, include_hidden=False
         )
         entity_ids = [r["entity_id"] for r in result["results"]]
-        assert "light.bedroom" in entity_ids
+        assert "light.bedroom" not in entity_ids
 
 
 class TestSearchFallbackResponse:

@@ -15,6 +15,7 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+from ..utils.fuzzy_search import apply_hidden_penalty
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -48,16 +49,17 @@ async def _exact_match_search(
     domain_filter: str | None,
     limit: int,
     offset: int = 0,
-    include_hidden: bool = False,
+    include_hidden: bool = True,
 ) -> dict[str, Any]:
     """
     Search entities by substring on entity_id + friendly_name.
 
     Used both as the ``exact_match=True`` primary path and as the
     fallback when fuzzy search raises. In addition to ``client.get_states()``,
-    also queries the entity registry via WebSocket to honor
-    ``include_hidden``: when False, entities with ``hidden_by != null``
-    are skipped.
+    also queries the entity registry via WebSocket to identify
+    ``hidden_by`` entities: by default they remain in results but
+    receive a score penalty so visible matches sort first; pass
+    ``include_hidden=False`` to filter them out entirely.
     """
     # Fetch states + entity registry in parallel. Registry-list failure
     # is tolerated (we just lose the hidden filter); states-fetch failure
@@ -76,11 +78,7 @@ async def _exact_match_search(
         raise state_result
     all_entities = state_result
     hidden_ids: set[str] = set()
-    if (
-        not include_hidden
-        and isinstance(registry_result, dict)
-        and registry_result.get("success")
-    ):
+    if isinstance(registry_result, dict) and registry_result.get("success"):
         for entry in registry_result.get("result", []):
             if entry.get("hidden_by") is not None:
                 eid = entry.get("entity_id")
@@ -92,7 +90,8 @@ async def _exact_match_search(
     results = []
     for entity in all_entities:
         entity_id = entity.get("entity_id", "")
-        if entity_id in hidden_ids:
+        is_hidden = entity_id in hidden_ids
+        if is_hidden and not include_hidden:
             continue
         attributes = entity.get("attributes", {})
         friendly_name = attributes.get("friendly_name", entity_id)
@@ -107,13 +106,16 @@ async def _exact_match_search(
             is_exact = (
                 query_lower == entity_id.lower() or query_lower == friendly_name.lower()
             )
+            score = 100 if is_exact else 80
+            if is_hidden:
+                score = apply_hidden_penalty(score, "_hidden")
             results.append(
                 {
                     "entity_id": entity_id,
                     "friendly_name": friendly_name,
                     "domain": domain,
                     "state": entity.get("state", "unknown"),
-                    "score": 100 if is_exact else 80,
+                    "score": score,
                     "match_type": "exact_match",
                 }
             )
@@ -198,16 +200,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         include_hidden: Annotated[
             bool | str,
             Field(
-                default=False,
+                default=True,
                 description=(
                     "Include entities marked hidden_by in the entity registry "
-                    "(default: False). Hidden entities are typically integration "
-                    "diagnostics or user-suppressed entries that an agent acting "
-                    "on a user phrase shouldn't surface. Set to True to include "
-                    "them — useful for diagnostics or service workflows."
+                    "(default: True). Hidden entities still appear in results "
+                    "but receive a score penalty so they sort below comparable "
+                    "visible matches — typically pulling integration "
+                    "diagnostics and user-suppressed entries to the bottom of "
+                    "the list rather than excluding them. Set to False to "
+                    "filter them out entirely."
                 ),
             ),
-        ] = False,
+        ] = True,
     ) -> dict[str, Any]:
         """Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -239,10 +243,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             or False
         )
         exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
-        include_hidden_bool = (
-            coerce_bool_param(include_hidden, "include_hidden", default=False)
-            or False
+        # Default True: hidden entities are kept (with score penalty) unless
+        # the caller explicitly opts out by passing include_hidden=False.
+        coerced_hidden = coerce_bool_param(
+            include_hidden, "include_hidden", default=True
         )
+        # coerce_bool_param returns the default when value is None; with
+        # default=True the result is a real bool, but the type system
+        # still admits None — coalesce defensively for static typing.
+        include_hidden_bool = coerced_hidden if coerced_hidden is not None else True
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
@@ -332,6 +341,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "_aliases": aliases_map.get(
                                 entity.get("entity_id", ""), []
                             ),
+                            "_hidden_by": entity.get("_hidden_by"),
                         }
                         for entity in all_area_entities
                     ]
@@ -411,9 +421,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 # Add score+match_type so the response
                                 # shape matches the other four
                                 # search-type branches. Score=100 because
-                                # area membership is exact, not fuzzy.
-                                # Strip leading-underscore internal
-                                # fields (e.g. `_aliases`) so the
+                                # area membership is exact, not fuzzy;
+                                # hidden entities receive the standard
+                                # penalty so they sort below visible
+                                # peers within the same area. Strip
+                                # leading-underscore internal fields
+                                # (e.g. `_aliases`, `_hidden_by`) so the
                                 # response only contains public-API
                                 # fields.
                                 all_results.extend(
@@ -424,12 +437,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                             if not k.startswith("_")
                                         },
                                         "domain": domain,
-                                        "score": 100,
+                                        "score": apply_hidden_penalty(
+                                            100, entity.get("_hidden_by")
+                                        ),
                                         "match_type": "area_match",
                                     }
                                     for entity in entities
                                 )
 
+                        # Re-sort so visible matches outrank penalised
+                        # hidden ones; iteration order alone doesn't
+                        # guarantee that for an area with mixed entities.
+                        all_results.sort(key=lambda x: x["score"], reverse=True)
                         paginated = all_results[offset : offset + limit]
 
                         area_search_data: dict[str, Any] = {
@@ -504,48 +523,53 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     raise states_result
                 all_entities = states_result
                 hidden_ids: set[str] = set()
-                if (
-                    not include_hidden_bool
-                    and isinstance(registry_result, dict)
-                    and registry_result.get("success")
-                ):
+                if isinstance(registry_result, dict) and registry_result.get("success"):
                     for entry in registry_result.get("result", []):
                         if entry.get("hidden_by") is not None:
                             eid = entry.get("entity_id")
                             if eid:
                                 hidden_ids.add(eid)
 
-                # Filter by domain (and hidden_by, when not opted in)
+                # Filter by domain. Hidden entities are kept by default
+                # (with score penalty applied below); ``include_hidden=False``
+                # filters them out entirely.
                 filtered_entities = [
                     e
                     for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
-                    and e.get("entity_id") not in hidden_ids
+                    and (
+                        include_hidden_bool
+                        or e.get("entity_id") not in hidden_ids
+                    )
                 ]
 
-                # Format results to match fuzzy search output
-                paginated_entities = filtered_entities[offset : offset + limit]
-                results = []
-                for entity in paginated_entities:
+                # Score: 100 baseline for domain membership (exact, not
+                # fuzzy); penalised for hidden entries so they sort below
+                # visible peers within the same domain.
+                scored_entities = []
+                for entity in filtered_entities:
                     entity_id = entity.get("entity_id", "")
                     attributes = entity.get("attributes", {})
-                    results.append(
-                        {
-                            "entity_id": entity_id,
-                            "friendly_name": attributes.get("friendly_name", entity_id),
-                            "domain": domain_filter,
-                            "state": entity.get("state", "unknown"),
-                            "score": 100,  # Perfect match since we're listing by domain
-                            "match_type": "domain_listing",
-                        }
+                    score = apply_hidden_penalty(
+                        100, "_hidden" if entity_id in hidden_ids else None
                     )
+                    scored_entities.append({
+                        "entity_id": entity_id,
+                        "friendly_name": attributes.get("friendly_name", entity_id),
+                        "domain": domain_filter,
+                        "state": entity.get("state", "unknown"),
+                        "score": score,
+                        "match_type": "domain_listing",
+                    })
+                scored_entities.sort(key=lambda x: x["score"], reverse=True)
+                results = scored_entities[offset : offset + limit]
 
                 domain_list_data: dict[str, Any] = {
                     "success": True,
                     "query": query,
                     "domain_filter": domain_filter,
                     **_build_pagination_metadata(
-                        len(filtered_entities), offset, limit, results
+                        len(scored_entities), offset, limit, results
                     ),
                     "results": results,
                     "search_type": "domain_listing",

@@ -6,7 +6,13 @@ and the BM25 path in SmartSearchTools._search_in_dict.
 
 import pytest
 
-from ha_mcp.utils.fuzzy_search import BM25Scorer, FuzzyEntitySearcher, tokenize
+from ha_mcp.utils.fuzzy_search import (
+    HIDDEN_SCORE_PENALTY,
+    BM25Scorer,
+    FuzzyEntitySearcher,
+    apply_hidden_penalty,
+    tokenize,
+)
 
 # ---------------------------------------------------------------------------
 # tokenize()
@@ -477,3 +483,58 @@ class TestSmartEntitySearchPropagation:
 
         with pytest.raises(ToolError):
             await smart_tools.smart_entity_search("anything", limit=5)
+
+
+class TestHiddenScorePenalty:
+    """Lock down option (c) for finding 9: hidden entities stay in
+    results but receive a score penalty so visible matches sort
+    above them. Filtering remains available via
+    ``include_hidden=False``.
+    """
+
+    def test_apply_hidden_penalty_subtracts_for_hidden(self):
+        assert apply_hidden_penalty(100, "user") == 100 - HIDDEN_SCORE_PENALTY
+        assert apply_hidden_penalty(80, "integration") == 80 - HIDDEN_SCORE_PENALTY
+
+    def test_apply_hidden_penalty_passthrough_for_visible(self):
+        assert apply_hidden_penalty(100, None) == 100
+        assert apply_hidden_penalty(60, None) == 60
+
+    def test_apply_hidden_penalty_clamps_to_zero(self):
+        # A 10-score hidden entity shouldn't go negative after a 20-pt
+        # penalty.
+        assert apply_hidden_penalty(10, "user") == 0
+
+    def test_visible_outranks_hidden_on_same_query(self):
+        """When a visible entity and a hidden entity both match the
+        same query, the visible one ranks first thanks to the penalty.
+        """
+        entities = [
+            {
+                "entity_id": "light.kitchen_main",
+                "attributes": {"friendly_name": "Kitchen Main"},
+                "state": "on",
+                # No _hidden_by → visible.
+            },
+            {
+                "entity_id": "light.kitchen_diag",
+                "attributes": {"friendly_name": "Kitchen Diag"},
+                "state": "on",
+                "_hidden_by": "integration",
+            },
+        ]
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(entities, "kitchen", limit=10)
+        assert total >= 2, f"both entities should match 'kitchen': {results}"
+        # Visible match must come first.
+        assert results[0]["entity_id"] == "light.kitchen_main", (
+            f"visible match should rank above penalised hidden: {results}"
+        )
+        # And the hidden one's score is lower.
+        hidden = next(
+            r for r in results if r["entity_id"] == "light.kitchen_diag"
+        )
+        visible = results[0]
+        assert hidden["score"] < visible["score"], (
+            f"hidden score should be < visible: hidden={hidden}, visible={visible}"
+        )

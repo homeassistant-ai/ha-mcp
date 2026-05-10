@@ -113,7 +113,7 @@ class SmartSearchTools:
         offset: int = 0,
         include_attributes: bool = False,
         domain_filter: str | None = None,
-        include_hidden: bool = False,
+        include_hidden: bool = True,
     ) -> dict[str, Any]:
         """
         Search entities with fuzzy matching and typo tolerance.
@@ -124,10 +124,10 @@ class SmartSearchTools:
             offset: Number of results to skip for pagination
             include_attributes: Whether to include full entity attributes
             domain_filter: Optional domain to filter entities before search (e.g., "light", "sensor")
-            include_hidden: When False (default), entities with
-                ``hidden_by`` set in the entity registry are skipped before
-                fuzzy search runs. Pass True to include them — typically
-                for diagnostics or service workflows.
+            include_hidden: When True (default), entities with ``hidden_by``
+                set in the entity registry are still returned but receive
+                a score penalty so they sort below comparable visible
+                matches. Pass False to filter them out entirely.
 
         Returns:
             Dictionary with search results and metadata
@@ -315,7 +315,7 @@ class SmartSearchTools:
         self,
         area_query: str,
         group_by_domain: bool = True,
-        include_hidden: bool = False,
+        include_hidden: bool = True,
     ) -> dict[str, Any]:
         """
         Get entities grouped by area/room using the HA registries for accurate area resolution.
@@ -327,9 +327,10 @@ class SmartSearchTools:
         Args:
             area_query: Area/room name (or alias) to search for
             group_by_domain: Whether to group results by domain within each area
-            include_hidden: When False (default), entities with
-                ``hidden_by`` set in the entity registry are excluded
-                from per-area results. Pass True to include them.
+            include_hidden: When True (default), entities with ``hidden_by``
+                set in the entity registry are still grouped under their
+                area but receive a score penalty when ranked. Pass False
+                to filter them out entirely.
 
         Returns:
             Dictionary with area-grouped entities
@@ -438,14 +439,17 @@ class SmartSearchTools:
 
             # Build entity_id -> resolved area_id mapping.
             # Priority: entity direct area_id > device area_id.
-            # Hidden entities are skipped unless include_hidden is True.
+            # Hidden entities are filtered only when include_hidden is
+            # False; otherwise they pass through and downstream applies
+            # the score penalty so they sort below visible matches.
             entity_area_resolved: dict[str, str] = {}
+            hidden_entity_ids: set[str] = set()
             for entity_id, reg_info in entity_reg_map.items():
-                if (
-                    not include_hidden
-                    and reg_info.get("hidden_by") is not None
-                ):
+                is_hidden = reg_info.get("hidden_by") is not None
+                if is_hidden and not include_hidden:
                     continue
+                if is_hidden:
+                    hidden_entity_ids.add(entity_id)
                 area_id = reg_info.get("area_id")
                 device_id = reg_info.get("device_id")
                 if not area_id and device_id:
@@ -494,6 +498,9 @@ class SmartSearchTools:
                         state_info = state_map.get(entity_id, {})
                         if domain not in domains:
                             domains[domain] = []
+                        # Carry ``_hidden_by`` as a sentinel ("hidden" or
+                        # None) so downstream branches can apply the
+                        # score penalty without a second registry lookup.
                         domains[domain].append(
                             {
                                 "entity_id": entity_id,
@@ -501,6 +508,11 @@ class SmartSearchTools:
                                     "friendly_name", entity_id
                                 ),
                                 "state": state_info.get("state", "unknown"),
+                                "_hidden_by": (
+                                    "hidden"
+                                    if entity_id in hidden_entity_ids
+                                    else None
+                                ),
                             }
                         )
                     area_data["entities"] = domains
@@ -515,6 +527,11 @@ class SmartSearchTools:
                             .get("friendly_name", entity_id),
                             "domain": entity_id.split(".")[0],
                             "state": state_info.get("state", "unknown"),
+                            "_hidden_by": (
+                                "hidden"
+                                if entity_id in hidden_entity_ids
+                                else None
+                            ),
                         }
                         for entity_id in area_entities
                     ]

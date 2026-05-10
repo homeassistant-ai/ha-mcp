@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"[._\-\s]+")
 
+# Score subtraction for entities marked ``hidden_by`` in the entity
+# registry. Hidden entities still surface in results, but a 20-point
+# penalty pushes them below comparable visible matches when both are
+# emitted by the same search branch. Picked so that an exact id/name
+# hit on a hidden entity (raw 100 → 80) still ranks above a fuzzy
+# threshold-floor visible match (60-70), but loses to any visible
+# entity scoring 80+.
+HIDDEN_SCORE_PENALTY = 20
+
+
+def apply_hidden_penalty(score: int, hidden_by: Any) -> int:
+    """Return ``score`` reduced by :data:`HIDDEN_SCORE_PENALTY` when
+    ``hidden_by`` indicates a hidden entity. Used by every search
+    branch that emits a ``score`` field so the ranking is consistent.
+    """
+    if hidden_by is not None:
+        return max(0, score - HIDDEN_SCORE_PENALTY)
+    return score
+
 
 def tokenize(text: str) -> list[str]:
     """Split text on `.`, `_`, `-`, and whitespace, lowercase, drop empties."""
@@ -178,6 +197,10 @@ class FuzzyEntitySearcher:
         meta: list[tuple[str, str, str, dict[str, Any], str]] = []  # eid, name, domain, attrs, state
         # Track which entities matched on alias (for `match_type="alias_match"`).
         alias_hit: list[set[str]] = []
+        # Track ``hidden_by`` per entity so the score-penalty pass can
+        # depress hidden hits without filtering them. Callers enrich via
+        # the ``_hidden_by`` key — see smart_search.smart_entity_search.
+        hidden_flags: list[Any] = []
 
         for entity in entities:
             entity_id = entity.get("entity_id", "")
@@ -227,6 +250,7 @@ class FuzzyEntitySearcher:
             docs.append(tokens)
             meta.append((entity_id, friendly_name, domain, attributes, state))
             alias_hit.append(entity_alias_tokens)
+            hidden_flags.append(entity.get("_hidden_by"))
 
         # Fit BM25
         scorer = BM25Scorer()
@@ -246,6 +270,7 @@ class FuzzyEntitySearcher:
                 if raw <= 0:
                     continue
                 score = min(100, round(raw / theoretical_max * 100))
+                score = apply_hidden_penalty(score, hidden_flags[i])
                 if score < self.threshold:
                     continue
                 eid, fname, domain, attrs, state = meta[i]
@@ -277,7 +302,9 @@ class FuzzyEntitySearcher:
         # exactly the noise floor the new absolute normalization is fixing.
         bm25_found_any = any(raw > 0 for raw in raw_scores)
         if not matches and not bm25_found_any:
-            matches = self._typo_fallback(query_tokens, query_lower, docs, meta)
+            matches = self._typo_fallback(
+                query_tokens, query_lower, docs, meta, hidden_flags
+            )
 
         matches.sort(key=lambda x: x["score"], reverse=True)
         total_matches = len(matches)
@@ -291,6 +318,7 @@ class FuzzyEntitySearcher:
         query_lower: str,
         docs: list[list[str]],
         meta: list[tuple[str, str, str, dict[str, Any], str]],
+        hidden_flags: list[Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Token-level SequenceMatcher fallback for typo correction.
 
@@ -329,13 +357,19 @@ class FuzzyEntitySearcher:
                     continue
 
             eid, fname, domain, attrs, state = meta[i]
+            entity_hidden = (
+                hidden_flags[i] if hidden_flags is not None else None
+            )
+            penalised = apply_hidden_penalty(best_token_score, entity_hidden)
+            if penalised < 75:  # mirror typo-fallback threshold
+                continue
             results.append({
                 "entity_id": eid,
                 "friendly_name": fname,
                 "domain": domain,
                 "state": state,
                 "attributes": attrs,
-                "score": best_token_score,
+                "score": penalised,
                 "match_type": "typo_fallback",
             })
         return results

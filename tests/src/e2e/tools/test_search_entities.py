@@ -1433,54 +1433,71 @@ async def hidden_helper(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_search_excludes_hidden_by_default_issue_1170(
+async def test_search_includes_hidden_with_penalty_by_default_issue_1170(
     mcp_client, hidden_helper
 ):
-    """Entities with ``hidden_by`` set are excluded from search by default.
-    (#1170 finding 9.)"""
+    """Hidden entities surface in default search results but receive a
+    score penalty so visible matches sort above them. The issue's
+    option (c) — keep them, rank them lower — preserves agent access
+    to integration/diagnostic entities without burying visible
+    user-facing entities under them."""
     fixture = hidden_helper
     res = await mcp_client.call_tool(
         "ha_search_entities",
         {"query": fixture["distinctive"], "exact_match": True, "limit": 5},
     )
-    data = assert_mcp_success(res, "default hidden exclusion").get("data", {})
+    data = assert_mcp_success(res, "default hidden included").get("data", {})
     entity_ids = [r["entity_id"] for r in data["results"]]
-    assert fixture["entity_id"] not in entity_ids, (
-        f"hidden entity surfaced under default include_hidden=False: {data}"
+    assert fixture["entity_id"] in entity_ids, (
+        f"hidden entity should be in default results (option c): {data}"
+    )
+    target = next(
+        r for r in data["results"] if r["entity_id"] == fixture["entity_id"]
+    )
+    # The hidden entity is the only match for a uuid-suffixed query, so
+    # its raw score would be 100 (exact substring) — minus the 20-point
+    # penalty → 80. Asserting ``< 100`` keeps the test robust to small
+    # tuning changes in the penalty constant.
+    assert target["score"] < 100, (
+        f"hidden entity should carry score penalty (got {target['score']}): "
+        f"{target}"
     )
 
 
 @pytest.mark.asyncio
-async def test_search_include_hidden_opt_in_issue_1170(mcp_client, hidden_helper):
-    """``include_hidden=True`` re-surfaces entities with ``hidden_by`` set.
-    (#1170 finding 9.)"""
+async def test_search_include_hidden_false_filters_issue_1170(
+    mcp_client, hidden_helper
+):
+    """``include_hidden=False`` filters hidden entities out of the
+    result set entirely — the explicit opt-out for callers that need
+    visible-only search."""
     fixture = hidden_helper
     res = await mcp_client.call_tool(
         "ha_search_entities",
         {
             "query": fixture["distinctive"],
             "exact_match": True,
-            "include_hidden": True,
+            "include_hidden": False,
             "limit": 5,
         },
     )
-    data = assert_mcp_success(res, "include_hidden=True").get("data", {})
+    data = assert_mcp_success(res, "include_hidden=False filters").get("data", {})
     entity_ids = [r["entity_id"] for r in data["results"]]
-    assert fixture["entity_id"] in entity_ids, (
-        f"include_hidden=True did not surface hidden entity: {data}"
+    assert fixture["entity_id"] not in entity_ids, (
+        f"include_hidden=False should filter hidden entity: {data}"
     )
 
 
 @pytest.mark.asyncio
-async def test_search_fuzzy_mode_excludes_hidden_issue_1170(
+async def test_search_fuzzy_mode_penalises_hidden_issue_1170(
     mcp_client, hidden_helper
 ):
-    """Fuzzy mode (``exact_match=False``) also honors the hidden filter.
+    """Fuzzy mode applies the same hidden-score penalty.
 
     Default-True ``exact_match`` and the fuzzy path are SEPARATE code
     paths in tools_search.py — substring matching vs ``smart_entity_search``
-    (BM25). Both must filter hidden entities or one path silently
-    regresses while the other test passes.
+    (BM25). Both must apply the penalty or one path silently regresses
+    while the other test passes.
     """
     fixture = hidden_helper
     res = await mcp_client.call_tool(
@@ -1491,20 +1508,44 @@ async def test_search_fuzzy_mode_excludes_hidden_issue_1170(
             "limit": 5,
         },
     )
-    data = assert_mcp_success(res, "fuzzy mode hidden filter").get("data", {})
+    data = assert_mcp_success(res, "fuzzy mode hidden penalty").get("data", {})
     entity_ids = [r["entity_id"] for r in data["results"]]
-    assert fixture["entity_id"] not in entity_ids, (
-        f"fuzzy mode leaked hidden entity: {data}"
+    assert fixture["entity_id"] in entity_ids, (
+        f"fuzzy mode should keep hidden entity (option c): {data}"
+    )
+    target = next(
+        r for r in data["results"] if r["entity_id"] == fixture["entity_id"]
+    )
+    assert target["score"] < 100, (
+        f"fuzzy mode hidden entity should carry penalty (got "
+        f"{target['score']}): {target}"
+    )
+
+    # And include_hidden=False filters it out entirely in fuzzy mode too.
+    res2 = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "query": fixture["distinctive"],
+            "exact_match": False,
+            "include_hidden": False,
+            "limit": 5,
+        },
+    )
+    data2 = assert_mcp_success(res2, "fuzzy include_hidden=False").get(
+        "data", {}
+    )
+    entity_ids2 = [r["entity_id"] for r in data2["results"]]
+    assert fixture["entity_id"] not in entity_ids2, (
+        f"fuzzy + include_hidden=False should filter hidden: {data2}"
     )
 
 
 @pytest.mark.asyncio
-async def test_search_area_only_excludes_hidden_issue_1170(mcp_client):
-    """Area branch (``area_filter`` only, no query) honors the hidden
-    filter. The area resolver uses the entity registry's ``area_id``;
-    we must skip ``hidden_by`` entries before composing the per-area
-    list. Otherwise a UI-hidden entity assigned to an area still
-    surfaces under ``area_filter=<that-area>``."""
+async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
+    """Area branch (``area_filter`` only, no query) keeps hidden entities
+    in the area's bucket but applies the score penalty so visible peers
+    sort above them. ``include_hidden=False`` filters them out entirely.
+    """
     suffix = uuid.uuid4().hex[:8]
     area_name = f"e2e_1170_areahidden_{suffix}"
 
@@ -1542,27 +1583,33 @@ async def test_search_area_only_excludes_hidden_issue_1170(mcp_client):
             "ha_set_entity", {"entity_id": eid, "hidden": True}
         )
 
-        # Default include_hidden=False
+        # Default include_hidden=True: hidden entity surfaces with penalty
         res = await mcp_client.call_tool(
             "ha_search_entities", {"area_filter": area_id, "limit": 10}
         )
         data = assert_mcp_success(res, "area_only default hidden").get("data", {})
         entity_ids = [r["entity_id"] for r in data["results"]]
-        assert eid not in entity_ids, (
-            f"area_only branch leaked hidden entity: {data}"
+        assert eid in entity_ids, (
+            f"area_only branch should keep hidden entity (option c): {data}"
+        )
+        target = next(r for r in data["results"] if r["entity_id"] == eid)
+        # area_only baseline score is 100; penalty drops it below 100.
+        assert target["score"] < 100, (
+            f"area_only hidden entity should carry penalty (got "
+            f"{target['score']}): {target}"
         )
 
-        # include_hidden=True surfaces it again
+        # include_hidden=False filters it out
         res2 = await mcp_client.call_tool(
             "ha_search_entities",
-            {"area_filter": area_id, "include_hidden": True, "limit": 10},
+            {"area_filter": area_id, "include_hidden": False, "limit": 10},
         )
-        data2 = assert_mcp_success(res2, "area_only include_hidden").get(
+        data2 = assert_mcp_success(res2, "area_only include_hidden=False").get(
             "data", {}
         )
         entity_ids2 = [r["entity_id"] for r in data2["results"]]
-        assert eid in entity_ids2, (
-            f"include_hidden=True did not surface hidden entity in area: {data2}"
+        assert eid not in entity_ids2, (
+            f"include_hidden=False should filter hidden entity in area: {data2}"
         )
     finally:
         # Cleanup
