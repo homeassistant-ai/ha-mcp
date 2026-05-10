@@ -357,12 +357,16 @@ async def test_search_entities_response_structure_issue_214(mcp_client):
     assert "search_type" in data, "Response must include 'search_type' field"
     assert isinstance(data["results"], list), "Results must be a list"
 
-    # search_type should be one of the expected values
+    # search_type should be one of the expected values.
+    # Note: `partial_listing` was removed in #1170 (finding 6) — its
+    # behavior was a useless score=0 entity dump that masked errors;
+    # exceptions now propagate to callers instead.
     valid_search_types = [
         "fuzzy_search",
         "exact_match",
-        "partial_listing",
         "domain_listing",
+        "area_only",
+        "area_filtered_query",
     ]
     assert data["search_type"] in valid_search_types, (
         f"search_type '{data['search_type']}' not in {valid_search_types}"
@@ -998,3 +1002,491 @@ async def test_area_filter_fuzzy_multi_area_with_query(
     assert data["total_matches"] == 2, (
         f"Both fuzzy-matched areas contribute one input_boolean each: {data}"
     )
+
+
+# ============================================================================
+# Issue #1170: ha_search_entities triage findings — regression tests
+# ============================================================================
+# Each test below locks in one of the 10 behaviors triaged in #1170.
+# All would fail against master HEAD prior to the fix-PR.
+
+
+@pytest.mark.asyncio
+async def test_domain_filter_uppercase_normalized_issue_1170(mcp_client):
+    """domain_filter is lowercased so agents that capitalize from a user
+    phrase (e.g. ``"turn on the Lights"``) don't hit a silent zero-result.
+    (#1170 finding 1.)"""
+    lower = await mcp_client.call_tool(
+        "ha_search_entities", {"domain_filter": "light", "limit": 50}
+    )
+    upper = await mcp_client.call_tool(
+        "ha_search_entities", {"domain_filter": "Light", "limit": 50}
+    )
+    lower_data = assert_mcp_success(lower, "domain_filter=light").get("data", {})
+    upper_data = assert_mcp_success(upper, "domain_filter=Light").get("data", {})
+    assert lower_data.get("total_matches", 0) > 0, (
+        f"baseline: lowercase should return results: {lower_data}"
+    )
+    assert upper_data["total_matches"] == lower_data["total_matches"], (
+        f"uppercase domain_filter must match lowercase result count: "
+        f"upper={upper_data}, lower={lower_data}"
+    )
+    # Echoed in normalized form so callers can see the canonical value.
+    assert upper_data["domain_filter"] == "light"
+
+
+@pytest.fixture
+async def populated_area_for_shape_test(mcp_client):
+    """Create an area with a single helper assigned, for response-shape checks."""
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"e2e_1170_shape_{suffix}"
+    area_result = await mcp_client.call_tool(
+        "ha_set_area_or_floor", {"kind": "area", "name": area_name}
+    )
+    area_data = assert_mcp_success(area_result, "Create shape-test area")
+    area_id = area_data["area_id"]
+    helper_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": f"e2e 1170 shape {suffix}",
+            "area_id": area_id,
+        },
+    )
+    helper_data = assert_mcp_success(helper_result, "Create shape-test helper")
+    boolean_id = (
+        helper_data.get("entity_id")
+        or f"input_boolean.{helper_data['helper_data']['id']}"
+    )
+    await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_search_entities",
+        arguments={"area_filter": area_id, "limit": 10},
+        predicate=lambda d: any(
+            r.get("entity_id") == boolean_id
+            for r in d.get("data", d).get("results", [])
+        ),
+        description="shape-test helper visible",
+    )
+    yield {"area_id": area_id, "boolean_id": boolean_id}
+    try:
+        await mcp_client.call_tool(
+            "ha_delete_helpers_integrations",
+            {"target": boolean_id, "helper_type": "input_boolean", "confirm": True},
+        )
+    except Exception as exc:  # pragma: no cover — cleanup best-effort
+        logger.warning(f"Cleanup of {boolean_id} failed: {exc}")
+    try:
+        await mcp_client.call_tool(
+            "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+        )
+    except Exception as exc:  # pragma: no cover — cleanup best-effort
+        logger.warning(f"Cleanup of area {area_id} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_area_only_results_have_score_and_match_type_issue_1170(
+    mcp_client, populated_area_for_shape_test
+):
+    """area_only branch results carry score+match_type, matching the other
+    four search-type branches. (#1170 finding 3.)"""
+    fixture = populated_area_for_shape_test
+    res = await mcp_client.call_tool(
+        "ha_search_entities", {"area_filter": fixture["area_id"], "limit": 50}
+    )
+    data = assert_mcp_success(res, "area_only shape").get("data", {})
+    assert data["search_type"] == "area_only"
+    assert data["results"], "fixture should yield at least one result"
+    for r in data["results"]:
+        assert r.get("score") == 100, f"score missing/wrong on area_only result: {r}"
+        assert r.get("match_type") == "area_match", (
+            f"match_type missing/wrong on area_only result: {r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_area_filtered_query_no_per_result_area_filter_issue_1170(
+    mcp_client, populated_area_for_shape_test
+):
+    """area_filtered_query: top-level ``area_filter`` only, not per-result.
+
+    The redundant per-result echo was the only branch emitting it — see
+    #1170 finding 4. Top-level field is still expected.
+    """
+    fixture = populated_area_for_shape_test
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "area_filter": fixture["area_id"],
+            "query": "1170",
+            "exact_match": False,
+            "limit": 50,
+        },
+    )
+    data = assert_mcp_success(res, "area_filtered_query shape").get("data", {})
+    assert data["search_type"] == "area_filtered_query"
+    assert data.get("area_filter") == fixture["area_id"], (
+        f"top-level area_filter should still echo: {data}"
+    )
+    for r in data["results"]:
+        assert "area_filter" not in r, (
+            f"per-result area_filter should be dropped: {r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_rejects_low_coverage_garbage_issue_1170(mcp_client):
+    """Multi-token nonsense queries don't surface entities that only one
+    token grazes. (#1170 finding 5.)
+
+    Pre-fix, ``query="xyz_irrelevant_garbage"`` returned ``cover.garage_door``
+    at score 92 via typo_fallback because the single token "garbage" matched
+    "garage" at SequenceMatcher ratio 92. The new multi-token coverage
+    gate rejects entities that only explain <50% of the query tokens.
+    """
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": "xyz_irrelevant_garbage", "exact_match": False, "limit": 5},
+    )
+    data = assert_mcp_success(res, "garbage query").get("data", {})
+    assert data["total_matches"] == 0, (
+        f"low-coverage garbage query must be rejected: {data}"
+    )
+
+
+@pytest.fixture
+async def two_areas_with_shared_prefix(mcp_client):
+    """Create two areas sharing a prefix (``bedroom_X_*``, ``bedroom_Y_*``)
+    each with a helper, so a single ``area_filter="bedroom_<suffix>"``
+    fuzzy-matches both."""
+    suffix = uuid.uuid4().hex[:8]
+    areas: list[str] = []
+    helpers: list[str] = []
+    for label in ("X", "Y"):
+        area_res = await mcp_client.call_tool(
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": f"bedroom {label} {suffix}"},
+        )
+        area_data = assert_mcp_success(area_res, f"Create area {label}")
+        areas.append(area_data["area_id"])
+        h_res = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": f"e2e 1170 bedroom {label} {suffix}",
+                "area_id": area_data["area_id"],
+            },
+        )
+        h_data = assert_mcp_success(h_res, f"Create helper {label}")
+        helpers.append(
+            h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+        )
+    # Wait for both helpers to be visible under the shared prefix
+    await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_search_entities",
+        arguments={"area_filter": f"bedroom_{suffix}", "limit": 10},
+        predicate=lambda d: {
+            r.get("entity_id") for r in d.get("data", d).get("results", [])
+        }.issuperset(set(helpers)),
+        description="both shared-prefix areas' helpers visible",
+    )
+    yield {"areas": areas, "helpers": helpers, "suffix": suffix}
+    for h in helpers:
+        try:
+            await mcp_client.call_tool(
+                "ha_delete_helpers_integrations",
+                {"target": h, "helper_type": "input_boolean", "confirm": True},
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of {h} failed: {exc}")
+    for area in areas:
+        try:
+            await mcp_client.call_tool(
+                "ha_remove_area_or_floor", {"kind": "area", "id": area}
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of area {area} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_area_only_aggregates_all_matched_areas_issue_1170(
+    mcp_client, two_areas_with_shared_prefix
+):
+    """area_only branch returns entities from ALL fuzzy-matched areas, not
+    just the first. (#1170 finding 7 — the most user-visible bug in the
+    triage; pre-fix, the user's intended area was silently skipped when
+    another area had a similar prefix.)"""
+    fixture = two_areas_with_shared_prefix
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
+    )
+    data = assert_mcp_success(res, "two-area aggregation").get("data", {})
+    assert data["search_type"] == "area_only"
+    # New plural field carries every matched area. The seeded `Bedroom`
+    # area also matches the `bedroom_<suffix>` prefix at partial_ratio
+    # 100 (the literal token "bedroom" is a substring of the query) and
+    # legitimately appears alongside the two fixture areas — that's the
+    # whole point of the fix: aggregate, don't drop. So we assert the
+    # two fixture-created area names are *both* present rather than
+    # asserting an exact count.
+    assert isinstance(data.get("area_names"), list), (
+        f"area_names must be a list: {data}"
+    )
+    assert len(data["area_names"]) >= 2, (
+        f"at least the two fixture areas should be reported "
+        f"in area_names: {data['area_names']}"
+    )
+    entity_ids = {r["entity_id"] for r in data["results"]}
+    assert set(fixture["helpers"]).issubset(entity_ids), (
+        f"both fixture areas' helpers should appear: missing "
+        f"{set(fixture['helpers']) - entity_ids}; got {entity_ids}"
+    )
+
+
+@pytest.fixture
+async def helper_with_alias(mcp_client):
+    """Create an input_boolean helper, then set an alias on it via
+    ``ha_set_entity``. The alias is what the search query targets."""
+    suffix = uuid.uuid4().hex[:8]
+    alias = f"e2e1170alias{suffix}"
+    helper_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": f"e2e 1170 alias src {suffix}"},
+    )
+    helper_data = assert_mcp_success(helper_res, "Create alias-target helper")
+    eid = (
+        helper_data.get("entity_id")
+        or f"input_boolean.{helper_data['helper_data']['id']}"
+    )
+    await mcp_client.call_tool(
+        "ha_set_entity", {"entity_id": eid, "aliases": [alias]}
+    )
+    yield {"entity_id": eid, "alias": alias}
+    try:
+        await mcp_client.call_tool(
+            "ha_delete_helpers_integrations",
+            {"target": eid, "helper_type": "input_boolean", "confirm": True},
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Cleanup of {eid} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_search_finds_entity_by_alias_issue_1170(mcp_client, helper_with_alias):
+    """Entity registry aliases are honoured in fuzzy search and labelled
+    ``alias_match``. (#1170 finding 8 — closes #1166.)"""
+    fixture = helper_with_alias
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": fixture["alias"], "exact_match": False, "limit": 5},
+    )
+    data = assert_mcp_success(res, "search by alias").get("data", {})
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["entity_id"] in entity_ids, (
+        f"alias query did not surface target entity: {data}"
+    )
+    target = next(r for r in data["results"] if r["entity_id"] == fixture["entity_id"])
+    assert target["match_type"] == "alias_match", (
+        f"expected match_type=alias_match, got: {target}"
+    )
+
+
+@pytest.fixture
+async def hidden_helper(mcp_client):
+    """Create an input_boolean helper, then hide it via the entity registry."""
+    suffix = uuid.uuid4().hex[:8]
+    distinctive = f"e2e1170hidden{suffix}"
+    res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": f"e2e 1170 hidden {suffix}"},
+    )
+    data = assert_mcp_success(res, "Create hidden-target helper")
+    eid = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+    # Rename so the search query has a unique substring to grep on.
+    await mcp_client.call_tool(
+        "ha_set_entity", {"entity_id": eid, "name": distinctive, "hidden": True}
+    )
+    yield {"entity_id": eid, "distinctive": distinctive}
+    try:
+        await mcp_client.call_tool(
+            "ha_delete_helpers_integrations",
+            {"target": eid, "helper_type": "input_boolean", "confirm": True},
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Cleanup of {eid} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_search_excludes_hidden_by_default_issue_1170(
+    mcp_client, hidden_helper
+):
+    """Entities with ``hidden_by`` set are excluded from search by default.
+    (#1170 finding 9.)"""
+    fixture = hidden_helper
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {"query": fixture["distinctive"], "exact_match": True, "limit": 5},
+    )
+    data = assert_mcp_success(res, "default hidden exclusion").get("data", {})
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["entity_id"] not in entity_ids, (
+        f"hidden entity surfaced under default include_hidden=False: {data}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_include_hidden_opt_in_issue_1170(mcp_client, hidden_helper):
+    """``include_hidden=True`` re-surfaces entities with ``hidden_by`` set.
+    (#1170 finding 9.)"""
+    fixture = hidden_helper
+    res = await mcp_client.call_tool(
+        "ha_search_entities",
+        {
+            "query": fixture["distinctive"],
+            "exact_match": True,
+            "include_hidden": True,
+            "limit": 5,
+        },
+    )
+    data = assert_mcp_success(res, "include_hidden=True").get("data", {})
+    entity_ids = [r["entity_id"] for r in data["results"]]
+    assert fixture["entity_id"] in entity_ids, (
+        f"include_hidden=True did not surface hidden entity: {data}"
+    )
+
+
+# ============================================================================
+# Issue #1170 finding 10: e2e coverage at realistic seeded-area populations
+# ============================================================================
+
+
+class TestSearchEntitiesSeededAreasIssue1170:
+    """E2E tests against a multi-domain populated area at the scale of the
+    initial_test_state seed.
+
+    Pre-fix coverage gap: existing area tests used ad-hoc fixtures with one
+    or two helpers per fresh area. None exercised the area_filter branches
+    against an area populated with multiple domains, which is the realistic
+    shape on a production HA install. (#1170 finding 10.)
+    """
+
+    SEED_ASSIGNMENTS = (
+        ("light.bed_light", "bedroom"),
+        ("light.ceiling_lights", "bedroom"),
+        ("switch.ac", "bedroom"),
+        ("cover.garage_door", "bedroom"),
+    )
+
+    @pytest.fixture
+    async def seeded_bedroom(self, mcp_client):
+        """Assign 4 entities of 3 different domains to the seeded
+        ``bedroom`` area, then unassign on teardown."""
+        for eid, area_id in self.SEED_ASSIGNMENTS:
+            try:
+                await mcp_client.call_tool(
+                    "ha_set_entity", {"entity_id": eid, "area_id": area_id}
+                )
+            except Exception as exc:
+                pytest.skip(f"Seed entity {eid} unavailable: {exc}")
+        # Wait until all 4 are visible in the bedroom area
+        expected = {eid for eid, _ in self.SEED_ASSIGNMENTS}
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search_entities",
+            arguments={"area_filter": "bedroom", "limit": 50},
+            predicate=lambda d: expected.issubset(
+                {
+                    r.get("entity_id")
+                    for r in d.get("data", d).get("results", [])
+                }
+            ),
+            description="all seed assignments visible under bedroom",
+        )
+        yield {
+            "area_id": "bedroom",
+            "entity_ids": [eid for eid, _ in self.SEED_ASSIGNMENTS],
+        }
+        # Cleanup: clear area assignment. ha_set_entity requires at least
+        # one update field, so we set area_id to empty-string (which the
+        # tool maps to "no area") rather than None.
+        for eid, _ in self.SEED_ASSIGNMENTS:
+            try:
+                await mcp_client.call_tool(
+                    "ha_set_entity", {"entity_id": eid, "area_id": ""}
+                )
+            except Exception as exc:  # pragma: no cover — cleanup best-effort
+                logger.warning(f"Cleanup of area assignment for {eid} failed: {exc}")
+
+    @pytest.mark.asyncio
+    async def test_area_only_returns_all_assigned_domains(
+        self, mcp_client, seeded_bedroom
+    ):
+        """area_only returns every assigned entity, spanning all domains."""
+        fixture = seeded_bedroom
+        res = await mcp_client.call_tool(
+            "ha_search_entities", {"area_filter": fixture["area_id"], "limit": 50}
+        )
+        data = assert_mcp_success(res, "populated area").get("data", {})
+        entity_ids = {r["entity_id"] for r in data["results"]}
+        assert set(fixture["entity_ids"]).issubset(entity_ids), (
+            f"all assigned entities should appear: missing "
+            f"{set(fixture['entity_ids']) - entity_ids}"
+        )
+        domains = {r["domain"] for r in data["results"]}
+        assert {"light", "switch", "cover"}.issubset(domains), (
+            f"all 3 assigned domains expected in results: {domains}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_area_with_query_filters_within_area(
+        self, mcp_client, seeded_bedroom
+    ):
+        """area_filter + query restricts to query matches inside the area."""
+        fixture = seeded_bedroom
+        res = await mcp_client.call_tool(
+            "ha_search_entities",
+            {
+                "area_filter": fixture["area_id"],
+                "query": "light",
+                "exact_match": False,
+                "limit": 50,
+            },
+        )
+        data = assert_mcp_success(res, "area + query").get("data", {})
+        entity_ids = [r["entity_id"] for r in data["results"]]
+        assert "light.bed_light" in entity_ids
+        assert "light.ceiling_lights" in entity_ids
+        assert "switch.ac" not in entity_ids, (
+            f"switch should not match query='light': {entity_ids}"
+        )
+        assert "cover.garage_door" not in entity_ids, (
+            f"cover should not match query='light': {entity_ids}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_area_only_pagination_realistic(
+        self, mcp_client, seeded_bedroom
+    ):
+        """Pagination works correctly at realistic populated-area scale."""
+        fixture = seeded_bedroom
+        res = await mcp_client.call_tool(
+            "ha_search_entities", {"area_filter": fixture["area_id"], "limit": 2}
+        )
+        data = assert_mcp_success(res, "limit=2 page 1").get("data", {})
+        assert len(data["results"]) == 2
+        assert data["has_more"] is True
+        assert data["next_offset"] == 2
+        res2 = await mcp_client.call_tool(
+            "ha_search_entities",
+            {
+                "area_filter": fixture["area_id"],
+                "limit": 50,
+                "offset": 2,
+            },
+        )
+        data2 = assert_mcp_success(res2, "offset=2").get("data", {})
+        assert len(data2["results"]) >= 2, (
+            f"page 2 should have at least the remaining entities: {data2}"
+        )

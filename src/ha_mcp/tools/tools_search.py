@@ -43,19 +43,53 @@ def _build_pagination_metadata(
 
 
 async def _exact_match_search(
-    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
+    client: Any,
+    query: str,
+    domain_filter: str | None,
+    limit: int,
+    offset: int = 0,
+    include_hidden: bool = False,
 ) -> dict[str, Any]:
     """
     Fallback exact match search when fuzzy search fails.
 
     Performs simple substring matching on entity_id and friendly_name.
+    Honors ``include_hidden`` (#1170 finding 9) by consulting the entity
+    registry and skipping ``hidden_by != null`` entries when False.
     """
-    all_entities = await client.get_states()
+    # Fetch states + entity registry in parallel; tolerate registry
+    # failure (we just lose the hidden filter, search still works).
+    entities_task = client.get_states()
+    registry_task = client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    gather_results = await asyncio.gather(
+        entities_task, registry_task, return_exceptions=True
+    )
+    state_result: Any = gather_results[0]
+    registry_result: Any = gather_results[1]
+    all_entities = (
+        state_result if not isinstance(state_result, Exception) else []
+    )
+    hidden_ids: set[str] = set()
+    if (
+        not include_hidden
+        and isinstance(registry_result, dict)
+        and registry_result.get("success")
+    ):
+        for entry in registry_result.get("result", []):
+            if entry.get("hidden_by") is not None:
+                eid = entry.get("entity_id")
+                if eid:
+                    hidden_ids.add(eid)
+
     query_lower = query.lower().strip()
 
     results = []
     for entity in all_entities:
         entity_id = entity.get("entity_id", "")
+        if entity_id in hidden_ids:
+            continue
         attributes = entity.get("attributes", {})
         friendly_name = attributes.get("friendly_name", entity_id)
         domain = entity_id.split(".")[0] if "." in entity_id else ""
@@ -89,49 +123,6 @@ async def _exact_match_search(
         **_build_pagination_metadata(len(results), offset, limit, paginated),
         "results": paginated,
         "search_type": "exact_match",
-    }
-
-
-async def _partial_results_search(
-    client: Any, query: str, domain_filter: str | None, limit: int, offset: int = 0
-) -> dict[str, Any]:
-    """
-    Last resort fallback - return any entities that might be relevant.
-
-    Returns entities from the specified domain (if any) or a sample of all entities.
-    """
-    all_entities = await client.get_states()
-
-    results = []
-    for entity in all_entities:
-        entity_id = entity.get("entity_id", "")
-        attributes = entity.get("attributes", {})
-        friendly_name = attributes.get("friendly_name", entity_id)
-        domain = entity_id.split(".")[0] if "." in entity_id else ""
-
-        # Apply domain filter if provided
-        if domain_filter and domain != domain_filter:
-            continue
-
-        results.append(
-            {
-                "entity_id": entity_id,
-                "friendly_name": friendly_name,
-                "domain": domain,
-                "state": entity.get("state", "unknown"),
-                "score": 0,
-                "match_type": "partial_listing",
-            }
-        )
-
-    paginated = results[offset : offset + limit]
-    return {
-        "success": True,
-        "partial": True,
-        "query": query,
-        **_build_pagination_metadata(len(results), offset, limit, paginated),
-        "results": paginated,
-        "search_type": "partial_listing",
     }
 
 
@@ -196,6 +187,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        include_hidden: Annotated[
+            bool | str,
+            Field(
+                default=False,
+                description=(
+                    "Include entities marked hidden_by in the entity registry "
+                    "(default: False). Hidden entities are typically integration "
+                    "diagnostics or user-suppressed entries that an agent acting "
+                    "on a user phrase shouldn't surface. Set to True to include "
+                    "them — useful for diagnostics or service workflows."
+                ),
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -216,12 +220,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parameter="query",
                 )
             )
+        # HA domains are canonically lowercase; agents that capitalize from a
+        # user phrase ("turn on the Lights") would otherwise hit a silent
+        # zero-result. Issue #1170 finding 1.
+        if domain_filter:
+            domain_filter = domain_filter.lower()
         # Coerce boolean parameter that may come as string from XML-style calls
         group_by_domain_bool = (
             coerce_bool_param(group_by_domain, "group_by_domain", default=False)
             or False
         )
         exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
+        include_hidden_bool = (
+            coerce_bool_param(include_hidden, "include_hidden", default=False)
+            or False
+        )
 
         try:
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
@@ -230,7 +243,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # If area_filter is provided, use area-based search
             if area_filter:
                 area_result = await smart_tools.get_entities_by_area(
-                    area_filter, group_by_domain=True
+                    area_filter,
+                    group_by_domain=True,
+                    include_hidden=include_hidden_bool,
                 )
 
                 # If we also have a query, filter the area results
@@ -253,7 +268,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     fuzzy_searcher = create_fuzzy_searcher(threshold=80)
 
-                    # Convert to format expected by fuzzy searcher
+                    # Convert to format expected by fuzzy searcher.
+                    # Pass through `_aliases` (populated by
+                    # get_entities_by_area) so the fuzzy haystack
+                    # includes per-entity aliases — closes #1166 for
+                    # the area+query branch alongside the non-area path.
                     entities_for_search = [
                         {
                             "entity_id": entity.get("entity_id", ""),
@@ -261,6 +280,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 "friendly_name": entity.get("friendly_name", "")
                             },
                             "state": entity.get("state", "unknown"),
+                            "_aliases": entity.get("_aliases", []),
                         }
                         for entity in all_area_entities
                     ]
@@ -269,7 +289,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         entities_for_search, query, limit, offset
                     )
 
-                    # Format matches similar to smart_entity_search
+                    # Format matches similar to smart_entity_search.
+                    # Top-level `area_filter` already carries this context for
+                    # the caller; per-result echo was redundant and
+                    # asymmetric vs the other branches (#1170 finding 4).
                     results = [
                         {
                             "entity_id": match["entity_id"],
@@ -278,7 +301,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "state": match["state"],
                             "score": match["score"],
                             "match_type": match["match_type"],
-                            "area_filter": area_filter,
                         }
                         for match in matches
                     ]
@@ -311,21 +333,51 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
-                        first_area = next(iter(area_result["areas"].values()))
-                        entities_data = first_area.get("entities")
-
-                        # Build a flat results list, applying domain_filter and
-                        # tagging each entity with its `domain` so the optional
-                        # by_domain rebuild below can group without re-parsing
-                        # entity_id. `{**entity, "domain": domain}` avoids
-                        # mutating dicts owned by the helper.
+                        # Iterate ALL fuzzy-matched areas, not just the first.
+                        # Pre-fix: `next(iter(...))` silently dropped every
+                        # area but one — a query like area_filter="bedroom"
+                        # against ["bedroom","bedroom_kids"] would return
+                        # only one area's entities and miss the user's
+                        # intended one entirely. The with-query branch
+                        # already iterated all matches, so the two paths
+                        # diverged. (#1170 finding 7.)
                         all_results: list[dict[str, Any]] = []
-                        for domain, entities in (entities_data or {}).items():
-                            if domain_filter and domain != domain_filter:
-                                continue
-                            all_results.extend(
-                                {**entity, "domain": domain} for entity in entities
+                        area_names_matched: list[str] = []
+                        # Sort area_id keys to make iteration deterministic;
+                        # the upstream `matched_area_ids` is a set, so
+                        # without sorting we'd be at the mercy of CPython
+                        # set-iteration order.
+                        for area_id in sorted(area_result["areas"]):
+                            area_data = area_result["areas"][area_id]
+                            area_names_matched.append(
+                                area_data.get("area_name", area_id)
                             )
+                            entities_data = area_data.get("entities") or {}
+                            for domain, entities in entities_data.items():
+                                if domain_filter and domain != domain_filter:
+                                    continue
+                                # `{**entity, ...}` avoids mutating dicts
+                                # owned by the smart_search helper.
+                                # Add score+match_type so the response shape
+                                # matches the other four search-type
+                                # branches (#1170 finding 3). Score=100
+                                # because area membership is exact, not
+                                # fuzzy. Strip leading-underscore internal
+                                # fields (e.g. `_aliases`) so the response
+                                # only contains public-API fields.
+                                all_results.extend(
+                                    {
+                                        **{
+                                            k: v
+                                            for k, v in entity.items()
+                                            if not k.startswith("_")
+                                        },
+                                        "domain": domain,
+                                        "score": 100,
+                                        "match_type": "area_match",
+                                    }
+                                    for entity in entities
+                                )
 
                         paginated = all_results[offset : offset + limit]
 
@@ -337,7 +389,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ),
                             "results": paginated,
                             "search_type": "area_only",
-                            "area_name": first_area.get("area_name", area_filter),
+                            # Public-API change: `area_names` is now a list
+                            # so callers can see when their filter matched
+                            # multiple areas (#1170 finding 7). The legacy
+                            # `area_name` is preserved as the first match
+                            # for one minor version to ease migration.
+                            "area_names": area_names_matched,
+                            "area_name": (
+                                area_names_matched[0]
+                                if area_names_matched
+                                else area_filter
+                            ),
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
@@ -369,14 +431,41 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
             if domain_filter and (not query or not query.strip()):
-                # Get all entities directly from the client
-                all_entities = await client.get_states()
+                # Fetch states + registry list in parallel so we can drop
+                # hidden entities (#1170 finding 9). Registry failure is
+                # tolerated: we just lose the hidden filter.
+                states_task = client.get_states()
+                registry_task = client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                )
+                gather_results = await asyncio.gather(
+                    states_task, registry_task, return_exceptions=True
+                )
+                states_result: Any = gather_results[0]
+                registry_result: Any = gather_results[1]
+                all_entities = (
+                    states_result
+                    if not isinstance(states_result, Exception)
+                    else []
+                )
+                hidden_ids: set[str] = set()
+                if (
+                    not include_hidden_bool
+                    and isinstance(registry_result, dict)
+                    and registry_result.get("success")
+                ):
+                    for entry in registry_result.get("result", []):
+                        if entry.get("hidden_by") is not None:
+                            eid = entry.get("entity_id")
+                            if eid:
+                                hidden_ids.add(eid)
 
-                # Filter by domain
+                # Filter by domain (and hidden_by, when not opted in)
                 filtered_entities = [
                     e
                     for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
+                    and e.get("entity_id") not in hidden_ids
                 ]
 
                 # Format results to match fuzzy search output
@@ -412,75 +501,61 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 return await add_timezone_metadata(client, domain_list_data)
 
             # Search strategy depends on exact_match setting:
-            # - exact_match=True: use exact substring matching directly
-            # - exact_match=False: try fuzzy first, fall back to exact, then partial
+            # - exact_match=True: substring match
+            # - exact_match=False: fuzzy first, fall back to substring on failure
+            #
+            # The legacy `partial_listing` last-resort dump was removed
+            # (#1170 finding 6): it returned every entity at score=0 with
+            # `partial: True`, which masked the underlying error and gave
+            # the agent a noise pile that was strictly worse than a clean
+            # error. If both real strategies fail we now propagate the
+            # exception so callers see why.
 
-            result: dict[str, Any] | None = None
+            result: dict[str, Any]
             warning: str | None = None
             search_type = "exact_match" if exact_match_bool else "fuzzy_search"
 
             if exact_match_bool:
-                # Exact match mode: skip fuzzy, go straight to substring matching
-                try:
-                    result = await _exact_match_search(
-                        client, query, domain_filter, limit, offset
-                    )
-                    search_type = "exact_match"
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exact_error:
-                    logger.warning(
-                        f"Exact match failed, trying partial results: {exact_error}"
-                    )
-                    try:
-                        result = await _partial_results_search(
-                            client, query, domain_filter, limit, offset
-                        )
-                        warning = "Search degraded, returning partial results"
-                        search_type = "partial_listing"
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as partial_error:
-                        logger.error(f"All search methods failed: {partial_error}")
-                        raise Exception("All search methods failed") from partial_error
+                # Exact match mode: substring matching only. No fallback —
+                # _exact_match_search only fails when client.get_states()
+                # itself fails, in which case any further retry is futile.
+                result = await _exact_match_search(
+                    client,
+                    query,
+                    domain_filter,
+                    limit,
+                    offset,
+                    include_hidden=include_hidden_bool,
+                )
+                search_type = "exact_match"
             else:
-                # Fuzzy mode: graceful degradation chain
+                # Fuzzy mode: BM25 → substring fallback on exception only.
                 try:
                     result = await smart_tools.smart_entity_search(
-                        query, limit, offset=offset, domain_filter=domain_filter
+                        query,
+                        limit,
+                        offset=offset,
+                        domain_filter=domain_filter,
+                        include_hidden=include_hidden_bool,
                     )
                     search_type = "fuzzy_search"
                 except asyncio.CancelledError:
                     raise
                 except Exception as fuzzy_error:
                     logger.warning(
-                        f"Fuzzy search failed, trying exact match: {fuzzy_error}"
+                        f"Fuzzy search failed, falling back to substring "
+                        f"match: {fuzzy_error}"
                     )
-                    try:
-                        result = await _exact_match_search(
-                            client, query, domain_filter, limit, offset
-                        )
-                        warning = "Fuzzy search unavailable, using exact match"
-                        search_type = "exact_match"
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exact_error:
-                        logger.warning(
-                            f"Exact match failed, trying partial results: {exact_error}"
-                        )
-                        try:
-                            result = await _partial_results_search(
-                                client, query, domain_filter, limit, offset
-                            )
-                            warning = "Search degraded, returning partial results"
-                            search_type = "partial_listing"
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as partial_error:
-                            logger.error(f"All search methods failed: {partial_error}")
-                            raise Exception(
-                                "All search methods failed"
-                            ) from partial_error
+                    result = await _exact_match_search(
+                        client,
+                        query,
+                        domain_filter,
+                        limit,
+                        offset,
+                        include_hidden=include_hidden_bool,
+                    )
+                    warning = "Fuzzy search unavailable, using substring match"
+                    search_type = "exact_match"
 
             # Convert 'matches' to 'results' for backward compatibility
             if "matches" in result:

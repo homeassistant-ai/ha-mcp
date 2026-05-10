@@ -31,6 +31,20 @@ def tokenize(text: str) -> list[str]:
     return [t for t in _SPLIT_RE.split(text.lower()) if t]
 
 
+def _strip_separators(text: str) -> str:
+    """Return *text* lowercased with all `._-\\s` removed.
+
+    Used to expose elided-separator forms in the BM25 corpus so a query
+    like `bedlight` can directly match the doc token built from
+    `light.bed_light`'s tail (`bed_light` → `bedlight`). Without this,
+    BM25 finds nothing and falls through to typo_fallback, which then
+    ties unrelated `*_lights` entities at the same score because each
+    of them has a single token (`light`) that fuzzy-matches part of
+    the query. (#1170 finding 2.)
+    """
+    return _SPLIT_RE.sub("", text.lower())
+
+
 # ---------------------------------------------------------------------------
 # BM25 scorer – lightweight, zero-dependency
 # ---------------------------------------------------------------------------
@@ -163,8 +177,12 @@ class FuzzyEntitySearcher:
             return [], 0
 
         # Build per-entity document: tokens from entity_id + friendly_name
+        # + entity registry aliases (when callers enrich entities with the
+        # ``_aliases`` key — see smart_search.smart_entity_search).
         docs: list[list[str]] = []
         meta: list[tuple[str, str, str, dict[str, Any], str]] = []  # eid, name, domain, attrs, state
+        # Track which entities matched on alias (for `match_type="alias_match"`).
+        alias_hit: list[set[str]] = []
 
         for entity in entities:
             entity_id = entity.get("entity_id", "")
@@ -173,9 +191,41 @@ class FuzzyEntitySearcher:
             domain = entity_id.split(".")[0] if "." in entity_id else ""
             state = entity.get("state", "unknown")
 
-            tokens = tokenize(entity_id) + tokenize(friendly_name)
+            id_tokens = tokenize(entity_id)
+            name_tokens = tokenize(friendly_name)
+            tokens = list(id_tokens + name_tokens)
+
+            # Separator-stripped forms (concat tokens) so queries that
+            # elide separators match. We add the entity_id tail (after
+            # the first dot) and the friendly_name to handle the common
+            # `bedlight` → `light.bed_light` / `Bed Light` case.
+            tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+            tail_concat = _strip_separators(tail)
+            if tail_concat:
+                tokens.append(tail_concat)
+            name_concat = _strip_separators(friendly_name)
+            if name_concat and name_concat != tail_concat:
+                tokens.append(name_concat)
+
+            # Aliases (entity registry). Each alias contributes both its
+            # tokenized form and its separator-stripped concat. Track the
+            # token set so we can label the result `alias_match` later
+            # without re-checking every alias against the query.
+            entity_alias_tokens: set[str] = set()
+            for alias in entity.get("_aliases", []) or []:
+                if not isinstance(alias, str):
+                    continue
+                a_tokens = tokenize(alias)
+                tokens.extend(a_tokens)
+                entity_alias_tokens.update(a_tokens)
+                a_concat = _strip_separators(alias)
+                if a_concat:
+                    tokens.append(a_concat)
+                    entity_alias_tokens.add(a_concat)
+
             docs.append(tokens)
             meta.append((entity_id, friendly_name, domain, attributes, state))
+            alias_hit.append(entity_alias_tokens)
 
         # Fit BM25
         scorer = BM25Scorer()
@@ -190,6 +240,7 @@ class FuzzyEntitySearcher:
         matches: list[dict[str, Any]] = []
 
         if theoretical_max > 0:
+            query_token_set = set(query_tokens)
             for i, raw in enumerate(raw_scores):
                 if raw <= 0:
                     continue
@@ -197,6 +248,17 @@ class FuzzyEntitySearcher:
                 if score < self.threshold:
                     continue
                 eid, fname, domain, attrs, state = meta[i]
+                # If any query token matched only on the alias haystack,
+                # surface that to the caller via match_type — useful both
+                # for telemetry and for the agent to know the friendly_name
+                # alone wouldn't have led it here. (#1170 finding 8.)
+                hit_alias_tokens = query_token_set & alias_hit[i]
+                if hit_alias_tokens:
+                    match_type = "alias_match"
+                else:
+                    match_type = self._get_match_type(
+                        eid, fname, domain, query_lower
+                    )
                 matches.append({
                     "entity_id": eid,
                     "friendly_name": fname,
@@ -204,7 +266,7 @@ class FuzzyEntitySearcher:
                     "state": state,
                     "attributes": attrs,
                     "score": score,
-                    "match_type": self._get_match_type(eid, fname, domain, query_lower),
+                    "match_type": match_type,
                 })
 
         # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
@@ -229,8 +291,19 @@ class FuzzyEntitySearcher:
         docs: list[list[str]],
         meta: list[tuple[str, str, str, dict[str, Any], str]],
     ) -> list[dict[str, Any]]:
-        """Token-level SequenceMatcher fallback for typo correction."""
+        """Token-level SequenceMatcher fallback for typo correction.
+
+        For multi-token queries, additionally requires coverage:
+        at least half of the distinct query tokens must each have *some*
+        doc token they ratio-match. Without this, a single-token
+        accidental hit (e.g. ``garbage`` ≈ ``garage``) was enough to
+        surface unrelated entities at score 92 from queries like
+        ``xyz_irrelevant_garbage``. (#1170 finding 5.)
+        """
+        del query_lower  # parameter kept for API compatibility
         results: list[dict[str, Any]] = []
+        distinct_query_tokens = list(dict.fromkeys(query_tokens))
+        n_distinct = len(distinct_query_tokens)
         for i, doc_tokens in enumerate(docs):
             best_token_score = 0
             for qt in query_tokens:
@@ -238,17 +311,32 @@ class FuzzyEntitySearcher:
                     ratio = calculate_ratio(qt, dt)
                     best_token_score = max(best_token_score, ratio)
 
-            if best_token_score >= 75:  # stricter threshold for typo fallback
-                eid, fname, domain, attrs, state = meta[i]
-                results.append({
-                    "entity_id": eid,
-                    "friendly_name": fname,
-                    "domain": domain,
-                    "state": state,
-                    "attributes": attrs,
-                    "score": best_token_score,
-                    "match_type": "typo_fallback",
-                })
+            if best_token_score < 75:  # stricter threshold for typo fallback
+                continue
+
+            # Multi-token coverage gate: how many distinct query tokens
+            # have any doc token within the typo-fallback threshold?
+            # A 3-token nonsense query that only one token explains
+            # (coverage 1/3) is rejected; a single-token query is always
+            # fully covered so unaffected.
+            if n_distinct > 1:
+                covered = 0
+                for qt in distinct_query_tokens:
+                    if any(calculate_ratio(qt, dt) >= 75 for dt in doc_tokens):
+                        covered += 1
+                if covered * 2 < n_distinct:  # < 50% coverage
+                    continue
+
+            eid, fname, domain, attrs, state = meta[i]
+            results.append({
+                "entity_id": eid,
+                "friendly_name": fname,
+                "domain": domain,
+                "state": state,
+                "attributes": attrs,
+                "score": best_token_score,
+                "match_type": "typo_fallback",
+            })
         return results
 
     def _calculate_entity_score(

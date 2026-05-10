@@ -3,12 +3,17 @@
 Tests that search functions correctly support offset-based pagination
 with standardized metadata: total_matches, offset, limit, count, has_more, next_offset.
 Also includes regression test for suggestions bug fix.
+
+Note: pagination tests for the legacy ``_partial_results_search`` were
+removed in #1170 (finding 6) — that fallback returned a useless
+score-0 entity dump and was deleted; exceptions now propagate to
+callers instead.
 """
 
 import pytest
 
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import _exact_match_search, _partial_results_search
+from ha_mcp.tools.tools_search import _exact_match_search
 from ha_mcp.utils.fuzzy_search import (
     FuzzyEntitySearcher,
     calculate_partial_ratio,
@@ -18,13 +23,25 @@ from ha_mcp.utils.fuzzy_search import (
 
 
 class MockClient:
-    """Mock Home Assistant client for testing."""
+    """Mock Home Assistant client for testing.
+
+    The search code paths now also call ``send_websocket_message`` to
+    fetch entity / area registries (#1170 findings 8 and 9). The mock
+    returns empty success responses, which the search code treats as
+    "no aliases, nothing hidden".
+    """
 
     def __init__(self, entities: list[dict]):
         self.entities = entities
 
     async def get_states(self) -> list[dict]:
         return self.entities
+
+    async def send_websocket_message(self, payload: dict) -> dict:
+        msg_type = payload.get("type", "")
+        if msg_type == "config/entity_registry/get_entries":
+            return {"success": True, "result": {}}
+        return {"success": True, "result": []}
 
 
 def _make_entities(count: int) -> list[dict]:
@@ -153,48 +170,6 @@ class TestExactMatchSearchPagination:
         assert result["has_more"] is False
         assert result["next_offset"] is None
         assert result["total_matches"] == 10
-
-
-class TestPartialResultsSearchPagination:
-    """Test _partial_results_search offset pagination."""
-
-    @pytest.fixture
-    def many_entities(self):
-        return _make_entities(10)
-
-    @pytest.mark.asyncio
-    async def test_offset_skips_results(self, many_entities):
-        client = MockClient(many_entities)
-        page1 = await _partial_results_search(client, "anything", None, 3, offset=0)
-        page2 = await _partial_results_search(client, "anything", None, 3, offset=3)
-
-        assert page1["count"] == 3
-        assert page2["count"] == 3
-        ids1 = {r["entity_id"] for r in page1["results"]}
-        ids2 = {r["entity_id"] for r in page2["results"]}
-        assert ids1.isdisjoint(ids2)
-
-    @pytest.mark.asyncio
-    async def test_pagination_metadata(self, many_entities):
-        client = MockClient(many_entities)
-        result = await _partial_results_search(client, "anything", None, 3, offset=0)
-
-        assert result.keys() >= PAGINATION_FIELDS
-        assert result["total_matches"] == 10
-        assert result["offset"] == 0
-        assert result["limit"] == 3
-        assert result["count"] == 3
-        assert result["has_more"] is True
-        assert result["next_offset"] == 3
-
-    @pytest.mark.asyncio
-    async def test_last_page_has_more_false(self, many_entities):
-        client = MockClient(many_entities)
-        result = await _partial_results_search(client, "anything", None, 5, offset=5)
-
-        assert result["count"] == 5
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
 
 
 class TestFuzzyScoreAccumulation:

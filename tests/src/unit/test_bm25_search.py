@@ -298,3 +298,115 @@ class TestSearchInDictBM25:
             config, "kitchen motion", exact_match=False
         )
         assert score > 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #1170 — fuzzy_search.py algorithmic regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestFuzzySearcherIssue1170:
+    """Lock down the fuzzy-search behavior changes from #1170 findings 2/5/8."""
+
+    @pytest.fixture
+    def lights_corpus(self):
+        return [
+            {
+                "entity_id": "light.bed_light",
+                "attributes": {"friendly_name": "Bed Light"},
+                "state": "off",
+            },
+            {
+                "entity_id": "light.ceiling_lights",
+                "attributes": {"friendly_name": "Ceiling Lights"},
+                "state": "off",
+            },
+            {
+                "entity_id": "light.kitchen_lights",
+                "attributes": {"friendly_name": "Kitchen Lights"},
+                "state": "off",
+            },
+            {
+                "entity_id": "cover.garage_door",
+                "attributes": {"friendly_name": "Garage Door"},
+                "state": "closed",
+            },
+        ]
+
+    def test_finding_2_elided_separator_query_finds_target_uniquely(
+        self, lights_corpus
+    ):
+        """Query ``bedlight`` (no separator) matches only ``light.bed_light``,
+        not the entire 3-light tie cluster pre-fix saw at score 76.
+
+        Implementation: separator-stripped concat tokens are added to the
+        BM25 corpus so a single-token query can match a multi-word entity
+        name directly, with high IDF (rare token = strong signal).
+        """
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(lights_corpus, "bedlight", limit=10)
+        assert total == 1, (
+            f"bedlight should uniquely match bed_light, not tie-cluster: {results}"
+        )
+        assert results[0]["entity_id"] == "light.bed_light"
+        assert results[0]["score"] >= 75, (
+            f"score should remain useful after fix: {results[0]}"
+        )
+
+    def test_finding_5_multi_token_garbage_rejected(self, lights_corpus):
+        """A 3-token nonsense query where only one token grazes a doc token
+        does NOT surface that doc.
+
+        Pre-fix: ``xyz_irrelevant_garbage`` returned ``cover.garage_door`` at
+        score 92 because typo_fallback compared each query token against
+        each doc token and a single ``garbage~garage`` ratio of 92 was
+        enough.
+
+        Post-fix: typo_fallback requires multi-token coverage ≥50% on
+        multi-token queries.
+        """
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(
+            lights_corpus, "xyz_irrelevant_garbage", limit=10
+        )
+        assert total == 0, (
+            f"low-coverage garbage query must yield no matches: {results}"
+        )
+
+    def test_finding_5_single_token_typo_still_recalls(self, lights_corpus):
+        """Single-token typos like ``ligth`` still recall (no coverage gate
+        on single-token queries — that would be too aggressive)."""
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(lights_corpus, "ligth", limit=10)
+        # Should still find at least the *_lights entities via typo_fallback.
+        assert total >= 1, f"single-token typo recall regressed: {results}"
+
+    def test_finding_8_alias_search_with_match_type_label(self, lights_corpus):
+        """Aliases are searchable when the caller supplies them on the
+        entity dict via ``_aliases``. Matches surface as
+        ``match_type='alias_match'`` so callers can distinguish."""
+        # Add an alias ONLY known via the `_aliases` field — neither
+        # entity_id nor friendly_name contain "lullaby".
+        enriched = []
+        for e in lights_corpus:
+            e2 = dict(e)
+            if e2["entity_id"] == "light.bed_light":
+                e2["_aliases"] = ["lullaby lamp"]
+            enriched.append(e2)
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(enriched, "lullaby", limit=10)
+        assert total == 1, (
+            f"alias should be searchable as a query token: {results}"
+        )
+        assert results[0]["entity_id"] == "light.bed_light"
+        assert results[0]["match_type"] == "alias_match", (
+            f"alias-driven match should be labeled alias_match: {results[0]}"
+        )
+
+    def test_finding_8_no_alias_no_match(self, lights_corpus):
+        """Without ``_aliases``, an alias-only query yields no result."""
+        searcher = FuzzyEntitySearcher()
+        results, total = searcher.search_entities(
+            lights_corpus, "lullaby", limit=10
+        )
+        assert total == 0, f"no alias data → no match: {results}"
