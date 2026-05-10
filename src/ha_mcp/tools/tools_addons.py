@@ -507,7 +507,7 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
 
     Args:
         client: Home Assistant REST client
-        slug: Add-on slug (e.g., "a0d7b954_nodered")
+        slug: Add-on slug (e.g., "<prefix>_nodered")
 
     Returns:
         Dictionary with add-on details including ingress info, state, options, etc.
@@ -740,7 +740,7 @@ async def _call_addon_ws(
 
     Args:
         client: Home Assistant REST client
-        slug: Add-on slug (e.g., "5c53de3b_esphome")
+        slug: Add-on slug (e.g., "<prefix>_esphome")
         path: WebSocket endpoint path (e.g., "/compile", "/validate")
         body: Message to send after connecting (JSON-encoded if dict, raw if string)
         timeout: Max seconds to wait for messages (default 60)
@@ -1081,7 +1081,7 @@ async def _call_addon_api(
 
     Args:
         client: Home Assistant REST client
-        slug: Add-on slug (e.g., "a0d7b954_nodered")
+        slug: Add-on slug (e.g., "<prefix>_nodered")
         path: API path relative to add-on root (e.g., "/flows")
         method: HTTP method (GET, POST, PUT, DELETE, PATCH)
         body: Request body for POST/PUT/PATCH
@@ -1349,8 +1349,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         slug: Annotated[
             str | None,
             Field(
-                description="Add-on slug for detailed info (e.g., 'a0d7b954_nodered'). "
-                "Omit to list all add-ons.",
+                description="Add-on slug for detailed info (e.g., '<prefix>_nodered'). "
+                "Slug prefixes vary by add-on repository — omit to list all add-ons "
+                "and discover the actual installed slug.",
                 default=None,
             ),
         ] = None,
@@ -1402,7 +1403,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Example Usage:**
         - List installed add-ons: ha_get_addon()
-        - Get Node-RED details: ha_get_addon(slug="a0d7b954_nodered")
+        - Get Node-RED details: ha_get_addon(slug="<prefix>_nodered")
         - List with resource usage: ha_get_addon(include_stats=True)
         - List available add-ons: ha_get_addon(source="available")
         - Search for MQTT: ha_get_addon(source="available", query="mqtt")
@@ -1448,8 +1449,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         slug: Annotated[
             str,
             Field(
-                description="Add-on slug (e.g., 'a0d7b954_nodered', 'ccab4aaf_frigate'). "
-                "Use ha_get_addon() to find installed add-on slugs.",
+                description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
+                "Slug prefixes vary by add-on repository — call ha_get_addon() "
+                "to discover the actual installed slug.",
             ),
         ],
         path: Annotated[
