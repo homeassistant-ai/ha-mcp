@@ -1629,6 +1629,190 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client):
+    """area_filter + query exercises a SEPARATE code path from the
+    plain area_only branch — `_hidden_by` is plumbed through
+    ``get_entities_by_area`` → ``entities_for_search`` enrichment →
+    BM25 ``hidden_flags``. A regression in any of those hops would
+    silently drop the penalty without breaking the simpler tests.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"e2e_1170_areafq_{suffix}"
+    area_res = await mcp_client.call_tool(
+        "ha_set_area_or_floor", {"kind": "area", "name": area_name}
+    )
+    area_id = assert_mcp_success(area_res, "Create area")["area_id"]
+
+    visible_name = f"e2e1170afqvis{suffix}"
+    hidden_name = f"e2e1170afqhid{suffix}"
+    v_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": visible_name,
+            "area_id": area_id,
+        },
+    )
+    v_eid = assert_mcp_success(v_res, "create visible").get("entity_id")
+    h_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {
+            "helper_type": "input_boolean",
+            "name": hidden_name,
+            "area_id": area_id,
+        },
+    )
+    h_eid = assert_mcp_success(h_res, "create hidden-target").get("entity_id")
+
+    try:
+        # Hide the second helper.
+        await mcp_client.call_tool(
+            "ha_set_entity", {"entity_id": h_eid, "hidden": True}
+        )
+        # Both helpers share the prefix "e2e1170afq" — query on that
+        # prefix matches both within the same area.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search_entities",
+            arguments={
+                "area_filter": area_id,
+                "query": "e2e1170afq",
+                "exact_match": False,
+                "limit": 20,
+            },
+            predicate=lambda d: any(
+                r.get("entity_id") == v_eid
+                for r in d.get("data", d).get("results", [])
+            ),
+            description="visible helper visible in area+query",
+        )
+        res = await mcp_client.call_tool(
+            "ha_search_entities",
+            {
+                "area_filter": area_id,
+                "query": "e2e1170afq",
+                "exact_match": False,
+                "limit": 20,
+            },
+        )
+        data = assert_mcp_success(res, "area+query hidden penalty").get(
+            "data", {}
+        )
+        ids = [r["entity_id"] for r in data["results"]]
+        if h_eid in ids and v_eid in ids:
+            visible = next(r for r in data["results"] if r["entity_id"] == v_eid)
+            hidden = next(r for r in data["results"] if r["entity_id"] == h_eid)
+            assert hidden["score"] < visible["score"], (
+                f"hidden should rank below visible in area+query: "
+                f"visible={visible}, hidden={hidden}"
+            )
+        else:
+            # If only the visible match surfaced (BM25 threshold +
+            # penalty interaction), at least the hidden one is allowed
+            # to be absent — but the visible one MUST be present.
+            assert v_eid in ids, (
+                f"visible area+query match disappeared: {ids}"
+            )
+    finally:
+        for eid in (v_eid, h_eid):
+            try:
+                await mcp_client.call_tool(
+                    "ha_delete_helpers_integrations",
+                    {
+                        "target": eid,
+                        "helper_type": "input_boolean",
+                        "confirm": True,
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(f"Cleanup of {eid} failed: {exc}")
+        try:
+            await mcp_client.call_tool(
+                "ha_remove_area_or_floor", {"kind": "area", "id": area_id}
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"Cleanup of area {area_id} failed: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
+    """Empty-query + domain_filter (the domain_listing branch) also
+    applies the hidden score penalty so visible domain entries sort
+    above hidden ones, and ``include_hidden=False`` filters them out.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    visible_name = f"e2e1170dlvis{suffix}"
+    hidden_name = f"e2e1170dlhid{suffix}"
+
+    v_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": visible_name},
+    )
+    v_eid = assert_mcp_success(v_res, "create visible dl").get("entity_id")
+    h_res = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": hidden_name},
+    )
+    h_eid = assert_mcp_success(h_res, "create hidden dl").get("entity_id")
+
+    try:
+        await mcp_client.call_tool(
+            "ha_set_entity", {"entity_id": h_eid, "hidden": True}
+        )
+
+        # Default include_hidden=True: hidden helper present, score < 100.
+        res = await mcp_client.call_tool(
+            "ha_search_entities",
+            {"domain_filter": "input_boolean", "limit": 200},
+        )
+        data = assert_mcp_success(res, "domain_listing default").get("data", {})
+        by_id = {r["entity_id"]: r for r in data["results"]}
+        assert h_eid in by_id, (
+            f"hidden helper should appear in domain_listing default: "
+            f"{list(by_id)[:5]}"
+        )
+        assert by_id[h_eid]["score"] < 100, (
+            f"hidden should carry penalty in domain_listing: "
+            f"{by_id[h_eid]}"
+        )
+        if v_eid in by_id:
+            assert by_id[v_eid]["score"] >= by_id[h_eid]["score"], (
+                f"visible should outrank hidden in domain_listing: "
+                f"visible={by_id[v_eid]}, hidden={by_id[h_eid]}"
+            )
+
+        # include_hidden=False: hidden helper filtered.
+        res2 = await mcp_client.call_tool(
+            "ha_search_entities",
+            {
+                "domain_filter": "input_boolean",
+                "include_hidden": False,
+                "limit": 200,
+            },
+        )
+        data2 = assert_mcp_success(res2, "domain_listing include_hidden=False").get(
+            "data", {}
+        )
+        ids2 = {r["entity_id"] for r in data2["results"]}
+        assert h_eid not in ids2, (
+            f"include_hidden=False should filter in domain_listing: {ids2}"
+        )
+    finally:
+        for eid in (v_eid, h_eid):
+            try:
+                await mcp_client.call_tool(
+                    "ha_delete_helpers_integrations",
+                    {
+                        "target": eid,
+                        "helper_type": "input_boolean",
+                        "confirm": True,
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(f"Cleanup of {eid} failed: {exc}")
+
+
+@pytest.mark.asyncio
 async def test_area_only_total_matches_aggregates_issue_1170(
     mcp_client, two_areas_with_shared_prefix
 ):

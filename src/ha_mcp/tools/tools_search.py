@@ -23,6 +23,7 @@ from .util_helpers import (
     coerce_bool_param,
     coerce_int_param,
     parse_string_list_param,
+    public_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,16 @@ async def _exact_match_search(
                 eid = entry.get("entity_id")
                 if eid:
                     hidden_ids.add(eid)
+    else:
+        # Without the registry we can't tag hidden entities, so the
+        # score-penalty downgrade silently doesn't apply. Log so the
+        # operator can correlate "diagnostic entity ranking first" with
+        # this WS hiccup instead of a code regression.
+        logger.warning(
+            "hidden_filter_unavailable: registry/list returned %r — "
+            "hidden entities will rank without the score penalty",
+            registry_result,
+        )
 
     query_lower = query.lower().strip()
 
@@ -237,23 +248,31 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # zero-result.
         if domain_filter:
             domain_filter = domain_filter.lower()
-        # Coerce boolean parameter that may come as string from XML-style calls
-        group_by_domain_bool = (
-            coerce_bool_param(group_by_domain, "group_by_domain", default=False)
-            or False
-        )
-        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
-        # Default True: hidden entities are kept (with score penalty) unless
-        # the caller explicitly opts out by passing include_hidden=False.
-        coerced_hidden = coerce_bool_param(
-            include_hidden, "include_hidden", default=True
-        )
-        # coerce_bool_param returns the default when value is None; with
-        # default=True the result is a real bool, but the type system
-        # still admits None — coalesce defensively for static typing.
-        include_hidden_bool = coerced_hidden if coerced_hidden is not None else True
 
         try:
+            # Param coercion stays inside try/except so a malformed
+            # value (e.g. include_hidden="maybe") surfaces as a
+            # structured ToolError via exception_to_structured_error
+            # rather than escaping as INTERNAL_ERROR.
+            group_by_domain_bool = (
+                coerce_bool_param(group_by_domain, "group_by_domain", default=False)
+                or False
+            )
+            exact_match_bool = coerce_bool_param(
+                exact_match, "exact_match", default=True
+            )
+            # Default True: hidden entities are kept (with score penalty)
+            # unless the caller explicitly opts out by passing False.
+            coerced_hidden = coerce_bool_param(
+                include_hidden, "include_hidden", default=True
+            )
+            # coerce_bool_param returns the default when value is None;
+            # with default=True the result is a real bool, but the type
+            # system still admits None — coalesce defensively for static
+            # typing.
+            include_hidden_bool = (
+                coerced_hidden if coerced_hidden is not None else True
+            )
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
             limit = coerce_int_param(limit, "limit", default=10, min_value=1)
 
@@ -350,7 +369,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         entities_for_search, query, limit, offset
                     )
 
-                    # Format matches similar to smart_entity_search.
                     # Top-level `area_filter` already carries this
                     # context for the caller; per-result echo would be
                     # redundant and asymmetric vs the other branches.
@@ -416,26 +434,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for domain, entities in entities_data.items():
                                 if domain_filter and domain != domain_filter:
                                     continue
-                                # `{**entity, ...}` avoids mutating dicts
-                                # owned by the smart_search helper.
-                                # Add score+match_type so the response
-                                # shape matches the other four
-                                # search-type branches. Score=100 because
-                                # area membership is exact, not fuzzy;
-                                # hidden entities receive the standard
-                                # penalty so they sort below visible
-                                # peers within the same area. Strip
-                                # leading-underscore internal fields
-                                # (e.g. `_aliases`, `_hidden_by`) so the
-                                # response only contains public-API
-                                # fields.
+                                # ``public_fields`` strips internal
+                                # ``_aliases`` / ``_hidden_by`` enrichments
+                                # before the dict crosses the public-API
+                                # boundary; ``{**..., ...}`` avoids
+                                # mutating dicts owned by smart_search.
+                                # Score=100 baseline because area
+                                # membership is exact (not fuzzy); hidden
+                                # entities receive the standard penalty
+                                # so they sort below visible peers within
+                                # the same area.
                                 all_results.extend(
                                     {
-                                        **{
-                                            k: v
-                                            for k, v in entity.items()
-                                            if not k.startswith("_")
-                                        },
+                                        **public_fields(entity),
                                         "domain": domain,
                                         "score": apply_hidden_penalty(
                                             100, entity.get("_hidden_by")
@@ -529,6 +540,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             eid = entry.get("entity_id")
                             if eid:
                                 hidden_ids.add(eid)
+                else:
+                    logger.warning(
+                        "hidden_filter_unavailable: registry/list returned "
+                        "%r — hidden entities in domain_listing will rank "
+                        "without the score penalty",
+                        registry_result,
+                    )
 
                 # Filter by domain. Hidden entities are kept by default
                 # (with score penalty applied below); ``include_hidden=False``

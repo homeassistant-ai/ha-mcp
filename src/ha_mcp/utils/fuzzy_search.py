@@ -39,10 +39,13 @@ def apply_hidden_penalty(score: int, hidden_by: Any) -> int:
     """Return ``score`` reduced by :data:`HIDDEN_SCORE_PENALTY` when
     ``hidden_by`` indicates a hidden entity. Used by every search
     branch that emits a ``score`` field so the ranking is consistent.
+    Coerces ``score`` to ``int`` so a stray float caller can't break
+    the result-dict's int contract for ``score``.
     """
+    s = int(score)
     if hidden_by is not None:
-        return max(0, score - HIDDEN_SCORE_PENALTY)
-    return score
+        return max(0, s - HIDDEN_SCORE_PENALTY)
+    return s
 
 
 def tokenize(text: str) -> list[str]:
@@ -269,10 +272,15 @@ class FuzzyEntitySearcher:
             for i, raw in enumerate(raw_scores):
                 if raw <= 0:
                     continue
-                score = min(100, round(raw / theoretical_max * 100))
-                score = apply_hidden_penalty(score, hidden_flags[i])
-                if score < self.threshold:
+                # Threshold gates the *raw* match quality so the option-c
+                # contract holds: a hidden entity that genuinely matches
+                # at threshold doesn't get penalised below it and silently
+                # disappear. Penalty is applied only after the gate, so it
+                # affects ranking but not visibility.
+                raw_score = min(100, round(raw / theoretical_max * 100))
+                if raw_score < self.threshold:
                     continue
+                score = apply_hidden_penalty(raw_score, hidden_flags[i])
                 eid, fname, domain, attrs, state = meta[i]
                 # If any query token matched only on the alias haystack,
                 # surface that to the caller via match_type — useful both
@@ -360,16 +368,17 @@ class FuzzyEntitySearcher:
             entity_hidden = (
                 hidden_flags[i] if hidden_flags is not None else None
             )
-            penalised = apply_hidden_penalty(best_token_score, entity_hidden)
-            if penalised < 75:  # mirror typo-fallback threshold
-                continue
+            # Apply the hidden penalty after the threshold gate above so
+            # borderline hidden matches still surface (option-c contract);
+            # the penalty only re-ranks them.
+            score = apply_hidden_penalty(best_token_score, entity_hidden)
             results.append({
                 "entity_id": eid,
                 "friendly_name": fname,
                 "domain": domain,
                 "state": state,
                 "attributes": attrs,
-                "score": penalised,
+                "score": score,
                 "match_type": "typo_fallback",
             })
         return results

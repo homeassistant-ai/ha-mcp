@@ -23,6 +23,40 @@ logger = logging.getLogger(__name__)
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
+def strip_internal_fields(obj: Any) -> Any:
+    """Remove leading-underscore keys from ``obj`` and any nested dicts
+    or lists in place.
+
+    The ha-mcp tool layer enriches entity / area dicts with internal
+    fields like ``_hidden_by`` and ``_aliases`` so downstream branches
+    can rank without re-querying the entity registry. Those keys must
+    not leak through public tool returns: this helper centralises the
+    convention so individual call sites don't have to remember to strip.
+    """
+    if isinstance(obj, dict):
+        for key in [k for k in obj if isinstance(k, str) and k.startswith("_")]:
+            obj.pop(key, None)
+        for value in obj.values():
+            strip_internal_fields(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            strip_internal_fields(item)
+    return obj
+
+
+def public_fields(d: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``d`` with leading-underscore keys
+    removed. Non-mutating counterpart to :func:`strip_internal_fields`,
+    for the comprehension call-sites where in-place mutation is
+    awkward (e.g. building a new result dict from an enriched input).
+    """
+    return {
+        k: v
+        for k, v in d.items()
+        if not (isinstance(k, str) and k.startswith("_"))
+    }
+
+
 def coerce_bool_param(
     value: bool | str | None,
     param_name: str = "parameter",
