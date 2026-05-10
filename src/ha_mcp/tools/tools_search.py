@@ -51,11 +51,13 @@ async def _exact_match_search(
     include_hidden: bool = False,
 ) -> dict[str, Any]:
     """
-    Substring search across entity_id + friendly_name; used both as the
-    ``exact_match=True`` primary path and as the fallback when fuzzy
-    search raises. In addition to ``client.get_states()``, also queries
-    the entity registry via WebSocket to honor ``include_hidden``
-    (#1170): when False, entities with ``hidden_by != null`` are skipped.
+    Search entities by substring on entity_id + friendly_name.
+
+    Used both as the ``exact_match=True`` primary path and as the
+    fallback when fuzzy search raises. In addition to ``client.get_states()``,
+    also queries the entity registry via WebSocket to honor
+    ``include_hidden`` (#1170): when False, entities with
+    ``hidden_by != null`` are skipped.
     """
     # Fetch states + entity registry in parallel. Registry-list failure
     # is tolerated (we just lose the hidden filter); states-fetch failure

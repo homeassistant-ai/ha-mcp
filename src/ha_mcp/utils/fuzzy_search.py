@@ -32,7 +32,7 @@ def tokenize(text: str) -> list[str]:
 
 
 def _strip_separators(text: str) -> str:
-    """Lowercase ``text`` and remove `.`, `_`, `-`, whitespace.
+    """Strip ``.``, ``_``, ``-``, whitespace from *text* and lowercase.
 
     Used to add elided-separator forms to the BM25 corpus so queries
     like ``bedlight`` match tokens like ``bed_light`` (#1170).

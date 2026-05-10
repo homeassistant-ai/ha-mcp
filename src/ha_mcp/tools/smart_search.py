@@ -116,7 +116,7 @@ class SmartSearchTools:
         include_hidden: bool = False,
     ) -> dict[str, Any]:
         """
-        Advanced entity search with fuzzy matching and typo tolerance.
+        Search entities with fuzzy matching and typo tolerance.
 
         Args:
             query: Search query (can be partial, with typos)
