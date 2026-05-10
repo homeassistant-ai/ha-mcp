@@ -40,10 +40,6 @@ class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
 
 
-class HomeAssistantAuthError(HomeAssistantError):
-    """Authentication error with Home Assistant."""
-
-
 class HomeAssistantAPIError(HomeAssistantError):
     """API error from Home Assistant."""
 
@@ -56,6 +52,29 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
+
+
+class HomeAssistantAuthError(HomeAssistantAPIError):
+    """Authentication error with Home Assistant.
+
+    Subclass of ``HomeAssistantAPIError`` so ``except HomeAssistantAPIError``
+    blocks (e.g. ``_get_system_service_log``) catch auth failures uniformly
+    instead of letting them propagate raw to FastMCP's generic wrapper.
+    Pattern matching in ``_classify_exception`` still routes auth errors to
+    ``create_auth_error`` first because ``case HomeAssistantAuthError():``
+    appears before ``case HomeAssistantAPIError():`` in source order.
+
+    Defaults ``status_code`` to 401 since that's what every production raise
+    site corresponds to today.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = 401,
+        response_data: dict[str, Any] | None = None,
+    ):
+        super().__init__(message, status_code=status_code, response_data=response_data)
 
 
 class HomeAssistantCommandError(HomeAssistantError):
@@ -1300,7 +1319,6 @@ class HomeAssistantClient:
                     status_code=405,
                 ) from e
             raise
-
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """

@@ -42,6 +42,10 @@ import pytest
 logger = logging.getLogger(__name__)
 
 MOCK_SUPERVISOR_TOKEN = "test-supervisor-token"
+# Special token that the mock treats as "valid auth, but addon hassio_role too
+# low" — surfaces as a 403 from any authenticated endpoint. Used by tests that
+# need to exercise the role-mismatch branch added alongside #1116.
+MOCK_INSUFFICIENT_ROLE_TOKEN = "test-supervisor-token-low-role"
 
 # The seven Supervisor-managed system services exposed at /<service>/logs.
 # Mirrors SYSTEM_SERVICE_SLUGS in src/ha_mcp/tools/tools_utility.py.
@@ -61,8 +65,21 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         return
 
     def _check_auth(self) -> bool:
-        if self.headers.get("Authorization", "") == f"Bearer {MOCK_SUPERVISOR_TOKEN}":
+        auth = self.headers.get("Authorization", "")
+        if auth == f"Bearer {MOCK_SUPERVISOR_TOKEN}":
             return True
+        if auth == f"Bearer {MOCK_INSUFFICIENT_ROLE_TOKEN}":
+            # Valid token, role too low — what real Supervisor returns when
+            # the addon's hassio_role is below `manager` for the requested
+            # endpoint (the #1116 cause).
+            self._send_json(
+                403,
+                {
+                    "result": "error",
+                    "message": "Insufficient role for this endpoint",
+                },
+            )
+            return False
         self._send_json(401, {"result": "error", "message": "Invalid Supervisor token"})
         return False
 
