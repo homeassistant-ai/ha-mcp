@@ -525,6 +525,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "binary_sensor command_line rest mqtt platform yaml-only "
             "config file modify add remove replace"
         ),
+        "ha_manage_addon": (
+            "manage addon add-on configure settings options port network boot "
+            "watchdog auto_update supervisor ingress proxy websocket api rest "
+            "esphome nodered node-red frigate mosquitto mqtt zigbee2mqtt zigbee "
+            "z-wave zwave appdaemon hacs studio code server file editor terminal "
+            "ssh samba grafana influxdb deconz motioneye compile validate upload "
+            "deploy firmware ota flash yaml device logs flows events stats"
+        ),
     }
 
     # Description overrides that REPLACE the original description for BM25.
