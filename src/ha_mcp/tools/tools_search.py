@@ -77,6 +77,11 @@ async def _exact_match_search(
     registry_result: Any = gather_results[1]
     if isinstance(state_result, BaseException):
         raise state_result
+    # CancelledError comes through gather as a captured exception even
+    # when return_exceptions=True; it has to propagate or the canceller
+    # waits forever.
+    if isinstance(registry_result, asyncio.CancelledError):
+        raise registry_result
     all_entities = state_result
     hidden_ids: set[str] = set()
     if isinstance(registry_result, dict) and registry_result.get("success"):
@@ -131,8 +136,10 @@ async def _exact_match_search(
                 }
             )
 
-    # Sort by score descending
-    results.sort(key=lambda x: x["score"], reverse=True)
+    # Sort by score descending, tie-break on entity_id for stable
+    # pagination when many results share a score (visible substring
+    # hits at 100, hidden ones at 80 etc).
+    results.sort(key=lambda x: (-x["score"], x["entity_id"]))
     paginated = results[offset : offset + limit]
     return {
         "success": True,
@@ -224,7 +231,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
+        """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
         When NOT to use: for searching inside automation, script, helper, or dashboard
         *configurations* (e.g. which automations call a service or reference an entity),
@@ -236,6 +243,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
+        # HA domains are canonically lowercase, no whitespace; agents
+        # that capitalize ("Lights") or pad ("  light  ") would
+        # otherwise hit a silent zero-result against the prefix match
+        # downstream. Strip-then-lowercase before validation so a
+        # whitespace-only filter ("   ") collapses to "" and fails the
+        # at-least-one-set check rather than passing it and falling
+        # through to a no-op fuzzy search.
+        if domain_filter:
+            domain_filter = domain_filter.strip().lower()
+        if area_filter:
+            area_filter = area_filter.strip()
         if not query.strip() and not domain_filter and not area_filter:
             raise_tool_error(
                 create_validation_error(
@@ -243,13 +261,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     parameter="query",
                 )
             )
-        # HA domains are canonically lowercase, no whitespace; agents that
-        # capitalize ("Lights") or pad ("  light  ") would otherwise hit a
-        # silent zero-result against the prefix match downstream. Strip
-        # before lowercasing so the canonical value flows through the
-        # response echo and the operator-facing note message.
-        if domain_filter:
-            domain_filter = domain_filter.strip().lower()
 
         try:
             # Param coercion stays inside try/except so a malformed
@@ -461,7 +472,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         # Re-sort so visible matches outrank penalised
                         # hidden ones; iteration order alone doesn't
                         # guarantee that for an area with mixed entities.
-                        all_results.sort(key=lambda x: x["score"], reverse=True)
+                        # Tie-break on entity_id so paginated requests
+                        # return a stable ordering when many results
+                        # share a score (every visible area_match is at
+                        # 100, every hidden one at 80 — without the
+                        # secondary key the page split would shift
+                        # between calls).
+                        all_results.sort(
+                            key=lambda x: (-x["score"], x["entity_id"])
+                        )
                         paginated = all_results[offset : offset + limit]
 
                         area_search_data: dict[str, Any] = {
@@ -534,6 +553,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 registry_result: Any = gather_results[1]
                 if isinstance(states_result, BaseException):
                     raise states_result
+                # CancelledError must propagate; gather captures it like
+                # any other exception when return_exceptions=True.
+                if isinstance(registry_result, asyncio.CancelledError):
+                    raise registry_result
                 all_entities = states_result
                 hidden_ids: set[str] = set()
                 if isinstance(registry_result, dict) and registry_result.get("success"):
@@ -581,7 +604,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "score": score,
                         "match_type": "domain_listing",
                     })
-                scored_entities.sort(key=lambda x: x["score"], reverse=True)
+                # Tie-break on entity_id for stable pagination — every
+                # visible domain entry scores 100 and every hidden one
+                # scores 80, so sorting by score alone leaves the
+                # within-tier ordering up to dict iteration.
+                scored_entities.sort(
+                    key=lambda x: (-x["score"], x["entity_id"])
+                )
                 results = scored_entities[offset : offset + limit]
 
                 domain_list_data: dict[str, Any] = {

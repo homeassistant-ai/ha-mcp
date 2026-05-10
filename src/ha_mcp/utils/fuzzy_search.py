@@ -272,11 +272,11 @@ class FuzzyEntitySearcher:
             for i, raw in enumerate(raw_scores):
                 if raw <= 0:
                     continue
-                # Threshold gates the *raw* match quality so the option-c
-                # contract holds: a hidden entity that genuinely matches
-                # at threshold doesn't get penalised below it and silently
-                # disappear. Penalty is applied only after the gate, so it
-                # affects ranking but not visibility.
+                # Threshold gates the *raw* match quality: a hidden
+                # entity that genuinely matches at threshold shouldn't
+                # get penalised below it and silently disappear.
+                # Penalty is applied only after the gate, so it affects
+                # ranking but not visibility.
                 raw_score = min(100, round(raw / theoretical_max * 100))
                 if raw_score < self.threshold:
                     continue
@@ -311,10 +311,13 @@ class FuzzyEntitySearcher:
         bm25_found_any = any(raw > 0 for raw in raw_scores)
         if not matches and not bm25_found_any:
             matches = self._typo_fallback(
-                query_tokens, query_lower, docs, meta, hidden_flags
+                query_tokens, docs, meta, hidden_flags
             )
 
-        matches.sort(key=lambda x: x["score"], reverse=True)
+        # Tie-break on entity_id so paginated requests return stable
+        # ordering when several entities share a score (common with the
+        # hidden-penalty bands at 100/80 and BM25's coarse score buckets).
+        matches.sort(key=lambda x: (-x["score"], x["entity_id"]))
         total_matches = len(matches)
         return matches[offset:offset + limit], total_matches
 
@@ -323,7 +326,6 @@ class FuzzyEntitySearcher:
     def _typo_fallback(
         self,
         query_tokens: list[str],
-        query_lower: str,
         docs: list[list[str]],
         meta: list[tuple[str, str, str, dict[str, Any], str]],
         hidden_flags: list[Any] | None = None,
@@ -337,7 +339,6 @@ class FuzzyEntitySearcher:
         surface unrelated entities at score 92 from a 3-token query
         whose other two tokens have no doc relationship.
         """
-        del query_lower  # parameter kept for API compatibility
         results: list[dict[str, Any]] = []
         distinct_query_tokens = list(dict.fromkeys(query_tokens))
         n_distinct = len(distinct_query_tokens)
@@ -368,9 +369,9 @@ class FuzzyEntitySearcher:
             entity_hidden = (
                 hidden_flags[i] if hidden_flags is not None else None
             )
-            # Apply the hidden penalty after the threshold gate above so
-            # borderline hidden matches still surface (option-c contract);
-            # the penalty only re-ranks them.
+            # Apply the hidden penalty after the threshold gate above
+            # so borderline hidden matches still surface; the penalty
+            # only re-ranks them.
             score = apply_hidden_penalty(best_token_score, entity_hidden)
             results.append({
                 "entity_id": eid,

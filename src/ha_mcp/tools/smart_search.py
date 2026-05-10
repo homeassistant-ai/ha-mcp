@@ -156,6 +156,11 @@ class SmartSearchTools:
             # bogus "zero matches" with success=True.
             if isinstance(results[0], BaseException):
                 raise results[0]
+            # CancelledError on the registry task must propagate too;
+            # gather captures it like any other exception when
+            # return_exceptions=True.
+            if isinstance(results[1], asyncio.CancelledError):
+                raise results[1]
             entities = results[0]
 
             # Build entity_id -> slim registry entry map. Registry-list

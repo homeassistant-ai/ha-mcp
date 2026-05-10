@@ -613,3 +613,46 @@ class TestHiddenScorePenalty:
                 assert hidden["score"] < results[0]["score"], (
                     f"hidden typo-match score should be lower: {results}"
                 )
+
+    def test_hidden_borderline_raw_score_threshold_edge(self):
+        """Lock down the threshold-on-raw-score fix at the regression-
+        prone edge: a hidden entity whose raw BM25 score lands
+        EXACTLY at the threshold must still surface, even though
+        ``raw - HIDDEN_SCORE_PENALTY`` falls below threshold.
+
+        Pre-fix the order was:
+            score = round(raw / theoretical_max * 100)
+            score = apply_hidden_penalty(score, hidden)
+            if score < threshold: continue   # ← drops borderline hidden
+        Post-fix the threshold gates the raw score before the penalty
+        is applied. A future revert that recomposes those two lines
+        would break here.
+        """
+        # Build a 1-entity corpus with a single token. Query against
+        # that token: BM25 raw score for the single doc is exactly
+        # theoretical_max → score 100 → at threshold 100 (custom).
+        # Then drop a hidden flag in: penalised would be 80 < 100,
+        # but the gate runs on raw=100 first, so it surfaces.
+        entities = [
+            {
+                "entity_id": "sensor.borderline",
+                "attributes": {"friendly_name": "borderline"},
+                "state": "off",
+                "_hidden_by": "integration",
+            },
+        ]
+        # threshold=100 means only an exact-IDF max BM25 hit clears.
+        # The single-token single-doc case lands at exactly that.
+        searcher = FuzzyEntitySearcher(threshold=100)
+        results, total = searcher.search_entities(
+            entities, "borderline", limit=10
+        )
+        assert total == 1, (
+            f"raw-100 hidden match must clear threshold-100 gate "
+            f"despite the post-gate penalty: {results}"
+        )
+        # And the emitted score reflects the penalty.
+        assert results[0]["score"] == 80, (
+            f"penalty must still apply (100→80) to the surfaced hit: "
+            f"{results[0]}"
+        )

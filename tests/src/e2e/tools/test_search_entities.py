@@ -1013,8 +1013,8 @@ async def test_area_filter_fuzzy_multi_area_with_query(
 
 @pytest.mark.asyncio
 async def test_domain_filter_uppercase_normalized_issue_1170(mcp_client):
-    """domain_filter is lowercased so agents that capitalize from a user
-    phrase (e.g. ``"turn on the Lights"``) don't hit a silent zero-result.
+    """domain_filter is stripped + lowercased so agents that capitalize
+    or pad from a user phrase don't hit a silent zero-result.
     (#1170 finding 1.)"""
     lower = await mcp_client.call_tool(
         "ha_search_entities", {"domain_filter": "light", "limit": 50}
@@ -1033,6 +1033,60 @@ async def test_domain_filter_uppercase_normalized_issue_1170(mcp_client):
     )
     # Echoed in normalized form so callers can see the canonical value.
     assert upper_data["domain_filter"] == "light"
+
+
+@pytest.mark.parametrize(
+    "padded",
+    ["  light  ", "\tlight", "light\n", "  Light  ", " LIGHT\t"],
+    ids=["padded", "tab-prefix", "newline-suffix", "padded-mixed-case", "tab-and-upper"],
+)
+@pytest.mark.asyncio
+async def test_domain_filter_whitespace_normalized_issue_1170(mcp_client, padded):
+    """domain_filter strips whitespace AND lowercases before the prefix
+    match. Pre-stress-test, only ``.lower()`` was applied: a padded
+    value like ``"  LIGHT  "`` returned a silent 0-result because the
+    prefix match ran against the unstripped string. This regression
+    test pins the strip step so a future revert silently re-introduces
+    the bug."""
+    canonical = await mcp_client.call_tool(
+        "ha_search_entities", {"domain_filter": "light", "limit": 50}
+    )
+    padded_call = await mcp_client.call_tool(
+        "ha_search_entities", {"domain_filter": padded, "limit": 50}
+    )
+    canon_data = assert_mcp_success(canonical, "canonical").get("data", {})
+    padded_data = assert_mcp_success(padded_call, f"padded={padded!r}").get("data", {})
+    assert canon_data["total_matches"] > 0, (
+        f"baseline canonical should return results: {canon_data}"
+    )
+    assert padded_data["total_matches"] == canon_data["total_matches"], (
+        f"padded domain_filter must match canonical: "
+        f"padded={padded!r} ({padded_data}), canon={canon_data}"
+    )
+    assert padded_data["domain_filter"] == "light", (
+        f"padded domain_filter should be echoed canonicalized: {padded_data}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_domain_filter_whitespace_only_rejected_issue_1170(mcp_client):
+    """``domain_filter='   '`` (all whitespace, no other filters) must
+    fail validation rather than collapse to '' and fall through to a
+    silent zero-result fuzzy search. Pre-fix, the strip happened
+    *after* the at-least-one-set check, so a whitespace-only filter
+    passed as truthy and then normalised to an empty string
+    downstream."""
+    data = await safe_call_tool(
+        mcp_client, "ha_search_entities", {"domain_filter": "   ", "limit": 5}
+    )
+    inner = data.get("data", data)
+    assert inner.get("success") is False, (
+        f"whitespace-only domain_filter should fail validation: {inner}"
+    )
+    error = inner.get("error", {})
+    assert isinstance(error, dict) and error.get("code") == "VALIDATION_FAILED", (
+        f"whitespace-only filter should be VALIDATION_FAILED: {inner}"
+    )
 
 
 @pytest.fixture
@@ -1713,20 +1767,22 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
             "data", {}
         )
         ids = [r["entity_id"] for r in data["results"]]
-        if h_eid in ids and v_eid in ids:
-            visible = next(r for r in data["results"] if r["entity_id"] == v_eid)
-            hidden = next(r for r in data["results"] if r["entity_id"] == h_eid)
-            assert hidden["score"] < visible["score"], (
-                f"hidden should rank below visible in area+query: "
-                f"visible={visible}, hidden={hidden}"
-            )
-        else:
-            # If only the visible match surfaced (BM25 threshold +
-            # penalty interaction), at least the hidden one is allowed
-            # to be absent — but the visible one MUST be present.
-            assert v_eid in ids, (
-                f"visible area+query match disappeared: {ids}"
-            )
+        # With the distinctive token hitting BM25 at score 100 in both
+        # entity_id and friendly_name, both helpers must surface — the
+        # earlier "hidden may be absent" escape hatch was masking the
+        # threshold-edge regression that's now locked down separately.
+        assert v_eid in ids, (
+            f"visible area+query match disappeared: {ids}"
+        )
+        assert h_eid in ids, (
+            f"hidden area+query match should still surface (option-c): {ids}"
+        )
+        visible = next(r for r in data["results"] if r["entity_id"] == v_eid)
+        hidden = next(r for r in data["results"] if r["entity_id"] == h_eid)
+        assert hidden["score"] < visible["score"], (
+            f"hidden should rank below visible in area+query: "
+            f"visible={visible}, hidden={hidden}"
+        )
     finally:
         for eid in (v_eid, h_eid):
             try:

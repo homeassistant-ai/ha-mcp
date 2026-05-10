@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
-def strip_internal_fields(obj: Any) -> Any:
+def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
     """Remove leading-underscore keys from ``obj`` and any nested dicts
     or lists in place.
 
@@ -32,23 +32,36 @@ def strip_internal_fields(obj: Any) -> Any:
     can rank without re-querying the entity registry. Those keys must
     not leak through public tool returns: this helper centralises the
     convention so individual call sites don't have to remember to strip.
+
+    Mutates in place and returns the same reference for chaining. Cycle
+    guard via ``_seen`` (id-tracked) keeps the recursion safe if a
+    future caller ever feeds it a non-tree structure — JSON payloads
+    don't, but the helper is now a generic utility (importable from
+    ``server.py``) so the protection is cheap insurance.
     """
+    if _seen is None:
+        _seen = set()
+    obj_id = id(obj)
+    if obj_id in _seen:
+        return obj
     if isinstance(obj, dict):
+        _seen.add(obj_id)
         for key in [k for k in obj if isinstance(k, str) and k.startswith("_")]:
             obj.pop(key, None)
         for value in obj.values():
-            strip_internal_fields(value)
+            strip_internal_fields(value, _seen)
     elif isinstance(obj, list):
+        _seen.add(obj_id)
         for item in obj:
-            strip_internal_fields(item)
+            strip_internal_fields(item, _seen)
     return obj
 
 
 def public_fields(d: dict[str, Any]) -> dict[str, Any]:
     """Return a shallow copy of ``d`` with leading-underscore keys
-    removed. Non-mutating counterpart to :func:`strip_internal_fields`,
-    for the comprehension call-sites where in-place mutation is
-    awkward (e.g. building a new result dict from an enriched input).
+    removed. Non-mutating counterpart to :func:`strip_internal_fields`.
+    Shallow only — list/dict values are shared with the source, so a
+    later mutation of those values would propagate.
     """
     return {
         k: v
