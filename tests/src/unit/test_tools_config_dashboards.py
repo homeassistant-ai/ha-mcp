@@ -89,68 +89,81 @@ class TestShouldLazyResolve:
 
 
 class TestResolveDashboard:
+    """Tests both arms of ``_resolve_dashboard``: matched and unexpected-shape."""
+
     async def test_match_by_url_path(self, fake_client):
-        fake_client.send_websocket_message.return_value = {
-            "result": [
-                {"url_path": "my-dash", "id": "my_dash"},
-                {"url_path": "other", "id": "other_id"},
-            ]
-        }
-        result = await _resolve_dashboard(fake_client, "my-dash")
-        assert result == {"url_path": "my-dash", "id": "my_dash"}
+        dashboards_list = [
+            {"url_path": "my-dash", "id": "my_dash"},
+            {"url_path": "other", "id": "other_id"},
+        ]
+        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
+        match, dashboards = await _resolve_dashboard(fake_client, "my-dash")
+        assert match == {"url_path": "my-dash", "id": "my_dash"}
+        assert dashboards == dashboards_list
 
     async def test_match_by_internal_id(self, fake_client):
-        fake_client.send_websocket_message.return_value = {
-            "result": [{"url_path": "my-dash", "id": "my_dash"}]
-        }
-        result = await _resolve_dashboard(fake_client, "my_dash")
-        assert result == {"url_path": "my-dash", "id": "my_dash"}
+        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
+        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
+        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
+        assert match == {"url_path": "my-dash", "id": "my_dash"}
+        assert dashboards == dashboards_list
 
     async def test_response_as_bare_list(self, fake_client):
         # Older HA versions / different response shapes return the list
         # directly rather than wrapped in {"result": ...}.
-        fake_client.send_websocket_message.return_value = [
-            {"url_path": "my-dash", "id": "my_dash"}
-        ]
-        result = await _resolve_dashboard(fake_client, "my_dash")
-        assert result == {"url_path": "my-dash", "id": "my_dash"}
+        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
+        fake_client.send_websocket_message.return_value = dashboards_list
+        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
+        assert match == {"url_path": "my-dash", "id": "my_dash"}
+        assert dashboards == dashboards_list
 
-    async def test_no_match_returns_none(self, fake_client):
-        fake_client.send_websocket_message.return_value = {
-            "result": [{"url_path": "my-dash", "id": "my_dash"}]
-        }
-        assert await _resolve_dashboard(fake_client, "nonexistent") is None
+    async def test_no_match_still_returns_dashboards_list(self, fake_client):
+        # When the identifier doesn't match any dashboard, ``match`` is
+        # None but ``dashboards`` still carries the fetched list — the
+        # fetch happened, only the match check failed.
+        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
+        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
+        match, dashboards = await _resolve_dashboard(fake_client, "nonexistent")
+        assert match is None
+        assert dashboards == dashboards_list
 
-    async def test_malformed_shape_logs_warning_and_returns_none(
+    async def test_malformed_shape_logs_warning_and_returns_none_pair(
         self, fake_client, caplog
     ):
         # Neither dict-with-result nor list — could be a future HA shape
         # change or an error envelope. Must surface as a logger.warning,
-        # not silently degrade to "always no match".
+        # not silently degrade to "always no match". Both elements of
+        # the tuple are None so callers know the fetch failed and they
+        # can fall back to a fresh fetch instead of treating ``[]`` as
+        # an authoritative empty registry.
         fake_client.send_websocket_message.return_value = "unexpected string"
         with caplog.at_level(
             logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
         ):
-            result = await _resolve_dashboard(fake_client, "anything")
-        assert result is None
+            match, dashboards = await _resolve_dashboard(fake_client, "anything")
+        assert match is None
+        assert dashboards is None
         assert any("unexpected shape" in rec.message for rec in caplog.records), (
             f"expected an 'unexpected shape' warning; got {caplog.records}"
         )
 
-    async def test_missing_url_path_in_match_returns_none(self, fake_client):
+    async def test_missing_url_path_in_match_returns_none_match(self, fake_client):
         # Malformed registry entry where the matching dashboard is
-        # missing one of the required fields. Must skip / return None
-        # rather than forwarding empty strings to delete_dashboard.
-        fake_client.send_websocket_message.return_value = {
-            "result": [{"id": "my_dash"}]  # url_path missing entirely
-        }
-        assert await _resolve_dashboard(fake_client, "my_dash") is None
+        # missing one of the required fields. Match is None (skipped
+        # rather than forwarding empty strings to delete_dashboard) but
+        # the list itself is still returned.
+        dashboards_list = [{"id": "my_dash"}]  # url_path missing entirely
+        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
+        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
+        assert match is None
+        assert dashboards == dashboards_list
 
-    async def test_empty_id_in_match_returns_none(self, fake_client):
-        fake_client.send_websocket_message.return_value = {
-            "result": [{"url_path": "my-dash", "id": ""}]
-        }
-        assert await _resolve_dashboard(fake_client, "my-dash") is None
+    async def test_empty_id_in_match_returns_none_match(self, fake_client):
+        dashboards_list = [{"url_path": "my-dash", "id": ""}]
+        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
+        match, dashboards = await _resolve_dashboard(fake_client, "my-dash")
+        assert match is None
+        assert dashboards == dashboards_list
 
 
 # -----------------------------------------------------------------------------

@@ -265,22 +265,37 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
-async def _resolve_dashboard(client: Any, identifier: str) -> dict[str, str] | None:
+async def _resolve_dashboard(
+    client: Any, identifier: str
+) -> tuple[dict[str, str] | None, list[dict[str, Any]] | None]:
     """Resolve a dashboard identifier (url_path or internal id) to both forms.
 
-    Calls ``lovelace/dashboards/list`` and returns
-    ``{"url_path": ..., "id": ...}`` when the identifier matches either field
-    on a registry entry that has both fields populated; otherwise returns
-    ``None``. Always pays the round-trip when called.
+    Calls ``lovelace/dashboards/list`` and returns a 2-tuple
+    ``(match, dashboards)``:
 
-    Two call sites:
+    - ``match`` is ``{"url_path": ..., "id": ...}`` when the identifier
+      matches either field on a registry entry that has both fields
+      populated; otherwise ``None``.
+    - ``dashboards`` is the raw list as returned by HA when the
+      response shape is recognised (dict-with-``result`` or bare list);
+      ``None`` when the shape was unexpected and a warning was logged.
+
+    Returning ``dashboards`` alongside ``match`` lets callers reuse the
+    list for follow-on checks (existence, id lookup) instead of paying
+    a second ``lovelace/dashboards/list`` round-trip.
+
+    Three call sites:
     - **Lazy fallback** (``_lazy_resolve_and_retry``): only invoked after
       ``lovelace/config`` rejected the identifier with
       ``_LAZY_RESOLVE_TRIGGER`` — the round-trip is gated by the caller.
+      Discards ``dashboards``.
     - **Eager pre-resolve** (``ha_config_set_dashboard``): invoked before
       hyphen validation so callers may pass either form; gated on a
       cheap heuristic ("no hyphen, not 'lovelace'") rather than an error
-      from HA.
+      from HA. Reuses ``dashboards`` for the existence-check below.
+    - **Delete** (``ha_config_delete_dashboard``): resolves either form
+      to the registry id before issuing the delete. Discards
+      ``dashboards``.
     """
     result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
     if isinstance(result, dict) and "result" in result:
@@ -297,7 +312,7 @@ async def _resolve_dashboard(client: Any, identifier: str) -> dict[str, str] | N
             "treating as no-match",
             type(result).__name__,
         )
-        return None
+        return None, None
 
     for d in dashboards:
         if d.get("id") == identifier or d.get("url_path") == identifier:
@@ -309,8 +324,8 @@ async def _resolve_dashboard(client: Any, identifier: str) -> dict[str, str] | N
                 # would be silently used by callers (e.g.
                 # ``delete_dashboard`` would forward ``resolved_id=""``).
                 continue
-            return {"url_path": url_path, "id": entry_id}
-    return None
+            return {"url_path": url_path, "id": entry_id}, dashboards
+    return None, dashboards
 
 
 @overload
@@ -376,7 +391,7 @@ async def _lazy_resolve_and_retry(
         return url_path, response
 
     try:
-        resolved = await _resolve_dashboard(client, url_path)
+        resolved, _ = await _resolve_dashboard(client, url_path)
     except Exception as resolver_exc:
         # Resolver itself raised (timeout, network blip, etc.). Don't let
         # this exception escape and replace the original HA error with
@@ -941,12 +956,18 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # ``resolved_from`` on the success response so callers can
             # detect this redirect.
             pre_resolved_from: str | None = None
+            # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
+            # has already fetched ``lovelace/dashboards/list``. Capture that list
+            # so the existence-check site below can reuse it instead of paying
+            # a second round-trip.
+            pre_fetched_dashboards: list[dict[str, Any]] | None = None
             if "-" not in url_path and url_path != "lovelace":
-                resolved = await _resolve_dashboard(client, url_path)
+                resolved, dashboards = await _resolve_dashboard(client, url_path)
                 if resolved is not None and resolved["url_path"]:
                     original_url_path = url_path
                     url_path = resolved["url_path"]
                     pre_resolved_from = original_url_path
+                    pre_fetched_dashboards = dashboards
                     logger.info(
                         "ha_config_set_dashboard pre-resolver mapped %r -> %r",
                         original_url_path,
@@ -1129,16 +1150,32 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     transform_result["resolved_from"] = pre_resolved_from
                 return transform_result
 
-            # Check if dashboard exists
-            result = await client.send_websocket_message(
-                {"type": "lovelace/dashboards/list"}
-            )
-            if isinstance(result, dict) and "result" in result:
-                existing_dashboards = result["result"]
-            elif isinstance(result, list):
-                existing_dashboards = result
+            # Check if dashboard exists. When the pre-resolver fired
+            # and matched (internal-id branch), reuse its already-fetched
+            # ``lovelace/dashboards/list`` response to skip a redundant
+            # round-trip — the matched dashboard is guaranteed present in
+            # that list.
+            if pre_fetched_dashboards is not None:
+                existing_dashboards = pre_fetched_dashboards
             else:
-                existing_dashboards = []
+                result = await client.send_websocket_message(
+                    {"type": "lovelace/dashboards/list"}
+                )
+                if isinstance(result, dict) and "result" in result:
+                    existing_dashboards = result["result"]
+                elif isinstance(result, list):
+                    existing_dashboards = result
+                else:
+                    # Mirror the warning emitted by ``_resolve_dashboard`` on
+                    # the same response-shape failure, so a future HA shape
+                    # change shows up at every fetch site rather than going
+                    # silent on this one.
+                    logger.warning(
+                        "lovelace/dashboards/list returned an unexpected shape "
+                        "(type=%s); treating as no-match",
+                        type(result).__name__,
+                    )
+                    existing_dashboards = []
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards
             )
@@ -1407,7 +1444,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
-            resolved = await _resolve_dashboard(client, url_path)
+            resolved, _ = await _resolve_dashboard(client, url_path)
             if resolved is None:
                 raise_tool_error(
                     create_resource_not_found_error(
