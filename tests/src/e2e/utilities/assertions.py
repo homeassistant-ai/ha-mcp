@@ -131,8 +131,7 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     ]
 
     if not any(success_indicators):
-        error_msg = data.get("error", "Unknown error"
-        )
+        error_msg = data.get("error", "Unknown error")
         suggestions = data.get("suggestions", [])
 
         failure_msg = f"{operation_name} failed: {error_msg}"
@@ -404,7 +403,7 @@ def assert_logbook_contains(
     if not logbook_data.get("success", False):
         raise AssertionError(f"Logbook query failed: {logbook_data.get('error')}")
 
-    entries = logbook_data.get("entries", [])
+    entries = logbook_data.get("data", {}).get("entries", [])
 
     if not entries:
         raise AssertionError("Logbook contains no entries")
@@ -540,9 +539,9 @@ async def wait_for_automation(
     import asyncio
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         # Use safe_call_tool to handle ToolError exceptions
         parsed = await safe_call_tool(
             mcp_client,
@@ -552,13 +551,11 @@ async def wait_for_automation(
 
         if parsed.get("success"):
             logger.debug(
-                f"Automation {automation_id} found after {time.time() - start_time:.2f}s"
+                f"Automation {automation_id} found after {time.monotonic() - start_time:.2f}s"
             )
             return parsed.get("config")
 
         await asyncio.sleep(poll_interval)
 
-    logger.warning(
-        f"Automation {automation_id} not found after {timeout}s timeout"
-    )
+    logger.warning(f"Automation {automation_id} not found after {timeout}s timeout")
     return None
