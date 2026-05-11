@@ -36,13 +36,13 @@ async def wait_for_entity_state(
     Returns:
         True if state reached, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(
         f"⏳ Waiting for {entity_id} to reach state '{expected_state}' (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}
@@ -50,12 +50,12 @@ async def wait_for_entity_state(
             state_data = parse_mcp_result(state_result)
 
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
+            if "data" in state_data and state_data["data"] is not None:
                 current_state = state_data.get("data", {}).get("state")
                 logger.debug(f"🔍 {entity_id} current state: {current_state}")
 
                 if current_state == expected_state:
-                    elapsed = time.time() - start_time
+                    elapsed = time.monotonic() - start_time
                     logger.info(
                         f"✅ {entity_id} reached state '{expected_state}' after {elapsed:.1f}s"
                     )
@@ -94,13 +94,13 @@ async def wait_for_entity_attribute(
     Returns:
         True if value reached, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(
         f"⏳ Waiting for {entity_id}.{attribute_name} = {expected_value} (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}
@@ -108,7 +108,7 @@ async def wait_for_entity_attribute(
             state_data = parse_mcp_result(state_result)
 
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
+            if "data" in state_data and state_data["data"] is not None:
                 attributes = state_data.get("data", {}).get("attributes", {})
                 current_value = attributes.get(attribute_name)
 
@@ -117,7 +117,7 @@ async def wait_for_entity_attribute(
                 )
 
                 if current_value == expected_value:
-                    elapsed = time.time() - start_time
+                    elapsed = time.monotonic() - start_time
                     logger.info(
                         f"✅ {entity_id}.{attribute_name} = {expected_value} after {elapsed:.1f}s"
                     )
@@ -149,13 +149,13 @@ async def wait_for_operation_completion(
     Returns:
         Operation status data
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(
         f"⏳ Waiting for operation {operation_id} to complete (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             status_result = await mcp_client.call_tool(
                 "ha_get_operation_status",
@@ -172,7 +172,7 @@ async def wait_for_operation_completion(
 
             # Check for completion states
             if operation_status in ["completed", "failed", "timeout"]:
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 logger.info(
                     f"✅ Operation {operation_id} finished with status '{operation_status}' after {elapsed:.1f}s"
                 )
@@ -205,7 +205,7 @@ async def wait_for_bulk_operations(
     Returns:
         Dictionary mapping operation_id to status data
     """
-    start_time = time.time()
+    start_time = time.monotonic()
     results = {}
     pending_operations = set(operation_ids)
 
@@ -213,7 +213,7 @@ async def wait_for_bulk_operations(
         f"⏳ Waiting for {len(operation_ids)} operations to complete (timeout: {timeout}s)"
     )
 
-    while pending_operations and time.time() - start_time < timeout:
+    while pending_operations and time.monotonic() - start_time < timeout:
         for op_id in list(pending_operations):
             try:
                 status_result = await mcp_client.call_tool(
@@ -246,7 +246,7 @@ async def wait_for_bulk_operations(
         }
 
     completed = len(results) - len(pending_operations)
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
     logger.info(
         f"📊 {completed}/{len(operation_ids)} operations completed after {elapsed:.1f}s"
     )
@@ -274,13 +274,13 @@ async def wait_for_logbook_entry(
     Returns:
         True if entry found, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(
         f"⏳ Waiting for logbook entry containing '{search_text}' (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             logbook_result = await mcp_client.call_tool(
                 "ha_get_logs", {"hours_back": hours_back}
@@ -289,13 +289,13 @@ async def wait_for_logbook_entry(
             logbook_data = parse_mcp_result(logbook_result)
 
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in logbook_data and logbook_data['data'] is not None:
-                entries = logbook_data.get("entries", [])
+            if "data" in logbook_data and logbook_data["data"] is not None:
+                entries = logbook_data["data"].get("entries", [])
 
                 for entry in entries:
                     entry_text = str(entry).lower()
                     if search_text.lower() in entry_text:
-                        elapsed = time.time() - start_time
+                        elapsed = time.monotonic() - start_time
                         logger.info(
                             f"✅ Found logbook entry with '{search_text}' after {elapsed:.1f}s"
                         )
@@ -330,18 +330,18 @@ async def wait_for_condition(
     Returns:
         True if condition met, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(f"⏳ Waiting for {condition_name} (timeout: {timeout}s)")
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             if (
                 await condition_func()
                 if asyncio.iscoroutinefunction(condition_func)
                 else condition_func()
             ):
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 logger.info(f"✅ {condition_name} met after {elapsed:.1f}s")
                 return True
         except Exception as e:
@@ -376,7 +376,7 @@ async def wait_for_state_change(
         initial_data = parse_mcp_result(initial_result)
 
         # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-        if 'data' not in initial_data or initial_data['data'] is None:
+        if "data" not in initial_data or initial_data["data"] is None:
             logger.warning(f"⚠️ Could not get initial state for {entity_id}")
             return None
 
@@ -389,9 +389,9 @@ async def wait_for_state_change(
         logger.warning(f"⚠️ Error getting initial state for {entity_id}: {e}")
         return None
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}
@@ -399,11 +399,11 @@ async def wait_for_state_change(
             state_data = parse_mcp_result(state_result)
 
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
+            if "data" in state_data and state_data["data"] is not None:
                 current_state = state_data.get("data", {}).get("state")
 
                 if current_state != initial_state:
-                    elapsed = time.time() - start_time
+                    elapsed = time.monotonic() - start_time
                     logger.info(
                         f"✅ {entity_id} changed: '{initial_state}' → '{current_state}' after {elapsed:.1f}s"
                     )
@@ -451,7 +451,7 @@ async def wait_for_tool_result(
     Raises:
         TimeoutError: If the predicate is not satisfied within the timeout.
     """
-    start_time = time.time()
+    start_time = time.monotonic()
     last_data: dict[str, Any] = {}
 
     logger.info(f"⏳ Waiting for {description} (timeout: {timeout}s)")
@@ -463,7 +463,7 @@ async def wait_for_tool_result(
             last_data = parse_mcp_result(result)
         except Exception as e:
             logger.debug(f"⚠️ Error calling {tool_name}: {e}")
-            if time.time() - start_time >= timeout:
+            if time.monotonic() - start_time >= timeout:
                 raise TimeoutError(
                     f"{description}: timed out after {timeout}s (last error: {e})"
                 ) from e
@@ -475,7 +475,7 @@ async def wait_for_tool_result(
             logger.debug(
                 f"⚠️ {tool_name} returned error: {last_data.get('error')}, retrying..."
             )
-            if time.time() - start_time >= timeout:
+            if time.monotonic() - start_time >= timeout:
                 raise TimeoutError(
                     f"{description}: timed out after {timeout}s "
                     f"(last MCP error: {last_data.get('error')})"
@@ -485,11 +485,11 @@ async def wait_for_tool_result(
 
         # Run predicate OUTSIDE try/except so bugs (TypeError, KeyError) propagate
         if predicate(last_data):
-            elapsed = time.time() - start_time
+            elapsed = time.monotonic() - start_time
             logger.info(f"✅ {description} satisfied after {elapsed:.1f}s")
             return last_data
 
-        if time.time() - start_time >= timeout:
+        if time.monotonic() - start_time >= timeout:
             raise TimeoutError(
                 f"{description}: timed out after {timeout}s (predicate not satisfied)"
             )

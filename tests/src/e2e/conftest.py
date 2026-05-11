@@ -1123,9 +1123,9 @@ async def wait_for_state_change():
         client: Client, entity_id: str, expected_state: str, timeout: int = 5
     ) -> bool:
         """Wait for entity to reach expected state."""
-        start_time = time.time()
+        start_time = time.monotonic()
 
-        while time.time() - start_time < timeout:
+        while time.monotonic() - start_time < timeout:
             state_result = await client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}
             )

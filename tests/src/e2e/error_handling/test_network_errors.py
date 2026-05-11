@@ -738,9 +738,9 @@ async def test_system_resilience_under_load(mcp_client):
         safe_overview_call() for _ in range(10)
     ]  # Reduced to 10 for stability
 
-    start_time = time.time()
+    start_time = time.monotonic()
     rapid_results = await asyncio.gather(*rapid_operations, return_exceptions=True)
-    end_time = time.time()
+    end_time = time.monotonic()
 
     successful_rapid = sum(
         1
