@@ -60,9 +60,8 @@ async def _get_local_backup_agent_id(
     HA Supervised registers ``hassio.local`` and HA Core registers
     ``backup.local`` — both have ``name: "local"``. Hardcoding either breaks
     the other deployment. We probe ``backup/agents/info`` and pick the agent
-    whose name is exactly ``"local"`` (prefer Supervisor's ``hassio.local``
-    when both are present, since the Supervisor agent is the canonical local
-    target on Supervised installs).
+    whose name is exactly ``"local"``, preferring ``hassio.local`` if both
+    happen to be registered.
 
     Raises ToolError if no local agent is available.
     """
@@ -261,9 +260,7 @@ async def create_backup(
 
         # Discover the local backup agent at call time. HA Core registers
         # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
-        # either breaks the other deployment (#366 silent-skip audit
-        # surfaced this — test_backup_create_with_auto_name was failing on
-        # Core test containers with "available agents: ['backup.local']").
+        # either breaks the other deployment.
         local_agent = await _get_local_backup_agent_id(ws_client)
 
         # Generate backup name if not provided
@@ -271,11 +268,14 @@ async def create_backup(
             now = datetime.now()
             name = f"MCP_Backup_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
 
-        # Create backup request. Addons + addon folders are Supervisor
-        # concepts — HA Core errors with "Addons and folders are not
-        # supported by core backup" if we ask for them. Toggle off when we
-        # detect the Core local agent.
+        # Addons + addon folders are Supervisor concepts — HA Core errors
+        # with "Addons and folders are not supported by core backup" if we
+        # ask for them. Toggle off when we detect the Core local agent.
         is_supervised = local_agent == "hassio.local"
+        logger.info(
+            f"Detected {'Supervised' if is_supervised else 'Core'} install "
+            f"via backup agent '{local_agent}'"
+        )
         backup_params = {
             "name": name,
             "password": password,
