@@ -87,6 +87,8 @@ module = [
     "aiohttp",
     "voluptuous",
     "jsonschema",
+    "requests",
+    "requests.*",
 ]
 ignore_missing_imports = true
 
