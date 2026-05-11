@@ -197,3 +197,42 @@ class TestSetAreaOrFloorCrossKindRejection:
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "non-empty" in error_data["error"]["message"]
         tools._client.send_websocket_message.assert_not_called()
+
+
+class TestHaConfigListAreasFieldsProjection:
+    """Unit tests for fields= projection in ha_config_list_areas."""
+
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(return_value={
+            "success": True,
+            "result": [
+                {"area_id": "kitchen", "name": "Kitchen"},
+                {"area_id": "bedroom", "name": "Bedroom"},
+            ],
+        })
+        return AreaTools(client)
+
+    async def test_no_fields_returns_full_response(self, tools):
+        result = await tools.ha_config_list_areas()
+        assert set(result.keys()) == {"success", "count", "areas", "message"}
+
+    async def test_single_field_projects_to_that_key_plus_success(self, tools):
+        result = await tools.ha_config_list_areas(fields=["areas"])
+        assert set(result.keys()) == {"success", "areas"}
+        assert len(result["areas"]) == 2
+
+    async def test_multiple_fields_projects_correctly(self, tools):
+        result = await tools.ha_config_list_areas(fields=["count", "areas"])
+        assert set(result.keys()) == {"success", "count", "areas"}
+        assert result["count"] == 2
+
+    async def test_success_always_included_regardless_of_fields(self, tools):
+        result = await tools.ha_config_list_areas(fields=["count"])
+        assert "success" in result
+        assert result["success"] is True
+
+    async def test_unknown_field_silently_omitted(self, tools):
+        result = await tools.ha_config_list_areas(fields=["nonexistent_key"])
+        assert set(result.keys()) == {"success"}
