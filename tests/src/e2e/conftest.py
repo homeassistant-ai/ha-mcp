@@ -204,6 +204,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     on the lock and exit when the winner releases it.
     """
     import tarfile
+    import urllib.error
     import urllib.request
 
     hacs_dir = initial_state_path / "custom_components" / "hacs"
@@ -213,10 +214,12 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     # Fast path: HACS not installed (nothing to do), or frontend present
     # AND no lock held. The lock-held check rules out the window where
     # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
-    # exists then but its contents are partial. By the time the winner's
-    # ``finally`` runs ``rmdir``, the move has already committed in the
-    # inner ``try`` — the ``rmdir`` is the visible release signal that
-    # peers can observe.
+    # exists then but its contents are partial. On the success path the
+    # move commits in the inner ``try`` before the winner's ``finally``
+    # runs ``rmdir`` — waiters observing lock-gone-and-frontend-present
+    # see a complete frontend. On any failure path the finally still
+    # releases with ``frontend_dir`` absent; waiters re-enter the slow
+    # path and the download except-branch handles the skip.
     if not hacs_dir.exists() or (frontend_dir.exists() and not lock_dir.exists()):
         return
 
@@ -232,10 +235,21 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
         wait_start = time.monotonic()
         while lock_dir.exists():
             if time.monotonic() - wait_start >= 180:
+                # Asymmetric with ``HA_MCP_TOOLS_WAIT`` below (which is
+                # ``pytest.fail``): a stuck tool registration breaks
+                # every downstream test, while a stuck HACS download
+                # only breaks HACS-dependent tests — the rest of the
+                # session still produces useful signal. Clear the stale
+                # lock so a subsequent session does not also hit the
+                # 180s wait when the winner truly crashed.
                 logger.warning(
                     f"Timeout waiting for HACS frontend lock release at "
                     f"{lock_dir}; proceeding without verification."
                 )
+                try:
+                    lock_dir.rmdir()
+                except OSError as exc:
+                    logger.warning(f"Could not clear stale HACS lock dir: {exc}")
                 return
             time.sleep(2)
         return
@@ -280,17 +294,35 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
                             f"Could not find hacs_frontend in downloaded archive for {tag_name}"
                         )
 
-            except Exception as e:
-                logger.warning(
-                    f"Failed to download HACS frontend ({type(e).__name__}): {e}"
-                )
+            except (
+                urllib.error.URLError,
+                json.JSONDecodeError,
+                KeyError,
+                tarfile.TarError,
+                OSError,
+            ):
+                # Narrow catch + ``logger.exception`` so the full
+                # traceback surfaces in CI logs, not just the exception
+                # type — KP13's "don't green-pass a failed download"
+                # principle. HACS-dependent tests will fail at first
+                # HACS call; other tests can still run.
+                logger.exception("Failed to download HACS frontend")
                 logger.warning("HACS tests may be skipped without the frontend")
     finally:
-        # Release the lock so waiting workers can proceed.
+        # Release the lock so waiting workers can proceed. A
+        # ``FileNotFoundError`` here means a timed-out waiter cleared
+        # the lock first — invariant broke but the session can
+        # continue; log so it's diagnosable. Other ``OSError`` classes
+        # (PermissionError, Errno-39 "Directory not empty" from a
+        # future sentinel/pidfile refactor) would wedge subsequent
+        # sessions into the 180s wait — let them surface.
         try:
             lock_dir.rmdir()
-        except OSError:
-            pass
+        except FileNotFoundError:
+            logger.warning(
+                f"HACS frontend lock dir {lock_dir} vanished before "
+                f"release — concurrent timeout-clear?"
+            )
 
 
 def _install_custom_component(
@@ -734,18 +766,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 f"— helper/automation tests may be flaky"
             )
 
-        # Wait for ha_mcp_tools custom component services (installed above).
-        # The component is loaded after core services, so it needs its own
-        # check. Bumped from 30s to 180s in two steps: 30→90 closed the
-        # silent-warn fake-pass against COMPONENT_NOT_INSTALLED; 90→180 added
-        # headroom after observation that on the 2-vCPU ARM runner with 4
-        # parallel HA containers, the pre-polling stages (boot + HACS install
-        # + custom-component install) can take ~48s, leaving the old 90s
-        # window starting too late to outlast registration. Timeout branch
-        # is ``pytest.fail`` so the failure mode is loud instead of letting
-        # tests advance into a guaranteed COMPONENT_NOT_INSTALLED on the
-        # first ha_mcp_tools call.
-        HA_MCP_TOOLS_WAIT = 180
+        # Loud failure (``pytest.fail`` rather than ``logger.warning``):
+        # filesystem and config-editing tests downstream require
+        # ha_mcp_tools, and a silent warn here lets them proceed into
+        # COMPONENT_NOT_INSTALLED on the first tool call — surfacing
+        # the registration gap beats misattributing it to the calling
+        # test.
+        HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
             logger.info("⏳ Waiting for ha_mcp_tools services to register...")
