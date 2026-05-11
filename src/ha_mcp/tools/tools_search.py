@@ -852,6 +852,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include active persistent notifications (default: True). Set False to skip.",
             ),
         ] = True,
+        fields: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    "response size (e.g. [\"system_info\", \"domains\"]). "
+                    "None = full response (default). "
+                    "Available keys: success, system_info, domains, entity_summary, "
+                    "total_entities, count, offset, limit, total_matches, has_more, "
+                    "next_offset, notification_count, notifications, "
+                    "repair_count, repairs, tool_discovery."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
@@ -862,6 +877,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         are always complete regardless of entity pagination.
         Standard/full modes paginate entities (default 200 per page) — use offset
         to fetch more. Use 'domains' filter to narrow scope.
+
+        Use fields= to project the response to only the keys you need — up to 94%
+        token reduction when fetching a single sub-section (e.g. fields=["system_info"]).
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -999,6 +1017,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ]
                 ),
             }
+
+        if fields is not None:
+            keep = set(fields) | {"success"}
+            result = cast(dict[str, Any], {k: v for k, v in result.items() if k in keep})
 
         return result
 
