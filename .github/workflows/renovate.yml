@@ -18,9 +18,7 @@ on:
           - error
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
 
 jobs:
   renovate:
@@ -30,11 +28,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # The default GITHUB_TOKEN cannot push commits that modify any file
+      # under .github/workflows/ — GitHub blocks workflow-file mutations
+      # from GITHUB_TOKEN for security reasons. Renovate needs to touch
+      # those files (the # renovate: annotations sit alongside image: pins
+      # in pr.yml, e2e-tests.yml, performance-tests.yml), so we mint a
+      # short-lived installation token from a dedicated GitHub App that
+      # has Workflows: write.
+      - name: Generate Renovate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
       - name: Self-hosted Renovate
         uses: renovatebot/github-action@v46.1.14
         with:
           configurationFile: renovate.json
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^cat.*", "^echo.*", "^cut.*", "^sed.*", "^git add.*"]'
