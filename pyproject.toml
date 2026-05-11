@@ -31,7 +31,7 @@ dependencies = [
     "truststore==0.10.4",
     "websockets==16.0",
     "cryptography==48.0.0",
-    "pydantic-monty==0.0.9",
+    "pydantic-monty==0.0.17",
 ]
 
 [project.urls]
