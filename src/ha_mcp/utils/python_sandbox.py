@@ -472,6 +472,17 @@ def format_sandbox_error(
             "See tool description for allowed operations",
             f"Expression: {preview}",
         ]
+        # Agents commonly emit ``\"`` (intending a JSON-style quote escape)
+        # inside transforms. Outside Python string literals this is a
+        # line-continuation token followed by an unexpected character.
+        # Pinpoint the actual mistake so the agent fixes it on the first
+        # retry instead of guessing at "syntax".
+        if "line continuation character" in str(error):
+            suggestions.insert(
+                0,
+                'Remove the leading backslash before quotes — write "foo" '
+                'not \\"foo\\" in the Python source.',
+            )
     if variable_name != "config":
         suggestions = [
             f"Operate on the `{variable_name}` variable (in-place or reassign)",
