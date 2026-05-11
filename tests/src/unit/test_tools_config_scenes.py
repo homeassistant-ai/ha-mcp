@@ -424,6 +424,45 @@ class TestScenePythonTransform:
         assert error_data["success"] is False
         assert error_data["error"]["code"] == "VALIDATION_FAILED"
 
+    async def test_transform_backslash_escape_surfaces_specific_hint(
+        self, tools, mock_client
+    ):
+        """A python_transform with ``\\"`` outside a string literal trips
+        Python's "unexpected character after line continuation character"
+        parser error. The scene tool routes that through
+        ``format_sandbox_error``, so the response must carry the
+        backslash-specific hint (not just a generic "Check expression
+        syntax") and an ``ErrorCode.VALIDATION_FAILED``.
+        """
+        seed = {
+            "id": "test_scene",
+            "name": "S",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed_hash = compute_config_hash(seed)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_scene(
+                scene_id="test_scene",
+                # The agent intended a JSON-style quote escape; outside a
+                # Python string literal the leading ``\`` is a
+                # line-continuation token followed by an unexpected char.
+                python_transform='config["entities"]["light.kitchen"] = \\"v\\"',
+                config_hash=seed_hash,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "VALIDATION_FAILED"
+        suggestions = error_data["error"].get("suggestions", [])
+        assert any("backslash" in s.lower() for s in suggestions), (
+            f"Expected a backslash-escape hint among suggestions, got {suggestions!r}"
+        )
+
 
 class TestResolveSceneEntityId:
     """Coverage for _resolve_scene_entity_id — the BAT-discovered fix.
@@ -1340,7 +1379,9 @@ class TestEmptySceneIdGuard:
 
     @pytest.mark.parametrize("whitespace_value", ["   ", "\t", "\n", " \t\n "])
     async def test_get_scene_rejects_whitespace_only_scene_id(
-        self, tools, whitespace_value: str,
+        self,
+        tools,
+        whitespace_value: str,
     ):
         """R7 blocker 23: whitespace-only ``scene_id`` slipped past the
         original ``if not scene_id`` and surfaced as ``RESOURCE_NOT_FOUND`` —
@@ -1353,7 +1394,9 @@ class TestEmptySceneIdGuard:
         assert "scene_id must not be empty" in body["error"]["message"]
 
     async def test_set_scene_rejects_whitespace_only_scene_id(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_scene(
@@ -1367,7 +1410,9 @@ class TestEmptySceneIdGuard:
         mock_client.upsert_scene_config.assert_not_called()
 
     async def test_remove_scene_rejects_whitespace_only_scene_id(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_remove_scene(scene_id="   ", wait=False)
@@ -1656,7 +1701,9 @@ class TestCategoryValidationGate:
     """
 
     async def test_no_category_at_all_skips_validation(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         """Neither user param nor config dict supplies a category — the
         validator must NOT fire. No WS round-trip for category_registry/list."""
@@ -1676,9 +1723,9 @@ class TestCategoryValidationGate:
         )
 
         category_list_calls = [
-            c for c in ws_calls
-            if isinstance(c, dict)
-            and c.get("type") == "config/category_registry/list"
+            c
+            for c in ws_calls
+            if isinstance(c, dict) and c.get("type") == "config/category_registry/list"
         ]
         assert not category_list_calls, (
             "_validate_category_id must NOT fire when no category is supplied "
@@ -1686,7 +1733,9 @@ class TestCategoryValidationGate:
         )
 
     async def test_user_passed_category_validates(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         """User passes a non-None ``category`` — validator must fire."""
         mock_client.send_websocket_message = AsyncMock(
@@ -1714,7 +1763,9 @@ class TestCategoryValidationGate:
         )
 
     async def test_dict_promoted_category_validates(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         """User passes ``category=None`` but config has top-level
         ``config["category"]`` — ``_validate_scene_config`` promotes it
@@ -1751,7 +1802,9 @@ class TestCategoryValidationGate:
         )
 
     async def test_dict_promoted_phantom_rejected_pre_upsert(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         """B25 regression — phantom category in top-level ``config["category"]``
         must be rejected pre-upsert. Live reproducer: caller sets
@@ -1793,7 +1846,9 @@ class TestPythonTransformIdNoneRebind:
     """
 
     async def test_transform_setting_id_to_none_passes_through(
-        self, tools, mock_client,
+        self,
+        tools,
+        mock_client,
     ):
         from ha_mcp.utils.config_hash import compute_config_hash
 
@@ -1886,9 +1941,7 @@ class TestSmartSearchSceneIdFallbackPaths:
 
         client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
 
-        with _patch(
-            "ha_mcp.tools.smart_search.get_global_settings"
-        ) as mock_settings:
+        with _patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
             mock_settings.return_value.fuzzy_threshold = 60
             tools_obj = SmartSearchTools(client=client)
             result = await tools_obj.deep_search(
@@ -1909,7 +1962,8 @@ class TestSmartSearchSceneIdFallbackPaths:
         assert scenes[0]["entity_id"] == "scene.bat_distinct_friendly_name"
 
     async def test_scene_falls_back_to_slug_with_warning(
-        self, caplog,
+        self,
+        caplog,
     ) -> None:
         """When neither the bulk config nor the registry walk produced a
         storage key for a scene, the result-builder falls back to the
@@ -1944,9 +1998,7 @@ class TestSmartSearchSceneIdFallbackPaths:
 
         caplog.set_level(logging.WARNING, logger="ha_mcp.tools.smart_search")
 
-        with _patch(
-            "ha_mcp.tools.smart_search.get_global_settings"
-        ) as mock_settings:
+        with _patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
             mock_settings.return_value.fuzzy_threshold = 60
             tools_obj = SmartSearchTools(client=client)
             result = await tools_obj.deep_search(

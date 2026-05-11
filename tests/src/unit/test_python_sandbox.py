@@ -682,6 +682,12 @@ class TestFormatSandboxError:
         assert message.startswith("Expression validation failed:")
         assert any("syntax" in s.lower() for s in suggestions)
         assert any("allowed operations" in s.lower() for s in suggestions)
+        # Negative: the backslash-escape hint must NOT surface on
+        # validation errors whose message lacks the line-continuation
+        # phrase — guards against a future substring broadening
+        # (e.g. ``"continuation"``) silently misfiring on unrelated
+        # syntax errors.
+        assert not any("backslash" in s.lower() for s in suggestions)
 
     def test_execution_error_suggestions_point_at_data(self):
         err = PythonSandboxExecutionError("KeyError: 'foo'")
@@ -729,20 +735,20 @@ class TestFormatSandboxError:
         )
 
     def test_line_continuation_error_gets_specific_hint(self):
-        """Issue #1197 — a backslash-escape mistake outside string literals
-        should produce a targeted hint that comes BEFORE the generic
-        'Check expression syntax' so the agent recovers on the first retry
-        instead of guessing."""
+        """A backslash-escape mistake outside string literals produces a
+        targeted hint that comes BEFORE the generic 'Check expression
+        syntax' so the agent recovers on the first retry instead of
+        guessing."""
         err = PythonSandboxValidationError(
             "Syntax error: unexpected character after line continuation "
             "character (<unknown>, line 1)"
         )
         _, suggestions = format_sandbox_error(err, 'config["k"] = \\"v\\"')
         # Hint must be present
-        assert any("line-continuation" in s.lower() for s in suggestions)
+        assert any("backslash" in s.lower() for s in suggestions)
         # ...and must come BEFORE the generic syntax suggestion
         hint_idx = next(
-            i for i, s in enumerate(suggestions) if "line-continuation" in s.lower()
+            i for i, s in enumerate(suggestions) if "backslash" in s.lower()
         )
         generic_idx = next(
             i
@@ -752,7 +758,7 @@ class TestFormatSandboxError:
         assert hint_idx < generic_idx
 
     def test_line_continuation_with_response_variable_orders_correctly(self):
-        """When BOTH the variable-name prepend AND the line-continuation hint
+        """When BOTH the variable-name prepend AND the backslash-escape hint
         fire (addon caller passes `response` and emits a backslash-escape),
         the variable-name hint must remain at index 0 — agents need the
         target-variable framing before the diagnostic."""
@@ -766,4 +772,4 @@ class TestFormatSandboxError:
         assert suggestions[0] == (
             "Operate on the `response` variable (in-place or reassign)"
         )
-        assert "line-continuation" in suggestions[1].lower()
+        assert "backslash" in suggestions[1].lower()
