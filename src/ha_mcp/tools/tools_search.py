@@ -150,6 +150,27 @@ async def _exact_match_search(
     }
 
 
+def _project_entity(
+    record: dict[str, Any],
+    fields: list[str] | None,
+    attribute_keys: list[str] | None,
+) -> dict[str, Any]:
+    """Apply optional field projection to a HA entity record.
+
+    ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
+    ``attribute_keys`` further filters the ``attributes`` sub-dict.
+    Both default None = full payload (no-op).
+    """
+    if fields is not None:
+        keep = set(fields)
+        record = {k: v for k, v in record.items() if k in keep}
+    if attribute_keys is not None:
+        attrs = record.get("attributes")
+        if isinstance(attrs, dict):
+            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attribute_keys}}
+    return record
+
+
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register search and discovery tools with the MCP server."""
     smart_tools = kwargs.get("smart_tools")
@@ -1144,6 +1165,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "(e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])"
             ),
         ],
+        fields: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level entity record keys to reduce "
+                    'response size (e.g. ["state", "attributes"]). '
+                    "None = full entity record (default). "
+                    "Available keys: entity_id, state, attributes, last_changed, "
+                    "last_reported, last_updated, context."
+                ),
+            ),
+        ] = None,
+        attribute_keys: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified keys from each entity's attributes dict "
+                    '(e.g. ["brightness", "color_temp"] for lights). '
+                    "None = full attributes (default). "
+                    "Unknown keys are silently absent (matches HA's per-domain behavior). "
+                    'Requires "attributes" to be present in fields= (or fields=None).'
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
@@ -1159,11 +1206,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
+        - State only: ha_get_state("light.kitchen", fields=["state"])
+        - Slim bulk: ha_get_state(["light.k", "sensor.t"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
         # Single entity path
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
+                result = _project_entity(result, fields, attribute_keys)
                 return await add_timezone_metadata(client, result)
             except ToolError:
                 raise
@@ -1235,7 +1285,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             for eid, result in zip(unique_ids, results, strict=True):
                 if result.get("success") is True and "state" in result:
-                    states[eid] = result["state"]
+                    states[eid] = _project_entity(result["state"], fields, attribute_keys)
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:
