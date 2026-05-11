@@ -25,10 +25,41 @@ logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"[._\-\s]+")
 
+# Score subtraction for entities marked ``hidden_by`` in the entity
+# registry. Hidden entities still surface in results, but a 20-point
+# penalty pushes them below comparable visible matches when both are
+# emitted by the same search branch. Picked so that an exact id/name
+# hit on a hidden entity (raw 100 → 80) still ranks above a fuzzy
+# threshold-floor visible match (60-70), but loses to any visible
+# entity scoring 80+.
+HIDDEN_SCORE_PENALTY = 20
+
+
+def apply_hidden_penalty(score: int, hidden_by: Any) -> int:
+    """Return ``score`` reduced by :data:`HIDDEN_SCORE_PENALTY` when
+    ``hidden_by`` indicates a hidden entity. Used by every search
+    branch that emits a ``score`` field so the ranking is consistent.
+    Coerces ``score`` to ``int`` so a stray float caller can't break
+    the result-dict's int contract for ``score``.
+    """
+    s = int(score)
+    if hidden_by is not None:
+        return max(0, s - HIDDEN_SCORE_PENALTY)
+    return s
+
 
 def tokenize(text: str) -> list[str]:
     """Split text on `.`, `_`, `-`, and whitespace, lowercase, drop empties."""
     return [t for t in _SPLIT_RE.split(text.lower()) if t]
+
+
+def _strip_separators(text: str) -> str:
+    """Strip ``.``, ``_``, ``-``, whitespace from *text* and lowercase.
+
+    Used to add elided-separator forms to the BM25 corpus so queries
+    like ``bedlight`` match tokens like ``bed_light``.
+    """
+    return _SPLIT_RE.sub("", text.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +194,16 @@ class FuzzyEntitySearcher:
             return [], 0
 
         # Build per-entity document: tokens from entity_id + friendly_name
+        # + entity registry aliases (when callers enrich entities with the
+        # ``_aliases`` key — see smart_search.smart_entity_search).
         docs: list[list[str]] = []
         meta: list[tuple[str, str, str, dict[str, Any], str]] = []  # eid, name, domain, attrs, state
+        # Track which entities matched on alias (for `match_type="alias_match"`).
+        alias_hit: list[set[str]] = []
+        # Track ``hidden_by`` per entity so the score-penalty pass can
+        # depress hidden hits without filtering them. Callers enrich via
+        # the ``_hidden_by`` key — see smart_search.smart_entity_search.
+        hidden_flags: list[Any] = []
 
         for entity in entities:
             entity_id = entity.get("entity_id", "")
@@ -173,9 +212,48 @@ class FuzzyEntitySearcher:
             domain = entity_id.split(".")[0] if "." in entity_id else ""
             state = entity.get("state", "unknown")
 
-            tokens = tokenize(entity_id) + tokenize(friendly_name)
+            id_tokens = tokenize(entity_id)
+            name_tokens = tokenize(friendly_name)
+            tokens = list(id_tokens + name_tokens)
+
+            # Separator-stripped forms (concat tokens) so queries that
+            # elide separators match — e.g. `bedlight` finds `light.bed_light`.
+            tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+            tail_concat = _strip_separators(tail)
+            if tail_concat:
+                tokens.append(tail_concat)
+            name_concat = _strip_separators(friendly_name)
+            if name_concat and name_concat != tail_concat:
+                tokens.append(name_concat)
+
+            # Aliases (entity registry). Each alias contributes both its
+            # tokenized form and its separator-stripped concat. We track
+            # only the alias tokens that *aren't* already in id+name —
+            # otherwise a query like `bed` would mislabel a friendly_name
+            # match as `alias_match` whenever the entity also has a
+            # `bed`-containing alias.
+            id_name_tokens = set(id_tokens) | set(name_tokens)
+            id_name_tokens.add(tail_concat)
+            id_name_tokens.add(name_concat)
+            entity_alias_tokens: set[str] = set()
+            for alias in entity.get("_aliases", []) or []:
+                if not isinstance(alias, str):
+                    continue
+                a_tokens = tokenize(alias)
+                tokens.extend(a_tokens)
+                for t in a_tokens:
+                    if t not in id_name_tokens:
+                        entity_alias_tokens.add(t)
+                a_concat = _strip_separators(alias)
+                if a_concat:
+                    tokens.append(a_concat)
+                    if a_concat not in id_name_tokens:
+                        entity_alias_tokens.add(a_concat)
+
             docs.append(tokens)
             meta.append((entity_id, friendly_name, domain, attributes, state))
+            alias_hit.append(entity_alias_tokens)
+            hidden_flags.append(entity.get("_hidden_by"))
 
         # Fit BM25
         scorer = BM25Scorer()
@@ -190,13 +268,31 @@ class FuzzyEntitySearcher:
         matches: list[dict[str, Any]] = []
 
         if theoretical_max > 0:
+            query_token_set = set(query_tokens)
             for i, raw in enumerate(raw_scores):
                 if raw <= 0:
                     continue
-                score = min(100, round(raw / theoretical_max * 100))
-                if score < self.threshold:
+                # Threshold gates the *raw* match quality: a hidden
+                # entity that genuinely matches at threshold shouldn't
+                # get penalised below it and silently disappear.
+                # Penalty is applied only after the gate, so it affects
+                # ranking but not visibility.
+                raw_score = min(100, round(raw / theoretical_max * 100))
+                if raw_score < self.threshold:
                     continue
+                score = apply_hidden_penalty(raw_score, hidden_flags[i])
                 eid, fname, domain, attrs, state = meta[i]
+                # If any query token matched only on the alias haystack,
+                # surface that to the caller via match_type — useful both
+                # for telemetry and for the agent to know the friendly_name
+                # alone wouldn't have led it here.
+                hit_alias_tokens = query_token_set & alias_hit[i]
+                if hit_alias_tokens:
+                    match_type = "alias_match"
+                else:
+                    match_type = self._get_match_type(
+                        eid, fname, domain, query_lower
+                    )
                 matches.append({
                     "entity_id": eid,
                     "friendly_name": fname,
@@ -204,7 +300,7 @@ class FuzzyEntitySearcher:
                     "state": state,
                     "attributes": attrs,
                     "score": score,
-                    "match_type": self._get_match_type(eid, fname, domain, query_lower),
+                    "match_type": match_type,
                 })
 
         # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
@@ -214,9 +310,14 @@ class FuzzyEntitySearcher:
         # exactly the noise floor the new absolute normalization is fixing.
         bm25_found_any = any(raw > 0 for raw in raw_scores)
         if not matches and not bm25_found_any:
-            matches = self._typo_fallback(query_tokens, query_lower, docs, meta)
+            matches = self._typo_fallback(
+                query_tokens, docs, meta, hidden_flags
+            )
 
-        matches.sort(key=lambda x: x["score"], reverse=True)
+        # Tie-break on entity_id so paginated requests return stable
+        # ordering when several entities share a score (common with the
+        # hidden-penalty bands at 100/80 and BM25's coarse score buckets).
+        matches.sort(key=lambda x: (-x["score"], x["entity_id"]))
         total_matches = len(matches)
         return matches[offset:offset + limit], total_matches
 
@@ -225,12 +326,32 @@ class FuzzyEntitySearcher:
     def _typo_fallback(
         self,
         query_tokens: list[str],
-        query_lower: str,
         docs: list[list[str]],
         meta: list[tuple[str, str, str, dict[str, Any], str]],
+        hidden_flags: list[Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Token-level SequenceMatcher fallback for typo correction."""
+        """Token-level SequenceMatcher fallback for typo correction.
+
+        For multi-token queries, additionally requires coverage:
+        at least half of the distinct query tokens must each have *some*
+        doc token they ratio-match. Without this, a single-token
+        accidental hit (e.g. ``garbage`` ≈ ``garage``) is enough to
+        surface unrelated entities at score 92 from a 3-token query
+        whose other two tokens have no doc relationship.
+        """
         results: list[dict[str, Any]] = []
+        distinct_query_tokens = list(dict.fromkeys(query_tokens))
+        n_distinct = len(distinct_query_tokens)
+        # Single-token min-length gate: short queries like ``lit`` (3
+        # chars) match too generously via partial overlap (every
+        # ``*_lite*`` entity surfaces at score 85). The multi-token
+        # coverage gate above doesn't help here (n_distinct == 1).
+        # Suppress the fallback entirely for short single-token
+        # queries — they almost never represent a typo, and the BM25
+        # path above already serves substring intent at a higher
+        # score floor.
+        if n_distinct == 1 and len(query_tokens[0]) < 4:
+            return results
         for i, doc_tokens in enumerate(docs):
             best_token_score = 0
             for qt in query_tokens:
@@ -238,17 +359,39 @@ class FuzzyEntitySearcher:
                     ratio = calculate_ratio(qt, dt)
                     best_token_score = max(best_token_score, ratio)
 
-            if best_token_score >= 75:  # stricter threshold for typo fallback
-                eid, fname, domain, attrs, state = meta[i]
-                results.append({
-                    "entity_id": eid,
-                    "friendly_name": fname,
-                    "domain": domain,
-                    "state": state,
-                    "attributes": attrs,
-                    "score": best_token_score,
-                    "match_type": "typo_fallback",
-                })
+            if best_token_score < 75:  # stricter threshold for typo fallback
+                continue
+
+            # Multi-token coverage gate: how many distinct query tokens
+            # have any doc token within the typo-fallback threshold?
+            # A 3-token nonsense query that only one token explains
+            # (coverage 1/3) is rejected; a single-token query is always
+            # fully covered so unaffected.
+            if n_distinct > 1:
+                covered = 0
+                for qt in distinct_query_tokens:
+                    if any(calculate_ratio(qt, dt) >= 75 for dt in doc_tokens):
+                        covered += 1
+                if covered * 2 < n_distinct:  # < 50% coverage
+                    continue
+
+            eid, fname, domain, attrs, state = meta[i]
+            entity_hidden = (
+                hidden_flags[i] if hidden_flags is not None else None
+            )
+            # Apply the hidden penalty after the threshold gate above
+            # so borderline hidden matches still surface; the penalty
+            # only re-ranks them.
+            score = apply_hidden_penalty(best_token_score, entity_hidden)
+            results.append({
+                "entity_id": eid,
+                "friendly_name": fname,
+                "domain": domain,
+                "state": state,
+                "attributes": attrs,
+                "score": score,
+                "match_type": "typo_fallback",
+            })
         return results
 
     def _calculate_entity_score(

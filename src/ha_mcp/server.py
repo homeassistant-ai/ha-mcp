@@ -21,6 +21,7 @@ from mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .tools.enhanced import EnhancedToolsMixin
+from .tools.util_helpers import strip_internal_fields
 from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
@@ -930,13 +931,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         return await self.client.call_service(domain, service, service_data)
 
     async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
-        """Bridge method to existing area functionality."""
-        return cast(
-            dict[str, Any],
-            await self.smart_tools.get_entities_by_area(
-                area_query=area_name, group_by_domain=True
-            ),
+        """Bridge method to existing area functionality.
+
+        ``smart_tools.get_entities_by_area`` enriches per-entity dicts
+        with leading-underscore internals (``_hidden_by`` etc.) so
+        downstream search branches can apply the score penalty without
+        a second registry lookup. Strip them here so this public bridge
+        doesn't leak internals to MCP clients.
+        """
+        result = await self.smart_tools.get_entities_by_area(
+            area_query=area_name, group_by_domain=True
         )
+        strip_internal_fields(result)
+        return cast(dict[str, Any], result)
 
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""

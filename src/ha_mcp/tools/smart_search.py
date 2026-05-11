@@ -113,9 +113,10 @@ class SmartSearchTools:
         offset: int = 0,
         include_attributes: bool = False,
         domain_filter: str | None = None,
+        include_hidden: bool = True,
     ) -> dict[str, Any]:
         """
-        Advanced entity search with fuzzy matching and typo tolerance.
+        Search entities with fuzzy matching and typo tolerance.
 
         Args:
             query: Search query (can be partial, with typos)
@@ -123,16 +124,120 @@ class SmartSearchTools:
             offset: Number of results to skip for pagination
             include_attributes: Whether to include full entity attributes
             domain_filter: Optional domain to filter entities before search (e.g., "light", "sensor")
+            include_hidden: When True (default), entities with ``hidden_by``
+                set in the entity registry are still returned but receive
+                a score penalty so they sort below comparable visible
+                matches. Pass False to filter them out entirely.
 
         Returns:
             Dictionary with search results and metadata
         """
         try:
-            # Get all entities
-            entities = await self.client.get_states()
+            # HA domains are canonically lowercase and unpadded; defend
+            # the service layer so internal callers get the same
+            # normalization the tool layer applies (strip + lowercase
+            # before the prefix match downstream).
+            if domain_filter:
+                domain_filter = domain_filter.strip().lower()
+            # Fetch states + entity registry list in parallel. The slim
+            # ``list`` view gives us ``hidden_by`` (used to filter
+            # UI-hidden entities by default) and the entity_ids we need
+            # to feed into ``get_entries`` for the full-fidelity data
+            # (aliases live only in get_entries, not the slim list).
+            entities_task = self.client.get_states()
+            entity_registry_task = self.client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+            results = await asyncio.gather(
+                entities_task, entity_registry_task, return_exceptions=True
+            )
+            # States-fetch failure is fatal — auth/connection errors must
+            # propagate so the caller sees the real cause instead of a
+            # bogus "zero matches" with success=True.
+            if isinstance(results[0], BaseException):
+                raise results[0]
+            # CancelledError on the registry task must propagate too;
+            # gather captures it like any other exception when
+            # return_exceptions=True.
+            if isinstance(results[1], asyncio.CancelledError):
+                raise results[1]
+            entities = results[0]
 
-            # Filter by domain BEFORE fuzzy search if domain_filter provided
-            # This ensures fuzzy search only looks at entities in the target domain
+            # Build entity_id -> slim registry entry map. Registry-list
+            # failure is tolerated: search continues without alias /
+            # hidden awareness rather than failing the whole call.
+            registry_slim: dict[str, dict[str, Any]] = {}
+            if isinstance(results[1], dict) and results[1].get("success"):
+                for entry in results[1].get("result", []):
+                    eid = entry.get("entity_id")
+                    if eid:
+                        registry_slim[eid] = entry
+
+            # First pass: hidden filter + collect entity_ids for the
+            # alias batch fetch. Pre-filtering shrinks the get_entries
+            # payload on installations with thousands of entities.
+            survivor_ids: list[str] = []
+            survivor_states: list[dict[str, Any]] = []
+            for entity in entities:
+                eid = entity.get("entity_id", "")
+                if not eid:
+                    continue
+                slim = registry_slim.get(eid, {})
+                hidden_by = slim.get("hidden_by")
+                if hidden_by is not None and not include_hidden:
+                    continue
+                survivor_ids.append(eid)
+                survivor_states.append(entity)
+
+            # Second pass: batch-fetch full registry entries for aliases.
+            # ``config/entity_registry/list`` deliberately omits
+            # ``aliases``; ``get_entries`` includes them. One extra
+            # round-trip enriches the survivor set without N+1 fan-out.
+            aliases_map: dict[str, list[str]] = {}
+            if survivor_ids:
+                try:
+                    entries_resp = await self.client.send_websocket_message({
+                        "type": "config/entity_registry/get_entries",
+                        "entity_ids": survivor_ids,
+                    })
+                    if (
+                        isinstance(entries_resp, dict)
+                        and entries_resp.get("success")
+                    ):
+                        for eid, entry in (
+                            entries_resp.get("result", {}) or {}
+                        ).items():
+                            if isinstance(entry, dict):
+                                aliases_map[eid] = entry.get("aliases", []) or []
+                    else:
+                        logger.warning(
+                            "alias_enrichment_failed: get_entries returned "
+                            "non-success for %d entities (resp=%r)",
+                            len(survivor_ids),
+                            entries_resp,
+                        )
+                except (KeyError, TypeError, AttributeError) as alias_err:
+                    logger.warning(
+                        "alias_enrichment_failed: malformed payload for "
+                        "%d entities (err=%r)",
+                        len(survivor_ids),
+                        alias_err,
+                    )
+
+            # Enrich entities with aliases + hidden_by for the fuzzy layer.
+            enriched: list[dict[str, Any]] = []
+            for entity, eid in zip(survivor_states, survivor_ids, strict=True):
+                slim = registry_slim.get(eid, {})
+                # Shallow copy + private-prefixed keys so downstream
+                # consumers that round-trip these dicts don't ship
+                # internal fields back to clients.
+                enriched.append({
+                    **entity,
+                    "_aliases": aliases_map.get(eid, []),
+                    "_hidden_by": slim.get("hidden_by"),
+                })
+
+            entities = enriched
             if domain_filter:
                 entities = [
                     e
@@ -159,19 +264,12 @@ class SmartSearchTools:
 
                 if include_attributes:
                     result["attributes"] = match["attributes"]
-                else:
-                    # Include only essential attributes
-                    attrs = match["attributes"]
-                    essential_attrs = {}
-                    for key in [
-                        "unit_of_measurement",
-                        "device_class",
-                        "icon",
-                        "area_id",
-                    ]:
-                        if key in attrs:
-                            essential_attrs[key] = attrs[key]
-                    result["essential_attributes"] = essential_attrs
+                # No ``essential_attributes`` fallback — the other four
+                # search-type branches (exact_match, area_only,
+                # area_filtered_query, domain_listing) never emit it, so
+                # surfacing it only from fuzzy_search was a shape
+                # asymmetry. Callers needing full state should follow
+                # up with ``ha_get_state``.
 
                 results.append(result)
 
@@ -213,18 +311,25 @@ class SmartSearchTools:
             )
 
     async def get_entities_by_area(
-        self, area_query: str, group_by_domain: bool = True
+        self,
+        area_query: str,
+        group_by_domain: bool = True,
+        include_hidden: bool = True,
     ) -> dict[str, Any]:
         """
         Get entities grouped by area/room using the HA registries for accurate area resolution.
 
         Uses entity registry, device registry, and area registry to determine
         which area each entity belongs to. Fuzzy matches the query against
-        area names/IDs to find the target area(s).
+        area names, IDs, and area-registry aliases to find the target area(s).
 
         Args:
-            area_query: Area/room name to search for
+            area_query: Area/room name (or alias) to search for
             group_by_domain: Whether to group results by domain within each area
+            include_hidden: When True (default), entities with ``hidden_by``
+                set in the entity registry are still grouped under their
+                area but receive a score penalty when ranked. Pass False
+                to filter them out entirely.
 
         Returns:
             Dictionary with area-grouped entities
@@ -260,7 +365,7 @@ class SmartSearchTools:
                     if area_id:
                         area_registry[area_id] = area
 
-            # Parse entity registry: entity_id -> {area_id, device_id}
+            # Parse entity registry: entity_id -> {area_id, device_id, hidden_by}
             entity_reg_map: dict[str, dict[str, str | None]] = {}
             if isinstance(results[2], dict) and results[2].get("success"):
                 for entry in results[2].get("result", []):
@@ -269,6 +374,7 @@ class SmartSearchTools:
                         entity_reg_map[entity_id] = {
                             "area_id": entry.get("area_id"),
                             "device_id": entry.get("device_id"),
+                            "hidden_by": entry.get("hidden_by"),
                         }
 
             # Parse device registry: device_id -> area_id
@@ -279,27 +385,54 @@ class SmartSearchTools:
                     if device_id:
                         device_area_map[device_id] = device.get("area_id")
 
-            # Fuzzy match area_query against known area names and IDs
+            # Two-pass area resolution. Pass 1 collects exact id / name /
+            # alias matches; if any are found, fuzzy aggregation is
+            # skipped entirely. This makes ``area_filter`` honor a
+            # literal area_id from ``ha_config_list_areas`` — pre-fix a
+            # query like ``"bedroom_kids"`` would also fuzzy-match its
+            # parent ``"bedroom"`` (partial_ratio=100) and aggregate
+            # sibling areas' entities. Aliases (per-area registry, used
+            # by HA voice config) mirror the entity-side enrichment in
+            # smart_entity_search.
             area_query_lower = area_query.lower().strip()
-            matched_area_ids: set[str] = set()
+            exact_area_ids: set[str] = set()
+            fuzzy_area_ids: set[str] = set()
 
             for area_id, area_info in area_registry.items():
                 area_name = area_info.get("name", "")
-                # Exact match on area_id or name (case-insensitive)
+                area_aliases = area_info.get("aliases", []) or []
+                # Exact match on area_id, name, or any alias (case-insensitive)
                 if (
                     area_query_lower == area_id.lower()
                     or area_query_lower == area_name.lower()
+                    or any(
+                        area_query_lower == a.lower()
+                        for a in area_aliases
+                        if isinstance(a, str)
+                    )
                 ):
-                    matched_area_ids.add(area_id)
+                    exact_area_ids.add(area_id)
                     continue
-                # Fuzzy match on area name
+                # Fuzzy match on area name, id, or any alias
                 name_score = calculate_partial_ratio(
                     area_query_lower, area_name.lower()
                 )
                 id_score = calculate_partial_ratio(area_query_lower, area_id.lower())
-                best_score = max(name_score, id_score)
+                alias_score = max(
+                    (
+                        calculate_partial_ratio(area_query_lower, a.lower())
+                        for a in area_aliases
+                        if isinstance(a, str)
+                    ),
+                    default=0,
+                )
+                best_score = max(name_score, id_score, alias_score)
                 if best_score >= 80:
-                    matched_area_ids.add(area_id)
+                    fuzzy_area_ids.add(area_id)
+
+            # Exact matches win — fuzzy aggregation only runs when no
+            # area_query_lower is itself an area_id / name / alias.
+            matched_area_ids = exact_area_ids or fuzzy_area_ids
 
             if not matched_area_ids:
                 return {
@@ -313,10 +446,19 @@ class SmartSearchTools:
                     ],
                 }
 
-            # Build entity_id -> resolved area_id mapping
-            # Priority: entity direct area_id > device area_id
+            # Build entity_id -> resolved area_id mapping.
+            # Priority: entity direct area_id > device area_id.
+            # Hidden entities are filtered only when include_hidden is
+            # False; otherwise they pass through and downstream applies
+            # the score penalty so they sort below visible matches.
             entity_area_resolved: dict[str, str] = {}
+            hidden_entity_ids: set[str] = set()
             for entity_id, reg_info in entity_reg_map.items():
+                is_hidden = reg_info.get("hidden_by") is not None
+                if is_hidden and not include_hidden:
+                    continue
+                if is_hidden:
+                    hidden_entity_ids.add(entity_id)
                 area_id = reg_info.get("area_id")
                 device_id = reg_info.get("device_id")
                 if not area_id and device_id:
@@ -331,7 +473,12 @@ class SmartSearchTools:
                 if eid:
                     state_map[eid] = entity
 
-            # Collect entities belonging to matched areas
+            # Collect entities belonging to matched areas. Alias data is
+            # NOT enriched here — exposing private `_aliases` on a public
+            # method would leak through any caller that round-trips this
+            # response (e.g. server.py:get_entities_by_area). The
+            # area+query consumer in tools_search.py fetches aliases on
+            # its own when needed.
             formatted_areas: dict[str, dict[str, Any]] = {}
             total_entities = 0
 
@@ -360,6 +507,9 @@ class SmartSearchTools:
                         state_info = state_map.get(entity_id, {})
                         if domain not in domains:
                             domains[domain] = []
+                        # Carry ``_hidden_by`` as a sentinel ("hidden" or
+                        # None) so downstream branches can apply the
+                        # score penalty without a second registry lookup.
                         domains[domain].append(
                             {
                                 "entity_id": entity_id,
@@ -367,6 +517,11 @@ class SmartSearchTools:
                                     "friendly_name", entity_id
                                 ),
                                 "state": state_info.get("state", "unknown"),
+                                "_hidden_by": (
+                                    "hidden"
+                                    if entity_id in hidden_entity_ids
+                                    else None
+                                ),
                             }
                         )
                     area_data["entities"] = domains
@@ -381,6 +536,11 @@ class SmartSearchTools:
                             .get("friendly_name", entity_id),
                             "domain": entity_id.split(".")[0],
                             "state": state_info.get("state", "unknown"),
+                            "_hidden_by": (
+                                "hidden"
+                                if entity_id in hidden_entity_ids
+                                else None
+                            ),
                         }
                         for entity_id in area_entities
                     ]
