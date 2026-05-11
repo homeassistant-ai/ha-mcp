@@ -432,21 +432,21 @@ class ServiceTools:
         return cast(dict[str, Any], result)
 
     @tool(
-        name="ha_fire_event",
+        name="ha_call_event",
         tags={"Service & Device Control"},
         annotations={
             "destructiveHint": True,
             "idempotentHint": False,
-            "title": "Fire Event",
+            "title": "Call Event",
         },
     )
     @log_tool_usage
-    async def ha_fire_event(
+    async def ha_call_event(
         self,
         event_type: str,
         data: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Fire a Home Assistant event on the event bus.
+        """Publish a custom event onto the Home Assistant event bus.
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
         ha_call_service instead. For triggering automations by name, use
