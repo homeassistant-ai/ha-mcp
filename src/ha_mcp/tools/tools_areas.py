@@ -6,7 +6,7 @@ Home Assistant areas and floors - essential organizational features for smart ho
 """
 
 import logging
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -169,7 +169,7 @@ class AreaTools:
                 }
                 if fields is not None:
                     keep = set(fields) | {"success"}
-                    response = cast(dict[str, Any], {k: v for k, v in response.items() if k in keep})
+                    response = {k: v for k, v in response.items() if k in keep}
                 return response
             else:
                 raise_tool_error(create_error_response(
