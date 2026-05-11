@@ -230,7 +230,13 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
         lock_dir.mkdir(exist_ok=False)
     except FileExistsError:
         wait_start = time.monotonic()
-        while lock_dir.exists() and time.monotonic() - wait_start < 180:
+        while lock_dir.exists():
+            if time.monotonic() - wait_start >= 180:
+                logger.warning(
+                    f"Timeout waiting for HACS frontend lock release at "
+                    f"{lock_dir}; proceeding without verification."
+                )
+                return
             time.sleep(2)
         return
 
