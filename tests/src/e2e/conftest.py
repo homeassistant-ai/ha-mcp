@@ -59,6 +59,97 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _refresh_recorder_timestamps(db_path: Path, target_age_seconds: float = 300.0) -> None:
+    """Shift baked recorder timestamps forward so they look "recent" each session.
+
+    The seed ``home-assistant_v2.db`` (built by ``scripts/bake_pagination_seed.py``)
+    ships with pre-recorded state-change rows for ``input_number.e2e_pagination_seed``.
+    Those rows have whatever Unix timestamps the bake captured; if more than 24h
+    elapses between bake and a test run, every history query with a 24h window
+    misses them entirely and pagination tests silently skip.
+
+    This helper opens the staged DB, finds the most recent ``last_updated_ts``,
+    and uniformly shifts every timestamp column so the newest row sits at
+    ``now - target_age_seconds`` (default 5 minutes). Relative ordering is
+    preserved; absolute window queries (24h, 7d, …) catch every seeded row.
+
+    No-op if the DB is missing or has no rows (defensive — early sessions or
+    fresh-bake states).
+    """
+    import sqlite3
+    import time
+
+    if not db_path.exists():
+        logger.warning(f"⏱️ recorder DB not found at {db_path}; skipping timestamp refresh")
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Tables that carry NUMERIC (REAL/FLOAT) recorder timestamps. Column
+        # lists are restricted to what HA 2026.x ships; unknown columns are
+        # skipped silently so a HA schema bump only loses a column, never
+        # crashes the fixture.
+        #
+        # `recorder_runs.{start,end,created}` are TEXT/ISO columns and are
+        # DELIBERATELY EXCLUDED — `UPDATE recorder_runs SET start = start + N`
+        # silently coerces the ISO string via SQLite leading-numeric parsing
+        # ("2026-05-11 15:58..." -> 2026), turning the cell into garbage and
+        # breaking HA's history layer on the next boot.
+        TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
+            "states": ("last_updated_ts", "last_changed_ts"),
+            "events": ("time_fired_ts",),
+            "statistics": ("start_ts", "created_ts"),
+            "statistics_short_term": ("start_ts", "created_ts"),
+        }
+
+        # Find the newest ts across all numeric timestamp columns
+        newest = 0.0
+        for table, cols in TIMESTAMP_COLUMNS.items():
+            for col in cols:
+                try:
+                    row = conn.execute(
+                        f"SELECT MAX({col}) FROM {table}"  # noqa: S608 (constant identifiers)
+                    ).fetchone()
+                except sqlite3.OperationalError:
+                    continue  # column or table missing in this HA schema rev
+                if row and row[0] is not None and isinstance(row[0], (int, float)):
+                    newest = max(newest, float(row[0]))
+
+        if newest <= 0:
+            logger.info("⏱️ no recorder timestamps to refresh (DB is empty)")
+            return
+
+        target = time.time() - target_age_seconds
+        offset = target - newest
+        if offset <= 0:
+            logger.info(
+                f"⏱️ recorder timestamps already recent (newest={newest:.0f}, "
+                f"target={target:.0f}); no shift needed"
+            )
+            return
+
+        # Apply the offset to every numeric timestamp column
+        rows_updated = 0
+        for table, cols in TIMESTAMP_COLUMNS.items():
+            for col in cols:
+                try:
+                    cur = conn.execute(
+                        f"UPDATE {table} SET {col} = {col} + ? "  # noqa: S608
+                        f"WHERE {col} IS NOT NULL",
+                        (offset,),
+                    )
+                    rows_updated += cur.rowcount
+                except sqlite3.OperationalError:
+                    continue
+        conn.commit()
+        logger.info(
+            f"⏱️ Shifted recorder timestamps by {offset:+.0f}s "
+            f"({rows_updated} rows updated) — newest seed row is now ~5min ago"
+        )
+    finally:
+        conn.close()
+
+
 def _setup_config_permissions(config_path: Path) -> None:
     """Set up proper permissions for Home Assistant config directory."""
     import os
@@ -341,6 +432,14 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         "ha_mcp_tools",
         "HA MCP Tools",
     )
+
+    # Shift the pre-baked recorder timestamps forward so the seeded rows
+    # look "recent" to history queries with a 24h window. The recorder DB in
+    # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
+    # and its rows have whatever timestamps were captured at bake time. Without
+    # this shift, the pagination tests in test_history.py/test_logbook.py would
+    # silently skip again the moment the seed gets more than 24h old.
+    _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)

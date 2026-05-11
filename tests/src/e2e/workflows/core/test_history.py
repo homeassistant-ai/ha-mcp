@@ -638,17 +638,33 @@ class TestGetHistoryNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
 
     async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
-        """Offset pagination works for a single entity and returns correct metadata."""
+        """Offset pagination works for a single entity and returns correct metadata.
+
+        Queries ``input_number.e2e_pagination_seed`` — the entity that the seed
+        recorder DB in ``tests/initial_test_state/home-assistant_v2.db`` ships
+        with 11 pre-baked state-change rows for. The conftest fixture shifts
+        those rows' timestamps forward each session so they fall inside any
+        reasonable history window. Previous reliance on
+        ``sensor.home_temperature`` (which never existed in the seed) was the
+        original cause of the silent skip flagged by #366.
+        """
+        target = "input_number.e2e_pagination_seed"
         # First page: offset=0, limit=5
         result_p1 = await safe_call_tool(
             mcp_client,
             "ha_get_history",
-            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 0},
+            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 0},
         )
-        if not result_p1.get("success"):
+        # safe_call_tool returns the parsed envelope; the history payload is
+        # nested under "data" (matches the unwrap pattern used elsewhere in
+        # this file at line ~39). Without this unwrap the assertions below
+        # read the wrong dict level and `success` is always None — a second
+        # latent bug uncovered by the same #366 audit.
+        inner_p1 = result_p1.get("data", result_p1)
+        if not inner_p1.get("success"):
             pytest.skip("No history data available for pagination test")
 
-        entities_p1 = result_p1.get("entities", [])
+        entities_p1 = inner_p1.get("entities", [])
         if not entities_p1:
             pytest.skip("No entities returned")
 
@@ -666,10 +682,11 @@ class TestGetHistoryNegativeInputs:
         result_p2 = await safe_call_tool(
             mcp_client,
             "ha_get_history",
-            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 5},
+            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 5},
         )
-        assert result_p2.get("success")
-        entity_p2 = result_p2["entities"][0]
+        inner_p2 = result_p2.get("data", result_p2)
+        assert inner_p2.get("success")
+        entity_p2 = inner_p2["entities"][0]
         assert entity_p2["offset"] == 5
         assert entity_p2["total_count"] == entity_p1["total_count"]
 

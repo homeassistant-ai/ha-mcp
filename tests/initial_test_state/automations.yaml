@@ -1,1 +1,17 @@
-[]
+# E2E seed automations — referenced by tests that would otherwise skip with
+# "No automation entities available for testing" (test_state.py::test_get_state_automation_entity).
+# initial_state is false so the automation never fires during the test session.
+- id: e2e_test_automation_seed
+  alias: E2E Seed Automation
+  description: Seed automation for test_state.py::test_get_state_automation_entity. Disabled at startup to avoid runtime side effects.
+  trigger:
+    - platform: time
+      at: '03:00:00'
+  condition: []
+  action:
+    - service: persistent_notification.create
+      data:
+        title: E2E seed
+        message: This automation should never run during tests; initial_state is false.
+  initial_state: false
+  mode: single
