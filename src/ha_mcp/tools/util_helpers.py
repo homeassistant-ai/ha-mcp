@@ -280,6 +280,22 @@ def parse_string_list_param(
     raise ValueError(f"{param_name} must be string, list, or None")
 
 
+def project_fields(
+    data: dict[str, Any],
+    fields: str | list[str] | None,
+) -> dict[str, Any]:
+    """Apply optional field projection to a response data dict.
+
+    Always retains ``success``. Unknown keys in *fields* are silently dropped.
+    Accepts a list or a CSV/JSON-array string for *fields*.
+    """
+    if fields is None:
+        return data
+    parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
+    keep = set(parsed) | {"success"}
+    return {k: v for k, v in data.items() if k in keep}
+
+
 def build_pagination_metadata(
     total_count: int, offset: int, limit: int, count: int
 ) -> dict[str, Any]:
