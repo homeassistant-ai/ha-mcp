@@ -340,7 +340,12 @@ class TestIntegrationFiltering:
 
     async def test_include_options_flag(self, mcp_client):
         """
-        Test: include_options parameter includes options in list response.
+        Test: include_options=True returns ACTUAL option values (not {}).
+
+        Regression guard for #1245 — the previous implementation read
+        ``options`` from HA's list endpoint, which deliberately omits the
+        field, so every entry came back with ``options={}``. The fix
+        probes each entry's OptionsFlow to recover the real values.
         """
         logger.info("Testing ha_get_integration with include_options=True...")
 
@@ -352,9 +357,23 @@ class TestIntegrationFiltering:
         if data["total_count"] == 0:
             pytest.skip("No integrations available")
 
-        # All entries should have options field
+        # All entries should have options field present.
         for entry in data["entries"]:
             assert "options" in entry, "include_options should add options field"
+
+        # At least one entry with supports_options=True should have non-empty
+        # options. The conftest seeds a HACS entry with real options. If every
+        # supports_options=True entry returns {}, the regression has resurfaced.
+        entries_with_support = [
+            e for e in data["entries"] if e.get("supports_options")
+        ]
+        if entries_with_support:
+            non_empty = [e for e in entries_with_support if e["options"]]
+            assert non_empty, (
+                "Expected at least one supports_options=True entry to expose "
+                "non-empty options via the OptionsFlow probe; all came back "
+                "empty (regression of #1245)."
+            )
 
         logger.info(
             f"include_options test passed: {data['total_count']} entries with options"
@@ -402,6 +421,37 @@ class TestIntegrationFiltering:
         logger.info(
             f"Specific entry test passed: domain={entry.get('domain')}, "
             f"options_keys={list(entry['options'].keys())}"
+        )
+
+    async def test_specific_entry_options_empty_when_unsupported(self, mcp_client):
+        """
+        Test: Single-entry response always includes an ``options`` field.
+
+        When the entry's integration doesn't expose an OptionsFlow
+        (``supports_options=False``), ``options`` must still be present and
+        equal to ``{}`` — callers rely on the field being canonical without
+        further presence checks.
+        """
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = assert_mcp_success(list_result, "list integrations")
+
+        target = next(
+            (e for e in list_data["entries"] if not e.get("supports_options")),
+            None,
+        )
+        if not target:
+            pytest.skip("No supports_options=False entries available")
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": target["entry_id"]}
+        )
+        data = assert_mcp_success(result, "get unsupported-options entry")
+
+        entry = data["entry"]
+        assert entry.get("options") == {}, (
+            "Single-entry response must always include options field; "
+            "expected {} when supports_options=False, got "
+            f"{entry.get('options')!r}"
         )
 
 

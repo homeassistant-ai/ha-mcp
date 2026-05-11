@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -57,6 +58,115 @@ from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
+    """Return True only for benign 'schema drift' errors (column/table missing).
+
+    Other ``OperationalError`` causes (locked DB, disk I/O error, malformed
+    image, readonly DB) must propagate — silently swallowing them is exactly
+    the regression class this helper exists to prevent.
+    """
+    msg = str(exc).lower()
+    return "no such table" in msg or "no such column" in msg
+
+
+def _refresh_recorder_timestamps(
+    db_path: Path, target_age_seconds: float = 300.0
+) -> None:
+    """Shift baked recorder timestamps forward so seeded rows fall inside the test window.
+
+    The seed ``home-assistant_v2.db`` (built by ``scripts/bake_pagination_seed.py``)
+    ships with pre-recorded state-change rows for ``input_number.e2e_pagination_seed``.
+    If more than 24h elapses between bake and a test run, every 24h-window
+    history query misses them and pagination tests would silently skip.
+
+    Finds the most recent numeric timestamp and uniformly shifts every numeric
+    timestamp column so the newest row sits at ``now - target_age_seconds``.
+    Relative ordering is preserved.
+
+    Raises ``RuntimeError`` if the DB is missing — falling back to a no-op
+    would re-introduce the silent-skip class this helper exists to prevent.
+    """
+    if not db_path.exists():
+        raise RuntimeError(
+            f"Recorder seed DB not found at {db_path}. The committed "
+            f"tests/initial_test_state/home-assistant_v2.db must be staged into "
+            f"the test config dir before this helper runs; without it the "
+            f"pagination tests will silently skip."
+        )
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # NUMERIC (REAL/FLOAT) recorder timestamp columns. Missing columns are
+        # skipped (HA schema drift); other OperationalErrors propagate.
+        #
+        # `recorder_runs.{start,end,created}` and `statistics_runs.start` are
+        # TEXT/ISO (DATETIME) columns and DELIBERATELY EXCLUDED — running
+        # `UPDATE … SET col = col + N` against an ISO string silently coerces
+        # it via SQLite leading-numeric parsing ("2026-05-11 15:58..." → 2026),
+        # turning the cell into garbage and breaking HA's history layer on the
+        # next boot. Do not add TEXT/DATETIME columns to this dict.
+        TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
+            "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
+            "events": ("time_fired_ts",),
+            "statistics": ("start_ts", "created_ts"),
+            "statistics_short_term": ("start_ts", "created_ts"),
+        }
+
+        newest = 0.0
+        for table, cols in TIMESTAMP_COLUMNS.items():
+            for col in cols:
+                try:
+                    row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
+                except sqlite3.OperationalError as exc:
+                    if _is_missing_column_or_table_error(exc):
+                        continue
+                    raise
+                if row and row[0] is not None and isinstance(row[0], (int, float)):
+                    newest = max(newest, float(row[0]))
+
+        if newest <= 0:
+            raise RuntimeError(
+                f"Recorder seed DB at {db_path} has no numeric timestamps. "
+                f"The bake script may have produced an empty DB; re-run "
+                f"`uv run python scripts/bake_pagination_seed.py`."
+            )
+
+        target = time.time() - target_age_seconds
+        offset = target - newest
+        if offset <= 0:
+            logger.info(
+                f"⏱️ recorder timestamps already recent (newest={newest:.0f}, "
+                f"target={target:.0f}); no shift needed"
+            )
+            return
+
+        rows_updated = 0
+        for table, cols in TIMESTAMP_COLUMNS.items():
+            for col in cols:
+                try:
+                    cur = conn.execute(
+                        f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
+                        (offset,),
+                    )
+                    rows_updated += cur.rowcount
+                except sqlite3.OperationalError as exc:
+                    if _is_missing_column_or_table_error(exc):
+                        continue
+                    raise
+        if rows_updated == 0:
+            raise RuntimeError(
+                f"Recorder seed DB at {db_path} matched zero rows for the "
+                f"shift UPDATE — schema may have changed beyond TIMESTAMP_COLUMNS."
+            )
+        conn.commit()
+        logger.info(
+            f"⏱️ Shifted recorder timestamps by {offset:+.0f}s "
+            f"({rows_updated} rows updated) — newest seed row is now ~5min ago"
+        )
+    finally:
+        conn.close()
 
 
 def _setup_config_permissions(config_path: Path) -> None:
@@ -341,6 +451,14 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         "ha_mcp_tools",
         "HA MCP Tools",
     )
+
+    # Shift the pre-baked recorder timestamps forward so the seeded rows
+    # look "recent" to history queries with a 24h window. The recorder DB in
+    # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
+    # and its rows have whatever timestamps were captured at bake time. Without
+    # this shift, the pagination tests in test_history.py/test_logbook.py would
+    # silently skip again the moment the seed gets more than 24h old.
+    _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)

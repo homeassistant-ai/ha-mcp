@@ -295,6 +295,17 @@ class IntegrationTools:
         try:
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
+
+            # Surface `options` on every per-entry response (HA's REST endpoint
+            # omits the field). For entries with supports_options=True we probe
+            # via OptionsFlow — see `_fetch_entry_options`. When include_schema
+            # is also requested, `_fetch_options_schema` below populates options
+            # from the same flow init so we don't pay for two round-trips.
+            if isinstance(result, dict):
+                result.setdefault("options", {})
+                if result.get("supports_options") and not include_schema:
+                    result["options"] = await self._fetch_entry_options(entry_id)
+
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
@@ -326,21 +337,95 @@ class IntegrationTools:
                 ],
             )
 
+    @staticmethod
+    def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
+        """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
+
+        Reads each ``data_schema`` entry's ``default`` key, falling back to
+        ``value`` only when the ``default`` key is absent (constant-type
+        fields ship ``value`` instead of ``default``). Fields with a missing
+        or ``None`` value are skipped.
+        """
+        out: dict[str, Any] = {}
+        for field in flow.get("data_schema") or []:
+            name = field.get("name")
+            if name is None:
+                continue
+            value = field.get("default", field.get("value"))
+            if value is not None:
+                out[name] = value
+        return out
+
+    async def _fetch_entry_options(self, entry_id: str) -> dict[str, Any]:
+        """Read the current ``options`` for a config entry via its OptionsFlow.
+
+        Home Assistant does not expose ``ConfigEntry.options`` through any
+        read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
+        deliberately omits the field. The closest approximation that the HA UI
+        itself uses is the ``default`` values populated into the OptionsFlow's
+        first-step ``data_schema``: integrations build that schema from the
+        existing options dict, so the defaults match the persisted state.
+
+        Starts the flow, harvests ``{name: default}`` from the first step,
+        and aborts the flow in ``finally`` so it doesn't sit half-open.
+
+        Returns ``{}`` on any failure (unsupported entry, non-form first step
+        such as a menu, init/abort errors) so callers can treat the return as
+        the canonical "options" field without further checks. Unexpected
+        exception types are logged at ``warning`` so probe breakage is
+        discoverable.
+        """
+        flow_id: str | None = None
+        try:
+            flow = await self._client.start_options_flow(entry_id)
+            flow_id = flow.get("flow_id")
+            flow_type = flow.get("type")
+            if flow_type != "form":
+                logger.debug(
+                    f"OptionsFlow for {entry_id} returned type={flow_type!r}, "
+                    f"not a form — cannot extract option defaults"
+                )
+                return {}
+            return self._options_from_form_flow(flow)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to fetch options for {entry_id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return {}
+        finally:
+            if flow_id:
+                try:
+                    await self._client.abort_options_flow(flow_id)
+                except Exception as abort_err:
+                    logger.warning(
+                        f"Failed to abort options flow {flow_id}: "
+                        f"{type(abort_err).__name__}: {abort_err}"
+                    )
+
     async def _fetch_options_schema(
         self, entry_id: str, resp: dict[str, Any]
     ) -> None:
-        """Start an options flow to read the schema, then abort it."""
+        """Start an options flow to read the schema, then abort it.
+
+        Also populates ``resp["entry"]["options"]`` for form-type flows from
+        the same flow result so callers requesting both schema and options
+        don't pay for two round-trips.
+        """
         flow_id = None
         try:
             flow_result = await self._client.start_options_flow(entry_id)
             flow_id = flow_result.get("flow_id")
             flow_type = flow_result.get("type")
+            entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
             if flow_type == "form":
                 resp["options_schema"] = {
                     "flow_type": "form",
                     "step_id": flow_result.get("step_id"),
                     "data_schema": flow_result.get("data_schema", []),
                 }
+                if entry is not None:
+                    entry["options"] = self._options_from_form_flow(flow_result)
             elif flow_type == "menu":
                 resp["options_schema"] = {
                     "flow_type": "menu",
@@ -348,16 +433,18 @@ class IntegrationTools:
                     "menu_options": flow_result.get("menu_options", []),
                 }
         except Exception as schema_err:
-            logger.debug(
-                f"Failed to fetch options schema for {entry_id}: {schema_err}"
+            logger.warning(
+                f"Failed to fetch options schema for {entry_id}: "
+                f"{type(schema_err).__name__}: {schema_err}"
             )
         finally:
             if flow_id:
                 try:
                     await self._client.abort_options_flow(flow_id)
                 except Exception as abort_err:
-                    logger.debug(
-                        f"Failed to abort options flow {flow_id}: {abort_err}"
+                    logger.warning(
+                        f"Failed to abort options flow {flow_id}: "
+                        f"{type(abort_err).__name__}: {abort_err}"
                     )
 
     async def _list_entries(
@@ -394,10 +481,27 @@ class IntegrationTools:
         # Fetch current logger levels once; enrich each entry with its effective level.
         logger_levels = await get_logger_levels(self._client)
 
-        # Format entries for response
+        # `_format_entry` is sync and cannot probe the OptionsFlow; options
+        # are filled in by a second async pass below for entries that
+        # advertise supports_options=True. See `_fetch_entry_options`.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
+
+        if include_opts:
+            options_targets = [
+                e for e in formatted_entries if e.get("supports_options")
+            ]
+            if options_targets:
+                fetched = await asyncio.gather(
+                    *(
+                        self._fetch_entry_options(e["entry_id"])
+                        for e in options_targets
+                    ),
+                    return_exceptions=False,
+                )
+                for entry, opts in zip(options_targets, fetched, strict=True):
+                    entry["options"] = opts
 
         # Apply search filter if query provided
         if query and query.strip():
