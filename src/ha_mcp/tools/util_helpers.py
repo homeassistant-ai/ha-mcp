@@ -288,8 +288,8 @@ def project_fields(
 
     Always retains ``success``. Unknown keys in *fields* are silently dropped.
     Accepts a list or a CSV/JSON-array string for *fields*.
-    Call this BEFORE ``add_timezone_metadata`` so the outer wrapper shape is
-    preserved and only the inner payload is reduced.
+    Apply to the inner payload before any outer wrapper that adds top-level keys
+    you want to preserve.
     """
     if fields is None:
         return data

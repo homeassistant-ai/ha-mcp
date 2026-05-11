@@ -166,6 +166,9 @@ def _project_entity(
     must be normalised at the call site via ``parse_string_list_param`` (see
     ``ha_get_state`` which parses once before the bulk loop to avoid re-parsing per
     entity record).
+
+    Unlike ``project_fields``, this helper does not auto-retain ``success`` — entity
+    records have no ``success`` field, so the asymmetry is intentional.
     """
     if not isinstance(record, dict):
         return record  # non-dict (e.g. error path returning None) — skip projection
@@ -287,9 +290,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
         # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
+        parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         # Normalize omitted/None query to empty string so downstream logic is unchanged
@@ -472,7 +476,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             by_domain[domain].append(item)
                         search_data["by_domain"] = by_domain
 
-                    return await add_timezone_metadata(client, project_fields(search_data, fields))
+                    return await add_timezone_metadata(client, project_fields(search_data, parsed_fields))
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -574,7 +578,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     entity["domain"], []
                                 ).append(entity)
                             area_search_data["by_domain"] = paginated_by_domain
-                        return await add_timezone_metadata(client, project_fields(area_search_data, fields))
+                        return await add_timezone_metadata(client, project_fields(area_search_data, parsed_fields))
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -593,7 +597,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             empty_area_data["domain_filter"] = domain_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, project_fields(empty_area_data, fields))
+                        return await add_timezone_metadata(client, project_fields(empty_area_data, parsed_fields))
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -687,7 +691,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
                 if group_by_domain_bool:
                     domain_list_data["by_domain"] = {domain_filter: results}
-                return await add_timezone_metadata(client, project_fields(domain_list_data, fields))
+                return await add_timezone_metadata(client, project_fields(domain_list_data, parsed_fields))
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -788,7 +792,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result["warning"] = warning
                 result["partial"] = True
 
-            return await add_timezone_metadata(client, project_fields(result, fields))
+            return await add_timezone_metadata(client, project_fields(result, parsed_fields))
 
         except ToolError:
             raise
@@ -936,9 +940,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
         # (ha_get_overview has no outer try/except, so ValueError would escape uncaught)
+        parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
 
@@ -1079,7 +1084,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
-        return project_fields(result, fields)
+        return project_fields(result, parsed_fields)
 
     @mcp.tool(
         tags={"Search & Discovery"},
@@ -1244,7 +1249,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Return only the specified keys from each entity's attributes dict "
                     '(e.g. ["brightness", "color_temp"] for lights). '
                     "None = full attributes (default). "
-                    "Unknown keys are silently absent (matches HA's per-domain behavior). "
+                    "Unknown keys are silently dropped. "
                     'Requires "attributes" to be present in fields= (or fields=None).'
                 ),
             ),
