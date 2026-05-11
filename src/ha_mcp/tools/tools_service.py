@@ -454,6 +454,9 @@ class ServiceTools:
 
         Use this to fire custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.
+
+        Caveats: Events are fire-and-forget; this tool confirms the event was accepted
+        by the bus but does not verify whether any automation or subscriber acted on it.
         """
         try:
             parsed_data: dict[str, Any] | None = None
