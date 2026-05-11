@@ -1,21 +1,21 @@
 """Unit tests for the shared Supervisor httpx client factory.
 
 Covers :func:`ha_mcp.client.supervisor_client.make_supervisor_httpx_client`,
-which builds the ``httpx.AsyncClient`` instances used by the three direct-
-Supervisor call sites (``rest_client._supervisor_logs_get``,
-``tools_bug_report._fetch_addon_logs``, ``settings_ui._restart_addon``).
+which builds the ``httpx.AsyncClient`` instances used everywhere ha-mcp
+talks directly to the Home Assistant Supervisor REST API.
 
 The factory itself is a one-liner around ``httpx.AsyncClient`` — these tests
-guard the contract the three call sites rely on:
+guard the contract callers rely on:
 
 - ``base_url`` resolved through :func:`ha_mcp._version.get_supervisor_base_url`
   (so the ``SUPERVISOR_BASE_URL`` E2E override flows through)
-- ``Authorization: Bearer ${SUPERVISOR_TOKEN}`` preset on the client
+- ``Authorization: Bearer ${SUPERVISOR_TOKEN}`` preset on the client at
+  construction time; per-call headers layer on top without displacing it
 - ``timeout`` / ``verify`` forwarded verbatim, both as plain ``float`` and as
   :class:`httpx.Timeout`
-- Absent or empty ``SUPERVISOR_TOKEN`` produces a ``"Bearer "`` header (the
-  call-site policy is to short-circuit before reaching here; this test pins
-  the documented graceful-degradation behaviour)
+- Absent or empty ``SUPERVISOR_TOKEN`` raises ``RuntimeError`` at construction
+  time rather than emitting a malformed ``Authorization: Bearer `` header
+  that Supervisor would reject as a bad token
 """
 
 from unittest.mock import patch
@@ -87,18 +87,30 @@ async def test_authorization_header_uses_token_from_env(
         assert client.headers["Authorization"] == f"Bearer {supervisor_token}"
 
 
-@pytest.mark.asyncio
-async def test_authorization_header_with_absent_token(
-    no_supervisor_token: None, no_base_url_override: None
-) -> None:
-    """Missing ``SUPERVISOR_TOKEN`` falls back to a literal ``Bearer `` header.
+def test_raises_on_absent_token(no_supervisor_token: None) -> None:
+    """Missing ``SUPERVISOR_TOKEN`` raises ``RuntimeError`` at construction.
 
-    Each call site short-circuits before reaching the factory when the token
-    is absent (see module docstring); this test pins the graceful-degradation
-    contract for any future direct caller that forgets to guard.
+    Each call site short-circuits before reaching the factory when the
+    token is absent; this test pins the factory's defensive fast-fail for
+    any future direct caller that forgets to guard. A malformed
+    ``Authorization: Bearer `` header would otherwise be read by
+    Supervisor as a token rejection (401), masking the missing-env-var
+    root cause.
     """
-    async with make_supervisor_httpx_client(timeout=5.0, verify=True) as client:
-        assert client.headers["Authorization"] == "Bearer "
+    with pytest.raises(RuntimeError, match="SUPERVISOR_TOKEN"):
+        make_supervisor_httpx_client(timeout=5.0, verify=True)
+
+
+def test_raises_on_empty_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty-string ``SUPERVISOR_TOKEN`` is treated the same as absent.
+
+    Some environments set the variable to an empty string rather than
+    unsetting it; both must short-circuit so the factory never emits a
+    malformed header.
+    """
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "")
+    with pytest.raises(RuntimeError, match="SUPERVISOR_TOKEN"):
+        make_supervisor_httpx_client(timeout=5.0, verify=True)
 
 
 @pytest.mark.asyncio
@@ -141,8 +153,8 @@ def test_verify_forwarded_to_async_client_kwarg(supervisor_token: str) -> None:
     the kwarg directly — this is the only way to guard against a regression
     that drops the parameter on the floor while still returning a valid
     client. The ``verify`` flag is a no-op for plain ``http://supervisor``
-    today, but call sites pass it for symmetry with the HTTPS-override path
-    (#1128) and that contract has to hold.
+    today, but call sites pass it for symmetry with the HTTPS-override
+    path and that contract has to hold.
     """
     with patch("ha_mcp.client.supervisor_client.httpx.AsyncClient") as mock_ctor:
         make_supervisor_httpx_client(timeout=5.0, verify=False)
@@ -151,3 +163,25 @@ def test_verify_forwarded_to_async_client_kwarg(supervisor_token: str) -> None:
         mock_ctor.reset_mock()
         make_supervisor_httpx_client(timeout=5.0, verify=True)
         assert mock_ctor.call_args.kwargs["verify"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_call_headers_layer_over_ctor_authorization(
+    supervisor_token: str, no_base_url_override: None
+) -> None:
+    """Per-call headers (e.g. ``Accept``) layer on top of the ctor-set
+    ``Authorization`` rather than displacing it.
+
+    ``_supervisor_logs_get`` passes ``headers={"Accept": "text/plain"}`` on
+    the call while the factory presets ``Authorization`` at the ctor.
+    httpx merges request-level headers with client-level headers; this
+    test pins that contract so a regression that moved ``Authorization``
+    to per-call defaults — which would silently drop it whenever a caller
+    supplies its own ``headers=`` kwarg — is caught.
+    """
+    async with make_supervisor_httpx_client(timeout=5.0, verify=True) as client:
+        request = client.build_request(
+            "GET", "/addons/self/logs", headers={"Accept": "text/plain"}
+        )
+        assert request.headers["Authorization"] == f"Bearer {supervisor_token}"
+        assert request.headers["Accept"] == "text/plain"

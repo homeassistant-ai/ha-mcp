@@ -218,7 +218,7 @@ class TestGetAddonLogs:
 
 
 class TestGetAddonLogsViaSupervisor:
-    """Supervisor-direct branch of `get_addon_logs` (#1116 regression scope)."""
+    """Supervisor-direct branch of `get_addon_logs`."""
 
     @pytest.fixture
     def mock_async_client_class(self):
@@ -232,7 +232,7 @@ class TestGetAddonLogsViaSupervisor:
         client_class = MagicMock(return_value=cm)
         # Patching `httpx.AsyncClient` directly (not through the `rest_client`
         # module attribute) is robust to either `import httpx` or a future
-        # `from httpx import AsyncClient` form (#1126 review item 15).
+        # `from httpx import AsyncClient` form.
         with patch("httpx.AsyncClient", client_class):
             yield inner_client, client_class
 
@@ -251,15 +251,14 @@ class TestGetAddonLogsViaSupervisor:
         assert "addon log line 1" in result
         inner_client.get.assert_awaited_once()
         args, kwargs = inner_client.get.call_args
-        # After the supervisor_client refactor (#1130), absolute-URL +
-        # per-call Authorization split into base_url + Bearer header on the
-        # constructor; only Accept stays per-call.
+        # Wire shape: relative path on the call, with per-call ``Accept``
+        # layered over the ctor-set ``Authorization`` — no per-call
+        # Authorization kwarg, which would displace the ctor header.
         assert args[0] == "/addons/81f33d0f_ha_mcp/logs"
         assert kwargs["headers"]["Accept"] == "text/plain"
         assert "Authorization" not in kwargs.get("headers", {})
         # Constructor kwargs propagated — guards against a regression that
-        # hard-codes verify, timeout, base_url, or the Bearer token (#1126
-        # review item 13, #1130 helper extraction).
+        # hard-codes verify, timeout, base_url, or the Bearer token.
         ctor_kwargs = client_class.call_args.kwargs
         assert ctor_kwargs["verify"] is True  # mirrors mock_client.verify_ssl
         assert isinstance(ctor_kwargs["timeout"], httpx.Timeout)
@@ -547,7 +546,7 @@ class TestGetErrorLogBranchSelection:
 
 class TestGetSystemServiceLogs:
     """REST-client `_get_system_service_logs` — system-service variant of the
-    Supervisor-direct path covering ``/{service}/logs`` (#1116 scope-add)."""
+    Supervisor-direct path covering ``/{service}/logs``."""
 
     @pytest.fixture
     def mock_async_client_class(self):
@@ -576,8 +575,8 @@ class TestGetSystemServiceLogs:
 
         assert "supervisor service log line" in result
         args, kwargs = inner_client.get.call_args
-        # After the supervisor_client refactor (#1130): relative path on the
-        # call, base_url + Authorization on the constructor.
+        # Wire shape: relative path on the call, with ``Authorization``
+        # assembled on the constructor (mirrors the addon-logs branch).
         assert args[0] == "/supervisor/logs"
         assert "Authorization" not in kwargs.get("headers", {})
         # Constructor kwargs propagated (parity with addon-logs branch).

@@ -746,6 +746,37 @@ class TestFetchAddonLogs:
 
         assert result == ""
 
+    @pytest.mark.asyncio
+    async def test_passes_relative_url_with_ctor_authorization(self, monkeypatch):
+        """Post-refactor wire shape: relative path on ``.get()``, with
+        ``Authorization`` assembled in the constructor kwargs rather than
+        per-call. Mirrors the parallel assertions in
+        ``test_tools_utility_supervisor_logs.py`` so a regression that
+        hard-codes the absolute URL or moves the Bearer header back to
+        per-call kwargs is caught here, not just on the rest-client branch.
+        """
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token-abc")
+
+        inner_client = MagicMock()
+        fake_response = httpx.Response(200, text="addon log line\n")
+        inner_client.get = AsyncMock(return_value=fake_response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        client_class = MagicMock(return_value=cm)
+        with patch("httpx.AsyncClient", client_class):
+            await _fetch_addon_logs()
+
+        inner_client.get.assert_awaited_once()
+        args, kwargs = inner_client.get.call_args
+        assert args[0] == "/addons/self/logs"
+        assert "Authorization" not in kwargs.get("headers", {})
+
+        ctor_kwargs = client_class.call_args.kwargs
+        assert ctor_kwargs["base_url"] == "http://supervisor"
+        assert ctor_kwargs["headers"]["Authorization"] == "Bearer test-token-abc"
+
 
 # Shared JWT fixture for the format-helper boundary tests below. 108 chars.
 _JWT_SAMPLE = (
@@ -1143,9 +1174,14 @@ class TestBugReportNewIdentityFields:
 
     @pytest.mark.asyncio
     async def test_config_toggles_section_renders_in_templates(
-        self, ha_report_issue_func
+        self, ha_report_issue_func, monkeypatch
     ):
-        # Use a fake Settings so we don't depend on real env vars.
+        # Use a fake Settings so we don't depend on real env vars. The
+        # `delenv("SUPERVISOR_TOKEN")` keeps `_fetch_addon_logs` on the
+        # early-return path so the test stays env-independent (the addon
+        # path would otherwise try `get_global_settings().verify_ssl` on
+        # the fake, which only carries the toggle fields).
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         fake = SimpleNamespace(
             enable_websocket=True,
             enable_dashboard_partial_tools=True,
