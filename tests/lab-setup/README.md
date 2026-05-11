@@ -26,7 +26,7 @@ sudo ./setup-ha-mcp.sh your-domain.example.com
 > If calling from a **root cron job**, set it explicitly:
 > `SUDO_USER=youruser ./setup-ha-mcp.sh your-domain.example.com`
 
-Setup takes about 3–10 minutes (depending on image pull speed). Home Assistant starts automatically.
+Setup takes about 3–10 minutes on subsequent runs. Allow up to 15 minutes on first install when the ~600 MB HA image must be pulled. Home Assistant starts automatically.
 
 ## What It Does
 
@@ -103,7 +103,8 @@ sudo systemctl restart hamcp-demo
 ### Full reset (re-clone and restart from scratch)
 ```bash
 sudo systemctl stop hamcp-demo
-docker stop $(docker ps -q) 2>/dev/null; docker rm $(docker ps -aq) 2>/dev/null
+docker ps -aq --filter "ancestor=ghcr.io/home-assistant/home-assistant" | xargs -r docker rm -f 2>/dev/null || true
+docker ps -aq --filter "ancestor=testcontainers/ryuk" | xargs -r docker rm -f 2>/dev/null || true
 rm -rf ~/ha-mcp
 sudo ./setup-ha-mcp.sh your-domain.example.com
 ```

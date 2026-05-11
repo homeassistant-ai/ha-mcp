@@ -88,7 +88,7 @@ info "Setting up systemd service..."
 
 # Remove old cron entries if they exist (migration from cron-based setup)
 if sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -q "hamcp-test-env"; then
-    sudo -u "$SETUP_USER" crontab -l 2>/dev/null | grep -v "hamcp-test-env" | sudo -u "$SETUP_USER" crontab -
+    sudo -u "$SETUP_USER" crontab -l 2>/dev/null | { grep -v "hamcp-test-env" || true; } | sudo -u "$SETUP_USER" crontab -
 fi
 
 cat > /etc/systemd/system/hamcp-demo.service << SVCEOF
