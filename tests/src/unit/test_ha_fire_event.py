@@ -46,6 +46,12 @@ class TestHaFireEvent:
         with pytest.raises(ToolError):
             await tools.ha_fire_event("my_event", "[1, 2, 3]")
 
+    async def test_raises_tool_error_on_invalid_json_string(self):
+        """Invalid JSON string raises ToolError with invalid_json path (not generic error)."""
+        tools = _make_tools({"message": "ok"})
+        with pytest.raises(ToolError):
+            await tools.ha_fire_event("my_event", "{not valid json")
+
     async def test_returns_fallback_message_when_response_empty(self):
         tools = _make_tools({})
         result = await tools.ha_fire_event("my_event")

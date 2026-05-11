@@ -458,26 +458,32 @@ class ServiceTools:
         Caveats: Events are fire-and-forget; this tool confirms the event was accepted
         by the bus but does not verify whether any automation or subscriber acted on it.
         """
-        try:
-            parsed_data: dict[str, Any] | None = None
-            if data is not None:
+        parsed_data: dict[str, Any] | None = None
+        if data is not None:
+            raw: Any = None
+            try:
                 raw = parse_json_param(data, "data")
-                if raw is not None and not isinstance(raw, dict):
+            except ValueError as e:
+                raise_tool_error(
+                    create_validation_error(
+                        f"Invalid data parameter: {e}",
+                        parameter="data",
+                        invalid_json=True,
+                    )
+                )
+            if raw is not None:
+                if not isinstance(raw, dict):
                     raise_tool_error(
                         create_validation_error(
-                            "Event data must be a JSON object (dict), not a list",
+                            "Event data must be a JSON object (dict)",
                             parameter="data",
+                            details=f"Received type: {type(raw).__name__}",
                         )
                     )
-                parsed_data = cast(dict[str, Any], raw)
+                parsed_data = raw
 
+        try:
             response = await self._client.fire_event(event_type, parsed_data)
-
-            return {
-                "success": True,
-                "event_type": event_type,
-                "message": response.get("message", f"Event {event_type} fired."),
-            }
         except ToolError:
             raise
         except Exception as e:
@@ -489,6 +495,12 @@ class ServiceTools:
                     "Verify event_type is a valid identifier",
                 ],
             )
+
+        return {
+            "success": True,
+            "event_type": event_type,
+            "message": response.get("message", f"Event {event_type} fired."),
+        }
 
 
 def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
