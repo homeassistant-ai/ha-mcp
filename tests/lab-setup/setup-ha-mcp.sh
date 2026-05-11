@@ -132,7 +132,7 @@ cat > /etc/systemd/system/hamcp-demo-update.timer << SVCEOF
 Description=HA-MCP Demo Weekly Update Timer
 
 [Timer]
-OnCalendar=Mon *-*-* 03:00:00
+OnCalendar=*-*-* 03:00:00
 AccuracySec=1h
 Persistent=true
 
