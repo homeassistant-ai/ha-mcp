@@ -45,13 +45,20 @@ def _error_text(data: dict[str, Any]) -> str:
     return str(error)
 
 
-async def _probe_ha_mcp_tools_available(mcp_client) -> tuple[bool, str]:
+async def _probe_ha_mcp_tools_available(mcp_client: Any) -> tuple[bool, str]:
     """Check whether the ha_mcp_tools custom component is installed and responsive.
 
     Returns ``(True, "")`` on success, otherwise ``(False, reason)`` so the caller
     can ``pytest.skip``. Probes via ``ha_list_files`` because it returns the
     structured ``COMPONENT_NOT_INSTALLED`` error early when the component failed
-    to register on the test container (see issue #366 / #1205).
+    to register on the test container (component-registration flake — issues
+    #366, #1205).
+
+    Only ``COMPONENT_NOT_INSTALLED`` triggers a skip. Any other error shape
+    (different code, string error, missing key) returns ``(True, "")`` so the
+    test proceeds and surfaces the real failure — otherwise a genuine regression
+    in HA or in the tool layer would be silently masked as "component not
+    installed".
     """
     data = await safe_call_tool(mcp_client, "ha_list_files", {"path": "www/"})
     error = data.get("error", {})
@@ -71,13 +78,57 @@ def yaml_config_tools_enabled(ha_container_with_fresh_config):
 
 @pytest.fixture
 async def mcp_client_with_yaml_config(yaml_config_tools_enabled, mcp_server):
-    """Create MCP client with YAML config editing enabled."""
+    """Create MCP client with YAML config editing enabled.
+
+    Skips the test if the ``ha_mcp_tools`` custom component failed to register
+    on the test container (component-registration flake — issues #366, #1205).
+    Without this, every assertion site doing ``data.get("error", "").lower()``
+    against a structured ``COMPONENT_NOT_INSTALLED`` error crashes with
+    ``AttributeError`` (dict has no ``.lower``), turning a fixture flake into a
+    hard test failure instead of a clean skip.
+    """
     from fastmcp import Client
 
     client = Client(mcp_server.mcp)
     async with client:
         logger.debug("FastMCP client with YAML config tools connected")
+        available, reason = await _probe_ha_mcp_tools_available(client)
+        if not available:
+            pytest.skip(reason)
         yield client
+
+
+# ---------------------------------------------------------------------------
+# Helper unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestErrorTextHelper:
+    """Regression tests for ``_error_text()`` across both error-payload shapes.
+
+    Guards against the original ``AttributeError`` failure mode this PR fixes:
+    if the helper ever reverts to a plain ``.get("error", "")``, dict-shaped
+    errors silently break every assertion that calls ``.lower()`` on the
+    result. These tests pin the contract so a refactor can't regress it.
+    """
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"error": "plain string error"}, "plain string error"),
+            (
+                {"error": {"code": "X", "message": "structured"}},
+                "structured",
+            ),
+            ({"error": {"code": "X"}}, ""),
+            ({"error": {}}, ""),
+            ({}, ""),
+        ],
+    )
+    def test_extracts_expected_message(
+        self, payload: dict[str, Any], expected: str
+    ) -> None:
+        assert _error_text(payload) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -119,22 +170,6 @@ class TestYamlConfigAvailability:
 @pytest.mark.filesystem
 class TestYamlConfigSecurity:
     """Test security boundaries for YAML config editing."""
-
-    @pytest.fixture(autouse=True)
-    async def _skip_if_ha_mcp_tools_unavailable(self, mcp_client_with_yaml_config):
-        """Skip when the ha_mcp_tools custom component failed to register.
-
-        Without this, a transient component-install failure (issue #1205) lets
-        the security tests reach an ``inner.get("error", "").lower()`` site
-        that crashes with ``AttributeError`` on the structured
-        ``COMPONENT_NOT_INSTALLED`` error — turning a fixture flake into a
-        hard test failure instead of a clean skip.
-        """
-        available, reason = await _probe_ha_mcp_tools_available(
-            mcp_client_with_yaml_config
-        )
-        if not available:
-            pytest.skip(reason)
 
     async def test_path_traversal_blocked(self, mcp_client_with_yaml_config):
         """Path traversal attempts must be rejected."""
@@ -795,7 +830,7 @@ class TestYamlModeDashboardRegistration:
             },
         )
         assert data.get("success") is False
-        assert "reserved" in (data.get("error") or "").lower()
+        assert "reserved" in _error_text(data).lower()
 
     async def test_rejects_filename_traversal(self, mcp_client_with_yaml_config):
         data = await safe_call_tool(
@@ -808,7 +843,7 @@ class TestYamlModeDashboardRegistration:
             },
         )
         assert data.get("success") is False
-        assert "filename" in (data.get("error") or "").lower()
+        assert "filename" in _error_text(data).lower()
 
     async def test_rejects_lovelace_mode_dotted_path(self, mcp_client_with_yaml_config):
         """Confirm we did not unlock other lovelace.* keys."""
