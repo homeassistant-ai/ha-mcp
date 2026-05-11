@@ -19,7 +19,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import build_pagination_metadata, coerce_int_param
+from .util_helpers import build_pagination_metadata, coerce_int_param, project_fields
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,19 @@ class ServiceDiscoveryTools:
                 ),
             ),
         ] = "summary",
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["services"]). '
+                    "None = full response (default). "
+                    "Available keys: success, domains, services, total_count, count, "
+                    "offset, limit, has_more, next_offset, detail_level, filters_applied."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """List available Home Assistant services with optional pagination and detail control.
 
@@ -119,7 +132,7 @@ class ServiceDiscoveryTools:
                 detail_level=detail_level,
             )
 
-            return result
+            return project_fields(result, fields)
 
         except ToolError:
             raise

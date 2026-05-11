@@ -23,6 +23,7 @@ from .util_helpers import (
     coerce_bool_param,
     coerce_int_param,
     parse_string_list_param,
+    project_fields,
     public_fields,
 )
 
@@ -150,6 +151,27 @@ async def _exact_match_search(
     }
 
 
+def _project_entity(
+    record: dict[str, Any],
+    fields: list[str] | None,
+    attribute_keys: list[str] | None,
+) -> dict[str, Any]:
+    """Apply optional field projection to a HA entity record.
+
+    ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
+    ``attribute_keys`` further filters the ``attributes`` sub-dict.
+    Both default None = full payload (no-op).
+    """
+    if fields is not None:
+        keep = set(fields)
+        record = {k: v for k, v in record.items() if k in keep}
+    if attribute_keys is not None:
+        attrs = record.get("attributes")
+        if isinstance(attrs, dict):
+            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attribute_keys}}
+    return record
+
+
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register search and discovery tools with the MCP server."""
     smart_tools = kwargs.get("smart_tools")
@@ -230,6 +252,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["results"]). '
+                    "None = full response (default). "
+                    "Available keys: success, query, results, total_matches, count, "
+                    "offset, limit, has_more, next_offset, search_type, "
+                    "domain_filter, area_filter, area_name, area_names, "
+                    "by_domain, warning, partial."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -421,7 +458,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             by_domain[domain].append(item)
                         search_data["by_domain"] = by_domain
 
-                    return await add_timezone_metadata(client, search_data)
+                    return await add_timezone_metadata(client, project_fields(search_data, fields))
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -523,7 +560,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     entity["domain"], []
                                 ).append(entity)
                             area_search_data["by_domain"] = paginated_by_domain
-                        return await add_timezone_metadata(client, area_search_data)
+                        return await add_timezone_metadata(client, project_fields(area_search_data, fields))
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -542,7 +579,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             empty_area_data["domain_filter"] = domain_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, empty_area_data)
+                        return await add_timezone_metadata(client, project_fields(empty_area_data, fields))
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -636,7 +673,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
                 if group_by_domain_bool:
                     domain_list_data["by_domain"] = {domain_filter: results}
-                return await add_timezone_metadata(client, domain_list_data)
+                return await add_timezone_metadata(client, project_fields(domain_list_data, fields))
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -737,7 +774,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result["warning"] = warning
                 result["partial"] = True
 
-            return await add_timezone_metadata(client, result)
+            return await add_timezone_metadata(client, project_fields(result, fields))
 
         except ToolError:
             raise
@@ -852,6 +889,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include active persistent notifications (default: True). Set False to skip.",
             ),
         ] = True,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    "response size (e.g. [\"system_info\", \"domains\"]). "
+                    "None = full response (default). "
+                    "Available keys: success, system_info, domains, entity_summary, "
+                    "total_entities, count, offset, limit, total_matches, has_more, "
+                    "next_offset, notification_count, notifications, "
+                    "repair_count, repairs, tool_discovery."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
@@ -862,6 +914,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         are always complete regardless of entity pagination.
         Standard/full modes paginate entities (default 200 per page) — use offset
         to fetch more. Use 'domains' filter to narrow scope.
+
+        Use fields= to project the response to only the keys you need — up to 94%
+        token reduction when fetching a single sub-section (e.g. fields=["system_info"]).
         """
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
@@ -999,6 +1054,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     ]
                 ),
             }
+
+        if fields is not None:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
+            keep = set(parsed_fields) | {"success"}
+            result = cast(dict[str, Any], {k: v for k, v in result.items() if k in keep})
 
         return result
 
@@ -1144,6 +1204,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "(e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])"
             ),
         ],
+        fields: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level entity record keys to reduce "
+                    'response size (e.g. ["state", "attributes"]). '
+                    "None = full entity record (default). "
+                    "Available keys: entity_id, state, attributes, last_changed, "
+                    "last_reported, last_updated, context."
+                ),
+            ),
+        ] = None,
+        attribute_keys: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified keys from each entity's attributes dict "
+                    '(e.g. ["brightness", "color_temp"] for lights). '
+                    "None = full attributes (default). "
+                    "Unknown keys are silently absent (matches HA's per-domain behavior). "
+                    'Requires "attributes" to be present in fields= (or fields=None).'
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
@@ -1159,11 +1245,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
+        - State only: ha_get_state("light.kitchen", fields=["state"])
+        - Slim bulk: ha_get_state(["light.k", "sensor.t"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
         # Single entity path
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
+                result = _project_entity(result, fields, attribute_keys)
                 return await add_timezone_metadata(client, result)
             except ToolError:
                 raise
@@ -1235,7 +1324,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             for eid, result in zip(unique_ids, results, strict=True):
                 if result.get("success") is True and "state" in result:
-                    states[eid] = result["state"]
+                    states[eid] = _project_entity(result["state"], fields, attribute_keys)
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:

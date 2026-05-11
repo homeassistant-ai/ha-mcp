@@ -12,7 +12,7 @@ ha_get_history -- Retrieve historical data with source-selectable mode:
 import logging
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -208,6 +208,19 @@ class HistoryTools:
                 default=None,
             ),
         ] = None,
+        fields: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    "response size. None = full response (default). "
+                    'History keys: success, source, entities, period, query_params, time_zone. '
+                    "Statistics keys: success, source, entities, period_type, time_range, "
+                    "statistic_types, query_params, warnings, time_zone."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
@@ -344,6 +357,14 @@ class HistoryTools:
                     total=3,
                     message="recorder query complete",
                 )
+                if fields is not None:
+                    keep = set(fields) | {"success"}
+                    inner = result.get("data", result)
+                    if isinstance(inner, dict):
+                        result = {
+                            **result,
+                            "data": cast(dict[str, Any], {k: v for k, v in inner.items() if k in keep}),
+                        }
                 return result
             finally:
                 if ws_client:

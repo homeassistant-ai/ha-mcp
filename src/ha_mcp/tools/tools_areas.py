@@ -132,7 +132,21 @@ class AreaTools:
         annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"},
     )
     @log_tool_usage
-    async def ha_config_list_areas(self) -> dict[str, Any]:
+    async def ha_config_list_areas(
+        self,
+        fields: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["areas"]). '
+                    "None = full response (default). "
+                    "Available keys: success, count, areas, message."
+                ),
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """
         List all Home Assistant areas (rooms).
 
@@ -147,12 +161,16 @@ class AreaTools:
 
             if result.get("success"):
                 areas = result.get("result", [])
-                return {
+                response: dict[str, Any] = {
                     "success": True,
                     "count": len(areas),
                     "areas": areas,
                     "message": f"Found {len(areas)} area(s)",
                 }
+                if fields is not None:
+                    keep = set(fields) | {"success"}
+                    response = {k: v for k, v in response.items() if k in keep}
+                return response
             else:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
