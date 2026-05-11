@@ -391,7 +391,7 @@ async def _run_test_prompt_inline(
     from uat.openai_agent import DEFAULT_MAX_TOKENS, run_scenario_inline
 
     tool_trace: list[str] = []
-    start = time.time()
+    start = time.monotonic()
     try:
         result = await run_scenario_inline(
             openai_client,
@@ -406,7 +406,7 @@ async def _run_test_prompt_inline(
     except Exception as e:
         logger.exception(f"  [{agent_name}] inline run failed")
         tb = traceback.format_exc()
-        duration_ms = int((time.time() - start) * 1000)
+        duration_ms = int((time.monotonic() - start) * 1000)
         return 1, _inline_failure_summary(
             agent_name,
             error_msg=f"{type(e).__name__}: {e}",
@@ -415,7 +415,7 @@ async def _run_test_prompt_inline(
             tool_trace=tool_trace,
         )
 
-    duration_ms = int((time.time() - start) * 1000)
+    duration_ms = int((time.monotonic() - start) * 1000)
     exit_code = 1 if result.get("hit_iteration_limit") else 0
 
     # Match the summary shape produced by run_uat.make_summary.
@@ -664,7 +664,7 @@ async def run_stories(
     For each agent: start container -> run all stories -> stop container.
     When --ha-url is provided, all agents share the external instance.
     """
-    run_start = time.time()
+    run_start = time.monotonic()
     sha, describe = get_git_info()
     agent_list = [a.strip() for a in args.agents.split(",")]
     using_external_ha = bool(args.ha_url)
@@ -804,7 +804,7 @@ async def run_stories(
                     await _run_mcp_steps(shared_mcp, setup_steps, "setup")
 
                 logger.info(f"[{agent}/{sid}] Running test prompt...")
-                prompt_start = time.time()
+                prompt_start = time.monotonic()
                 summary: dict | None
                 if use_inline:
                     assert (
@@ -909,7 +909,7 @@ async def run_stories(
         session_info = f" (session: {session_file})" if session_file else ""
         logger.info(f"  [{status}] {agent}/{sid}: {story['title']}{session_info}")
 
-    elapsed = time.time() - run_start
+    elapsed = time.monotonic() - run_start
     mins, secs = divmod(int(elapsed), 60)
     logger.info(f"\nTotal time: {mins}m {secs}s")
     logger.info(f"Results appended to {args.results_file}")
