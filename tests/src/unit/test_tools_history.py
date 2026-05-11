@@ -60,19 +60,14 @@ class TestHaGetHistoryExceptionSuggestions:
         assert any("entity" in s.lower() for s in suggestions)
 
 
-_HISTORY_RESULT = {
-    "data": {
-        "success": True,
-        "source": "history",
-        "entities": [{"entity_id": "sensor.temp", "states": []}],
-        "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
-        "query_params": {"minimal_response": True, "significant_changes_only": True, "limit": 100, "offset": 0},
-    },
-    "metadata": {
-        "home_assistant_timezone": "UTC",
-        "timestamp_format": "ISO 8601 (UTC)",
-        "note": "All timestamps are in UTC. Home Assistant timezone is UTC.",
-    },
+# _fetch_history returns the unwrapped inner payload; ha_get_history then runs
+# project_fields and wraps with add_timezone_metadata at the call site.
+_HISTORY_INNER = {
+    "success": True,
+    "source": "history",
+    "entities": [{"entity_id": "sensor.temp", "states": []}],
+    "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+    "query_params": {"minimal_response": True, "significant_changes_only": True, "limit": 100, "offset": 0},
 }
 
 
@@ -85,6 +80,9 @@ class TestHaGetHistoryFieldsProjection:
         client.base_url = "http://homeassistant.local"
         client.token = "test_token"
         client.verify_ssl = True
+        # add_timezone_metadata is invoked at the projection call site and reads
+        # client.get_config(); mock it so the wrapper returns deterministically.
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         return client
 
     @pytest.fixture
@@ -105,7 +103,7 @@ class TestHaGetHistoryFieldsProjection:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(_HISTORY_RESULT),
+            return_value=dict(_HISTORY_INNER),
         ):
             result = await history_tool(entity_ids="sensor.temp")
         assert "data" in result
@@ -117,7 +115,7 @@ class TestHaGetHistoryFieldsProjection:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(_HISTORY_RESULT),
+            return_value=dict(_HISTORY_INNER),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["entities"])
         assert set(result["data"].keys()) == {"success", "entities"}
@@ -129,7 +127,7 @@ class TestHaGetHistoryFieldsProjection:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(_HISTORY_RESULT),
+            return_value=dict(_HISTORY_INNER),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["source", "period"])
         assert set(result["data"].keys()) == {"success", "source", "period"}
@@ -140,7 +138,7 @@ class TestHaGetHistoryFieldsProjection:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(_HISTORY_RESULT),
+            return_value=dict(_HISTORY_INNER),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["source"])
         assert "success" in result["data"]
@@ -151,7 +149,7 @@ class TestHaGetHistoryFieldsProjection:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(_HISTORY_RESULT),
+            return_value=dict(_HISTORY_INNER),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["nonexistent"])
         assert set(result["data"].keys()) == {"success"}

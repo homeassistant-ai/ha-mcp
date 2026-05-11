@@ -269,3 +269,102 @@ class TestHaGetStateSingleEntity:
 
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_attribute_keys_no_effect_emits_warning_single(
+        self, mock_client, get_state_tool
+    ):
+        """Single-entity: warn when attribute_keys is set but attributes is excluded from fields."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        data = result["data"]
+        assert "attributes" not in data
+        assert "warning" in data
+        assert "attribute_keys" in data["warning"]
+
+    @pytest.mark.asyncio
+    async def test_attribute_keys_no_warning_when_attributes_included(
+        self, mock_client, get_state_tool
+    ):
+        """No warning when attributes IS in fields — attribute_keys applies."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255, "color_temp": 3500},
+            }
+        )
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state", "attributes"],
+            attribute_keys=["brightness"],
+        )
+
+        data = result["data"]
+        assert "warning" not in data
+        assert data["attributes"] == {"brightness": 255}
+
+
+class TestHaGetStateAttributeKeysWarningBulk:
+    """Bulk-path warning when attribute_keys is set but 'attributes' is not in fields=."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def get_states_tool(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_attribute_keys_no_effect_emits_warning(
+        self, get_states_tool
+    ):
+        """Bulk-path: warn once at the top level when attribute_keys is silently ignored."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        data = result["data"]
+        assert "warning" in data
+        assert "attribute_keys" in data["warning"]
+        assert data["states"]["light.kitchen"] == {"state": "on"}

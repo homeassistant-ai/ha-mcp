@@ -153,27 +153,30 @@ async def _exact_match_search(
 
 def _project_entity(
     record: dict[str, Any],
-    fields: str | list[str] | None,
-    attribute_keys: str | list[str] | None,
+    fields: list[str] | None,
+    attribute_keys: list[str] | None,
 ) -> dict[str, Any]:
     """Apply optional field projection to a HA entity record.
 
     ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
     ``attribute_keys`` further filters the ``attributes`` sub-dict.
     Both default None = full payload (no-op).
-    Accepts a list or a CSV/JSON-array string for both parameters.
+
+    Both parameters are already parsed into ``list[str] | None`` — string/CSV inputs
+    must be normalised at the call site via ``parse_string_list_param`` (see
+    ``ha_get_state`` which parses once before the bulk loop to avoid re-parsing per
+    entity record).
     """
     if not isinstance(record, dict):
         return record  # non-dict (e.g. error path returning None) — skip projection
     if fields is not None:
-        parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
-        keep = set(parsed_fields)
+        keep = set(fields)
         record = {k: v for k, v in record.items() if k in keep}
     if attribute_keys is not None:
-        parsed_attr_keys = parse_string_list_param(attribute_keys, "attribute_keys", allow_csv=True) or []
         attrs = record.get("attributes")
         if isinstance(attrs, dict):
-            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in parsed_attr_keys}}
+            attr_keep = set(attribute_keys)
+            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attr_keep}}
     return record
 
 
@@ -920,8 +923,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Standard/full modes paginate entities (default 200 per page) — use offset
         to fetch more. Use 'domains' filter to narrow scope.
 
-        Use fields= to project the response to only the keys you need — up to 94%
-        token reduction when fetching a single sub-section (e.g. fields=["system_info"]).
+        Use fields= to project the response to only the keys you need — a
+        significantly smaller payload when fetching a single sub-section (e.g.
+        fields=["system_info"] returns just that section instead of the full overview).
         """
         # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
         # (ha_get_overview has no outer try/except, so ValueError would escape uncaught)
@@ -1250,17 +1254,61 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns success=True if at least one entity state was retrieved.
         Check 'error_count' for any failed lookups in partial-success scenarios.
 
+        FIELDS PROJECTION:
+        `fields=` projects the per-entity record (`entity_id`, `state`, `attributes`,
+        `last_changed`, `last_updated`, `context`), NOT the outer bulk response wrapper.
+        In single-entity mode it filters keys of the returned record directly. In bulk
+        mode it filters keys of each record inside `states[entity_id]`; outer keys
+        (`success`, `count`, `states`, `errors`, ...) are always preserved.
+        `attribute_keys=` further narrows the `attributes` sub-dict and is only applied
+        when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
+
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
         - State only: ha_get_state("light.kitchen", fields=["state"])
         - Slim bulk: ha_get_state(["light.kitchen", "sensor.temperature"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
+        # Parse projection params once up front so the bulk loop doesn't re-parse
+        # the same string/CSV input per entity (100 entities → 200 parses pre-fix).
+        # parse_string_list_param raises ValueError on bad input; surface as
+        # VALIDATION_INVALID_PARAMETER via the normal ToolError flow.
+        try:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+            parsed_attribute_keys = parse_string_list_param(
+                attribute_keys, "attribute_keys", allow_csv=True
+            )
+        except ValueError as e:
+            raise_tool_error(
+                create_validation_error(
+                    str(e),
+                    parameter=(
+                        "attribute_keys" if "attribute_keys" in str(e) else "fields"
+                    ),
+                )
+            )
+
+        # `attribute_keys` only takes effect when `attributes` is in the projected
+        # field set (or `fields=None`). Surface a warning rather than silently
+        # ignoring it — caller likely intended to slim attributes and would
+        # otherwise see an unfiltered or absent `attributes` key with no signal.
+        attribute_keys_no_effect = (
+            parsed_attribute_keys is not None
+            and parsed_fields is not None
+            and "attributes" not in parsed_fields
+        )
+
         # Single entity path
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
-                result = _project_entity(result, fields, attribute_keys)
+                result = _project_entity(result, parsed_fields, parsed_attribute_keys)
+                if attribute_keys_no_effect and isinstance(result, dict):
+                    result["warning"] = (
+                        "attribute_keys was ignored because 'attributes' is not in "
+                        "fields=. Add 'attributes' to fields= (or omit fields=) to "
+                        "apply attribute_keys."
+                    )
                 return await add_timezone_metadata(client, result)
             except ToolError:
                 raise
@@ -1332,7 +1380,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             for eid, result in zip(unique_ids, results, strict=True):
                 if result.get("success") is True and "state" in result:
-                    states[eid] = _project_entity(result["state"], fields, attribute_keys)
+                    states[eid] = _project_entity(
+                        result["state"], parsed_fields, parsed_attribute_keys
+                    )
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:
@@ -1352,6 +1402,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "count": len(states),
                 "states": states,
             }
+
+            if attribute_keys_no_effect:
+                response["warning"] = (
+                    "attribute_keys was ignored because 'attributes' is not in "
+                    "fields=. Add 'attributes' to fields= (or omit fields=) to "
+                    "apply attribute_keys."
+                )
 
             if errors:
                 response["errors"] = errors

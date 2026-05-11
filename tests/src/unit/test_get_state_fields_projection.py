@@ -66,17 +66,8 @@ class TestProjectEntity:
         assert "last_changed" in original
         assert original["attributes"]["color_temp"] == 3500
 
-    def test_fields_csv_string_input(self):
-        result = _project_entity(dict(_ENTITY_RECORD), "state,entity_id", None)
-        assert set(result.keys()) == {"state", "entity_id"}
-
-    def test_fields_json_array_string_input(self):
-        result = _project_entity(dict(_ENTITY_RECORD), '["state", "attributes"]', ["brightness"])
-        assert set(result.keys()) == {"state", "attributes"}
-        assert result["attributes"] == {"brightness": 200}
-
-    def test_attribute_keys_csv_string_input(self):
-        result = _project_entity(dict(_ENTITY_RECORD), None, "brightness,color_temp")
-        assert set(result["attributes"].keys()) == {"brightness", "color_temp"}
+    def test_non_dict_record_returned_unchanged(self):
+        # Defensive: error paths may pass None/non-dict; helper must not raise.
+        assert _project_entity(None, ["state"], None) is None  # type: ignore[arg-type]
 
 

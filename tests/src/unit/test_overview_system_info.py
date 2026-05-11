@@ -101,7 +101,7 @@ class TestHaGetOverviewFieldsProjection:
 
     Pins the contract from issue #1199: callers that only need one section
     (e.g. system_info) can request it via fields= and receive a response
-    that omits all other top-level keys, reducing token usage by up to 94%.
+    that omits all other top-level keys.
     """
 
     @pytest.fixture
