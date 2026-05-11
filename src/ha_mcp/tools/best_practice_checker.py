@@ -77,6 +77,11 @@ _RE_SUN = re.compile(r"(?:is_state|state_attr|states)\s*\(\s*['\"]sun\.sun['\"]"
 _RE_STATE_IN = re.compile(r"states\s*\([^)]+\)\s+in\s+[\[(]")
 # Unsafe direct state access: states.sensor.x.state
 _RE_DIRECT_STATE = re.compile(r"\bstates\.\w+\.\w+\.state\b")
+# Duration/recency checks via last_changed or last_updated arithmetic
+_RE_DURATION_MATH = re.compile(
+    r"\bnow\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b"
+    r"|\blast_(?:changed|updated)\s*<\s*now\(\)"
+)
 # Motion entity pattern
 _RE_MOTION = re.compile(r"binary_sensor\.\w*motion", re.IGNORECASE)
 # Any Jinja template marker — catch-all and target-field scan.
@@ -272,6 +277,16 @@ def _check_template_string(
             "errors if entity doesn't exist — use the `states('entity_id')` "
             "function instead (returns 'unknown' if missing rather than raising)."
             + _ref(skill_prefix, "template-guidelines.md#common-patterns")
+        )
+    if _RE_DURATION_MATH.search(template):
+        warnings.append(
+            f"{label} uses template for duration/recency check "
+            "(`now() - X.last_changed/last_updated`) — use the native `for:` field "
+            "on a `state` trigger or condition instead "
+            "(e.g., `platform: state, entity_id: binary_sensor.motion, to: 'off', "
+            "for: {minutes: 5}`). Native `for:` is event-driven and avoids repeated "
+            "template evaluation on every state change."
+            + _ref(skill_prefix, "automation-patterns.md#native-conditions")
         )
 
     # Generic fallback: any Jinja in this logic position that didn't match
@@ -495,6 +510,19 @@ def _check_triggers(
                         "Trigger uses template with `is_state()` — use "
                         "native `state` trigger instead "
                         "(e.g., `platform: state, entity_id: light.x, to: 'on'`)."
+                        + _ref(
+                            skill_prefix,
+                            "automation-patterns.md#trigger-types",
+                        )
+                    )
+                if _RE_DURATION_MATH.search(vt):
+                    warnings.append(
+                        "Trigger uses template for duration/recency check "
+                        "(`now() - X.last_changed/last_updated`) — use the native "
+                        "`for:` field on a `state` trigger instead "
+                        "(e.g., `platform: state, entity_id: binary_sensor.motion, "
+                        "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
+                        "and doesn't re-evaluate on every state change."
                         + _ref(
                             skill_prefix,
                             "automation-patterns.md#trigger-types",

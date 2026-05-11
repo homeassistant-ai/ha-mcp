@@ -1311,3 +1311,81 @@ class TestSkillPrefixNoneNewDetectors:
             "action": [],
         }, skill_prefix=None)
         self._assert_clean(warnings)
+
+
+# ---------------------------------------------------------------------------
+# Duration math / for: field detector
+# ---------------------------------------------------------------------------
+
+
+class TestDurationMathDetector:
+    """Detects now() - X.last_changed patterns and suggests native for:."""
+
+    def test_condition_last_changed_math(self):
+        config = {
+            "condition": [{
+                "condition": "template",
+                "value_template": "{{ now() - states.binary_sensor.motion.last_changed > timedelta(minutes=5) }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_condition_last_updated_math(self):
+        config = {
+            "condition": [{
+                "condition": "template",
+                "value_template": "{{ now() - states.sensor.temp.last_updated > timedelta(minutes=10) }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_trigger_template_last_changed_math(self):
+        config = {
+            "trigger": [{
+                "platform": "template",
+                "value_template": "{{ now() - trigger.last_changed > timedelta(seconds=30) }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_state_trigger_with_for_field_no_warning(self):
+        config = {
+            "trigger": [{
+                "platform": "state",
+                "entity_id": "binary_sensor.motion",
+                "to": "off",
+                "for": {"minutes": 5},
+            }],
+            "action": [{"service": "light.turn_off", "target": {"entity_id": "light.hall"}}],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(warnings, "last_changed", "for:")
+
+    def test_warning_contains_skill_ref(self):
+        config = {
+            "condition": [{
+                "condition": "template",
+                "value_template": "{{ now() - states.sensor.x.last_changed > timedelta(hours=1) }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
+        assert _has_warning_containing(warnings, "automation-patterns.md#native-conditions")
+
+    def test_no_generic_fallback_when_duration_fires(self):
+        config = {
+            "condition": [{
+                "condition": "template",
+                "value_template": "{{ now() - states.binary_sensor.door.last_changed > timedelta(minutes=1) }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        generic_warnings = [w for w in warnings if "if this maps to a native option" in w]
+        assert not generic_warnings, "Generic fallback should not fire alongside specific detector"
