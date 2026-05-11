@@ -61,12 +61,18 @@ class TestHaGetHistoryExceptionSuggestions:
 
 
 _HISTORY_RESULT = {
-    "success": True,
-    "source": "history",
-    "entities": [{"entity_id": "sensor.temp", "states": []}],
-    "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
-    "query_params": {"minimal_response": True, "significant_changes_only": True, "limit": 100, "offset": 0},
-    "time_zone": "UTC",
+    "data": {
+        "success": True,
+        "source": "history",
+        "entities": [{"entity_id": "sensor.temp", "states": []}],
+        "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+        "query_params": {"minimal_response": True, "significant_changes_only": True, "limit": 100, "offset": 0},
+    },
+    "metadata": {
+        "home_assistant_timezone": "UTC",
+        "timestamp_format": "ISO 8601 (UTC)",
+        "note": "All timestamps are in UTC. Home Assistant timezone is UTC.",
+    },
 }
 
 
@@ -102,7 +108,9 @@ class TestHaGetHistoryFieldsProjection:
             return_value=dict(_HISTORY_RESULT),
         ):
             result = await history_tool(entity_ids="sensor.temp")
-        assert set(result.keys()) == {"success", "source", "entities", "period", "query_params", "time_zone"}
+        assert "data" in result
+        assert "metadata" in result
+        assert set(result["data"].keys()) == {"success", "source", "entities", "period", "query_params"}
 
     @pytest.mark.asyncio
     async def test_single_field_projects_to_that_key_plus_success(self, history_tool):
@@ -112,8 +120,9 @@ class TestHaGetHistoryFieldsProjection:
             return_value=dict(_HISTORY_RESULT),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["entities"])
-        assert set(result.keys()) == {"success", "entities"}
-        assert result["entities"][0]["entity_id"] == "sensor.temp"
+        assert set(result["data"].keys()) == {"success", "entities"}
+        assert result["data"]["entities"][0]["entity_id"] == "sensor.temp"
+        assert "metadata" in result
 
     @pytest.mark.asyncio
     async def test_multiple_fields_projects_correctly(self, history_tool):
@@ -123,7 +132,8 @@ class TestHaGetHistoryFieldsProjection:
             return_value=dict(_HISTORY_RESULT),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["source", "period"])
-        assert set(result.keys()) == {"success", "source", "period"}
+        assert set(result["data"].keys()) == {"success", "source", "period"}
+        assert "metadata" in result
 
     @pytest.mark.asyncio
     async def test_success_always_present_regardless_of_fields(self, history_tool):
@@ -132,9 +142,9 @@ class TestHaGetHistoryFieldsProjection:
             new_callable=AsyncMock,
             return_value=dict(_HISTORY_RESULT),
         ):
-            result = await history_tool(entity_ids="sensor.temp", fields=["time_zone"])
-        assert "success" in result
-        assert result["success"] is True
+            result = await history_tool(entity_ids="sensor.temp", fields=["source"])
+        assert "success" in result["data"]
+        assert result["data"]["success"] is True
 
     @pytest.mark.asyncio
     async def test_unknown_field_silently_omitted(self, history_tool):
@@ -144,4 +154,4 @@ class TestHaGetHistoryFieldsProjection:
             return_value=dict(_HISTORY_RESULT),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["nonexistent"])
-        assert set(result.keys()) == {"success"}
+        assert set(result["data"].keys()) == {"success"}

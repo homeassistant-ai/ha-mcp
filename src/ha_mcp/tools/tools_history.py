@@ -359,7 +359,12 @@ class HistoryTools:
                 )
                 if fields is not None:
                     keep = set(fields) | {"success"}
-                    result = cast(dict[str, Any], {k: v for k, v in result.items() if k in keep})
+                    inner = result.get("data", result)
+                    if isinstance(inner, dict):
+                        result = {
+                            **result,
+                            "data": cast(dict[str, Any], {k: v for k, v in inner.items() if k in keep}),
+                        }
                 return result
             finally:
                 if ws_client:
