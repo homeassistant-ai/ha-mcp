@@ -431,6 +431,62 @@ class ServiceTools:
         )
         return cast(dict[str, Any], result)
 
+    @tool(
+        name="ha_fire_event",
+        tags={"Service & Device Control"},
+        annotations={
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "title": "Fire Event",
+        },
+    )
+    @log_tool_usage
+    async def ha_fire_event(
+        self,
+        event_type: str,
+        data: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Fire a Home Assistant event on the event bus.
+
+        When NOT to use: for controlling entities (lights, switches, climate) — use
+        ha_call_service instead. For triggering automations by name, use
+        ha_call_service("automation", "trigger").
+
+        Use this to fire custom event types consumed by event-triggered automations,
+        Node-RED flows, or custom integrations that subscribe to specific event types.
+        """
+        try:
+            parsed_data: dict[str, Any] | None = None
+            if data is not None:
+                raw = parse_json_param(data, "data")
+                if raw is not None and not isinstance(raw, dict):
+                    raise_tool_error(
+                        create_validation_error(
+                            "Event data must be a JSON object (dict), not a list",
+                            parameter="data",
+                        )
+                    )
+                parsed_data = cast(dict[str, Any], raw)
+
+            response = await self._client.fire_event(event_type, parsed_data)
+
+            return {
+                "success": True,
+                "event_type": event_type,
+                "message": response.get("message", f"Event {event_type} fired."),
+            }
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"event_type": event_type},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify event_type is a valid identifier",
+                ],
+            )
+
 
 def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
