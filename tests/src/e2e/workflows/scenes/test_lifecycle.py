@@ -44,9 +44,9 @@ async def _wait_for_scene_registered(
     mcp_client, scene_id: str, timeout: int = 15, poll_interval: float = 1.0
 ) -> bool:
     """Poll until the scene is queryable via the management API or state API."""
-    start_time = time.time()
+    start_time = time.monotonic()
     scene_entity = f"scene.{scene_id}"
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             get_data = await safe_call_tool(
                 mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
@@ -72,8 +72,8 @@ async def _wait_for_scene_removed(
     mcp_client, scene_id: str, timeout: int = 15, poll_interval: float = 1.0
 ) -> bool:
     """Poll until the scene is no longer queryable."""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         try:
             get_data = await safe_call_tool(
                 mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
