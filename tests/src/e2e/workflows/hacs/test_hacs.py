@@ -387,6 +387,7 @@ class TestHacsRepositoryInfo:
         # the error code and the message phrase guards against a future
         # refactor that returns success=False with a different code/phrase
         # — silently re-opening the bug that this PR's matcher fix closes.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
         error = data.get("error", {})
         assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
@@ -523,6 +524,7 @@ class TestHacsWriteOperations:
         # RESOURCE_NOT_FOUND code and the "not found" phrase so the matcher
         # fix in is_hacs_unavailable() can't silently regress through a tool
         # returning success=False with a different error shape.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
         error = data.get("error", {})
         assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
@@ -775,7 +777,7 @@ class TestMcpToolsInstallation:
 # ---------------------------------------------------------------------------
 
 
-def test_unit_is_hacs_unavailable_skips_legitimate_repo_not_found():
+def test_unit_is_hacs_unavailable_skips_legitimate_repo_not_found() -> None:
     """Legitimate HACS "Repository ... not found" responses must NOT trip."""
     data = {
         "success": False,
@@ -791,7 +793,7 @@ def test_unit_is_hacs_unavailable_skips_legitimate_repo_not_found():
     )
 
 
-def test_unit_is_hacs_unavailable_catches_command_not_found():
+def test_unit_is_hacs_unavailable_catches_command_not_found() -> None:
     """The literal 'command not found' substring must still trip."""
     data = {"error": "Command not found: hacs/info"}
     unavailable, reason = is_hacs_unavailable(data)
@@ -799,7 +801,7 @@ def test_unit_is_hacs_unavailable_catches_command_not_found():
     assert reason == "Command not found"
 
 
-def test_unit_is_hacs_unavailable_catches_unknown_command():
+def test_unit_is_hacs_unavailable_catches_unknown_command() -> None:
     """HA's WebSocket 'unknown command' must still trip (the genuine signal)."""
     data = {"error_code": "unknown_command", "error": "unknown command: hacs/info"}
     unavailable, reason = is_hacs_unavailable(data)
@@ -807,7 +809,7 @@ def test_unit_is_hacs_unavailable_catches_unknown_command():
     assert reason == "Unknown command"
 
 
-def test_unit_is_hacs_unavailable_catches_hacs_not_available_code():
+def test_unit_is_hacs_unavailable_catches_hacs_not_available_code() -> None:
     """The HACS_NOT_AVAILABLE error code must trip directly."""
     data = {"error_code": "HACS_NOT_AVAILABLE", "error": "HACS not loaded"}
     unavailable, reason = is_hacs_unavailable(data)
@@ -815,7 +817,7 @@ def test_unit_is_hacs_unavailable_catches_hacs_not_available_code():
     assert reason == "HACS not available"
 
 
-def test_unit_is_hacs_unavailable_handles_nested_error_dict():
+def test_unit_is_hacs_unavailable_handles_nested_error_dict() -> None:
     """Both flat ('error': str) and nested ('error': {'code', 'message'}) shapes work."""
     nested = {
         "success": False,
@@ -826,7 +828,7 @@ def test_unit_is_hacs_unavailable_handles_nested_error_dict():
     assert reason == "Command not found"
 
 
-def test_unit_is_hacs_unavailable_success_response_passes():
+def test_unit_is_hacs_unavailable_success_response_passes() -> None:
     """Successful HACS responses must not trip any indicator."""
     data = {"success": True, "results": [], "total_matches": 0}
     unavailable, reason = is_hacs_unavailable(data)
