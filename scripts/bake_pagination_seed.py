@@ -25,7 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import requests  # type: ignore[import-untyped]
+import requests
 import websockets
 
 REPO = Path(__file__).resolve().parents[1]
