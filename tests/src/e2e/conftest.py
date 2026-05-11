@@ -245,7 +245,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             # Best-effort: if cleanup fails (e.g., non-empty dir from a
             # future sentinel/pidfile refactor, or permission denied), the
             # existing 180s polling timeout still catches the orphan.
-            logger.debug(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
+            logger.warning(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
 
     # Fast path: HACS not installed (nothing to do), or frontend present
     # AND no lock held. The lock-held check rules out the window where
