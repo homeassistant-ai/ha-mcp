@@ -1252,6 +1252,77 @@ class IntegrationTools:
                 ],
             )
 
+    @tool(
+        name="ha_get_diagnostics",
+        tags={"Integrations"},
+        annotations={
+            "readOnlyHint": True,
+            "idempotentHint": True,
+            "title": "Get Integration Diagnostics",
+        },
+    )
+    @log_tool_usage
+    async def ha_get_diagnostics(
+        self,
+        config_entry_id: Annotated[
+            str,
+            Field(description="Config entry ID. Use ha_get_integration() to find it."),
+        ],
+        device_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional device ID for device-scoped diagnostics. "
+                    "Omit to get full config-entry diagnostics."
+                ),
+                default=None,
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Get the diagnostics dump for a Home Assistant integration or one of its devices.
+
+        Returns the structured JSON diagnostics data that integrations expose for
+        debugging — the same data users download from Settings → Devices & Services
+        → [integration] → Download diagnostics.
+
+        When NOT to use: for listing integrations or their config, use ha_get_integration().
+        For system logs, use ha_get_error_log() or ha_get_system_health().
+
+        When to use: debugging a flaky integration when you need auth state, device
+        hierarchy, redacted config entries, or integration-internal library state
+        (e.g., before filing a bug report or calling ha_report_issue()).
+
+        Caveats: not all integrations implement diagnostics; returns a 404 if
+        unsupported. Content is integration-defined and often partially redacted
+        for privacy — structure varies between integrations.
+        """
+        try:
+            result = await self._client.get_diagnostics(config_entry_id, device_id)
+            response: dict[str, Any] = {
+                "success": True,
+                "config_entry_id": config_entry_id,
+                "diagnostics": result,
+            }
+            if device_id:
+                response["device_id"] = device_id
+            return response
+        except ToolError:
+            raise
+        except Exception as e:
+            context: dict[str, Any] = {"config_entry_id": config_entry_id}
+            if device_id:
+                context["device_id"] = device_id
+            exception_to_structured_error(
+                e,
+                context=context,
+                suggestions=[
+                    "Use ha_get_integration() to find a valid config_entry_id",
+                    "Verify the integration supports diagnostics (not all do)",
+                    "Check Home Assistant connection",
+                ],
+            )
+
+
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""
     register_tool_methods(mcp, IntegrationTools(client))

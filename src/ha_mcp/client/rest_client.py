@@ -1058,6 +1058,31 @@ class HomeAssistantClient:
             )
         return found
 
+    async def get_diagnostics(
+        self,
+        config_entry_id: str,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch diagnostics for a config entry or a specific device within it.
+
+        Args:
+            config_entry_id: Config entry ID to fetch diagnostics for.
+            device_id: Optional device ID for device-scoped diagnostics.
+
+        Returns:
+            Diagnostics dict provided by the integration.
+
+        Raises:
+            HomeAssistantAPIError: If the entry is not found, integration does not
+                support diagnostics, or the API returns an error status.
+        """
+        if device_id:
+            path = f"/diagnostics/config_entry/{config_entry_id}/device/{device_id}"
+        else:
+            path = f"/diagnostics/config_entry/{config_entry_id}"
+        logger.debug(f"Fetching diagnostics: {path}")
+        return await self._request("GET", path)
+
     async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete a config entry via REST API.
 
