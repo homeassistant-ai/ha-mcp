@@ -389,39 +389,6 @@ def assert_bulk_operation_success(
     logger.debug(f"✅ Bulk operation started {len(operation_ids)} operations")
 
 
-def assert_logbook_contains(
-    logbook_data: dict[str, Any], search_text: str, case_sensitive: bool = False
-):
-    """
-    Assert that logbook contains entries with specified text.
-
-    Args:
-        logbook_data: Parsed logbook result
-        search_text: Text to search for in logbook entries
-        case_sensitive: Whether search should be case sensitive
-    """
-    if not logbook_data.get("success", False):
-        raise AssertionError(f"Logbook query failed: {logbook_data.get('error')}")
-
-    entries = logbook_data.get("data", {}).get("entries", [])
-
-    if not entries:
-        raise AssertionError("Logbook contains no entries")
-
-    search_func = str if case_sensitive else lambda x: str(x).lower()
-    target = search_func(search_text)
-
-    for entry in entries:
-        entry_text = search_func(entry)
-        if target in entry_text:
-            logger.debug(f"✅ Found '{search_text}' in logbook")
-            return
-
-    raise AssertionError(
-        f"Logbook doesn't contain '{search_text}' in {len(entries)} entries"
-    )
-
-
 class MCPAssertions:
     """
     Context manager for MCP-specific assertions with better error reporting.
