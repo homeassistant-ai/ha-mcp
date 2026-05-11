@@ -207,6 +207,18 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     import urllib.error
     import urllib.request
 
+    def _is_valid_frontend(path: Path) -> bool:
+        """Best-effort check that ``path`` holds a complete HACS frontend.
+
+        A SIGKILL or partial-failure during ``tar.extractall`` →
+        ``shutil.move`` can leave a populated but incomplete ``frontend_dir``
+        from a prior session. ``entrypoint.js`` is a top-level file in every
+        release tarball published at https://github.com/hacs/frontend/releases,
+        so its absence flags an interrupted prior session and forces a clean
+        re-download instead of letting HACS boot against a broken frontend.
+        """
+        return (path / "entrypoint.js").is_file()
+
     hacs_dir = initial_state_path / "custom_components" / "hacs"
     frontend_dir = hacs_dir / "hacs_frontend"
     lock_dir = initial_state_path / ".hacs_frontend.lock"
@@ -256,7 +268,9 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     # see a complete frontend. On any failure path the finally still
     # releases with ``frontend_dir`` absent; waiters re-enter the slow
     # path and the download except-branch handles the skip.
-    if not hacs_dir.exists() or (frontend_dir.exists() and not lock_dir.exists()):
+    if not hacs_dir.exists() or (
+        _is_valid_frontend(frontend_dir) and not lock_dir.exists()
+    ):
         return
 
     # Cross-worker lock: atomic mkdir succeeds on exactly one xdist worker.
@@ -293,8 +307,18 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     # We own the lock. Outer try/finally guarantees release even when the
     # download block is skipped (e.g. hacs_dir missing) or raises.
     try:
-        # Check if HACS is installed and frontend is still missing.
-        if hacs_dir.exists() and not frontend_dir.exists():
+        # Check if HACS is installed and frontend is missing or invalid.
+        if hacs_dir.exists() and not _is_valid_frontend(frontend_dir):
+            if frontend_dir.exists():
+                # Partial/corrupt directory from a prior interrupted
+                # session. Clear it so ``shutil.move`` below replaces it
+                # cleanly — moving onto an existing directory nests the
+                # fresh ``hacs_frontend/`` inside the stale one.
+                logger.warning(
+                    f"HACS frontend at {frontend_dir} is partial or corrupt; "
+                    f"removing before re-download."
+                )
+                shutil.rmtree(frontend_dir, ignore_errors=True)
             logger.info("HACS frontend not found, downloading...")
 
             try:
