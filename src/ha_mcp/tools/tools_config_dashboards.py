@@ -267,7 +267,7 @@ def _should_lazy_resolve(error_msg: str) -> bool:
 
 async def _fetch_dashboards_list(
     client: Any,
-    _logger: logging.Logger,
+    log: logging.Logger,
 ) -> list[dict[str, Any]] | None:
     """Fetch and normalise the lovelace/dashboards/list WebSocket response.
 
@@ -284,7 +284,7 @@ async def _fetch_dashboards_list(
         return cast(list[dict[str, Any]], result["result"])
     if isinstance(result, list):
         return cast(list[dict[str, Any]], result)
-    _logger.warning(
+    log.warning(
         "lovelace/dashboards/list returned an unexpected shape (type=%s); "
         "treating as no-match",
         type(result).__name__,
