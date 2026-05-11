@@ -120,8 +120,8 @@ class TestGetDashboardListOnlyUnexpectedShape:
     fallback means the tool still returns a valid success response with an
     empty dashboards list. This test pins the behavior introduced when the
     inline fetch was extracted to the shared helper so that a silent ``[]``
-    return can no longer mask a future HA shape change at Site 2
-    (ha_config_get_dashboard list path).
+    return can no longer mask a future HA shape change at the
+    ``ha_config_get_dashboard`` list path (``list_only=True`` branch).
     """
 
     @pytest.fixture
@@ -164,6 +164,10 @@ class TestGetDashboardListOnlyUnexpectedShape:
         assert result["success"] is True
         assert result["dashboards"] == []
         assert result["count"] == 0
-        assert any("unexpected shape" in rec.message for rec in caplog.records), (
-            f"expected 'unexpected shape' warning; got {[r.message for r in caplog.records]}"
+        assert any(
+            "unexpected shape" in rec.message and "type=str" in rec.message
+            for rec in caplog.records
+        ), (
+            f"expected an 'unexpected shape' warning naming the response "
+            f"type; got {[rec.message for rec in caplog.records]}"
         )
