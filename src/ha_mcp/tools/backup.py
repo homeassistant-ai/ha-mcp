@@ -89,19 +89,23 @@ async def _get_local_backup_agent_id(
             )
         )
 
-    local_agents = [a.get("agent_id") for a in agents if a.get("name") == "local"]
+    local_agents: list[str] = [
+        a["agent_id"]
+        for a in agents
+        if a.get("name") == "local" and a.get("agent_id")
+    ]
     # Prefer hassio.local (Supervisor) over backup.local (Core) when both exist
     for preferred in ("hassio.local", "backup.local"):
         if preferred in local_agents:
             return preferred
     if local_agents:
-        return cast(str, local_agents[0])
+        return local_agents[0]
 
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "No local backup agent found",
-            context={"available_agents": [a.get("agent_id") for a in agents]},
+            context={"available_agents": [a.get("agent_id") for a in agents if a.get("agent_id")]},
             suggestions=[
                 "Backup creation requires a local agent (hassio.local on "
                 "Supervised, backup.local on Core); none is registered",
