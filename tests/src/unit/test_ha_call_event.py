@@ -33,12 +33,14 @@ class TestHaCallEvent:
         tools = _make_tools({"message": "Event custom_event fired."})
         result = await tools.ha_call_event("custom_event", {"key": "value"})
         assert result["success"] is True
+        assert result["event_type"] == "custom_event"
         tools._client.fire_event.assert_called_once_with("custom_event", {"key": "value"})
 
     async def test_fires_event_with_json_string_data(self):
         tools = _make_tools({"message": "Event my_event fired."})
         result = await tools.ha_call_event("my_event", '{"temperature": 22}')
         assert result["success"] is True
+        assert result["event_type"] == "my_event"
         tools._client.fire_event.assert_called_once_with("my_event", {"temperature": 22})
 
     async def test_raises_tool_error_on_list_data(self):
@@ -47,14 +49,16 @@ class TestHaCallEvent:
             await tools.ha_call_event("my_event", "[1, 2, 3]")
 
     async def test_raises_tool_error_on_invalid_json_string(self):
-        """Invalid JSON string raises ToolError with invalid_json path (not generic error)."""
+        """Invalid JSON raises ToolError via the ValueError → invalid_json path."""
         tools = _make_tools({"message": "ok"})
         with pytest.raises(ToolError):
-            await tools.ha_fire_event("my_event", "{not valid json")
+            await tools.ha_call_event("my_event", "{not valid json")
 
     async def test_returns_fallback_message_when_response_empty(self):
         tools = _make_tools({})
         result = await tools.ha_call_event("my_event")
+        assert result["success"] is True
+        assert result["event_type"] == "my_event"
         assert "my_event" in result["message"]
 
     async def test_propagates_connection_error_as_tool_error(self):
@@ -69,8 +73,26 @@ class TestHaCallEvent:
         assert call_args[0][0] == "zone_entered"
         assert call_args[0][1] == {"zone": "home"}
 
-    async def test_raises_tool_error_on_invalid_json_string(self):
-        """Invalid JSON string raises ToolError with invalid_json path (not generic error)."""
+    async def test_raises_tool_error_on_empty_event_type(self):
+        """Empty event_type is rejected before hitting the wire."""
         tools = _make_tools({"message": "ok"})
         with pytest.raises(ToolError):
-            await tools.ha_call_event("my_event", "{not valid json")
+            await tools.ha_call_event("")
+
+    async def test_raises_tool_error_on_whitespace_event_type(self):
+        """Whitespace-only event_type is rejected before hitting the wire."""
+        tools = _make_tools({"message": "ok"})
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("   ")
+
+    async def test_raises_tool_error_on_event_type_with_slash(self):
+        """event_type containing a slash produces a malformed URL — rejected early."""
+        tools = _make_tools({"message": "ok"})
+        with pytest.raises(ToolError):
+            await tools.ha_call_event("bad/event")
+
+    async def test_reraises_tool_error_from_client(self):
+        """ToolError from fire_event propagates unchanged (not swallowed by except Exception)."""
+        tools = _make_tools(ToolError("already structured"))
+        with pytest.raises(ToolError, match="already structured"):
+            await tools.ha_call_event("my_event")

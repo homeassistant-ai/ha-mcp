@@ -446,18 +446,36 @@ class ServiceTools:
         event_type: str,
         data: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Publish a custom event onto the Home Assistant event bus.
+        """Execute a custom event on the Home Assistant event bus.
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
         ha_call_service instead. For triggering automations by name, use
         ha_call_service("automation", "trigger").
 
-        Use this to fire custom event types consumed by event-triggered automations,
+        Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.
 
         Caveats: Events are fire-and-forget; this tool confirms the event was accepted
         by the bus but does not verify whether any automation or subscriber acted on it.
         """
+        # Validate event_type before hitting the wire — empty strings or path separators
+        # produce malformed URLs at POST /api/events/{event_type}.
+        if not event_type or not event_type.strip():
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot be empty or whitespace",
+                    parameter="event_type",
+                )
+            )
+        if "/" in event_type or "\\" in event_type:
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot contain path separators",
+                    parameter="event_type",
+                    details=f"Received: {event_type!r}",
+                )
+            )
+
         parsed_data: dict[str, Any] | None = None
         if data is not None:
             raw: Any = None
@@ -484,6 +502,26 @@ class ServiceTools:
 
         try:
             response = await self._client.fire_event(event_type, parsed_data)
+        except HomeAssistantConnectionError as error:
+            if isinstance(error.__cause__, httpx.TimeoutException):
+                return {
+                    "success": True,
+                    "partial": True,
+                    "event_type": event_type,
+                    "message": (
+                        f"Event {event_type} was dispatched but Home Assistant "
+                        "did not respond within the timeout period."
+                    ),
+                    "warning": (
+                        "Response timed out. The event was dispatched and may still "
+                        "have been delivered to subscribers."
+                    ),
+                }
+            exception_to_structured_error(
+                error,
+                context={"event_type": event_type},
+                suggestions=["Check Home Assistant connection"],
+            )
         except ToolError:
             raise
         except Exception as e:
