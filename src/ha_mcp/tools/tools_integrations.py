@@ -295,6 +295,17 @@ class IntegrationTools:
         try:
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
+
+            # Always surface `options` on the per-entry response. HA's REST
+            # list endpoint omits the field entirely, so we read current
+            # values via the OptionsFlow probe (first-step defaults). Done
+            # only when the entry advertises options support; otherwise the
+            # flow init would return nothing useful.
+            if isinstance(result, dict) and result.get("supports_options"):
+                result["options"] = await self._fetch_entry_options(entry_id)
+            elif isinstance(result, dict):
+                result.setdefault("options", {})
+
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
@@ -325,6 +336,56 @@ class IntegrationTools:
                     "config entries",
                 ],
             )
+
+    async def _fetch_entry_options(self, entry_id: str) -> dict[str, Any]:
+        """Read the current ``options`` for a config entry via its OptionsFlow.
+
+        Home Assistant does not expose ``ConfigEntry.options`` through any
+        read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
+        deliberately omits the field. The closest approximation that the HA UI
+        itself uses is the ``default`` values populated into the OptionsFlow's
+        first-step ``data_schema``: integrations build that schema from the
+        existing options dict, so the defaults match the persisted state.
+
+        We start the flow, harvest ``{name: default}`` for each field, and
+        abort the flow so it doesn't sit half-open.
+
+        Caveats:
+          - Only the FIRST step is read. Multi-step OptionsFlows hide later
+            options behind user input we can't synthesize, so this is a
+            "best effort, first-step subset" approximation.
+          - Constant-type fields ship a ``value`` instead of a ``default``;
+            we read both and prefer ``default`` when present.
+          - Empty dict on any failure (entry doesn't support options, flow
+            isn't a form, init/abort errors, etc.) so callers can treat the
+            return as the canonical "options" field without further checks.
+        """
+        flow_id: str | None = None
+        try:
+            flow = await self._client.start_options_flow(entry_id)
+            flow_id = flow.get("flow_id")
+            if flow.get("type") != "form":
+                return {}
+            out: dict[str, Any] = {}
+            for field in flow.get("data_schema") or []:
+                name = field.get("name")
+                if name is None:
+                    continue
+                value = field.get("default", field.get("value"))
+                if value is not None:
+                    out[name] = value
+            return out
+        except Exception as exc:
+            logger.debug(f"Failed to fetch options for {entry_id}: {exc}")
+            return {}
+        finally:
+            if flow_id:
+                try:
+                    await self._client.abort_options_flow(flow_id)
+                except Exception as abort_err:
+                    logger.debug(
+                        f"Failed to abort options flow {flow_id}: {abort_err}"
+                    )
 
     async def _fetch_options_schema(
         self, entry_id: str, resp: dict[str, Any]
@@ -394,10 +455,31 @@ class IntegrationTools:
         # Fetch current logger levels once; enrich each entry with its effective level.
         logger_levels = await get_logger_levels(self._client)
 
-        # Format entries for response
+        # Format entries for response. Options are fetched in a second pass
+        # below — `_format_entry` itself can't fetch them because HA's list
+        # endpoint doesn't return the `options` field at all.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
+
+        # When the caller asked for options, fetch them in parallel via the
+        # per-entry OptionsFlow probe (the only HA API path that exposes
+        # current option values). Skip entries that don't support options,
+        # since starting a flow on them returns nothing useful.
+        if include_opts:
+            options_targets = [
+                e for e in formatted_entries if e.get("supports_options")
+            ]
+            if options_targets:
+                fetched = await asyncio.gather(
+                    *(
+                        self._fetch_entry_options(e["entry_id"])
+                        for e in options_targets
+                    ),
+                    return_exceptions=False,
+                )
+                for entry, opts in zip(options_targets, fetched, strict=True):
+                    entry["options"] = opts
 
         # Apply search filter if query provided
         if query and query.strip():
