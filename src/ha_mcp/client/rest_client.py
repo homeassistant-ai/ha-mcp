@@ -13,6 +13,7 @@ import httpx
 
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
+from .supervisor_client import make_supervisor_httpx_client
 
 
 def _is_ssl_error(exc: BaseException) -> bool:
@@ -555,23 +556,21 @@ class HomeAssistantClient:
                 "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
             )
 
-        url = f"{get_supervisor_base_url()}/{path}/logs"
-        logger.debug("Fetching %s via Supervisor direct", url)
+        relative_path = f"/{path}/logs"
+        logger.debug(
+            "Fetching %s%s via Supervisor direct",
+            get_supervisor_base_url(),
+            relative_path,
+        )
 
         try:
-            async with httpx.AsyncClient(
+            async with make_supervisor_httpx_client(
                 timeout=httpx.Timeout(self.timeout),
-                # `verify` is a no-op for plain http://supervisor, but kept
-                # for symmetry with the other two direct-Supervisor httpx
-                # clients (#1128 establishes the 3-site convention).
                 verify=self.verify_ssl,
             ) as client:
                 response = await client.get(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Accept": "text/plain",
-                    },
+                    relative_path,
+                    headers={"Accept": "text/plain"},
                 )
         except httpx.TimeoutException as e:
             raise HomeAssistantConnectionError(

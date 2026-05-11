@@ -19,7 +19,8 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from ._version import get_supervisor_base_url, is_running_in_addon
+from ._version import is_running_in_addon
+from .client.supervisor_client import make_supervisor_httpx_client
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -893,8 +894,7 @@ def register_settings_routes(
         )
 
     async def _restart_addon(_: Request) -> JSONResponse:
-        token = os.environ.get("SUPERVISOR_TOKEN")
-        if not token:
+        if not os.environ.get("SUPERVISOR_TOKEN"):
             return JSONResponse(
                 create_error_response(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
@@ -906,13 +906,10 @@ def register_settings_routes(
         # Short timeout — the supervisor kills our process during restart so
         # the connection will drop. A connection drop is actually success.
         try:
-            async with httpx.AsyncClient(
+            async with make_supervisor_httpx_client(
                 timeout=5.0, verify=server.settings.verify_ssl
             ) as client:
-                resp = await client.post(
-                    f"{get_supervisor_base_url()}/addons/self/restart",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
+                resp = await client.post("/addons/self/restart")
         except (httpx.ReadError, httpx.RemoteProtocolError):
             # Connection dropped mid-request — restart is happening.
             # `ConnectError` is deliberately NOT in this tuple: it fires

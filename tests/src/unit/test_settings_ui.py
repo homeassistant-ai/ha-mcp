@@ -598,3 +598,36 @@ class TestRestartAddon:
         assert resp.status_code == 502
         body = json.loads(resp.body)
         assert body["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_posts_relative_url_with_ctor_authorization(self, monkeypatch):
+        """Post-refactor wire shape: relative path on ``.post()``, with
+        ``Authorization`` assembled in the constructor kwargs rather than
+        per-call. Mirrors the parallel assertions in
+        ``test_tools_utility_supervisor_logs.py`` so a regression that
+        hard-codes the absolute URL or moves the Bearer header back to
+        per-call kwargs is caught on the restart-handler branch too.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = MagicMock()
+
+        response = MagicMock()
+        response.status_code = 200
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        client_class = MagicMock(return_value=cm)
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", client_class):
+            await restart(request)
+
+        mock_client.post.assert_awaited_once()
+        args, kwargs = mock_client.post.call_args
+        assert args[0] == "/addons/self/restart"
+        assert "Authorization" not in kwargs.get("headers", {})
+
+        ctor_kwargs = client_class.call_args.kwargs
+        assert ctor_kwargs["base_url"] == "http://supervisor"
+        assert ctor_kwargs["headers"]["Authorization"] == "Bearer fake-supervisor-token"
