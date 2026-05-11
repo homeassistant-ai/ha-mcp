@@ -152,9 +152,10 @@ class AreaTools:
 
         Returns area ID, name, icon, floor assignment, aliases, and picture URL.
         """
+        parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
@@ -172,7 +173,7 @@ class AreaTools:
                     "areas": areas,
                     "message": f"Found {len(areas)} area(s)",
                 }
-                return project_fields(response, fields)
+                return project_fields(response, parsed_fields)
             else:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

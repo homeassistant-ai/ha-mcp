@@ -114,9 +114,10 @@ class ServiceDiscoveryTools:
             # Paginate through all services
             ha_list_services(offset=50)
         """
+        parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
@@ -142,7 +143,7 @@ class ServiceDiscoveryTools:
                 detail_level=detail_level,
             )
 
-            return project_fields(result, fields)
+            return project_fields(result, parsed_fields)
 
         except ToolError:
             raise

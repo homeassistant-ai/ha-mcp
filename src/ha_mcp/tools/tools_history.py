@@ -268,9 +268,10 @@ class HistoryTools:
                        start_time="30d", period="5minute", limit=100, offset=200)
         ```
         """
+        parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
@@ -367,7 +368,7 @@ class HistoryTools:
                 # as every other tool (raw response dict). add_timezone_metadata
                 # wraps the result in {"data": ..., "metadata": ...} which would
                 # otherwise force a bespoke unwrap-project-rewrap site.
-                projected = project_fields(inner, fields)
+                projected = project_fields(inner, parsed_fields)
                 return await add_timezone_metadata(self._client, projected)
             finally:
                 if ws_client:
