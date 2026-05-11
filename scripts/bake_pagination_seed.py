@@ -25,7 +25,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import requests
+import requests  # type: ignore[import-untyped]
 import websockets
 
 REPO = Path(__file__).resolve().parents[1]
@@ -47,7 +47,6 @@ async def populate_recorder(base_url: str) -> None:
     headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
     ws_url = base_url.replace("http://", "ws://") + "/api/websocket"
     async with websockets.connect(ws_url) as ws:
-        # Auth handshake
         await ws.recv()
         await ws.send(json.dumps({"type": "auth", "access_token": TEST_TOKEN}))
         ok = json.loads(await ws.recv())
@@ -68,36 +67,53 @@ async def populate_recorder(base_url: str) -> None:
                 )
             )
             msg_id += 1
-            await ws.recv()  # ignore ack
+            ack = json.loads(await ws.recv())
+            if not ack.get("success", True):
+                raise RuntimeError(f"call_service set_value={value} failed: {ack!r}")
             await asyncio.sleep(0.3)
 
-        # Verify the state actually changed (sanity check; service call returning
-        # 200 doesn't guarantee state mutation if e.g. the entity didn't accept
-        # the value).
-        state_r = requests.get(
-            f"{base_url}/api/states/{SEED_ENTITY}", timeout=5, headers=headers
+        # Service call returning 200 doesn't guarantee state mutation if the
+        # entity didn't accept the value — assert so we abort before
+        # committing a useless DB. ``requests`` is blocking, so dispatch via
+        # ``to_thread`` to keep the async function loop-safe (ASYNC210).
+        state_r = await asyncio.to_thread(
+            requests.get,
+            f"{base_url}/api/states/{SEED_ENTITY}",
+            timeout=5,
+            headers=headers,
         )
         cur_state = state_r.json().get("state")
-        print(f"  current state of {SEED_ENTITY}: {cur_state!r} (expected '{NUM_VALUES}.0')")
+        expected = f"{float(NUM_VALUES):.1f}"
+        assert cur_state == expected, (
+            f"Entity {SEED_ENTITY} did not accept set_value: got {cur_state!r}, "
+            f"expected {expected!r}. Bake aborted to avoid committing a useless DB."
+        )
+        print(f"✓ {SEED_ENTITY} state is {cur_state!r} (expected {expected!r})")
 
-        # Force a recorder commit so the rows hit disk before we stop the
-        # container. The default commit_interval is 1s; ask for 5s of buffer.
+        # Default recorder commit_interval is 1s; sleep 5s for headroom.
         await asyncio.sleep(5)
 
-        # Trigger a graceful HA shutdown via the service API. `docker stop`
-        # sends SIGTERM but HA's recorder commit-on-shutdown isn't always
-        # reliable; calling homeassistant.stop is the documented clean path.
+        # Calling homeassistant.stop forces a synchronous recorder commit
+        # before shutdown; `docker stop`'s SIGTERM path doesn't always flush.
         try:
-            requests.post(
+            r = await asyncio.to_thread(
+                requests.post,
                 f"{base_url}/api/services/homeassistant/stop",
                 timeout=5,
                 headers=headers,
             )
-            print("✓ Issued homeassistant.stop for clean recorder flush")
+            if r.status_code < 300:
+                print("✓ Issued homeassistant.stop for clean recorder flush")
+            else:
+                print(
+                    f"  homeassistant.stop returned HTTP {r.status_code}: {r.text[:200]}"
+                )
         except requests.exceptions.RequestException as exc:
-            # Non-fatal: docker stop below is the fallback.
-            print(f"  homeassistant.stop returned: {exc}")
-        # Give HA a moment to actually shut down before docker stop fires.
+            # ConnectionError after stop is expected once HA tears down its API
+            # — non-fatal; docker stop below is the fallback.
+            print(
+                f"  homeassistant.stop raised (likely HA already shutting down): {exc}"
+            )
         await asyncio.sleep(8)
         print(f"✓ Set {SEED_ENTITY} to {NUM_VALUES} distinct values")
 
@@ -140,10 +156,9 @@ def main() -> int:
         print(f"ERROR: seed dir not found at {SEED_DIR}", file=sys.stderr)
         return 1
 
-    # Stage the seed in a temp dir so we don't mutate the source tree while HA runs.
+    # Stage in temp so HA doesn't mutate the source tree.
     with tempfile.TemporaryDirectory(prefix="ha_bake_") as temp_dir:
         config_dir = Path(temp_dir)
-        # copytree wants the dest to NOT exist; use dirs_exist_ok to allow it
         shutil.copytree(SEED_DIR, config_dir, dirs_exist_ok=True)
         print(f"✓ Staged seed at {config_dir}")
 
@@ -154,7 +169,6 @@ def main() -> int:
         # whatever's already there.
         recorder_db = config_dir / "home-assistant_v2.db"
 
-        # Start a one-shot HA container.
         container_name = f"ha-bake-{int(time.time())}"
         try:
             _docker(
@@ -183,18 +197,19 @@ def main() -> int:
             _docker("stop", "-t", "20", container_name)
             print(f"✓ Stopped container {container_name} (recorder flushed)")
         except Exception:
-            # Try to clean up if we left the container running.
             try:
                 _docker("stop", "-t", "5", container_name)
-            except subprocess.CalledProcessError:
-                pass
+            except subprocess.CalledProcessError as cleanup_exc:
+                print(
+                    f"  cleanup `docker stop {container_name}` also failed: "
+                    f"{cleanup_exc} — container may be leaked",
+                    file=sys.stderr,
+                )
             raise
 
-        # Copy the post-bake DB into the source seed. HA uses SQLite WAL mode;
-        # `docker stop` doesn't always merge the WAL back into the main DB, so
-        # the standalone home-assistant_v2.db file can be near-empty even when
-        # data is fully committed to the WAL sibling. Checkpoint the WAL into
-        # the main DB ourselves so the committed DB is self-contained.
+        # After `docker stop` the main DB file may be missing recent committed
+        # pages still in the `-wal` sidecar. `wal_checkpoint(TRUNCATE)` folds
+        # them in so the copied file is self-contained.
         import sqlite3
 
         if not recorder_db.exists():
@@ -208,20 +223,23 @@ def main() -> int:
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
             conn.commit()
-            # Verify the checkpoint actually folded data into the main DB
+            # Verify the checkpoint actually folded data into the main DB.
+            # Modern HA recorder schema: entity_id lives in `states_meta`, joined
+            # to `states` via `metadata_id`. The vestigial `states.entity_id`
+            # column is CHAR(0) and always empty, so naive
+            # `WHERE entity_id = ?` queries return 0.
             row_count = conn.execute(
-                "SELECT COUNT(*) FROM states WHERE entity_id = ? OR state_id IN ("
-                "  SELECT state_id FROM states_meta WHERE entity_id = ?)",
-                (SEED_ENTITY, SEED_ENTITY),
-            ).fetchone()[0] if any(
-                r[0] == "states_meta"
-                for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            ) else conn.execute(
-                "SELECT COUNT(*) FROM states WHERE entity_id = ?",
+                "SELECT COUNT(*) FROM states s "
+                "JOIN states_meta sm ON s.metadata_id = sm.metadata_id "
+                "WHERE sm.entity_id = ?",
                 (SEED_ENTITY,),
             ).fetchone()[0]
+            if row_count < NUM_VALUES:
+                raise RuntimeError(
+                    f"Bake produced only {row_count} rows for {SEED_ENTITY} "
+                    f"(expected ≥{NUM_VALUES}). Recorder commit may have failed; "
+                    f"refusing to overwrite the committed seed DB."
+                )
             print(f"✓ WAL checkpointed; {row_count} states rows for {SEED_ENTITY}")
         finally:
             conn.close()

@@ -656,27 +656,33 @@ class TestGetHistoryNegativeInputs:
             {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 0},
         )
         # safe_call_tool returns the parsed envelope; the history payload is
-        # nested under "data" (matches the unwrap pattern used elsewhere in
-        # this file at line ~39). Without this unwrap the assertions below
-        # read the wrong dict level and `success` is always None — a second
-        # latent bug uncovered by the same #366 audit.
+        # nested under "data" — matches the unwrap pattern used by
+        # test_get_history_single_entity earlier in this file. Without this
+        # unwrap the assertions below read the wrong dict level and
+        # `success` is always None — a latent bug uncovered by the same
+        # #366 audit.
         inner_p1 = result_p1.get("data", result_p1)
-        if not inner_p1.get("success"):
-            pytest.skip("No history data available for pagination test")
-
+        # The seed ships ≥10 rows for ``input_number.e2e_pagination_seed`` and
+        # the conftest fixture shifts their timestamps into the 24h window.
+        # Pagination preconditions are therefore guaranteed; assert rather
+        # than pytest.skip so a regression (empty seed, broken refresh)
+        # fails loudly instead of silently passing.
+        assert inner_p1.get("success"), (
+            f"ha_get_history failed for {target}: {inner_p1!r}"
+        )
         entities_p1 = inner_p1.get("entities", [])
-        if not entities_p1:
-            pytest.skip("No entities returned")
+        assert entities_p1, f"No entities returned for {target}: {inner_p1!r}"
 
         entity_p1 = entities_p1[0]
         assert entity_p1["offset"] == 0
         assert entity_p1["limit"] == 5
-        assert "total_count" in entity_p1
-        assert "has_more" in entity_p1
-        assert "next_offset" in entity_p1
-
-        if not entity_p1["has_more"]:
-            pytest.skip("Not enough history rows to test offset pagination")
+        assert entity_p1["total_count"] >= 10, (
+            f"Expected >=10 seeded rows for {target}, got "
+            f"{entity_p1['total_count']} - recorder seed or timestamp refresh "
+            f"may be broken; see conftest._refresh_recorder_timestamps."
+        )
+        assert entity_p1["has_more"] is True
+        assert entity_p1["next_offset"] == 5
 
         # Second page: offset=5
         result_p2 = await safe_call_tool(
@@ -689,6 +695,9 @@ class TestGetHistoryNegativeInputs:
         entity_p2 = inner_p2["entities"][0]
         assert entity_p2["offset"] == 5
         assert entity_p2["total_count"] == entity_p1["total_count"]
+        assert len(entity_p2.get("states", [])) >= 1, (
+            f"Second page returned no rows: {entity_p2!r}"
+        )
 
     async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
         """offset > 0 with multiple entity_ids is rejected before any network call."""

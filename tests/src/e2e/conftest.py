@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -59,65 +60,78 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _refresh_recorder_timestamps(db_path: Path, target_age_seconds: float = 300.0) -> None:
-    """Shift baked recorder timestamps forward so they look "recent" each session.
+def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
+    """Return True only for benign 'schema drift' errors (column/table missing).
+
+    Other ``OperationalError`` causes (locked DB, disk I/O error, malformed
+    image, readonly DB) must propagate — silently swallowing them is exactly
+    the regression class this helper exists to prevent.
+    """
+    msg = str(exc).lower()
+    return "no such table" in msg or "no such column" in msg
+
+
+def _refresh_recorder_timestamps(
+    db_path: Path, target_age_seconds: float = 300.0
+) -> None:
+    """Shift baked recorder timestamps forward so seeded rows fall inside the test window.
 
     The seed ``home-assistant_v2.db`` (built by ``scripts/bake_pagination_seed.py``)
     ships with pre-recorded state-change rows for ``input_number.e2e_pagination_seed``.
-    Those rows have whatever Unix timestamps the bake captured; if more than 24h
-    elapses between bake and a test run, every history query with a 24h window
-    misses them entirely and pagination tests silently skip.
+    If more than 24h elapses between bake and a test run, every 24h-window
+    history query misses them and pagination tests would silently skip.
 
-    This helper opens the staged DB, finds the most recent ``last_updated_ts``,
-    and uniformly shifts every timestamp column so the newest row sits at
-    ``now - target_age_seconds`` (default 5 minutes). Relative ordering is
-    preserved; absolute window queries (24h, 7d, …) catch every seeded row.
+    Finds the most recent numeric timestamp and uniformly shifts every numeric
+    timestamp column so the newest row sits at ``now - target_age_seconds``.
+    Relative ordering is preserved.
 
-    No-op if the DB is missing or has no rows (defensive — early sessions or
-    fresh-bake states).
+    Raises ``RuntimeError`` if the DB is missing — falling back to a no-op
+    would re-introduce the silent-skip class this helper exists to prevent.
     """
-    import sqlite3
-    import time
-
     if not db_path.exists():
-        logger.warning(f"⏱️ recorder DB not found at {db_path}; skipping timestamp refresh")
-        return
+        raise RuntimeError(
+            f"Recorder seed DB not found at {db_path}. The committed "
+            f"tests/initial_test_state/home-assistant_v2.db must be staged into "
+            f"the test config dir before this helper runs; without it the "
+            f"pagination tests will silently skip."
+        )
 
     conn = sqlite3.connect(str(db_path))
     try:
-        # Tables that carry NUMERIC (REAL/FLOAT) recorder timestamps. Column
-        # lists are restricted to what HA 2026.x ships; unknown columns are
-        # skipped silently so a HA schema bump only loses a column, never
-        # crashes the fixture.
+        # NUMERIC (REAL/FLOAT) recorder timestamp columns. Missing columns are
+        # skipped (HA schema drift); other OperationalErrors propagate.
         #
-        # `recorder_runs.{start,end,created}` are TEXT/ISO columns and are
-        # DELIBERATELY EXCLUDED — `UPDATE recorder_runs SET start = start + N`
-        # silently coerces the ISO string via SQLite leading-numeric parsing
-        # ("2026-05-11 15:58..." -> 2026), turning the cell into garbage and
-        # breaking HA's history layer on the next boot.
+        # `recorder_runs.{start,end,created}` and `statistics_runs.start` are
+        # TEXT/ISO (DATETIME) columns and DELIBERATELY EXCLUDED — running
+        # `UPDATE … SET col = col + N` against an ISO string silently coerces
+        # it via SQLite leading-numeric parsing ("2026-05-11 15:58..." → 2026),
+        # turning the cell into garbage and breaking HA's history layer on the
+        # next boot. Do not add TEXT/DATETIME columns to this dict.
         TIMESTAMP_COLUMNS: dict[str, tuple[str, ...]] = {
-            "states": ("last_updated_ts", "last_changed_ts"),
+            "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
             "events": ("time_fired_ts",),
             "statistics": ("start_ts", "created_ts"),
             "statistics_short_term": ("start_ts", "created_ts"),
         }
 
-        # Find the newest ts across all numeric timestamp columns
         newest = 0.0
         for table, cols in TIMESTAMP_COLUMNS.items():
             for col in cols:
                 try:
-                    row = conn.execute(
-                        f"SELECT MAX({col}) FROM {table}"  # noqa: S608 (constant identifiers)
-                    ).fetchone()
-                except sqlite3.OperationalError:
-                    continue  # column or table missing in this HA schema rev
+                    row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
+                except sqlite3.OperationalError as exc:
+                    if _is_missing_column_or_table_error(exc):
+                        continue
+                    raise
                 if row and row[0] is not None and isinstance(row[0], (int, float)):
                     newest = max(newest, float(row[0]))
 
         if newest <= 0:
-            logger.info("⏱️ no recorder timestamps to refresh (DB is empty)")
-            return
+            raise RuntimeError(
+                f"Recorder seed DB at {db_path} has no numeric timestamps. "
+                f"The bake script may have produced an empty DB; re-run "
+                f"`uv run python scripts/bake_pagination_seed.py`."
+            )
 
         target = time.time() - target_age_seconds
         offset = target - newest
@@ -128,19 +142,24 @@ def _refresh_recorder_timestamps(db_path: Path, target_age_seconds: float = 300.
             )
             return
 
-        # Apply the offset to every numeric timestamp column
         rows_updated = 0
         for table, cols in TIMESTAMP_COLUMNS.items():
             for col in cols:
                 try:
                     cur = conn.execute(
-                        f"UPDATE {table} SET {col} = {col} + ? "  # noqa: S608
-                        f"WHERE {col} IS NOT NULL",
+                        f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
                         (offset,),
                     )
                     rows_updated += cur.rowcount
-                except sqlite3.OperationalError:
-                    continue
+                except sqlite3.OperationalError as exc:
+                    if _is_missing_column_or_table_error(exc):
+                        continue
+                    raise
+        if rows_updated == 0:
+            raise RuntimeError(
+                f"Recorder seed DB at {db_path} matched zero rows for the "
+                f"shift UPDATE — schema may have changed beyond TIMESTAMP_COLUMNS."
+            )
         conn.commit()
         logger.info(
             f"⏱️ Shifted recorder timestamps by {offset:+.0f}s "

@@ -123,12 +123,16 @@ async def test_logbook_pagination_with_offset(mcp_client):
     )
     first_data = get_logbook_data(first_raw)
 
-    # Skip test if no entries or not enough for pagination
-    if not first_data.get("success") or first_data.get("total_entries", 0) <= 5:
-        logger.info(
-            f"Skipping pagination test - only {first_data.get('total_entries', 0)} entries"
-        )
-        pytest.skip("Not enough logbook entries to test pagination")
+    # The recorder seed ships with >5 logbook-visible events (see
+    # scripts/bake_pagination_seed.py + conftest._refresh_recorder_timestamps);
+    # assert rather than skip so a regression in the seed or refresh fails
+    # loudly instead of silently passing.
+    assert first_data.get("success"), f"ha_get_logs failed: {first_data!r}"
+    assert first_data.get("total_entries", 0) > 5, (
+        f"Expected >5 logbook entries from seed, got "
+        f"{first_data.get('total_entries', 0)} — recorder seed or timestamp "
+        f"refresh may be broken."
+    )
 
     # Get second page
     second_raw = await safe_call_tool(
