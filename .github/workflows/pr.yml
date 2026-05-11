@@ -178,6 +178,7 @@ jobs:
         echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
         uv run pytest tests/src/e2e/ \
           -n${{ matrix.pytest_workers }} \
+          --dist loadscope \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
