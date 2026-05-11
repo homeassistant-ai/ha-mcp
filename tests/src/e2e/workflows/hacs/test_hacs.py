@@ -93,7 +93,15 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
             "GitHub access issue",
         ),
         (error_code == "INTERNAL_ERROR", f"HACS internal error: {error_str}"),
-        ("not found" in error_str, "Command not found"),
+        # `"not found"` substring used to trigger here too, but HACS's
+        # legitimate "Repository with ID (...) not found" responses also
+        # contain that phrase — which is exactly what tests like
+        # `test_repository_info_not_found` are asserting against. The real
+        # "HACS commands not registered" case is captured by the
+        # `"unknown command"` check on the next line; require the more
+        # specific `"command not found"` substring here so we don't
+        # conflate it with a legitimate repo-lookup miss.
+        ("command not found" in error_str, "Command not found"),
         ("unknown command" in error_str, "Unknown command"),
         ("disabled" in error_str, "HACS disabled"),
         ("401" in error_str, "GitHub authentication failed"),
@@ -375,9 +383,20 @@ class TestHacsRepositoryInfo:
         if unavailable:
             pytest.skip(f"HACS not available: {reason}")
 
-        # Should fail with appropriate error
+        # Should fail with the canonical "not found" response. Pinning both
+        # the error code and the message phrase guards against a future
+        # refactor that returns success=False with a different code/phrase
+        # — silently re-opening the bug that this PR's matcher fix closes.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
-        assert "error" in data or "error_code" in data, "Should have error information"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+        assert "not found" in (error.get("message") or "").lower(), (
+            f"Expected 'not found' in error message, got {error.get('message')!r}"
+        )
 
         logger.info("Repository not found test passed")
 
@@ -501,8 +520,20 @@ class TestHacsWriteOperations:
         if unavailable:
             pytest.skip(f"HACS not available: {reason}")
 
-        # Should fail with not found error
+        # Same contract as test_repository_info_not_found: pin the canonical
+        # RESOURCE_NOT_FOUND code and the "not found" phrase so the matcher
+        # fix in is_hacs_unavailable() can't silently regress through a tool
+        # returning success=False with a different error shape.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+        assert "not found" in (error.get("message") or "").lower(), (
+            f"Expected 'not found' in error message, got {error.get('message')!r}"
+        )
 
         logger.info("Download nonexistent repository test passed")
 
@@ -736,3 +767,70 @@ class TestMcpToolsInstallation:
         logger.info(f"Version: {mcp_tools_repo.get('installed_version')}")
 
         logger.info("Check MCP tools in HACS test passed")
+
+
+# ---------------------------------------------------------------------------
+# Pure-function tests for is_hacs_unavailable() — no Docker / mcp_client.
+# These pin the matcher boundaries so the "Repository ... not found"-skips-
+# legitimate-responses bug (closed by tightening `"not found"` ->
+# `"command not found"`) can't silently come back through the helper.
+# ---------------------------------------------------------------------------
+
+
+def test_unit_is_hacs_unavailable_skips_legitimate_repo_not_found() -> None:
+    """Legitimate HACS "Repository ... not found" responses must NOT trip."""
+    data = {
+        "success": False,
+        "error": {
+            "code": "RESOURCE_NOT_FOUND",
+            "message": "Repository 'nonexistent/repo12345' not found in HACS",
+        },
+    }
+    unavailable, _ = is_hacs_unavailable(data)
+    assert unavailable is False, (
+        "Legitimate 'Repository ... not found' responses must not be treated "
+        "as HACS-unavailable (regression of the matcher fix in this PR)."
+    )
+
+
+def test_unit_is_hacs_unavailable_catches_command_not_found() -> None:
+    """The literal 'command not found' substring must still trip."""
+    data = {"error": "Command not found: hacs/info"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "Command not found"
+
+
+def test_unit_is_hacs_unavailable_catches_unknown_command() -> None:
+    """HA's WebSocket 'unknown command' must still trip (the genuine signal)."""
+    data = {"error_code": "unknown_command", "error": "unknown command: hacs/info"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "Unknown command"
+
+
+def test_unit_is_hacs_unavailable_catches_hacs_not_available_code() -> None:
+    """The HACS_NOT_AVAILABLE error code must trip directly."""
+    data = {"error_code": "HACS_NOT_AVAILABLE", "error": "HACS not loaded"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "HACS not available"
+
+
+def test_unit_is_hacs_unavailable_handles_nested_error_dict() -> None:
+    """Both flat ('error': str) and nested ('error': {'code', 'message'}) shapes work."""
+    nested = {
+        "success": False,
+        "error": {"code": "RESOURCE_NOT_FOUND", "message": "command not found"},
+    }
+    unavailable, reason = is_hacs_unavailable(nested)
+    assert unavailable is True
+    assert reason == "Command not found"
+
+
+def test_unit_is_hacs_unavailable_success_response_passes() -> None:
+    """Successful HACS responses must not trip any indicator."""
+    data = {"success": True, "results": [], "total_matches": 0}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is False
+    assert reason == ""
