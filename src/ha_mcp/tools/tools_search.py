@@ -23,6 +23,7 @@ from .util_helpers import (
     coerce_bool_param,
     coerce_int_param,
     parse_string_list_param,
+    project_fields,
     public_fields,
 )
 
@@ -150,19 +151,6 @@ async def _exact_match_search(
     }
 
 
-def _project_fields(data: dict[str, Any], fields: list[str] | None) -> dict[str, Any]:
-    """Apply optional field projection to a raw (pre-timezone-wrap) data dict.
-
-    Always retains ``success``. Unknown keys in *fields* are silently dropped.
-    Call this BEFORE ``add_timezone_metadata`` so the outer wrapper shape is
-    preserved and only the inner payload is reduced.
-    """
-    if fields is None:
-        return data
-    keep = set(fields) | {"success"}
-    return cast(dict[str, Any], {k: v for k, v in data.items() if k in keep})
-
-
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register search and discovery tools with the MCP server."""
     smart_tools = kwargs.get("smart_tools")
@@ -244,7 +232,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
         fields: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
@@ -254,7 +242,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Available keys: success, query, results, total_matches, count, "
                     "offset, limit, has_more, next_offset, search_type, "
                     "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warning, partial, time_zone."
+                    "by_domain, warning, partial."
                 ),
             ),
         ] = None,
@@ -449,7 +437,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             by_domain[domain].append(item)
                         search_data["by_domain"] = by_domain
 
-                    return await add_timezone_metadata(client, _project_fields(search_data, fields))
+                    return await add_timezone_metadata(client, project_fields(search_data, fields))
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -551,7 +539,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     entity["domain"], []
                                 ).append(entity)
                             area_search_data["by_domain"] = paginated_by_domain
-                        return await add_timezone_metadata(client, _project_fields(area_search_data, fields))
+                        return await add_timezone_metadata(client, project_fields(area_search_data, fields))
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -570,7 +558,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             empty_area_data["domain_filter"] = domain_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, _project_fields(empty_area_data, fields))
+                        return await add_timezone_metadata(client, project_fields(empty_area_data, fields))
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -664,7 +652,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
                 if group_by_domain_bool:
                     domain_list_data["by_domain"] = {domain_filter: results}
-                return await add_timezone_metadata(client, _project_fields(domain_list_data, fields))
+                return await add_timezone_metadata(client, project_fields(domain_list_data, fields))
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -765,7 +753,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 result["warning"] = warning
                 result["partial"] = True
 
-            return await add_timezone_metadata(client, _project_fields(result, fields))
+            return await add_timezone_metadata(client, project_fields(result, fields))
 
         except ToolError:
             raise
