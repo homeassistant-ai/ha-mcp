@@ -52,6 +52,64 @@ def _get_backup_hint_text() -> str:
     return hints.get(hint, hints["normal"])
 
 
+async def _get_local_backup_agent_id(
+    ws_client: HomeAssistantWebSocketClient,
+) -> str:
+    """Discover the local backup agent_id at call time.
+
+    HA Supervised registers ``hassio.local`` and HA Core registers
+    ``backup.local`` — both have ``name: "local"``. Hardcoding either breaks
+    the other deployment. We probe ``backup/agents/info`` and pick the agent
+    whose name is exactly ``"local"`` (prefer Supervisor's ``hassio.local``
+    when both are present, since the Supervisor agent is the canonical local
+    target on Supervised installs).
+
+    Raises ToolError if no local agent is available.
+    """
+    response = await ws_client.send_command("backup/agents/info")
+    if not response.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Failed to enumerate backup agents",
+                context={"details": response},
+            )
+        )
+
+    agents = response.get("result", {}).get("agents", [])
+    if not agents:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "No backup agents registered with Home Assistant",
+                suggestions=[
+                    "The HA backup integration may not be fully set up; "
+                    "check the backup panel in Home Assistant",
+                ],
+            )
+        )
+
+    local_agents = [a.get("agent_id") for a in agents if a.get("name") == "local"]
+    # Prefer hassio.local (Supervisor) over backup.local (Core) when both exist
+    for preferred in ("hassio.local", "backup.local"):
+        if preferred in local_agents:
+            return preferred
+    if local_agents:
+        return cast(str, local_agents[0])
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "No local backup agent found",
+            context={"available_agents": [a.get("agent_id") for a in agents]},
+            suggestions=[
+                "Backup creation requires a local agent (hassio.local on "
+                "Supervised, backup.local on Core); none is registered",
+            ],
+        )
+    )
+
+
 async def _get_backup_password(
     ws_client: HomeAssistantWebSocketClient,
 ) -> str:
@@ -94,8 +152,13 @@ async def _poll_backup_completion(
     backup_job_id: str,
     max_wait_seconds: int,
     poll_interval: int,
+    agent_id: str,
 ) -> dict[str, Any]:
     """Poll backup/info until the named backup completes, fails, or times out.
+
+    ``agent_id`` is the local agent that owns this backup (e.g.
+    ``hassio.local`` on Supervised, ``backup.local`` on Core); used to look
+    up the per-agent size in the backup-info payload.
 
     Raises ToolError on backup failure or timeout.
     """
@@ -134,7 +197,7 @@ async def _poll_backup_completion(
                         "name": name,
                         "date": created_backup.get("date"),
                         "size_bytes": created_backup.get("agents", {})
-                        .get("hassio.local", {})
+                        .get(agent_id, {})
                         .get("size"),
                         "status": "Backup completed successfully",
                         "duration_seconds": waited,
@@ -192,19 +255,30 @@ async def create_backup(
         # Get backup password (raises ToolError on failure)
         password = await _get_backup_password(ws_client)
 
+        # Discover the local backup agent at call time. HA Core registers
+        # `backup.local`; HA Supervised registers `hassio.local`. Hardcoding
+        # either breaks the other deployment (#366 silent-skip audit
+        # surfaced this — test_backup_create_with_auto_name was failing on
+        # Core test containers with "available agents: ['backup.local']").
+        local_agent = await _get_local_backup_agent_id(ws_client)
+
         # Generate backup name if not provided
         if not name:
             now = datetime.now()
             name = f"MCP_Backup_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
 
-        # Create backup request
+        # Create backup request. Addons + addon folders are Supervisor
+        # concepts — HA Core errors with "Addons and folders are not
+        # supported by core backup" if we ask for them. Toggle off when we
+        # detect the Core local agent.
+        is_supervised = local_agent == "hassio.local"
         backup_params = {
             "name": name,
             "password": password,
-            "agent_ids": ["hassio.local"],  # Local only
+            "agent_ids": [local_agent],
             "include_homeassistant": True,
             "include_database": False,  # Fast backup
-            "include_all_addons": True,
+            "include_all_addons": is_supervised,
         }
 
         # Send backup request
@@ -225,6 +299,7 @@ async def create_backup(
             backup_job_id,
             max_wait_seconds=_BACKUP_MAX_WAIT_S,
             poll_interval=_BACKUP_POLL_INTERVAL_S,
+            agent_id=local_agent,
         )
 
     except ToolError:
@@ -248,8 +323,12 @@ async def create_backup(
 async def _create_safety_backup(
     ws_client: HomeAssistantWebSocketClient,
     password: str | None,
+    agent_id: str,
 ) -> str | None:
     """Create a pre-restore safety backup.
+
+    ``agent_id`` is the local backup agent (Supervisor's ``hassio.local`` or
+    Core's ``backup.local``) discovered by the caller.
 
     Returns the safety backup ID, or None when password is None (backup intentionally
     skipped). Raises ToolError if backup creation fails.
@@ -260,14 +339,16 @@ async def _create_safety_backup(
     now = datetime.now()
     safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
 
+    # include_all_addons is a Supervisor concept; HA Core rejects it.
+    is_supervised = agent_id == "hassio.local"
     safety_backup = await ws_client.send_command(
         "backup/generate",
         name=safety_backup_name,
         password=password,
-        agent_ids=["hassio.local"],
+        agent_ids=[agent_id],
         include_homeassistant=True,
         include_database=True,
-        include_all_addons=True,
+        include_all_addons=is_supervised,
     )
 
     if not safety_backup.get("success"):
@@ -330,6 +411,11 @@ async def restore_backup(
                 suggestions=["Use ha_backup_list() to see available backups"],
             ))
 
+        # Discover the local backup agent (Supervisor's hassio.local on
+        # Supervised, backup.local on Core). Used for both the safety backup
+        # and the restore call below.
+        local_agent = await _get_local_backup_agent_id(ws_client)
+
         # Create safety backup BEFORE restoring
         logger.info("Creating safety backup before restore...")
         try:
@@ -339,12 +425,12 @@ async def restore_backup(
             logger.warning("No default password - proceeding without safety backup")
             password = None
 
-        safety_backup_id = await _create_safety_backup(ws_client, password)
+        safety_backup_id = await _create_safety_backup(ws_client, password, local_agent)
 
         # Perform restore
         restore_params = {
             "backup_id": backup_id,
-            "agent_id": "hassio.local",
+            "agent_id": local_agent,
             "restore_database": restore_database,
             "restore_homeassistant": True,
             "restore_addons": [],  # Restore all addons from backup
@@ -409,7 +495,7 @@ def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs:
 
 **Password:** Uses Home Assistant's default backup password (if configured)
 
-**Storage:** Local only (hassio.local agent)
+**Storage:** Local only (the local backup agent — `hassio.local` on HA Supervised, `backup.local` on HA Core)
 
 **Duration:** Typically takes several seconds to complete (without database)
 
