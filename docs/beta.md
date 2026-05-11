@@ -116,7 +116,11 @@ Reload the `Logger` integration (or restart HA) to apply.
 
 Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_home_assistant_best_practices` (or its `skill://` resource). This is a behaviour flag, not a new tool.
 
-**The trade-off.** This reduces idle tool-catalog token usage but relies on the LLM actually calling the skill tool (or reading the skill resource) when it needs detail. Some models will skip the extra tool call and produce worse output than they would have with the full docstrings in front of them. Pair this toggle with one of the following to mitigate:
+**The trade-off.** This reduces idle tool-catalog token usage but relies on the LLM actually calling the skill tool (or reading the skill resource) when it needs detail. Some models will skip the extra tool call and produce worse output than they would have with the full docstrings in front of them.
+
+**Search discoverability shrinks too.** Clients that BM25-search the tool catalog (claude.ai's native deferred-tool search, ha-mcp's own `enable_tool_search` index) see fewer tokens per lite-mapped tool, so natural-language queries that previously matched on words in the full docstring may rank lower or miss. ha-mcp's explicit `_SEARCH_KEYWORDS` boosts still apply on top of the lite text, but coverage outside those boosts will be thinner.
+
+Pair this toggle with one of the following to mitigate:
 
 - A client that supports MCP resources (the model can read `skill://` directly without an extra tool round-trip).
 - `enable_tool_search` — the search transform's description already nudges the LLM toward the skill resources.

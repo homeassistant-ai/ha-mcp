@@ -542,20 +542,14 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ),
     }
 
-    # Lite docstrings — beta opt-in (enable_lite_docstrings).
+    # Lite docstrings — beta opt-in (enable_lite_docstrings, #1062).
     # Each entry replaces the full docstring on a heavy tool with a
-    # shorter variant that defers schema/example detail to the
-    # ha_get_skill_home_assistant_best_practices tool (or its skill://
-    # resource). The intent is to reduce idle catalog token usage; the
-    # trade-off (LLMs that skip the skill tool get less guidance) is
-    # surfaced in the dev-addon toggle description, in docs/beta.md,
-    # and as a startup WARNING log when the flag is on.
-    #
-    # Keep these lite variants long enough to still convey the tool's
-    # mode/shape (e.g. python_transform vs config) but short enough to
-    # meaningfully trim the catalog. Each one preserves a pointer to
-    # ha_get_skill_home_assistant_best_practices so the LLM has a path
-    # to the full guidance even from inside the trimmed description.
+    # shorter variant that defers schema/example detail to
+    # ha_get_skill_home_assistant_best_practices. Every entry preserves
+    # a pointer to that skill so the LLM still has a path to the full
+    # guidance from inside the trimmed description. The trade-off
+    # (LLMs that skip the skill tool get less guidance) is surfaced in
+    # the dev-addon toggle, docs/beta.md, and a startup WARNING.
     _LITE_DOCSTRINGS: ClassVar[dict[str, str]] = {
         "ha_config_get_automation": (
             "Retrieve a Home Assistant automation configuration by "
@@ -611,23 +605,43 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_list_helpers": (
-            "List Home Assistant helpers of a given type (e.g., "
-            "input_boolean, input_number, counter, timer, schedule, "
-            "zone, person, tag). Returns storage-based helpers only "
-            "(those created via UI/API), not YAML-defined ones.\n\n"
-            "For the helper-type taxonomy and per-type schemas, see "
-            "ha_get_helper_schema and "
+            "List Home Assistant helpers of a given simple type. "
+            "Accepts the 12 storage-backed helper types only: "
+            "input_button, input_boolean, input_select, input_number, "
+            "input_text, input_datetime, counter, timer, schedule, "
+            "zone, person, tag. Flow-based helpers (template, group, "
+            "utility_meter, derivative, statistics, trend, threshold, "
+            "filter, switch_as_x, etc.) cannot be listed through this "
+            "tool — use ha_search_entities or ha_deep_search.\n\n"
+            "For per-type schemas, see ha_get_helper_schema and "
             "ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_set_helper": (
-            "Create or update a Home Assistant helper of any of the "
-            "27 supported types (input_*, counter, timer, schedule, "
-            "zone, person, tag, template, group, utility_meter, "
-            "derivative, statistics, trend, threshold, etc.).\n\n"
+            "Create or update a Home Assistant helper. Supports all "
+            "supported helper types: the simple types (input_*, "
+            "counter, timer, schedule, zone, person, tag) and the "
+            "flow-based types (template, group, utility_meter, "
+            "derivative, statistics, trend, threshold, filter, "
+            "switch_as_x, and others).\n\n"
             "For per-type config schemas, call "
             "ha_get_helper_schema(helper_type) first. For decision "
             "matrix and worked examples (which helper type for which "
             "use case), see ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_get_dashboard": (
+            "Inspect a Home Assistant dashboard.\n\n"
+            "Three modes: (1) list — `list_only=True` returns all "
+            "storage-mode dashboards with metadata. (2) search — pass "
+            "any of `entity_id`, `card_type`, `heading` to find cards "
+            "(and their `jq_path`) inside a specific dashboard; the "
+            "result includes a `config_hash` you can pair with "
+            "ha_config_set_dashboard(python_transform=...) to edit "
+            "matched cards surgically. (3) get — no search params "
+            "returns the full Lovelace config plus a stable "
+            "`config_hash`. Use `url_path='default'` for the main "
+            "dashboard.\n\n"
+            "For card-type taxonomy and search workflow examples, see "
+            "ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_set_dashboard": (
             "Create or update a Home Assistant dashboard.\n\n"
@@ -695,7 +709,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         Emits a startup WARNING when enabled so non-addon users (Docker,
         uvx, pip) see the trade-off in their logs — the addon UI surfaces
-        the same warning via the toggle description.
+        the same warning via the toggle description. A second WARNING is
+        emitted if the transform install fails, so users don't silently
+        get full descriptions back after explicitly enabling the toggle.
 
         Runs before ``_apply_search_keyword_enrichment`` so BM25 keywords
         append to the lite text instead of the discarded full description.
@@ -717,20 +733,24 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             from .transforms import LiteDocstringsTransform
         except ImportError:
             logger.exception(
-                "LiteDocstringsTransform not available; full tool "
-                "descriptions will be exposed."
+                "LiteDocstringsTransform not importable — please file a "
+                "bug. ENABLE_LITE_DOCSTRINGS=true is in effect but full "
+                "tool descriptions will be exposed."
             )
             return
 
         try:
             self.mcp.add_transform(
-                LiteDocstringsTransform(
-                    enabled=True,
-                    replacements=self._LITE_DOCSTRINGS,
-                )
+                LiteDocstringsTransform(replacements=self._LITE_DOCSTRINGS)
             )
         except Exception:
             logger.exception("Failed to apply LiteDocstringsTransform")
+            logger.warning(
+                "ENABLE_LITE_DOCSTRINGS=true was set but the transform "
+                "failed to install — full tool descriptions remain in "
+                "effect. Catalog token usage will be unchanged from the "
+                "default."
+            )
 
     def _apply_search_keyword_enrichment(self) -> None:
         """Append BM25 keyword boosts to tool descriptions.
