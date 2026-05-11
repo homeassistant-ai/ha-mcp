@@ -64,7 +64,7 @@ class TestGetLocalBackupAgentId:
             await _get_local_backup_agent_id(ws)
         error = json.loads(str(exc_info.value))
         assert "No local backup agent found" in error["error"]["message"]
-        assert error["error"]["context"]["available_agents"] == ["google_drive.cloud"]
+        assert error["available_agents"] == ["google_drive.cloud"]
 
     @pytest.mark.asyncio
     async def test_empty_agent_list_raises(self):
