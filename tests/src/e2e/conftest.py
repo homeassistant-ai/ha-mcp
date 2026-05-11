@@ -266,7 +266,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
                     # Extract to temp location first; the context manager
                     # cleans up even if extractall or shutil.move raises.
                     temp_extract = Path(temp_dir_str)
-                    tar.extractall(temp_extract)
+                    tar.extractall(temp_extract, filter="data")
 
                     # Move the hacs_frontend subdirectory
                     extracted_frontend = (
