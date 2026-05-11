@@ -2323,7 +2323,7 @@
   {
     "name": "ha_search_entities",
     "title": "Search Entities",
-    "description": "Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.\n\nWhen NOT to use: for searching inside automation, script, helper, or dashboard\n*configurations* (e.g. which automations call a service or reference an entity),\nuse `ha_deep_search`.\n\nTo enumerate all entities of a domain, omit `query` and pass `domain_filter`. For\nexample, `ha_search_entities(domain_filter=\"calendar\")` lists all calendars. At\nleast one of `query`, `domain_filter`, or `area_filter` must be set.",
+    "description": "Search for entities (lights, sensors, switches, etc.) by name, domain, or area.\n\nWhen NOT to use: for searching inside automation, script, helper, or dashboard\n*configurations* (e.g. which automations call a service or reference an entity),\nuse `ha_deep_search`.\n\nTo enumerate all entities of a domain, omit `query` and pass `domain_filter`. For\nexample, `ha_search_entities(domain_filter=\"calendar\")` lists all calendars. At\nleast one of `query`, `domain_filter`, or `area_filter` must be set.",
     "inputSchema": {
       "properties": {
         "query": {
@@ -2331,7 +2331,7 @@
           "default": null
         },
         "domain_filter": {
-          "type": "Annotated[str | None, Field(default=None, description=\"Limit to a single domain (e.g. 'light', 'sensor', 'calendar').\")]",
+          "type": "Annotated[str | None, Field(default=None, description=\"Limit to a single domain (e.g. 'light', 'sensor', 'calendar'). Case-insensitive — values are normalized to lowercase before matching.\")]",
           "default": null
         },
         "area_filter": {
@@ -2352,6 +2352,10 @@
         },
         "exact_match": {
           "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
+          "default": true
+        },
+        "include_hidden": {
+          "type": "Annotated[bool | str, Field(default=True, description='Include entities marked hidden_by in the entity registry (default: True). Hidden entities still appear in results but receive a score penalty so they sort below comparable visible matches — typically pulling integration diagnostics and user-suppressed entries to the bottom of the list rather than excluding them. Set to False to filter them out entirely.')]",
           "default": true
         }
       }
