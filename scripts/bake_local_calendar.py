@@ -1,13 +1,14 @@
 """One-shot bake for an e2e local_calendar config entry.
 
 Spins up HA against ``tests/initial_test_state/``, completes the
-``local_calendar`` config flow via the WebSocket API to register a writable
-calendar entity, stops HA cleanly, and copies the resulting
-``.storage/core.config_entries`` + ``.storage/local_calendar.*`` files back
-into the seed dir.
+``local_calendar`` config flow via the REST config-entries API to register a
+writable calendar entity, stops HA cleanly, and copies the resulting
+``.storage/core.config_entries`` back into the seed dir. The entity-registry
+entry and per-entry ``local_calendar.<entry_id>`` iCal file are deliberately
+NOT copied — HA recreates them on boot from the config entry's ``storage_key``.
 
 After this bake, the test container boots with a pre-registered
-``calendar.e2e_test_calendar`` entity that supports event creation, unblocking
+``calendar.local_e2e_test`` entity that supports event creation, unblocking
 ``tests/src/e2e/workflows/calendar/test_calendar.py::test_create_calendar_event``
 which previously skipped on every CI run with
 "Calendar event creation not available" because the only calendar entity in
@@ -19,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -30,9 +32,22 @@ import requests
 
 REPO = Path(__file__).resolve().parents[1]
 SEED_DIR = REPO / "tests" / "initial_test_state"
-HA_IMAGE_VAR = REPO / "tests" / "test_constants.py"
-# Public test token from tests/test_constants.py
-TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxOTE5ZTZlMTVkYjI0Mzk2YTQ4YjFiZTI1MDM1YmU2YSIsImlhdCI6MTc1NzI4OTc5NiwiZXhwIjoyMDcyNjQ5Nzk2fQ.Yp9SSAjm2gvl9Xcu96FFxS8SapHxWAVzaI0E3cD9xac"
+
+
+def _load_test_constants() -> object:
+    """Import tests/test_constants.py as a module without making tests/ a package."""
+    constants_path = REPO / "tests" / "test_constants.py"
+    spec = importlib.util.spec_from_file_location("_test_constants", constants_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec for {constants_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_constants = _load_test_constants()
+TEST_TOKEN: str = _constants.TEST_TOKEN  # type: ignore[attr-defined]
+HA_IMAGE: str = _constants.HA_TEST_IMAGE  # type: ignore[attr-defined]
 # Includes "local" deliberately so `calendar._find_writable_calendar` finds
 # this entity over the read-only demo calendar (it prefers entity_ids
 # containing "local").
@@ -42,14 +57,6 @@ HOST_PORT = 32789
 
 def _docker(*args: str) -> str:
     return subprocess.check_output(["docker", *args], text=True).strip()
-
-
-def _ha_image() -> str:
-    """Pull HA_TEST_IMAGE from tests/test_constants.py so we always match CI."""
-    for line in HA_IMAGE_VAR.read_text().splitlines():
-        if line.startswith("HA_TEST_IMAGE"):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise RuntimeError("HA_TEST_IMAGE not found in tests/test_constants.py")
 
 
 def create_local_calendar(base_url: str) -> str:
@@ -104,7 +111,7 @@ def create_local_calendar(base_url: str) -> str:
         ]
         if local_cals:
             print(f"✓ Calendar entity registered after {attempt + 1}s: {local_cals[0]['entity_id']}")
-            return entry_id
+            return str(entry_id)
         time.sleep(1)
     raise RuntimeError("local_calendar entity didn't register within 30s")
 
@@ -148,7 +155,7 @@ def main() -> int:
                 "-e",
                 "TZ=UTC",
                 "--privileged",
-                _ha_image(),
+                HA_IMAGE,
             )
             print(f"✓ Started container {container_name} on :{HOST_PORT}")
 
@@ -156,7 +163,10 @@ def main() -> int:
             wait_for_api(base_url)
             create_local_calendar(base_url)
 
-            # Graceful stop so HA flushes .storage writes
+            # Graceful stop so HA flushes .storage writes. The REST stop kicks
+            # off HA's shutdown; `docker stop -t 15` then waits up to 15s for
+            # the container to exit before SIGKILL — enough time to flush
+            # storage without a separate sleep.
             headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
             try:
                 requests.post(
@@ -164,7 +174,6 @@ def main() -> int:
                     timeout=5,
                     headers=headers,
                 )
-                time.sleep(8)
             except requests.exceptions.RequestException:
                 pass
             _docker("stop", "-t", "15", container_name)
