@@ -529,9 +529,15 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 
         # Wait for key HA service domains to register.  Components loaded and
         # entities present does not guarantee services are ready — individual
-        # integrations (input_boolean, sun) register their services
-        # asynchronously after their entities appear.
-        REQUIRED_SERVICES = {"input_boolean", "sun"}
+        # integrations register their services asynchronously after their
+        # entities appear.
+        #
+        # `sun` is NOT included here: the sun integration registers an entity
+        # (sun.sun) but no service domain on current HA (2026.x). Polling for
+        # it would deterministically time out, wasting 30s per session. Sun
+        # readiness is gated below via the sun.sun state check, which is the
+        # actual signal the template tests need.
+        REQUIRED_SERVICES = {"input_boolean"}
         SERVICE_WAIT = 30
         logger.info("⏳ Waiting for required service domains to register...")
         for svc_attempt in range(SERVICE_WAIT):
