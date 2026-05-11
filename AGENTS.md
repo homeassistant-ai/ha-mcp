@@ -507,7 +507,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 - `set` — create/update (`ha_config_set_helper`)
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
-- `call` — execute (`ha_call_service`)
+- `call` — execute (`ha_call_service`, `ha_call_event`)
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
 
 **Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
