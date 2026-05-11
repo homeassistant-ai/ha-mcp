@@ -267,7 +267,6 @@ def _should_lazy_resolve(error_msg: str) -> bool:
 
 async def _fetch_dashboards_list(
     client: Any,
-    log: logging.Logger,
 ) -> list[dict[str, Any]] | None:
     """Fetch and normalise the lovelace/dashboards/list WebSocket response.
 
@@ -280,11 +279,11 @@ async def _fetch_dashboards_list(
     propagate the failure).
     """
     result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
-    if isinstance(result, dict) and "result" in result:
+    if isinstance(result, dict) and isinstance(result.get("result"), list):
         return cast(list[dict[str, Any]], result["result"])
     if isinstance(result, list):
         return cast(list[dict[str, Any]], result)
-    log.warning(
+    logger.warning(
         "lovelace/dashboards/list returned an unexpected shape (type=%s); "
         "treating as no-match",
         type(result).__name__,
@@ -324,7 +323,7 @@ async def _resolve_dashboard(
       to the registry id before issuing the delete. Discards
       ``dashboards``.
     """
-    dashboards = await _fetch_dashboards_list(client, logger)
+    dashboards = await _fetch_dashboards_list(client)
     if dashboards is None:
         return None, None
 
@@ -541,7 +540,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         try:
             # List mode
             if list_only:
-                dashboards = await _fetch_dashboards_list(client, logger) or []
+                dashboards = await _fetch_dashboards_list(client) or []
                 return {
                     "success": True,
                     "action": "list",
@@ -1164,7 +1163,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 existing_dashboards = pre_fetched_dashboards
             else:
                 existing_dashboards = (
-                    await _fetch_dashboards_list(client, logger) or []
+                    await _fetch_dashboards_list(client) or []
                 )
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards
