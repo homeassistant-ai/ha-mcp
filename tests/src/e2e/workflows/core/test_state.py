@@ -163,15 +163,16 @@ async def test_get_state_sensor_with_numeric_value(mcp_client):
 async def test_get_state_automation_entity(mcp_client):
     """Test retrieving state of an automation entity.
 
-    Anchors on ``automation.e2e_test_automation_seed`` -- a disabled seed
-    automation defined in ``tests/initial_test_state/automations.yaml`` --
-    so a regression that removes the seed automation fails this test
-    loudly instead of silently passing on whatever generic automation
-    happened to be present.
+    Anchors on ``automation.e2e_seed_automation`` -- the entity_id HA
+    derives from the slugified ``alias`` of the disabled seed automation
+    defined in ``tests/initial_test_state/automations.yaml`` -- so a
+    regression that removes the seed automation fails this test loudly
+    instead of silently passing on whatever generic automation happened
+    to be present.
     """
     logger.info("Testing ha_get_state with automation entity")
 
-    seed_entity = "automation.e2e_test_automation_seed"
+    seed_entity = "automation.e2e_seed_automation"
     search_result = await mcp_client.call_tool(
         "ha_search_entities",
         {"domain_filter": "automation", "limit": 25},
