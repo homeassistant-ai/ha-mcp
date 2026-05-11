@@ -94,14 +94,6 @@ class TestHaGetOverviewSystemInfo:
         result = await overview_tool(detail_level="minimal")
 
         assert "allowlist_external_dirs" not in result["system_info"]
-        """The field must not appear in system_info when detail_level != 'full'."""
-        mock_client.get_config = AsyncMock(
-            return_value={"allowlist_external_dirs": ["/media"]}
-        )
-
-        result = await overview_tool(detail_level="minimal")
-
-        assert "allowlist_external_dirs" not in result["system_info"]
 
 
 class TestHaGetOverviewFieldsProjection:

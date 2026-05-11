@@ -197,12 +197,6 @@ class TestSetAreaOrFloorCrossKindRejection:
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "non-empty" in error_data["error"]["message"]
         tools._client.send_websocket_message.assert_not_called()
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(kind="area", id="", name="K")
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "non-empty" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
 
 
 class TestHaConfigListAreasFieldsProjection:

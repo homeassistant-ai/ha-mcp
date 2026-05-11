@@ -163,6 +163,8 @@ def _project_entity(
     Both default None = full payload (no-op).
     Accepts a list or a CSV/JSON-array string for both parameters.
     """
+    if not isinstance(record, dict):
+        return record  # non-dict (e.g. error path returning None) — skip projection
     if fields is not None:
         parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
         keep = set(parsed_fields)
@@ -921,6 +923,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use fields= to project the response to only the keys you need — up to 94%
         token reduction when fetching a single sub-section (e.g. fields=["system_info"]).
         """
+        # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
+        # (ha_get_overview has no outer try/except, so ValueError would escape uncaught)
+        if fields is not None:
+            try:
+                parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
             include_state, "include_state", default=None
@@ -1244,7 +1254,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
         - State only: ha_get_state("light.kitchen", fields=["state"])
-        - Slim bulk: ha_get_state(["light.k", "sensor.t"], fields=["state", "attributes"], attribute_keys=["brightness"])
+        - Slim bulk: ha_get_state(["light.kitchen", "sensor.temperature"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
         # Single entity path
         if isinstance(entity_id, str):
