@@ -853,7 +853,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
         fields: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
@@ -1019,7 +1019,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
         if fields is not None:
-            keep = set(fields) | {"success"}
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
+            keep = set(parsed_fields) | {"success"}
             result = cast(dict[str, Any], {k: v for k, v in result.items() if k in keep})
 
         return result
