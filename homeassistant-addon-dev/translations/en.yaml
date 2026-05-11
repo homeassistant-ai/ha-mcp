@@ -45,6 +45,21 @@ configuration:
       Saved tools persist to /data/saved_tools.json by default so they
       survive add-on restarts. See docs/beta.md for known limitations.
       Requires restart to take effect.
+  enable_lite_docstrings:
+    name: Enable lite tool docstrings (beta)
+    description: >-
+      Beta feature — disabled by default. Replaces the docstrings on a
+      handful of heavy ha-mcp tools (automations, scripts, scenes, helpers,
+      dashboards, ha_call_service, ha_config_set_yaml) with shorter
+      variants that defer schema and example detail to the
+      ha_get_skill_home_assistant_best_practices tool (or its skill://
+      resource). WARNING: this reduces idle token usage, but may degrade
+      LLM performance — the trimmed descriptions rely on the LLM
+      actually calling the skill tool or reading the skill resource for
+      detail, which is not guaranteed (some models will skip the extra
+      tool call and end up with less guidance than they had before).
+      Best paired with a client that supports MCP resources or with
+      enable_tool_search. Requires restart to take effect.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: >-

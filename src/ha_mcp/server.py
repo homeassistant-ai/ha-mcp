@@ -263,6 +263,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # search indexing too).
         self._apply_settings_visibility()
 
+        # Replace heavy tool descriptions with lite variants when
+        # ENABLE_LITE_DOCSTRINGS=true. Must come BEFORE keyword
+        # enrichment so BM25 keywords append to the lite text (instead
+        # of the full description we just discarded).
+        self._apply_lite_docstrings()
+
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
         # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
@@ -536,6 +542,131 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ),
     }
 
+    # Lite docstrings — beta opt-in (enable_lite_docstrings).
+    # Each entry replaces the full docstring on a heavy tool with a
+    # shorter variant that defers schema/example detail to the
+    # ha_get_skill_home_assistant_best_practices tool (or its skill://
+    # resource). The intent is to reduce idle catalog token usage; the
+    # trade-off (LLMs that skip the skill tool get less guidance) is
+    # surfaced in the dev-addon toggle description, in docs/beta.md,
+    # and as a startup WARNING log when the flag is on.
+    #
+    # Keep these lite variants long enough to still convey the tool's
+    # mode/shape (e.g. python_transform vs config) but short enough to
+    # meaningfully trim the catalog. Each one preserves a pointer to
+    # ha_get_skill_home_assistant_best_practices so the LLM has a path
+    # to the full guidance even from inside the trimmed description.
+    _LITE_DOCSTRINGS: ClassVar[dict[str, str]] = {
+        "ha_config_get_automation": (
+            "Retrieve a Home Assistant automation configuration by "
+            "entity_id or unique_id. Returns the full config "
+            "(trigger, condition, action, mode) plus a stable "
+            "config_hash for use with python_transform on "
+            "ha_config_set_automation.\n\n"
+            "For schema and field-level details, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_automation": (
+            "Create or update a Home Assistant automation.\n\n"
+            "Supports two modes: full `config` replacement, or surgical "
+            "`python_transform` on an existing automation (requires "
+            "`identifier` and `config_hash` from "
+            "ha_config_get_automation). Omit `identifier` to create a "
+            "new automation.\n\n"
+            "For schema details, examples, and native-vs-template "
+            "guidance, see ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_get_script": (
+            "Retrieve a Home Assistant script configuration by "
+            "script_id or entity_id. Returns the full config (sequence, "
+            "mode, fields) plus a stable config_hash for use with "
+            "python_transform on ha_config_set_script.\n\n"
+            "For schema details, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_script": (
+            "Create or update a Home Assistant script.\n\n"
+            "Supports two modes: full `config` replacement, or surgical "
+            "`python_transform` on an existing script (requires "
+            "`identifier` and `config_hash` from "
+            "ha_config_get_script). Omit `identifier` to create a new "
+            "script.\n\n"
+            "For schema details and examples, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_get_scene": (
+            "Retrieve a Home Assistant scene configuration by "
+            "scene_id or entity_id. Returns the full config plus a "
+            "stable config_hash for use with python_transform on "
+            "ha_config_set_scene.\n\n"
+            "For schema details, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_scene": (
+            "Create or update a Home Assistant scene.\n\n"
+            "Supports two modes: full `config` replacement, or surgical "
+            "`python_transform` on an existing scene (requires "
+            "`identifier` and `config_hash`).\n\n"
+            "For schema details and examples, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_list_helpers": (
+            "List Home Assistant helpers of a given type (e.g., "
+            "input_boolean, input_number, counter, timer, schedule, "
+            "zone, person, tag). Returns storage-based helpers only "
+            "(those created via UI/API), not YAML-defined ones.\n\n"
+            "For the helper-type taxonomy and per-type schemas, see "
+            "ha_get_helper_schema and "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_helper": (
+            "Create or update a Home Assistant helper of any of the "
+            "27 supported types (input_*, counter, timer, schedule, "
+            "zone, person, tag, template, group, utility_meter, "
+            "derivative, statistics, trend, threshold, etc.).\n\n"
+            "For per-type config schemas, call "
+            "ha_get_helper_schema(helper_type) first. For decision "
+            "matrix and worked examples (which helper type for which "
+            "use case), see ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_dashboard": (
+            "Create or update a Home Assistant dashboard.\n\n"
+            "Supports two modes: full `config` replacement (new "
+            "dashboards or full restructures), or surgical "
+            "`python_transform` on an existing dashboard (requires "
+            "`config_hash` from ha_config_get_dashboard; recommended "
+            "for edits). Use `url_path` of 'default' or 'lovelace' "
+            "to target the built-in dashboard.\n\n"
+            "For card types, layout patterns, and python_transform "
+            "security rules, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_call_service": (
+            "Execute a Home Assistant service to control entities or "
+            "trigger automations. Calls `<domain>.<service>` "
+            "(e.g., light.turn_on, climate.set_temperature). Use "
+            "ha_search_entities to find entity IDs and ha_get_state "
+            "to read current values before changing them.\n\n"
+            "For service-parameter details and per-domain guidance, "
+            "see ha_get_skill_home_assistant_best_practices."
+        ),
+        "ha_config_set_yaml": (
+            "Add, replace, or remove a top-level YAML key in "
+            "configuration.yaml or packages/*.yaml (LAST RESORT).\n\n"
+            "Dedicated tools (ha_config_set_automation, "
+            "ha_config_set_script, ha_config_set_scene, "
+            "ha_config_set_helper) cover almost every use case and "
+            "should be preferred. Use this only for YAML-only "
+            "integrations (command_line, rest, shell_command, notify) "
+            "or registering YAML-mode dashboards via "
+            "`lovelace.dashboards.<url_path>`. Most edits require a "
+            "full HA restart; template, mqtt, and group support "
+            "reload.\n\n"
+            "For routing guidance and the full allowlist, see "
+            "ha_get_skill_home_assistant_best_practices."
+        ),
+    }
+
     # Description overrides that REPLACE the original description for BM25.
     # Used to narrow overly broad tools so they stop matching generic queries
     # against ha-mcp's internal BM25 search tool. Only applied when
@@ -551,6 +682,55 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "NOT for finding entities or discovering tools."
         ),
     }
+
+    def _apply_lite_docstrings(self) -> None:
+        """Swap heavy tool descriptions for shorter variants if enabled.
+
+        Beta feature gated on ``settings.enable_lite_docstrings`` /
+        ``ENABLE_LITE_DOCSTRINGS=true``. Replaces the description on
+        each tool listed in ``_LITE_DOCSTRINGS`` with a shorter variant
+        that defers detail to
+        ``ha_get_skill_home_assistant_best_practices``. Tools not in the
+        mapping pass through unchanged.
+
+        Emits a startup WARNING when enabled so non-addon users (Docker,
+        uvx, pip) see the trade-off in their logs — the addon UI surfaces
+        the same warning via the toggle description.
+
+        Runs before ``_apply_search_keyword_enrichment`` so BM25 keywords
+        append to the lite text instead of the discarded full description.
+        """
+        if not self.settings.enable_lite_docstrings:
+            return
+
+        logger.warning(
+            "ENABLE_LITE_DOCSTRINGS=true: replacing %d tool descriptions "
+            "with shorter variants. This reduces idle catalog token usage "
+            "but may degrade LLM performance — the trimmed descriptions "
+            "rely on the LLM calling ha_get_skill_home_assistant_best_practices "
+            "(or reading skill:// resources) for detail, which is not "
+            "guaranteed. See docs/beta.md.",
+            len(self._LITE_DOCSTRINGS),
+        )
+
+        try:
+            from .transforms import LiteDocstringsTransform
+        except ImportError:
+            logger.exception(
+                "LiteDocstringsTransform not available; full tool "
+                "descriptions will be exposed."
+            )
+            return
+
+        try:
+            self.mcp.add_transform(
+                LiteDocstringsTransform(
+                    enabled=True,
+                    replacements=self._LITE_DOCSTRINGS,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to apply LiteDocstringsTransform")
 
     def _apply_search_keyword_enrichment(self) -> None:
         """Append BM25 keyword boosts to tool descriptions.
