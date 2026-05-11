@@ -93,7 +93,15 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
             "GitHub access issue",
         ),
         (error_code == "INTERNAL_ERROR", f"HACS internal error: {error_str}"),
-        ("not found" in error_str, "Command not found"),
+        # `"not found"` substring used to trigger here too, but HACS's
+        # legitimate "Repository with ID (...) not found" responses also
+        # contain that phrase — which is exactly what tests like
+        # `test_repository_info_not_found` are asserting against. The real
+        # "HACS commands not registered" case is captured by the
+        # `"unknown command"` check on the next line; require the literal
+        # `"command not found"` prefix here so we don't conflate it with
+        # a legitimate repo-lookup miss.
+        ("command not found" in error_str, "Command not found"),
         ("unknown command" in error_str, "Unknown command"),
         ("disabled" in error_str, "HACS disabled"),
         ("401" in error_str, "GitHub authentication failed"),
