@@ -197,54 +197,94 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
 
     HACS requires the frontend (~51MB) to be present to fully initialize.
     This is not committed to git to keep the repo size manageable.
+
+    Uses a directory-based atomic lock so concurrent xdist workers don't race
+    on ``shutil.move`` into the shared ``initial_test_state`` path. One worker
+    wins ``mkdir(exist_ok=False)`` and performs the download; the losers poll
+    on the lock and exit when the winner releases it.
     """
     import tarfile
     import urllib.request
 
     hacs_dir = initial_state_path / "custom_components" / "hacs"
     frontend_dir = hacs_dir / "hacs_frontend"
+    lock_dir = initial_state_path / ".hacs_frontend.lock"
 
-    # Check if HACS is installed and frontend is missing
-    if hacs_dir.exists() and not frontend_dir.exists():
-        logger.info("HACS frontend not found, downloading...")
+    # Fast path: HACS not installed (nothing to do), or frontend present
+    # AND no lock held. The lock-held check rules out the window where
+    # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
+    # exists then but its contents are partial. By the time the winner's
+    # ``finally`` runs ``rmdir``, the move has already committed in the
+    # inner ``try`` — the ``rmdir`` is the visible release signal that
+    # peers can observe.
+    if not hacs_dir.exists() or (frontend_dir.exists() and not lock_dir.exists()):
+        return
 
-        try:
-            # Get the latest frontend version from GitHub API
-            import json
+    # Cross-worker lock: atomic mkdir succeeds on exactly one xdist worker.
+    # The losers poll on the lock itself (released by the winner's finally
+    # block) so they wake immediately whether the winner finished, skipped
+    # the download, or raised — not only when ``frontend_dir`` appears. The
+    # 180s cap survives as a safety net for an ungraceful winner exit (e.g.
+    # SIGKILL) that never reaches the finally clause.
+    try:
+        lock_dir.mkdir(exist_ok=False)
+    except FileExistsError:
+        wait_start = time.monotonic()
+        while lock_dir.exists() and time.monotonic() - wait_start < 180:
+            time.sleep(2)
+        return
 
-            api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
-            with urllib.request.urlopen(api_url, timeout=30) as response:
-                release_data = json.loads(response.read())
-                tag_name = release_data["tag_name"]
+    # We own the lock. Outer try/finally guarantees release even when the
+    # download block is skipped (e.g. hacs_dir missing) or raises.
+    try:
+        # Check if HACS is installed and frontend is still missing.
+        if hacs_dir.exists() and not frontend_dir.exists():
+            logger.info("HACS frontend not found, downloading...")
 
-            # Download and extract the frontend
-            tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
-            logger.info(f"Downloading HACS frontend {tag_name}...")
+            try:
+                # Get the latest frontend version from GitHub API
+                api_url = "https://api.github.com/repos/hacs/frontend/releases/latest"
+                with urllib.request.urlopen(api_url, timeout=30) as response:
+                    release_data = json.loads(response.read())
+                    tag_name = release_data["tag_name"]
 
-            with (
-                urllib.request.urlopen(tarball_url, timeout=120) as response,
-                tarfile.open(fileobj=response, mode="r:gz") as tar,
-            ):
-                # Extract to temp location first
-                temp_extract = Path(tempfile.mkdtemp())
-                tar.extractall(temp_extract)
+                # Download and extract the frontend
+                tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
+                logger.info(f"Downloading HACS frontend {tag_name}...")
 
-                # Move the hacs_frontend subdirectory
-                extracted_frontend = (
-                    temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
+                with (
+                    urllib.request.urlopen(tarball_url, timeout=120) as response,
+                    tarfile.open(fileobj=response, mode="r:gz") as tar,
+                    tempfile.TemporaryDirectory() as temp_dir_str,
+                ):
+                    # Extract to temp location first; the context manager
+                    # cleans up even if extractall or shutil.move raises.
+                    temp_extract = Path(temp_dir_str)
+                    tar.extractall(temp_extract)
+
+                    # Move the hacs_frontend subdirectory
+                    extracted_frontend = (
+                        temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
+                    )
+                    if extracted_frontend.exists():
+                        shutil.move(str(extracted_frontend), str(frontend_dir))
+                        logger.info(f"HACS frontend installed at {frontend_dir}")
+                    else:
+                        logger.warning(
+                            f"Could not find hacs_frontend in downloaded archive for {tag_name}"
+                        )
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to download HACS frontend ({type(e).__name__}): {e}"
                 )
-                if extracted_frontend.exists():
-                    shutil.move(str(extracted_frontend), str(frontend_dir))
-                    logger.info(f"HACS frontend installed at {frontend_dir}")
-                else:
-                    logger.warning("Could not find hacs_frontend in downloaded archive")
-
-                # Cleanup temp
-                shutil.rmtree(temp_extract, ignore_errors=True)
-
-        except Exception as e:
-            logger.warning(f"Failed to download HACS frontend: {e}")
-            logger.warning("HACS tests may be skipped without the frontend")
+                logger.warning("HACS tests may be skipped without the frontend")
+    finally:
+        # Release the lock so waiting workers can proceed.
+        try:
+            lock_dir.rmdir()
+        except OSError:
+            pass
 
 
 def _install_custom_component(
@@ -689,8 +729,17 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             )
 
         # Wait for ha_mcp_tools custom component services (installed above).
-        # The component is loaded after core services, so it needs its own check.
-        HA_MCP_TOOLS_WAIT = 30
+        # The component is loaded after core services, so it needs its own
+        # check. Bumped from 30s to 180s in two steps: 30→90 closed the
+        # silent-warn fake-pass against COMPONENT_NOT_INSTALLED; 90→180 added
+        # headroom after observation that on the 2-vCPU ARM runner with 4
+        # parallel HA containers, the pre-polling stages (boot + HACS install
+        # + custom-component install) can take ~48s, leaving the old 90s
+        # window starting too late to outlast registration. Timeout branch
+        # is ``pytest.fail`` so the failure mode is loud instead of letting
+        # tests advance into a guaranteed COMPONENT_NOT_INSTALLED on the
+        # first ha_mcp_tools call.
+        HA_MCP_TOOLS_WAIT = 180
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
             logger.info("⏳ Waiting for ha_mcp_tools services to register...")
@@ -713,9 +762,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     logger.debug(f"ha_mcp_tools service check failed: {exc}")
                 time.sleep(1)
             else:
-                logger.warning(
-                    f"⚠️ ha_mcp_tools services not registered after {HA_MCP_TOOLS_WAIT}s "
-                    f"— yaml config tests may fail"
+                pytest.fail(
+                    f"ha_mcp_tools services not registered after {HA_MCP_TOOLS_WAIT}s. "
+                    "Required for filesystem and config-editing tests; a silent "
+                    "warning here would let those tests proceed into "
+                    "COMPONENT_NOT_INSTALLED on the first tool call."
                 )
 
         # Wait for sun.sun to leave the 'unknown' state.  During HA startup the
