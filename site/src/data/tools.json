@@ -2396,6 +2396,33 @@
     "source_file": "tools_service.py"
   },
   {
+    "name": "ha_call_event",
+    "title": "Call Event",
+    "description": "Execute a custom event on the Home Assistant event bus.\n\nWhen NOT to use: for controlling entities (lights, switches, climate) — use\nha_call_service instead. For triggering automations by name, use\nha_call_service(\"automation\", \"trigger\").\n\nUse this to publish custom event types consumed by event-triggered automations,\nNode-RED flows, or custom integrations that subscribe to specific event types.\n\nCaveats: Events are fire-and-forget; this tool confirms the event was accepted\nby the bus but does not verify whether any automation or subscriber acted on it.",
+    "inputSchema": {
+      "properties": {
+        "event_type": {
+          "type": "str"
+        },
+        "data": {
+          "type": "str | dict[str, Any] | None",
+          "default": null
+        }
+      },
+      "required": [
+        "event_type"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false
+    },
+    "tags": [
+      "Service & Device Control"
+    ],
+    "source_file": "tools_service.py"
+  },
+  {
     "name": "ha_call_service",
     "title": "Call Service",
     "description": "Execute Home Assistant services to control entities and trigger automations.\n\nThis is the universal tool for controlling all Home Assistant entities. Services follow\nthe pattern domain.service (e.g., light.turn_on, climate.set_temperature).\n\n**Basic Usage:**\n```python\n# Turn on a light\nha_call_service(\"light\", \"turn_on\", entity_id=\"light.living_room\")\n\n# Set temperature with parameters\nha_call_service(\"climate\", \"set_temperature\",\n              entity_id=\"climate.thermostat\", data={\"temperature\": 22})\n\n# Trigger automation\nha_call_service(\"automation\", \"trigger\", entity_id=\"automation.morning_routine\")\n\n# Universal controls work with any entity\nha_call_service(\"homeassistant\", \"toggle\", entity_id=\"switch.porch_light\")\n```\n\n**Parameters:**\n- **domain**: Service domain (light, climate, automation, etc.)\n- **service**: Service name (turn_on, set_temperature, trigger, etc.)\n- **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain\n- **data**: Optional dict of service-specific parameters\n- **return_response**: Set to True for services that return data\n- **wait**: Wait for the entity state to change after the service call (default: True).\n  Only applies to state-changing services on a single entity. Set to False for\n  fire-and-forget calls, bulk operations, or services without observable state changes.\n\n**For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**\n\nCommon patterns: Use ha_get_state() to check current values before making changes.\nUse ha_search_entities() to find correct entity IDs.",

@@ -431,6 +431,115 @@ class ServiceTools:
         )
         return cast(dict[str, Any], result)
 
+    @tool(
+        name="ha_call_event",
+        tags={"Service & Device Control"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "title": "Call Event",
+        },
+    )
+    @log_tool_usage
+    async def ha_call_event(
+        self,
+        event_type: str,
+        data: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute a custom event on the Home Assistant event bus.
+
+        When NOT to use: for controlling entities (lights, switches, climate) — use
+        ha_call_service instead. For triggering automations by name, use
+        ha_call_service("automation", "trigger").
+
+        Use this to publish custom event types consumed by event-triggered automations,
+        Node-RED flows, or custom integrations that subscribe to specific event types.
+
+        Caveats: Events are fire-and-forget; this tool confirms the event was accepted
+        by the bus but does not verify whether any automation or subscriber acted on it.
+        """
+        # Validate event_type before hitting the wire — empty strings or path separators
+        # produce malformed URLs at POST /api/events/{event_type}.
+        if not event_type or not event_type.strip():
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot be empty or whitespace",
+                    parameter="event_type",
+                )
+            )
+        if "/" in event_type or "\\" in event_type:
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot contain path separators",
+                    parameter="event_type",
+                    details=f"Received: {event_type!r}",
+                )
+            )
+
+        parsed_data: dict[str, Any] | None = None
+        if data is not None:
+            raw: Any = None
+            try:
+                raw = parse_json_param(data, "data")
+            except ValueError as e:
+                raise_tool_error(
+                    create_validation_error(
+                        f"Invalid data parameter: {e}",
+                        parameter="data",
+                        invalid_json=True,
+                    )
+                )
+            if raw is not None:
+                if not isinstance(raw, dict):
+                    raise_tool_error(
+                        create_validation_error(
+                            "Event data must be a JSON object (dict)",
+                            parameter="data",
+                            details=f"Received type: {type(raw).__name__}",
+                        )
+                    )
+                parsed_data = raw
+
+        try:
+            response = await self._client.fire_event(event_type, parsed_data)
+        except HomeAssistantConnectionError as error:
+            if isinstance(error.__cause__, httpx.TimeoutException):
+                return {
+                    "success": True,
+                    "partial": True,
+                    "event_type": event_type,
+                    "message": (
+                        f"Event {event_type} was dispatched but Home Assistant "
+                        "did not respond within the timeout period."
+                    ),
+                    "warning": (
+                        "Response timed out. The event was dispatched and may still "
+                        "have been delivered to subscribers."
+                    ),
+                }
+            exception_to_structured_error(
+                error,
+                context={"event_type": event_type},
+                suggestions=["Check Home Assistant connection"],
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"event_type": event_type},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify event_type is a valid identifier",
+                ],
+            )
+
+        return {
+            "success": True,
+            "event_type": event_type,
+            "message": response.get("message", f"Event {event_type} fired."),
+        }
+
 
 def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
