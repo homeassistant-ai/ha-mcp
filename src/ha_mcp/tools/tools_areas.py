@@ -19,7 +19,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import parse_string_list_param
+from .util_helpers import parse_string_list_param, project_fields
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class AreaTools:
     async def ha_config_list_areas(
         self,
         fields: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
@@ -167,10 +167,7 @@ class AreaTools:
                     "areas": areas,
                     "message": f"Found {len(areas)} area(s)",
                 }
-                if fields is not None:
-                    keep = set(fields) | {"success"}
-                    response = {k: v for k, v in response.items() if k in keep}
-                return response
+                return project_fields(response, fields)
             else:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

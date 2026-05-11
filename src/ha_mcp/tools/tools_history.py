@@ -209,7 +209,7 @@ class HistoryTools:
             ),
         ] = None,
         fields: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
@@ -358,7 +358,8 @@ class HistoryTools:
                     message="recorder query complete",
                 )
                 if fields is not None:
-                    keep = set(fields) | {"success"}
+                    parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
+                    keep = set(parsed) | {"success"}
                     inner = result.get("data", result)
                     if isinstance(inner, dict):
                         result = {

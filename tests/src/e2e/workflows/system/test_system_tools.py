@@ -753,10 +753,6 @@ class TestSystemToolsIntegration:
             assert not_found, "Test notification should be dismissed"
 
         logger.info("Notification lifecycle test completed successfully")
-            )
-            assert not_found, "Test notification should be dismissed"
-
-        logger.info("Notification lifecycle test completed successfully")
 
     @pytest.mark.asyncio
     async def test_overview_fields_projection(self, mcp_client):

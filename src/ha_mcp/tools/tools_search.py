@@ -153,22 +153,25 @@ async def _exact_match_search(
 
 def _project_entity(
     record: dict[str, Any],
-    fields: list[str] | None,
-    attribute_keys: list[str] | None,
+    fields: str | list[str] | None,
+    attribute_keys: str | list[str] | None,
 ) -> dict[str, Any]:
     """Apply optional field projection to a HA entity record.
 
     ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
     ``attribute_keys`` further filters the ``attributes`` sub-dict.
     Both default None = full payload (no-op).
+    Accepts a list or a CSV/JSON-array string for both parameters.
     """
     if fields is not None:
-        keep = set(fields)
+        parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
+        keep = set(parsed_fields)
         record = {k: v for k, v in record.items() if k in keep}
     if attribute_keys is not None:
+        parsed_attr_keys = parse_string_list_param(attribute_keys, "attribute_keys", allow_csv=True) or []
         attrs = record.get("attributes")
         if isinstance(attrs, dict):
-            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attribute_keys}}
+            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in parsed_attr_keys}}
     return record
 
 
@@ -1055,12 +1058,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
-        if fields is not None:
-            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True) or []
-            keep = set(parsed_fields) | {"success"}
-            result = cast(dict[str, Any], {k: v for k, v in result.items() if k in keep})
-
-        return result
+        return project_fields(result, fields)
 
     @mcp.tool(
         tags={"Search & Discovery"},
@@ -1205,7 +1203,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ],
         fields: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
@@ -1218,7 +1216,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         attribute_keys: Annotated[
-            list[str] | None,
+            str | list[str] | None,
             Field(
                 default=None,
                 description=(
