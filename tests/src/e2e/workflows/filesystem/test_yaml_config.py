@@ -18,6 +18,7 @@ Tests are designed for the Docker Home Assistant test environment.
 
 import logging
 import os
+from typing import Any
 
 import pytest
 
@@ -29,6 +30,34 @@ logger = logging.getLogger(__name__)
 FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 TOOL_NAME = "ha_config_set_yaml"
 READ_TOOL = "ha_read_file"
+
+
+def _error_text(data: dict[str, Any]) -> str:
+    """Extract an error message as a string from a tool result.
+
+    Handles both legacy string errors and structured ``{"code": ..., "message": ...}``
+    dict errors. Without this, callers doing ``data.get("error", "").lower()`` raise
+    ``AttributeError`` when the tool returns a structured error (e.g. ``COMPONENT_NOT_INSTALLED``).
+    """
+    error = data.get("error", "")
+    if isinstance(error, dict):
+        return str(error.get("message", ""))
+    return str(error)
+
+
+async def _probe_ha_mcp_tools_available(mcp_client) -> tuple[bool, str]:
+    """Check whether the ha_mcp_tools custom component is installed and responsive.
+
+    Returns ``(True, "")`` on success, otherwise ``(False, reason)`` so the caller
+    can ``pytest.skip``. Probes via ``ha_list_files`` because it returns the
+    structured ``COMPONENT_NOT_INSTALLED`` error early when the component failed
+    to register on the test container (see issue #366 / #1205).
+    """
+    data = await safe_call_tool(mcp_client, "ha_list_files", {"path": "www/"})
+    error = data.get("error", {})
+    if isinstance(error, dict) and error.get("code") == "COMPONENT_NOT_INSTALLED":
+        return False, "ha_mcp_tools custom component not installed in Home Assistant"
+    return True, ""
 
 
 @pytest.fixture(scope="module")
@@ -91,6 +120,22 @@ class TestYamlConfigAvailability:
 class TestYamlConfigSecurity:
     """Test security boundaries for YAML config editing."""
 
+    @pytest.fixture(autouse=True)
+    async def _skip_if_ha_mcp_tools_unavailable(self, mcp_client_with_yaml_config):
+        """Skip when the ha_mcp_tools custom component failed to register.
+
+        Without this, a transient component-install failure (issue #1205) lets
+        the security tests reach an ``inner.get("error", "").lower()`` site
+        that crashes with ``AttributeError`` on the structured
+        ``COMPONENT_NOT_INSTALLED`` error — turning a fixture flake into a
+        hard test failure instead of a clean skip.
+        """
+        available, reason = await _probe_ha_mcp_tools_available(
+            mcp_client_with_yaml_config
+        )
+        if not available:
+            pytest.skip(reason)
+
     async def test_path_traversal_blocked(self, mcp_client_with_yaml_config):
         """Path traversal attempts must be rejected."""
 
@@ -123,7 +168,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Disallowed file should fail: {data}"
-        assert "not allowed" in inner.get("error", "").lower()
+        assert "not allowed" in _error_text(inner).lower()
         logger.info("Correctly rejected disallowed file")
 
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
@@ -142,7 +187,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Blocked key should fail: {data}"
-        assert "not in the allowed list" in inner.get("error", "").lower()
+        assert "not in the allowed list" in _error_text(inner).lower()
         logger.info("Correctly rejected blocked key")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
@@ -401,7 +446,7 @@ class TestYamlConfigOperations:
         )
         inner = data
         assert inner.get("success") is False, f"Type mismatch should error: {data}"
-        assert "type mismatch" in inner.get("error", "").lower()
+        assert "type mismatch" in _error_text(inner).lower()
         logger.info("Correctly errored on type mismatch")
 
 
