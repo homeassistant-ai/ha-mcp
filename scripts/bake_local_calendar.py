@@ -99,21 +99,30 @@ def create_local_calendar(base_url: str) -> str:
     # Wait for the calendar entity to actually register. The integration sets
     # up async after the flow completes; stopping HA before then leaves the
     # entity registry unwritten and the seed unusable.
+    observed_calendars: list[str] = []
     for attempt in range(30):
-        states = requests.get(
+        states_r = requests.get(
             f"{base_url}/api/states", timeout=5, headers=headers
-        ).json()
-        local_cals = [
-            s for s in states
+        )
+        states_r.raise_for_status()
+        states = states_r.json()
+        observed_calendars = [
+            s["entity_id"] for s in states
             if s.get("entity_id", "").startswith("calendar.")
-            and "demo" not in s["entity_id"]
-            and "calendar_" not in s["entity_id"]  # demo entities use this prefix
+        ]
+        local_cals = [
+            eid for eid in observed_calendars
+            if "demo" not in eid
+            and "calendar_" not in eid  # demo entities use this prefix
         ]
         if local_cals:
-            print(f"✓ Calendar entity registered after {attempt + 1}s: {local_cals[0]['entity_id']}")
+            print(f"✓ Calendar entity registered after {attempt + 1}s: {local_cals[0]}")
             return str(entry_id)
         time.sleep(1)
-    raise RuntimeError("local_calendar entity didn't register within 30s")
+    raise RuntimeError(
+        f"local_calendar entity didn't register within 30s; "
+        f"last observed calendar entities: {observed_calendars}"
+    )
 
 
 def wait_for_api(base_url: str, timeout_s: int = 90) -> None:
@@ -174,8 +183,15 @@ def main() -> int:
                     timeout=5,
                     headers=headers,
                 )
-            except requests.exceptions.RequestException:
-                pass
+            except requests.exceptions.RequestException as e:
+                # Don't abort — docker stop -t 15 below still SIGTERMs HA — but
+                # warn so the operator knows the bake may have flushed less than
+                # expected if `core.config_entries` ends up empty.
+                print(
+                    f"  warning: graceful stop POST failed: {e}; "
+                    f"falling back to docker stop -t 15",
+                    file=sys.stderr,
+                )
             _docker("stop", "-t", "15", container_name)
             print(f"✓ Stopped container {container_name}")
         except Exception:
@@ -193,9 +209,15 @@ def main() -> int:
         # HA on boot from the config-entry data, so we skip it too.
         src = config_dir / ".storage" / "core.config_entries"
         dst = SEED_DIR / ".storage" / "core.config_entries"
-        if src.exists():
-            shutil.copy2(src, dst)
-            print(f"✓ Updated {dst}")
+        if not src.exists():
+            print(
+                f"ERROR: bake produced no {src} — HA likely didn't flush "
+                f".storage before shutdown",
+                file=sys.stderr,
+            )
+            return 1
+        shutil.copy2(src, dst)
+        print(f"✓ Updated {dst}")
 
     print("DONE — review the diff before committing")
     return 0
