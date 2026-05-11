@@ -265,6 +265,33 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
+async def _fetch_dashboards_list(
+    client: Any,
+    _logger: logging.Logger,
+) -> list[dict[str, Any]] | None:
+    """Fetch and normalise the lovelace/dashboards/list WebSocket response.
+
+    Returns the list of dashboard registry entries on success, or ``None``
+    when the response shape is unrecognised.  A warning is logged on
+    unexpected shapes so that future HA response-format changes surface at
+    every fetch site rather than silently degrading.
+
+    Callers decide how to handle ``None`` (e.g. fall through to ``[]`` or
+    propagate the failure).
+    """
+    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+    if isinstance(result, dict) and "result" in result:
+        return cast(list[dict[str, Any]], result["result"])
+    if isinstance(result, list):
+        return cast(list[dict[str, Any]], result)
+    _logger.warning(
+        "lovelace/dashboards/list returned an unexpected shape (type=%s); "
+        "treating as no-match",
+        type(result).__name__,
+    )
+    return None
+
+
 async def _resolve_dashboard(
     client: Any, identifier: str
 ) -> tuple[dict[str, str] | None, list[dict[str, Any]] | None]:
@@ -297,21 +324,8 @@ async def _resolve_dashboard(
       to the registry id before issuing the delete. Discards
       ``dashboards``.
     """
-    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
-    if isinstance(result, dict) and "result" in result:
-        dashboards = result["result"]
-    elif isinstance(result, list):
-        dashboards = result
-    else:
-        # Neither dict-with-result nor list — either HA returned an error
-        # envelope (unknown shape) or the response format changed.
-        # Surface a warning so the next response-shape change isn't a
-        # silent "always no match" regression.
-        logger.warning(
-            "lovelace/dashboards/list returned an unexpected shape (type=%s); "
-            "treating as no-match",
-            type(result).__name__,
-        )
+    dashboards = await _fetch_dashboards_list(client, logger)
+    if dashboards is None:
         return None, None
 
     for d in dashboards:
@@ -527,16 +541,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         try:
             # List mode
             if list_only:
-                result = await client.send_websocket_message(
-                    {"type": "lovelace/dashboards/list"}
-                )
-                if isinstance(result, dict) and "result" in result:
-                    dashboards = result["result"]
-                elif isinstance(result, list):
-                    dashboards = result
-                else:
-                    dashboards = []
-
+                dashboards = await _fetch_dashboards_list(client, logger) or []
                 return {
                     "success": True,
                     "action": "list",
@@ -1158,24 +1163,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if pre_fetched_dashboards is not None:
                 existing_dashboards = pre_fetched_dashboards
             else:
-                result = await client.send_websocket_message(
-                    {"type": "lovelace/dashboards/list"}
+                existing_dashboards = (
+                    await _fetch_dashboards_list(client, logger) or []
                 )
-                if isinstance(result, dict) and "result" in result:
-                    existing_dashboards = result["result"]
-                elif isinstance(result, list):
-                    existing_dashboards = result
-                else:
-                    # Mirror the warning emitted by ``_resolve_dashboard`` on
-                    # the same response-shape failure, so a future HA shape
-                    # change shows up at every fetch site rather than going
-                    # silent on this one.
-                    logger.warning(
-                        "lovelace/dashboards/list returned an unexpected shape "
-                        "(type=%s); treating as no-match",
-                        type(result).__name__,
-                    )
-                    existing_dashboards = []
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards
             )
