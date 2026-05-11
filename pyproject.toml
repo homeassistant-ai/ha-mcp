@@ -30,7 +30,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
-    "cryptography==47.0.0",
+    "cryptography==48.0.0",
     "pydantic-monty==0.0.9",
 ]
 
