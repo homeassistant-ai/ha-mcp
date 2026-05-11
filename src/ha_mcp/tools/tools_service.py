@@ -435,7 +435,7 @@ class ServiceTools:
         name="ha_fire_event",
         tags={"Service & Device Control"},
         annotations={
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": False,
             "title": "Fire Event",
         },
