@@ -527,43 +527,33 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 f"(minimum: {MIN_ENTITIES}). Check Docker logs."
             )
 
-        # Wait for key HA service domains to register.  Components loaded and
-        # entities present does not guarantee services are ready — individual
-        # integrations register their services asynchronously after their
-        # entities appear.
-        #
-        # `sun` is NOT included here: the sun integration registers an entity
-        # (sun.sun) but no service domain on current HA (2026.x). Polling for
-        # it would deterministically time out, wasting 30s per session. Sun
-        # readiness is gated below via the sun.sun state check, which is the
-        # actual signal the template tests need.
-        REQUIRED_SERVICES = {"input_boolean"}
-        SERVICE_WAIT = 30
-        logger.info("⏳ Waiting for required service domains to register...")
-        for svc_attempt in range(SERVICE_WAIT):
+        # Wait for input_boolean service domain to register. HA loads
+        # entities before their services for some integrations; helper and
+        # automation tests need input_boolean.* to be callable.
+        # (sun is intentionally not polled here — it registers sun.sun as an
+        # entity but never a service domain, so it would always time out.
+        # sun.sun readiness is gated by the state check below.)
+        INPUT_BOOLEAN_WAIT = 30
+        logger.info("⏳ Waiting for input_boolean service domain to register...")
+        for svc_attempt in range(INPUT_BOOLEAN_WAIT):
             try:
                 svc_resp = requests.get(
                     f"{base_url}/api/services", timeout=5, headers=headers
                 )
                 if svc_resp.status_code == 200:
-                    registered = {s.get("domain") for s in svc_resp.json()}
-                    missing = REQUIRED_SERVICES - registered
-                    if not missing:
+                    domains = {s.get("domain") for s in svc_resp.json()}
+                    if "input_boolean" in domains:
                         logger.info(
-                            f"✅ Required service domains ready after {svc_attempt + 1}s"
+                            f"✅ input_boolean service ready after {svc_attempt + 1}s"
                         )
                         break
-                    if svc_attempt % 5 == 0:
-                        logger.info(
-                            f"⏳ Waiting for service domains: {missing}"
-                        )
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"Service check failed: {exc}")
             time.sleep(1)
         else:
             logger.warning(
-                f"⚠️ Service domain wait timed out after {SERVICE_WAIT}s "
-                f"— some tests may be flaky"
+                f"⚠️ input_boolean service not registered after {INPUT_BOOLEAN_WAIT}s "
+                f"— helper/automation tests may be flaky"
             )
 
         # Wait for ha_mcp_tools custom component services (installed above).
