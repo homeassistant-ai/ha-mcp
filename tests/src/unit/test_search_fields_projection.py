@@ -1,5 +1,11 @@
 """Unit tests for project_fields helper in util_helpers (issue #1199)."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastmcp.exceptions import ToolError
+
+from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.tools.util_helpers import project_fields
 
 
@@ -62,3 +68,76 @@ class TestProjectFields:
         data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
         result = project_fields(data, '["results"]')
         assert set(result.keys()) == {"success", "results"}
+
+
+class TestHaSearchEntitiesFieldsProjection:
+    """Tool-level tests for fields= projection in ha_search_entities."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # exact_match=True (default) calls client.get_states() + send_websocket_message()
+        client.get_states = AsyncMock(return_value=[
+            {
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"friendly_name": "Kitchen Light", "brightness": 200},
+            }
+        ])
+        client.send_websocket_message = AsyncMock(return_value={"success": True, "result": []})
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_search_entities"]
+
+    @pytest.mark.asyncio
+    async def test_fields_none_returns_full_response(self, search_tool):
+        result = await search_tool(query="kitchen")
+        data = result["data"]
+        assert "success" in data
+        assert "results" in data
+
+    @pytest.mark.asyncio
+    async def test_fields_single_key_projects_correctly(self, search_tool):
+        result = await search_tool(query="kitchen", fields=["results"])
+        data = result["data"]
+        assert "results" in data
+        assert "success" in data
+        assert "total_matches" not in data
+
+    @pytest.mark.asyncio
+    async def test_fields_success_always_present(self, search_tool):
+        result = await search_tool(query="kitchen", fields=["results"])
+        assert result["data"]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_malformed_fields_raises_tool_error(self, search_tool):
+        with pytest.raises(ToolError):
+            await search_tool(query="kitchen", fields=123)
+
+    @pytest.mark.asyncio
+    async def test_bad_json_fields_raises_tool_error(self, search_tool):
+        with pytest.raises(ToolError):
+            await search_tool(query="kitchen", fields='["')

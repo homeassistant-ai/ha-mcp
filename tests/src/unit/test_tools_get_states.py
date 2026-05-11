@@ -368,3 +368,82 @@ class TestHaGetStateAttributeKeysWarningBulk:
         assert "warning" in data
         assert "attribute_keys" in data["warning"]
         assert data["states"]["light.kitchen"] == {"state": "on"}
+
+    @pytest.mark.asyncio
+    async def test_bulk_no_warning_when_attributes_in_fields(self, mock_client, get_states_tool):
+        """When attributes IS in fields, attribute_keys applies and no warning is emitted."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp": 3500},
+            }
+        )
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            fields=["state", "attributes"],
+            attribute_keys=["brightness"],
+        )
+        data = result["data"]
+        assert "warning" not in data
+        assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 200}
+
+
+class TestHaGetStateFieldsValidation:
+    """Tests for malformed fields= and attribute_keys= parameter validation."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def ha_get_state(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_bad_fields_integer_raises_tool_error(self, ha_get_state):
+        """fields=123 raises ToolError with VALIDATION_FAILED."""
+        with pytest.raises(ToolError) as exc_info:
+            await ha_get_state(entity_id="light.kitchen", fields=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_bad_json_fields_raises_tool_error(self, ha_get_state):
+        """fields='[\"' (malformed JSON) raises ToolError."""
+        with pytest.raises(ToolError):
+            await ha_get_state(entity_id="light.kitchen", fields='["')
+
+    @pytest.mark.asyncio
+    async def test_bad_attribute_keys_raises_with_correct_param(self, ha_get_state):
+        """attribute_keys=123 raises ToolError with parameter='attribute_keys' in the error."""
+        with pytest.raises(ToolError) as exc_info:
+            await ha_get_state(entity_id="light.kitchen", attribute_keys=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        # parameter is surfaced at the top level of the error response
+        assert error.get("parameter") == "attribute_keys"

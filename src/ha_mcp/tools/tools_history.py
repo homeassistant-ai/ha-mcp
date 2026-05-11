@@ -19,7 +19,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -216,9 +216,9 @@ class HistoryTools:
                 description=(
                     "Return only the specified top-level response keys to reduce "
                     "response size. None = full response (default). "
-                    'History keys: success, source, entities, period, query_params, time_zone. '
+                    "History keys: success, source, entities, period, query_params. "
                     "Statistics keys: success, source, entities, period_type, time_range, "
-                    "statistic_types, query_params, warnings, time_zone."
+                    "statistic_types, query_params, warnings."
                 ),
             ),
         ] = None,
@@ -268,6 +268,11 @@ class HistoryTools:
                        start_time="30d", period="5minute", limit=100, offset=200)
         ```
         """
+        if fields is not None:
+            try:
+                parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
             # Parse entity_ids
             entity_id_list = _parse_entity_ids(entity_ids)

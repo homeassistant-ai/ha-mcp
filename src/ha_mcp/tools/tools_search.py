@@ -271,7 +271,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Available keys: success, query, results, total_matches, count, "
                     "offset, limit, has_more, next_offset, search_type, "
                     "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warning, partial."
+                    "by_domain, warning, partial, message, note."
                 ),
             ),
         ] = None,
@@ -286,6 +286,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
+        # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
+        if fields is not None:
+            try:
+                parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
         # HA domains are canonically lowercase, no whitespace; agents
@@ -905,10 +911,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Return only the specified top-level response keys to reduce "
                     "response size (e.g. [\"system_info\", \"domains\"]). "
                     "None = full response (default). "
-                    "Available keys: success, system_info, domains, entity_summary, "
-                    "total_entities, count, offset, limit, total_matches, has_more, "
-                    "next_offset, notification_count, notifications, "
-                    "repair_count, repairs, tool_discovery."
+                    "Available keys: success, system_summary, domain_stats, "
+                    "area_analysis, ai_insights, pagination, partial, warnings, "
+                    "device_types, service_availability, system_info, "
+                    "notification_count, notifications, repair_count, repairs, "
+                    "repairs_error, tool_discovery."
                 ),
             ),
         ] = None,
@@ -1255,8 +1262,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Check 'error_count' for any failed lookups in partial-success scenarios.
 
         FIELDS PROJECTION:
-        `fields=` projects the per-entity record (`entity_id`, `state`, `attributes`,
-        `last_changed`, `last_updated`, `context`), NOT the outer bulk response wrapper.
+        `fields=` projects the per-entity record keys (see the fields= parameter
+        description for the full key list), NOT the outer bulk response wrapper.
         In single-entity mode it filters keys of the returned record directly. In bulk
         mode it filters keys of each record inside `states[entity_id]`; outer keys
         (`success`, `count`, `states`, `errors`, ...) are always preserved.
@@ -1275,18 +1282,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # VALIDATION_INVALID_PARAMETER via the normal ToolError flow.
         try:
             parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+        except ValueError as e:
+            raise_tool_error(create_validation_error(str(e), parameter="fields"))
+        try:
             parsed_attribute_keys = parse_string_list_param(
                 attribute_keys, "attribute_keys", allow_csv=True
             )
         except ValueError as e:
-            raise_tool_error(
-                create_validation_error(
-                    str(e),
-                    parameter=(
-                        "attribute_keys" if "attribute_keys" in str(e) else "fields"
-                    ),
-                )
-            )
+            raise_tool_error(create_validation_error(str(e), parameter="attribute_keys"))
 
         # `attribute_keys` only takes effect when `attributes` is in the projected
         # field set (or `fields=None`). Surface a warning rather than silently
@@ -1302,14 +1305,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
-                result = _project_entity(result, parsed_fields, parsed_attribute_keys)
-                if attribute_keys_no_effect and isinstance(result, dict):
-                    result["warning"] = (
+                entity_record = _project_entity(result, parsed_fields, parsed_attribute_keys)
+                if attribute_keys_no_effect:
+                    outer: dict[str, Any] = {**entity_record, "warning": (
                         "attribute_keys was ignored because 'attributes' is not in "
                         "fields=. Add 'attributes' to fields= (or omit fields=) to "
                         "apply attribute_keys."
-                    )
-                return await add_timezone_metadata(client, result)
+                    )}
+                    return await add_timezone_metadata(client, outer)
+                return await add_timezone_metadata(client, entity_record)
             except ToolError:
                 raise
             except Exception as e:

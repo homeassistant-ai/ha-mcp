@@ -12,14 +12,19 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import build_pagination_metadata, coerce_int_param, project_fields
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_int_param,
+    parse_string_list_param,
+    project_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +114,11 @@ class ServiceDiscoveryTools:
             # Paginate through all services
             ha_list_services(offset=50)
         """
+        if fields is not None:
+            try:
+                parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
             limit_int = coerce_int_param(
                 limit, "limit", default=50, min_value=1, max_value=200

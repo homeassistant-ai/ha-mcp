@@ -12,7 +12,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -152,6 +152,11 @@ class AreaTools:
 
         Returns area ID, name, icon, floor assignment, aliases, and picture URL.
         """
+        if fields is not None:
+            try:
+                parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
             message: dict[str, Any] = {
                 "type": "config/area_registry/list",
