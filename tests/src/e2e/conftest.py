@@ -318,7 +318,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
                     f"HACS frontend at {frontend_dir} is partial or corrupt; "
                     f"removing before re-download."
                 )
-                shutil.rmtree(frontend_dir, ignore_errors=True)
+                shutil.rmtree(frontend_dir)
             logger.info("HACS frontend not found, downloading...")
 
             try:
