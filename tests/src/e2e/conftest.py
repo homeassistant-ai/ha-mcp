@@ -111,21 +111,26 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             tarball_url = f"https://github.com/hacs/frontend/releases/download/{tag_name}/hacs_frontend-{tag_name}.tar.gz"
             logger.info(f"Downloading HACS frontend {tag_name}...")
 
-            with urllib.request.urlopen(tarball_url, timeout=120) as response, tarfile.open(fileobj=response, mode="r:gz") as tar:
-                    # Extract to temp location first
-                    temp_extract = Path(tempfile.mkdtemp())
-                    tar.extractall(temp_extract)
+            with (
+                urllib.request.urlopen(tarball_url, timeout=120) as response,
+                tarfile.open(fileobj=response, mode="r:gz") as tar,
+            ):
+                # Extract to temp location first
+                temp_extract = Path(tempfile.mkdtemp())
+                tar.extractall(temp_extract)
 
-                    # Move the hacs_frontend subdirectory
-                    extracted_frontend = temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
-                    if extracted_frontend.exists():
-                        shutil.move(str(extracted_frontend), str(frontend_dir))
-                        logger.info(f"HACS frontend installed at {frontend_dir}")
-                    else:
-                        logger.warning("Could not find hacs_frontend in downloaded archive")
+                # Move the hacs_frontend subdirectory
+                extracted_frontend = (
+                    temp_extract / f"hacs_frontend-{tag_name}" / "hacs_frontend"
+                )
+                if extracted_frontend.exists():
+                    shutil.move(str(extracted_frontend), str(frontend_dir))
+                    logger.info(f"HACS frontend installed at {frontend_dir}")
+                else:
+                    logger.warning("Could not find hacs_frontend in downloaded archive")
 
-                    # Cleanup temp
-                    shutil.rmtree(temp_extract, ignore_errors=True)
+                # Cleanup temp
+                shutil.rmtree(temp_extract, ignore_errors=True)
 
         except Exception as e:
             logger.warning(f"Failed to download HACS frontend: {e}")
@@ -214,18 +219,26 @@ def _detect_docker_host() -> dict:
         client = docker_sdk.from_env()
         output = client.containers.run(
             "alpine",
-            ["sh", "-c", "getent hosts host.docker.internal 2>/dev/null | awk '{print $1}'"],
+            [
+                "sh",
+                "-c",
+                "getent hosts host.docker.internal 2>/dev/null | awk '{print $1}'",
+            ],
             remove=True,
         )
         if output.strip():
             # Docker Desktop DNS resolved the name — use hostname, no override needed
-            logger.info("🔍 Docker Desktop DNS detected — using host.docker.internal as-is")
+            logger.info(
+                "🔍 Docker Desktop DNS detected — using host.docker.internal as-is"
+            )
             return {"hostname": "host.docker.internal", "extra_hosts": {}}
     except Exception as exc:
         logger.debug(f"Docker Desktop DNS probe failed: {exc}")
 
     # Plain Linux Docker — inject the mapping so the hostname resolves in the container
-    logger.info("🔍 Plain Linux Docker detected — injecting host.docker.internal via extra_hosts")
+    logger.info(
+        "🔍 Plain Linux Docker detected — injecting host.docker.internal via extra_hosts"
+    )
     return {
         "hostname": "host.docker.internal",
         "extra_hosts": {"host.docker.internal": "host-gateway"},
@@ -266,6 +279,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     # --- Safety guard 1: ensure Docker is available before doing anything else ---
     try:
         import docker as docker_sdk
+
         docker_sdk.from_env().ping()
     except Exception as e:
         pytest.fail(
@@ -320,9 +334,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             "target_url": "http://localhost:8123/api/",
             "webhook_id": "mcp_e2e_test_webhook_proxy",
         }
-        (config_path / ".mcp_proxy_config.json").write_text(
-            json.dumps(proxy_config)
-        )
+        (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
     _install_custom_component(
         config_path,
         repo_root / "custom_components" / "ha_mcp_tools",
@@ -348,7 +360,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             container = container.with_bind_ports(8123, port)
             logger.info(f"🔌 Using fixed port {port} (from HA_TEST_PORT)")
         except ValueError:
-            logger.warning(f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using dynamic port")
+            logger.warning(
+                f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using dynamic port"
+            )
             container = container.with_exposed_ports(8123)
     else:
         container = container.with_exposed_ports(8123)  # Dynamic port assignment
@@ -387,10 +401,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 
         # Reset cached settings so WebSocket client picks up the dynamic URL
         import ha_mcp.config
+
         ha_mcp.config._settings = None
 
         # Reset the WebSocket manager to ensure fresh connection with new URL
         from ha_mcp.client.websocket_client import websocket_manager
+
         websocket_manager._client = None
         websocket_manager._current_loop = None
 
@@ -458,9 +474,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     f"{base_url}/api/config", timeout=2, headers=headers
                 )
                 if config_resp.status_code == 200:
-                    component_count = len(
-                        config_resp.json().get("components", [])
-                    )
+                    component_count = len(config_resp.json().get("components", []))
                     if component_count >= MIN_COMPONENTS:
                         logger.info(
                             f"✅ Home Assistant stabilized with {component_count} components "
@@ -574,7 +588,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                                 f"✅ ha_mcp_tools services ready after {mcp_attempt + 1}s"
                             )
                             break
-                except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+                except (
+                    requests.exceptions.RequestException,
+                    json.JSONDecodeError,
+                ) as exc:
                     logger.debug(f"ha_mcp_tools service check failed: {exc}")
                 time.sleep(1)
             else:
@@ -606,8 +623,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             time.sleep(1)
         else:
             logger.warning(
-                f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s "
-                f"— template tests may fail"
+                f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
             )
 
         # Store connection info for other fixtures
