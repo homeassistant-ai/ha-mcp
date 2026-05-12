@@ -749,6 +749,8 @@ data = await wait_for_tool_result(
 ```
 Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wait_for_state_change()`. See `wait_helpers.py` for the full set.
 
+**Exception handling in polling helpers.** `wait_helpers.py` catches a narrow `_POLLING_TRANSIENT_ERRORS` tuple (MCP / transport / runtime classes) inside retry loops; bugs like `TypeError` / `AttributeError` / `KeyError` propagate so they fail tests immediately with a clear stack trace. Don't broaden these to `except Exception` — see `.gemini/styleguide.md` → *Exception Handling in Test Polling Loops*.
+
 ## Release Process
 
 Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.

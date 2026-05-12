@@ -11,9 +11,25 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from fastmcp.exceptions import ClientError, FastMCPError
+from mcp import McpError
+
 from .assertions import parse_mcp_result
 
 logger = logging.getLogger(__name__)
+
+# Transient errors expected during async polling of MCP tools or HTTP endpoints.
+# Bugs (TypeError, AttributeError, KeyError, AssertionError, ...) MUST propagate
+# out of polling loops so they fail tests with a clear stack trace instead of
+# being swallowed and retried until timeout. See issue #1266.
+_POLLING_TRANSIENT_ERRORS = (
+    McpError,
+    FastMCPError,
+    ClientError,
+    RuntimeError,
+    OSError,
+    TimeoutError,
+)
 
 
 async def wait_for_entity_state(
@@ -61,7 +77,7 @@ async def wait_for_entity_state(
                     )
                     return True
 
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking state for {entity_id}: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -119,7 +135,7 @@ async def wait_for_logbook_entry(
                         )
                         return True
 
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking logbook: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -162,7 +178,7 @@ async def wait_for_condition(
                 elapsed = time.monotonic() - start_time
                 logger.info(f"✅ {condition_name} met after {elapsed:.1f}s")
                 return True
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking {condition_name}: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -227,7 +243,7 @@ async def wait_for_state_change(
                     )
                     return current_state
 
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking state change for {entity_id}: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -279,7 +295,7 @@ async def wait_for_tool_result(
         try:
             result = await mcp_client.call_tool(tool_name, arguments)
             last_data = parse_mcp_result(result)
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error calling {tool_name}: {e}")
             if time.monotonic() - start_time >= timeout:
                 raise TimeoutError(
