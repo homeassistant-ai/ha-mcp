@@ -912,41 +912,18 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         except Exception as e:
             logger.warning(f"⚠️ Could not inspect container: {e}")
 
-        # Wait for API to be ready
+        # Wait for API to be ready. Use the module-level
+        # ``_wait_for_ha_api_ready`` helper so the initial-boot and the
+        # post-restart-retry paths share a single readiness contract — any
+        # future tweak to the polling semantics (timeout, sleep cadence,
+        # error handling) propagates to both call sites.
         import requests
-
-        api_ready = False
 
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
-        # Wall-clock-bound polling: ``range(60)`` would let a slow ``/api/``
-        # (5s HTTP timeout + 1s sleep ≈ up to 6s per iteration) stretch the
-        # 60-second budget to ~6 minutes. The monotonic-based cap enforces
-        # the declared 60-second window.
-        api_start = time.monotonic()
-        attempt = 0
-        while time.monotonic() - api_start < 60:
-            attempt += 1
-            try:
-                response = requests.get(f"{base_url}/api/", timeout=5, headers=headers)
-                if response.status_code == 200:
-                    elapsed = int(time.monotonic() - api_start)
-                    logger.info(
-                        f"🏠 Home Assistant API ready after {elapsed}s "
-                        f"({attempt} additional attempts)"
-                    )
-                    api_ready = True
-                    break
-            except requests.exceptions.RequestException:
-                if attempt == 1:
-                    logger.info("🔄 Waiting for Home Assistant API to become ready...")
-                if attempt > 1 and attempt % 15 == 0:
-                    elapsed = int(time.monotonic() - api_start)
-                    logger.info(f"⏳ Still waiting... {elapsed}s elapsed")
-                time.sleep(1)
-
-        if not api_ready:
+        logger.info("🔄 Waiting for Home Assistant API to become ready...")
+        if not _wait_for_ha_api_ready(base_url, headers, timeout=60):
             pytest.fail(
                 f"Home Assistant API at {base_url} did not become ready within 60 seconds.\n"
                 "The container may have failed to start. Check Docker logs for details."
