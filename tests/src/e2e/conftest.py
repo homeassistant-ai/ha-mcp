@@ -541,10 +541,12 @@ def _dump_ha_mcp_tools_diagnostics(
             logger.warning(
                 f"  /api/services: HTTP {svc_resp.status_code} {svc_resp.text[:200]}"
             )
-    except (
-        _requests.exceptions.RequestException,
-        json.JSONDecodeError,
-    ) as exc:
+    except Exception as exc:
+        # Broad catch by design: this is a diagnostic dump, and an
+        # unexpected exception class (e.g. SSL error subclass, unicode
+        # decode of an HTML 5xx body) should not abort the remaining
+        # captures below. The per-capture try/except scope ensures any
+        # single failure is logged without losing the others.
         logger.warning(f"  /api/services: request failed: {type(exc).__name__}: {exc}")
 
     # /api/config/config_entries/entry — surfaces the entry's state
@@ -579,10 +581,8 @@ def _dump_ha_mcp_tools_diagnostics(
             logger.warning(
                 f"  /api/config/config_entries: HTTP {entries_resp.status_code}"
             )
-    except (
-        _requests.exceptions.RequestException,
-        json.JSONDecodeError,
-    ) as exc:
+    except Exception as exc:
+        # Same broad-catch rationale as the /api/services dump above.
         logger.warning(
             f"  /api/config/config_entries: request failed: {type(exc).__name__}: {exc}"
         )
