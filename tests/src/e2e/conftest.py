@@ -1103,11 +1103,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # container-restart retry path that originally sat here added a
         # ~3-minute slow-failure penalty (matching the second readiness
         # sequence) for negligible recovery value once the underlying
-        # H_LOAD class — the only flake-class observed live — was fixed by
-        # the ``ruamel`` defensive imports in
-        # ``custom_components/ha_mcp_tools/__init__.py``. Reintroduce a
-        # bounded retry only if a future dump surfaces a recoverable class
-        # (H_DEPS / H_LISTEN / H_RESOURCE) in the wild.
+        # H_LOAD class — the only flake-class observed live — was fixed
+        # structurally by pre-installing manifest ``requirements`` in
+        # the container entrypoint above (see
+        # ``_collect_manifest_requirements`` call site). Reintroduce a
+        # bounded retry only if a future dump surfaces a recoverable
+        # class (H_DEPS / H_LISTEN / H_RESOURCE) in the wild.
         HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
