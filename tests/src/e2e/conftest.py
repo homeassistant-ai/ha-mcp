@@ -870,10 +870,17 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 
         ha_mcp.config._settings = None
 
-        # Reset the WebSocket manager to ensure fresh connection with new URL
+        # Reset the WebSocket manager to ensure fresh connection with new URL.
+        # ``WebSocketManager`` stores connections in ``_clients`` (dict, plural)
+        # and tracks per-key freshness in ``_last_used``; ``._client`` (the
+        # singular form previously assigned here) was never an attribute of the
+        # class, so the prior assignment created a new no-op attribute on the
+        # singleton without clearing the actual connection cache. Use the real
+        # collection-clear methods.
         from ha_mcp.client.websocket_client import websocket_manager
 
-        websocket_manager._client = None
+        websocket_manager._clients.clear()
+        websocket_manager._last_used.clear()
         websocket_manager._current_loop = None
 
         logger.info(f"🚀 Home Assistant container started on {base_url}")
@@ -1083,7 +1090,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 ha_mcp.config._settings = None
                 from ha_mcp.client.websocket_client import websocket_manager
 
-                websocket_manager._client = None
+                # Mirror the connection-cache reset from the initial fixture
+                # setup above (``_clients`` dict + ``_last_used`` dict, not the
+                # nonexistent ``_client`` singular attribute).
+                websocket_manager._clients.clear()
+                websocket_manager._last_used.clear()
                 websocket_manager._current_loop = None
 
                 # Re-wait for the API to come back up after the restart; the
