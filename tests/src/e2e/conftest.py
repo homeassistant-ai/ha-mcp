@@ -21,6 +21,7 @@ import http.server
 import json
 import logging
 import os
+import shlex
 import shutil
 import sqlite3
 import sys
@@ -434,6 +435,40 @@ def _install_custom_component(
 
     logger.info("Installed %s component", domain)
     return True
+
+
+def _collect_manifest_requirements(config_path: Path) -> list[str]:
+    """Aggregate ``requirements`` from every installed custom-component manifest.
+
+    Returns a de-duplicated ordered list of pip-installable requirement
+    strings (e.g. ``["ruamel.yaml>=0.18.0"]``).
+
+    Used to pre-install third-party packages in the HA container's Python
+    env before HA boots: HA's runtime manifest-requirement-install does
+    not reliably fire for config entries that the e2e fixture pre-injects
+    via ``.storage/core.config_entries`` (the path
+    ``_install_custom_component`` takes), so an integration that imports
+    a third-party package at module load or in ``async_setup_entry``
+    would otherwise hit ``ModuleNotFoundError`` and end up in
+    ``state=setup_error``. Live evidence on PR #1268 ARM E2E
+    (2026-05-12): ``ruamel.yaml`` was never installed by HA on that run.
+    """
+    cc_dir = config_path / "custom_components"
+    if not cc_dir.exists():
+        return []
+    reqs: list[str] = []
+    for manifest_path in sorted(cc_dir.glob("*/manifest.json")):
+        try:
+            manifest_data = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                f"⚠️ Could not read {manifest_path}: {type(exc).__name__}: {exc}"
+            )
+            continue
+        for req in manifest_data.get("requirements", []):
+            if isinstance(req, str) and req not in reqs:
+                reqs.append(req)
+    return reqs
 
 
 def _wait_for_ha_api_ready(
@@ -851,6 +886,30 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     container_kwargs: dict = {"privileged": True}
     if _blueprint_http_server.get("extra_hosts"):
         container_kwargs["extra_hosts"] = _blueprint_http_server["extra_hosts"]
+
+    # Pre-install custom-component manifest requirements into the HA
+    # container's Python env before HA boots. HA's own runtime manifest-
+    # install does not reliably fire when ``_install_custom_component``
+    # pre-injects a config entry via ``.storage/core.config_entries`` —
+    # observed on PR #1268 ARM E2E (2026-05-12) where ``ruamel.yaml``
+    # was never installed by HA on that run and the integration ended up
+    # in ``state=setup_error``. The wrapped entrypoint runs ``pip
+    # install`` first; ``&&`` short-circuits to ``/init`` only on success,
+    # so install failures surface as container-exit-non-zero rather than
+    # as an HA boot with missing dependencies.
+    manifest_reqs = _collect_manifest_requirements(config_path)
+    if manifest_reqs:
+        quoted = " ".join(shlex.quote(r) for r in manifest_reqs)
+        container_kwargs["entrypoint"] = [
+            "sh",
+            "-c",
+            f"pip install --no-cache-dir {quoted} && exec /init",
+        ]
+        logger.info(
+            f"📦 Pre-installing {len(manifest_reqs)} custom-component "
+            f"requirement(s) before HA boots: {manifest_reqs}"
+        )
+
     container = container.with_kwargs(**container_kwargs)
 
     # Remove any .HA_RESTORE file that might cause issues
