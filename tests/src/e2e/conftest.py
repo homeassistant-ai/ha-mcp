@@ -655,6 +655,30 @@ def _restart_ha_container_for_retry(container: DockerContainer) -> bool:
         return False
 
 
+def _reset_ha_in_process_caches() -> None:
+    """Clear in-process caches that reference the previous HA container.
+
+    Both the initial fixture setup (after first container start) and the
+    retry path (after ``_restart_ha_container_for_retry``) call this so
+    subsequent ``HomeAssistantClient`` lookups go through the new
+    container's URL instead of stale references to the prior container.
+
+    ``ha_mcp.config._settings`` caches the URL + token. ``WebSocketManager``
+    pools live connections keyed by URL: ``_clients`` (plural dict) and
+    ``_last_used`` are the real attribute names — a direct
+    ``websocket_manager._client = None`` (singular) would create a no-op
+    attribute on the singleton without clearing the connection pool, since
+    ``_client`` is not declared on the class.
+    """
+    import ha_mcp.config
+    from ha_mcp.client.websocket_client import websocket_manager
+
+    ha_mcp.config._settings = None
+    websocket_manager._clients.clear()
+    websocket_manager._last_used.clear()
+    websocket_manager._current_loop = None
+
+
 @pytest.fixture(scope="session")
 async def test_settings():
     """Get test configuration settings."""
@@ -874,23 +898,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
 
-        # Reset cached settings so WebSocket client picks up the dynamic URL
-        import ha_mcp.config
-
-        ha_mcp.config._settings = None
-
-        # Reset the WebSocket manager to ensure fresh connection with new URL.
-        # ``WebSocketManager`` stores connections in ``_clients`` (dict, plural)
-        # and tracks per-key freshness in ``_last_used``; ``._client`` (the
-        # singular form previously assigned here) was never an attribute of the
-        # class, so the prior assignment created a new no-op attribute on the
-        # singleton without clearing the actual connection cache. Use the real
-        # collection-clear methods.
-        from ha_mcp.client.websocket_client import websocket_manager
-
-        websocket_manager._clients.clear()
-        websocket_manager._last_used.clear()
-        websocket_manager._current_loop = None
+        # Reset cached settings + WebSocket pool so subsequent client
+        # lookups pick up the new container's URL.
+        _reset_ha_in_process_caches()
 
         logger.info(f"🚀 Home Assistant container started on {base_url}")
         logger.info(f"🐳 Container ID: {container.get_container_host_ip()}:{host_port}")
@@ -1087,20 +1097,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                         "COMPONENT_NOT_INSTALLED on the first tool call."
                     )
 
-                # In-process caches that hold references to the pre-restart
-                # HA instance must be cleared, matching the same resets the
-                # initial fixture setup performs (search for the first
-                # ``ha_mcp.config._settings = None`` assignment in this
-                # file).
-                ha_mcp.config._settings = None
-                from ha_mcp.client.websocket_client import websocket_manager
-
-                # Mirror the connection-cache reset from the initial fixture
-                # setup above (``_clients`` dict + ``_last_used`` dict, not the
-                # nonexistent ``_client`` singular attribute).
-                websocket_manager._clients.clear()
-                websocket_manager._last_used.clear()
-                websocket_manager._current_loop = None
+                # Mirror the initial-fixture-setup reset so the post-restart
+                # client lookups go through the new container URL.
+                _reset_ha_in_process_caches()
 
                 # Re-wait for the API to come back up after the restart; the
                 # post-restart ha_mcp_tools wait depends on it. The 60s
