@@ -450,11 +450,18 @@ def _wait_for_ha_api_ready(
     """
     import requests as _requests
 
-    for attempt in range(timeout):
+    # Wall-clock-bound polling: ``for attempt in range(timeout)`` would let a
+    # single slow request (5s HTTP timeout) plus the 1s sleep stretch each
+    # iteration to ~6s, so a hung server could keep the loop running for up
+    # to ``6 * timeout`` seconds instead of ``timeout``. The monotonic-based
+    # cap enforces the budget the caller asked for.
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         try:
             response = _requests.get(f"{base_url}/api/", timeout=5, headers=headers)
             if response.status_code == 200:
-                logger.info(f"🏠 Home Assistant API ready after {attempt + 1} attempts")
+                elapsed = int(time.monotonic() - start_time)
+                logger.info(f"🏠 Home Assistant API ready after {elapsed}s")
                 return True
         except _requests.exceptions.RequestException:
             pass
@@ -475,7 +482,10 @@ def _wait_for_ha_mcp_tools_services(
     """
     import requests as _requests
 
-    for mcp_attempt in range(timeout):
+    # Wall-clock-bound (see ``_wait_for_ha_api_ready`` for the rationale on
+    # why ``range(timeout)`` would understate the actual budget).
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         try:
             svc_resp = _requests.get(
                 f"{base_url}/api/services", timeout=5, headers=headers
@@ -483,9 +493,8 @@ def _wait_for_ha_mcp_tools_services(
             if svc_resp.status_code == 200:
                 domains = {s.get("domain") for s in svc_resp.json()}
                 if "ha_mcp_tools" in domains:
-                    logger.info(
-                        f"✅ ha_mcp_tools services ready after {mcp_attempt + 1}s"
-                    )
+                    elapsed = int(time.monotonic() - start_time)
+                    logger.info(f"✅ ha_mcp_tools services ready after {elapsed}s")
                     return True
         except (
             _requests.exceptions.RequestException,
@@ -911,20 +920,30 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
-        for attempt in range(60):  # Up to 60 seconds additional wait
+        # Wall-clock-bound polling: ``range(60)`` would let a slow ``/api/``
+        # (5s HTTP timeout + 1s sleep ≈ up to 6s per iteration) stretch the
+        # 60-second budget to ~6 minutes. The monotonic-based cap enforces
+        # the declared 60-second window.
+        api_start = time.monotonic()
+        attempt = 0
+        while time.monotonic() - api_start < 60:
+            attempt += 1
             try:
                 response = requests.get(f"{base_url}/api/", timeout=5, headers=headers)
                 if response.status_code == 200:
+                    elapsed = int(time.monotonic() - api_start)
                     logger.info(
-                        f"🏠 Home Assistant API ready after {attempt + 1} additional attempts"
+                        f"🏠 Home Assistant API ready after {elapsed}s "
+                        f"({attempt} additional attempts)"
                     )
                     api_ready = True
                     break
             except requests.exceptions.RequestException:
-                if attempt == 0:
+                if attempt == 1:
                     logger.info("🔄 Waiting for Home Assistant API to become ready...")
-                if attempt % 15 == 0 and attempt > 0:
-                    logger.info(f"⏳ Still waiting... {attempt}/60 attempts")
+                if attempt > 1 and attempt % 15 == 0:
+                    elapsed = int(time.monotonic() - api_start)
+                    logger.info(f"⏳ Still waiting... {elapsed}s elapsed")
                 time.sleep(1)
 
         if not api_ready:
@@ -941,7 +960,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 
         logger.info("⏳ Waiting for Home Assistant components to stabilize...")
         last_count = 0
-        for stabilize_attempt in range(STABILIZATION_TIMEOUT):
+        # Wall-clock-bound polling: ``range(STABILIZATION_TIMEOUT)`` would let
+        # a slow ``/api/config`` (2s HTTP timeout + 1s sleep ≈ up to 3s per
+        # iteration) stretch the effective wait to ~3× the declared budget.
+        stabilize_start = time.monotonic()
+        while time.monotonic() - stabilize_start < STABILIZATION_TIMEOUT:
             try:
                 config_resp = requests.get(
                     f"{base_url}/api/config", timeout=2, headers=headers
@@ -949,9 +972,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if config_resp.status_code == 200:
                     component_count = len(config_resp.json().get("components", []))
                     if component_count >= MIN_COMPONENTS:
+                        elapsed = int(time.monotonic() - stabilize_start)
                         logger.info(
                             f"✅ Home Assistant stabilized with {component_count} components "
-                            f"after {stabilize_attempt + 1}s"
+                            f"after {elapsed}s"
                         )
                         break
                     if component_count != last_count:
@@ -982,7 +1006,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         ENTITY_STABILIZATION_TIMEOUT = 30
         logger.info("⏳ Waiting for entities to register...")
         last_entity_count = 0
-        for entity_attempt in range(ENTITY_STABILIZATION_TIMEOUT):
+        # Wall-clock-bound polling — same rationale as the component-
+        # stabilization loop above.
+        entity_start = time.monotonic()
+        while time.monotonic() - entity_start < ENTITY_STABILIZATION_TIMEOUT:
             try:
                 states_resp = requests.get(
                     f"{base_url}/api/states",
@@ -992,9 +1019,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if states_resp.status_code == 200:
                     entity_count = len(states_resp.json())
                     if entity_count >= MIN_ENTITIES:
+                        elapsed = int(time.monotonic() - entity_start)
                         logger.info(
-                            f"✅ {entity_count} entities registered "
-                            f"after {entity_attempt + 1}s"
+                            f"✅ {entity_count} entities registered after {elapsed}s"
                         )
                         break
                     if entity_count != last_entity_count:
@@ -1022,7 +1049,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # sun.sun readiness is gated by the state check below.)
         INPUT_BOOLEAN_WAIT = 30
         logger.info("⏳ Waiting for input_boolean service domain to register...")
-        for svc_attempt in range(INPUT_BOOLEAN_WAIT):
+        # Wall-clock-bound polling — same rationale as the loops above.
+        ib_start = time.monotonic()
+        while time.monotonic() - ib_start < INPUT_BOOLEAN_WAIT:
             try:
                 svc_resp = requests.get(
                     f"{base_url}/api/services", timeout=5, headers=headers
@@ -1030,9 +1059,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if svc_resp.status_code == 200:
                     domains = {s.get("domain") for s in svc_resp.json()}
                     if "input_boolean" in domains:
-                        logger.info(
-                            f"✅ input_boolean service ready after {svc_attempt + 1}s"
-                        )
+                        elapsed = int(time.monotonic() - ib_start)
+                        logger.info(f"✅ input_boolean service ready after {elapsed}s")
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"Service check failed: {exc}")
@@ -1145,7 +1173,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # before the sun integration finishes its first calculation.
         SUN_WAIT = 30
         logger.info("⏳ Waiting for sun.sun to reach a known state...")
-        for sun_attempt in range(SUN_WAIT):
+        # Wall-clock-bound polling — same rationale as the loops above.
+        sun_start = time.monotonic()
+        while time.monotonic() - sun_start < SUN_WAIT:
             try:
                 sun_resp = requests.get(
                     f"{base_url}/api/states/sun.sun", timeout=5, headers=headers
@@ -1153,9 +1183,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if sun_resp.status_code == 200:
                     sun_state = sun_resp.json().get("state", "unknown")
                     if sun_state != "unknown":
-                        logger.info(
-                            f"✅ sun.sun is '{sun_state}' after {sun_attempt + 1}s"
-                        )
+                        elapsed = int(time.monotonic() - sun_start)
+                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed}s")
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"sun.sun check failed: {exc}")
