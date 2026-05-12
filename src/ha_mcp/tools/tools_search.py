@@ -175,12 +175,11 @@ def _project_entity(
     rare from HA's state API but possible from malformed records, partial
     error payloads, or mocked fixtures), the key-set filter cannot be
     applied and the ``attributes`` value is returned unchanged. A
-    ``debug``-level log line records the short-circuit so it can be traced
-    without spamming production logs. The bulk path shares this helper, so
+    ``warning``-level log line records the short-circuit so it is visible
+    at default log levels. The bulk path shares this helper, so
     both single- and bulk-entity calls behave identically here. This is
     deliberately silent (no warning to the caller) because malformed
-    ``attributes`` is rare and the call still produces a usable record;
-    upgrade to a warning if real-world data starts exercising this branch.
+    ``attributes`` is rare and the call still produces a usable record.
     """
     if not isinstance(record, dict):
         return record  # non-dict (e.g. error path returning None) — skip projection
@@ -194,9 +193,8 @@ def _project_entity(
             record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attr_keep}}
         elif "attributes" in record:
             # ``attributes`` is present but not a dict — filter cannot apply.
-            # Log at debug so the silent no-op is traceable without
-            # polluting production logs (this branch is exercised rarely;
-            # see docstring for the rationale).
+            # Log at warning so the no-op is visible at default log levels
+            # (this branch is exercised rarely; see docstring for rationale).
             logger.warning(
                 "_project_entity: attribute_keys filter skipped — "
                 "'attributes' is %s (expected dict) for record keys=%r",
