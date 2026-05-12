@@ -747,7 +747,7 @@ data = await wait_for_tool_result(
     description="deep search finds new automation",
 )
 ```
-Other available helpers: `wait_for_entity_state()`, `wait_for_entity_attribute()`, `wait_for_condition()`. See `wait_helpers.py` for the full set.
+Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wait_for_state_change()`. See `wait_helpers.py` for the full set.
 
 ## Release Process
 

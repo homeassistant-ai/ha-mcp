@@ -200,81 +200,6 @@ def assert_entity_state(
     logger.debug(f"✅ Entity {entity_id} has expected state: {expected_state}")
 
 
-def assert_entity_attribute(
-    state_data: dict[str, Any], attribute_name: str, expected_value: Any, entity_id: str
-):
-    """
-    Assert that entity has expected attribute value.
-
-    Args:
-        state_data: Parsed MCP get_state result
-        attribute_name: Name of attribute to check
-        expected_value: Expected attribute value
-        entity_id: Entity ID for error message
-    """
-    if not state_data.get("success", True):
-        raise AssertionError(
-            f"Failed to get state for {entity_id}: {state_data.get('error')}"
-        )
-
-    attributes = state_data.get("data", {}).get("attributes", {})
-
-    if attribute_name not in attributes:
-        raise AssertionError(f"Entity {entity_id} missing attribute '{attribute_name}'")
-
-    actual_value = attributes[attribute_name]
-
-    if actual_value != expected_value:
-        raise AssertionError(
-            f"Entity {entity_id} attribute '{attribute_name}' is {actual_value}, expected {expected_value}"
-        )
-
-    logger.debug(f"✅ Entity {entity_id} attribute {attribute_name} = {expected_value}")
-
-
-def assert_automation_config(
-    config_data: dict[str, Any], expected_fields: dict[str, Any], automation_id: str
-):
-    """
-    Assert that automation configuration contains expected fields.
-
-    Args:
-        config_data: Parsed automation config from get action
-        expected_fields: Dictionary of field name -> expected value
-        automation_id: Automation ID for error message
-    """
-    if not config_data.get("success", True):
-        raise AssertionError(
-            f"Failed to get config for {automation_id}: {config_data.get('error')}"
-        )
-
-    config = config_data.get("config", {})
-
-    for field_name, expected_value in expected_fields.items():
-        if field_name not in config:
-            raise AssertionError(
-                f"Automation {automation_id} missing field '{field_name}'"
-            )
-
-        actual_value = config[field_name]
-
-        # Handle list/dict comparisons
-        if isinstance(expected_value, list | dict):
-            if len(actual_value) != len(expected_value):
-                raise AssertionError(
-                    f"Automation {automation_id} field '{field_name}' has {len(actual_value)} items, "
-                    f"expected {len(expected_value)}"
-                )
-        else:
-            if actual_value != expected_value:
-                raise AssertionError(
-                    f"Automation {automation_id} field '{field_name}' is {actual_value}, "
-                    f"expected {expected_value}"
-                )
-
-    logger.debug(f"✅ Automation {automation_id} config matches expected fields")
-
-
 def assert_search_results(
     search_data: dict[str, Any],
     min_results: int = 0,
@@ -361,32 +286,6 @@ def assert_template_evaluation(
     logger.debug(
         f"✅ Template evaluation {'succeeded' if success else 'failed'} as expected"
     )
-
-
-def assert_bulk_operation_success(
-    bulk_data: dict[str, Any],
-    expected_operations: int,
-    allow_partial_failure: bool = False,
-):
-    """
-    Assert bulk operation completed successfully.
-
-    Args:
-        bulk_data: Parsed bulk operation result
-        expected_operations: Number of operations that should have been submitted
-        allow_partial_failure: Whether individual operation failures are acceptable
-    """
-    if not bulk_data.get("success", False):
-        raise AssertionError(f"Bulk operation failed: {bulk_data.get('error')}")
-
-    operation_ids = bulk_data.get("operation_ids", [])
-
-    if len(operation_ids) != expected_operations:
-        raise AssertionError(
-            f"Bulk operation created {len(operation_ids)} operations, expected {expected_operations}"
-        )
-
-    logger.debug(f"✅ Bulk operation started {len(operation_ids)} operations")
 
 
 class MCPAssertions:
