@@ -837,10 +837,19 @@ class TestStatelessTokenResilience:
         # Provider 2: "restart" — loads the same HMAC secret from disk
         provider2 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
 
-        # Tokens from provider1 are VALID (same persisted HMAC secret)
+        # Access token survives restart (same persisted HMAC secret)
         access2 = await provider2.load_access_token(token_response.access_token)
         assert access2 is not None, (
-            "Tokens should survive a provider restart when HMAC secret is persisted"
+            "Access token should survive a provider restart when HMAC secret is persisted"
+        )
+
+        # Refresh token also survives restart — critical for ChatGPT reconnect
+        assert token_response.refresh_token is not None
+        client_info2 = await provider2.get_client("persist-client")
+        assert client_info2 is not None, "Client should survive restart (persisted DCR registry)"
+        refresh2 = await provider2.load_refresh_token(client_info2, token_response.refresh_token)
+        assert refresh2 is not None, (
+            "Refresh token should survive a provider restart when HMAC secret is persisted"
         )
 
     @pytest.mark.asyncio
@@ -1566,10 +1575,13 @@ class TestDCRPersistence:
         assert len(provider._hmac_secret) == 32
 
     def test_hmac_secret_persisted_to_disk(self, tmp_data_dir):
-        HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         secret_file = tmp_data_dir / "oauth_hmac_secret"
         assert secret_file.exists()
-        assert len(bytes.fromhex(secret_file.read_text().strip())) == 32
+        persisted = bytes.fromhex(secret_file.read_text().strip())
+        assert len(persisted) == 32
+        # Disk content must match the in-memory secret the provider is using.
+        assert persisted == provider._hmac_secret
 
     def test_hmac_secret_same_across_restarts(self, tmp_data_dir):
         """Second provider loads the same HMAC secret — refresh tokens stay valid."""

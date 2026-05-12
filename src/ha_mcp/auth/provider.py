@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -33,7 +34,7 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -172,7 +173,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         except FileNotFoundError:
             logger.debug("No persistent OAuth client registry found at %s", path)
             return {}
-        except Exception as exc:  # json error, pydantic validation error, OS error
+        except (json.JSONDecodeError, OSError, ValidationError) as exc:
             logger.warning(
                 "Could not load OAuth client registry from %s (%s: %s); "
                 "starting with empty registry.",
@@ -196,7 +197,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             }
             path.write_text(json.dumps(data, indent=2))
             logger.debug("Persisted %d OAuth client(s) to %s", len(data), path)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             logger.warning(
                 "Failed to persist OAuth client registry to %s (%s: %s). "
                 "Clients will need to re-register after the next restart. "
@@ -216,12 +217,14 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         path = self._hmac_secret_file()
         try:
             hex_secret = path.read_text().strip()
+            if not hex_secret:
+                raise ValueError("HMAC secret file is empty")
             secret = bytes.fromhex(hex_secret)
             logger.debug("Loaded HMAC secret from %s", path)
             return secret
         except FileNotFoundError:
             pass  # first start — generate and persist below
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             logger.warning(
                 "Could not load HMAC secret from %s (%s: %s); "
                 "generating a new one — existing refresh tokens will be invalidated.",
@@ -232,7 +235,16 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         secret = secrets.token_bytes(32)
         try:
-            path.write_text(secret.hex())
+            # Write to a temp file first, then atomically rename — prevents a
+            # partial write from corrupting the secret on an interrupted flush.
+            # Use os.open with mode 0o600 so the file is owner-readable only.
+            tmp_path = path.parent / f".{path.name}.tmp"
+            fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, secret.hex().encode())
+            finally:
+                os.close(fd)
+            os.replace(str(tmp_path), str(path))
             logger.debug("Persisted new HMAC secret to %s", path)
         except OSError as exc:
             logger.warning(
