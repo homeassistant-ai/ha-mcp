@@ -563,9 +563,9 @@ def _dump_ha_readiness_diagnostics(
     only the generic counts.
 
     Without those arguments, the dump shows aggregate ``/api/services``
-    and ``/api/config/config_entries`` domain lists — enough context to
-    distinguish "HA never finished starting" from "HA started but a
-    specific domain regressed".
+    and ``/api/config/config_entries/entry`` domain lists — enough
+    context to distinguish "HA never finished starting" from "HA started
+    but a specific domain regressed".
 
     Each capture is wrapped in its own try/except so a single failure
     (container already exited, HA API gone) does not lose the other
@@ -646,17 +646,17 @@ def _dump_ha_readiness_diagnostics(
                     )
             else:
                 logger.warning(
-                    f"  /api/config/config_entries: {len(entries)} total: "
+                    f"  /api/config/config_entries/entry: {len(entries)} total: "
                     f"{entry_domains}"
                 )
         else:
             logger.warning(
-                f"  /api/config/config_entries: HTTP {entries_resp.status_code}"
+                f"  /api/config/config_entries/entry: HTTP {entries_resp.status_code}"
             )
     except Exception as exc:
         # Same broad-catch rationale as the /api/services dump above.
         logger.warning(
-            f"  /api/config/config_entries: request failed: {type(exc).__name__}: {exc}"
+            f"  /api/config/config_entries/entry: request failed: {type(exc).__name__}: {exc}"
         )
 
     # docker logs --tail 100 + container state. The early ``tail=20`` grab
@@ -1140,7 +1140,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # test.
         #
         # On timeout the branch dumps HA-side diagnostics (``/api/services``
-        # snapshot, ``/api/config/config_entries`` entry state, ``docker
+        # snapshot, ``/api/config/config_entries/entry`` state, ``docker
         # logs --tail 100``, container state) and then fails fast. The
         # container-restart retry path that originally sat here added a
         # ~3-minute slow-failure penalty (matching the second readiness
