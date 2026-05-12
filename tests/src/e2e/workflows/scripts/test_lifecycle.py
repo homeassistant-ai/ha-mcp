@@ -123,14 +123,14 @@ async def verify_script_exists_and_registered(
     This function addresses timing issues where scripts are created but not
     immediately discoverable through the management API or entity registry.
     """
-    start_time = time.time()
+    start_time = time.monotonic()
     script_entity = f"script.{script_id}"
 
     logger.info(
         f"⏳ Waiting for script {script_entity} to be registered (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             # Method 1: Try to get script config via management API
             get_result = await mcp_client.call_tool(
@@ -171,7 +171,7 @@ async def verify_script_exists_and_registered(
         except Exception as e:
             logger.debug(f"Script registration check failed: {e}")
 
-        elapsed = time.time() - start_time
+        elapsed = time.monotonic() - start_time
         logger.debug(
             f"🔍 Script {script_entity} not yet registered (elapsed: {elapsed:.1f}s)"
         )
@@ -187,11 +187,11 @@ async def verify_script_execution_state(
     timeout: int = 15,  # Increased from 10s to 15s
 ) -> dict[str, Any]:
     """Verify script execution by checking state changes with retry logic."""
-    start_time = time.time()
+    start_time = time.monotonic()
     consecutive_failures = 0
     max_consecutive_failures = 3
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": script_entity}

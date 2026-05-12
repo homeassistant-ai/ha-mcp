@@ -23,7 +23,7 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
     Does not check for specific state, only that entity exists.
     """
     import time
-    start_time = time.time()
+    start_time = time.monotonic()
     attempt = 0
 
     async def entity_exists():
@@ -34,7 +34,7 @@ async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int 
         success = 'data' in data and data['data'] is not None
 
         # Log every attempt with full details
-        elapsed = time.time() - start_time
+        elapsed = time.monotonic() - start_time
         logger.info(
             f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
             f"success={success}, data keys={list(data.keys())}"
