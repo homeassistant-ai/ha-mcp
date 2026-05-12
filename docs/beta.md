@@ -13,6 +13,7 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 | `ha_delete_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on) / `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` (env var) | Installs the `ha_mcp_tools` custom component via HACS. |
 | `ha_manage_custom_tool` | `enable_code_mode` (dev add-on) / `ENABLE_CODE_MODE=true` (env var) | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
+| _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on) / `ENABLE_LITE_DOCSTRINGS=true` (env var) | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_home_assistant_best_practices` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
 
 ## How to enable
 
@@ -24,7 +25,7 @@ Some ha-mcp tools are gated behind feature flags and available only in the **dev
 4. Enable the desired toggle (e.g., `enable_yaml_config_editing`, `enable_filesystem_tools`).
 5. Restart the add-on.
 
-`enable_yaml_config_editing`, `enable_filesystem_tools`, `enable_custom_component_integration`, and `enable_code_mode` are only available in the dev channel add-on. The stable add-on does not expose these beta toggles.
+`enable_yaml_config_editing`, `enable_filesystem_tools`, `enable_custom_component_integration`, `enable_code_mode`, and `enable_lite_docstrings` are only available in the dev channel add-on. The stable add-on does not expose these beta toggles.
 
 ### Option 2: Environment variable (non-add-on installs)
 
@@ -110,3 +111,25 @@ Reload the `Logger` integration (or restart HA) to apply.
 **Recommended prerequisites:**
 - You're comfortable with the AI authoring small Python snippets that wrap existing tools or HA REST endpoints
 - You have `destructiveHint=True` confirmation enabled on the MCP client and you actually read the prompts
+
+### `enable_lite_docstrings`
+
+Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_home_assistant_best_practices` (or its `skill://` resource). This is a behaviour flag, not a new tool.
+
+**The trade-off.** This reduces idle tool-catalog token usage but relies on the LLM actually calling the skill tool (or reading the skill resource) when it needs detail. Some models will skip the extra tool call and produce worse output than they would have with the full docstrings in front of them.
+
+**Search discoverability shrinks too.** Clients that BM25-search the tool catalog (claude.ai's native deferred-tool search, ha-mcp's own `enable_tool_search` index) see fewer tokens per lite-mapped tool, so natural-language queries that previously matched on words in the full docstring may rank lower or miss. ha-mcp's explicit `_SEARCH_KEYWORDS` boosts still apply on top of the lite text, but coverage outside those boosts will be thinner.
+
+Pair this toggle with one of the following to mitigate:
+
+- A client that supports MCP resources (the model can read `skill://` directly without an extra tool round-trip).
+- `enable_tool_search` — the search transform's description already nudges the LLM toward the skill resources.
+- A clear system prompt that instructs the LLM to consult `ha_get_skill_home_assistant_best_practices` before creating/editing automations, scripts, or helpers.
+
+**Startup warning.** When this flag is enabled via environment variable, a single WARNING line is emitted at startup so non-add-on users see the trade-off in their logs. The add-on UI surfaces the same warning in the toggle's description.
+
+**What is replaced.** Only the descriptions exposed via the MCP `list_tools` reply are swapped. The Python docstrings in `src/ha_mcp/tools/` are unchanged — the substitution happens via a FastMCP transform installed during server initialisation. Tools not in the lite mapping pass through with their original descriptions.
+
+**Recommended prerequisites:**
+- A client that lets you watch tool-call traces, so you can see whether the LLM is actually fetching the skill content before acting
+- Willingness to disable the flag if the model regresses on your prompts
