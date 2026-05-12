@@ -197,7 +197,7 @@ def _project_entity(
             # Log at debug so the silent no-op is traceable without
             # polluting production logs (this branch is exercised rarely;
             # see docstring for the rationale).
-            logger.debug(
+            logger.warning(
                 "_project_entity: attribute_keys filter skipped — "
                 "'attributes' is %s (expected dict) for record keys=%r",
                 type(attrs).__name__,
@@ -1364,14 +1364,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # ``data`` level is structurally outside them; in single
                 # mode the projected record IS ``data``, so the analogous
                 # "outside" location is the top-level wrapper).
-                # The guard on ``isinstance(entity_record, dict)`` is
-                # required because ``_project_entity`` has a defensive
-                # short-circuit that returns non-dict inputs unchanged —
-                # without it a future shape change could cause
-                # ``add_timezone_metadata`` to receive a non-dict and the
-                # subsequent dict-write to raise ``TypeError`` (then get
-                # reclassified as ``INTERNAL_ERROR`` by the outer except).
-                if attribute_keys_no_effect and isinstance(entity_record, dict):
+                # ``add_timezone_metadata`` always returns a dict, so
+                # ``wrapped["warning"] = ...`` is safe regardless of
+                # ``entity_record``'s type — no isinstance guard needed here.
+                if attribute_keys_no_effect:
                     wrapped["warning"] = (
                         "attribute_keys was ignored because 'attributes' is not in "
                         "fields=. Add 'attributes' to fields= (or omit fields=) to "

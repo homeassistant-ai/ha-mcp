@@ -326,6 +326,27 @@ class TestHaGetStateSingleEntity:
         assert "warning" not in data
         assert data["attributes"] == {"brightness": 255}
 
+    @pytest.mark.asyncio
+    async def test_non_dict_state_with_attribute_keys_no_effect_still_warns(
+        self, mock_client, get_state_tool
+    ):
+        """Warning fires even when get_entity_state returns None (non-dict entity record).
+
+        C2 regression: the isinstance(entity_record, dict) guard must NOT suppress
+        the warning — add_timezone_metadata always returns a dict so the write is safe.
+        """
+        mock_client.get_entity_state = AsyncMock(return_value=None)
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        # Warning must be present at the top level even when entity_record is None
+        assert "warning" in result
+        assert "attribute_keys" in result["warning"]
+
 
 class TestHaGetStateAttributeKeysWarningBulk:
     """Bulk-path warning when attribute_keys is set but 'attributes' is not in fields=."""
