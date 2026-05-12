@@ -211,6 +211,42 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     frontend_dir = hacs_dir / "hacs_frontend"
     lock_dir = initial_state_path / ".hacs_frontend.lock"
 
+    # Staleness check: a SIGKILL during the winner's critical section (e.g.
+    # a developer hard-kills pytest mid-download) leaves an orphan
+    # ``lock_dir`` that would force every peer in the next session into the
+    # 180s polling wait below. If the lock predates any plausible download
+    # duration, clear it before the fast-path so peers recover instantly.
+    # CI tolerates the 180s wait because containers are torn down between
+    # runs; local developer iterations under a debugger don't.
+    #
+    # The 5-minute threshold is a conservative ceiling for any plausible
+    # download; legitimate winners finish well within this window.
+    #
+    # NB: ``stat().st_mtime`` is wall-clock (epoch seconds), so the age math
+    # uses ``time.time()`` — ``time.monotonic()`` measures elapsed-from-
+    # arbitrary-origin and cannot be compared to ``st_mtime``.
+    stale_lock_threshold_s = 300
+    if lock_dir.exists():
+        try:
+            lock_age_s = time.time() - lock_dir.stat().st_mtime
+            if lock_age_s > stale_lock_threshold_s:
+                logger.warning(
+                    f"Removing stale HACS frontend lock at {lock_dir} "
+                    f"(age {lock_age_s:.0f}s > {stale_lock_threshold_s}s "
+                    f"threshold — likely orphaned by a crashed prior run)."
+                )
+                lock_dir.rmdir()
+        except FileNotFoundError:
+            # Race: a peer cleared the lock between ``exists()`` and
+            # ``stat`` / ``rmdir``. The fast-path or lock-acquire below
+            # will handle whatever state remains.
+            pass
+        except OSError as exc:
+            # Best-effort: if cleanup fails (e.g., non-empty dir from a
+            # future sentinel/pidfile refactor, or permission denied), the
+            # existing 180s polling timeout still catches the orphan.
+            logger.warning(f"Stale-lock cleanup failed at {lock_dir}: {exc}")
+
     # Fast path: HACS not installed (nothing to do), or frontend present
     # AND no lock held. The lock-held check rules out the window where
     # another worker's ``shutil.move`` is mid-flight — ``frontend_dir``
