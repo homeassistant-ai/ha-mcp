@@ -543,6 +543,21 @@ def _check_triggers(
                         )
                     )
 
+        # numeric_state trigger: value_template can also contain duration math
+        # (e.g. transforming last_changed into a seconds value for the threshold).
+        if platform == "numeric_state":
+            vt = trigger.get("value_template", "")
+            if isinstance(vt, str) and _RE_DURATION_MATH.search(vt):
+                warnings.append(
+                    "`numeric_state` trigger uses `value_template` for duration/recency "
+                    "check (`now() - X.last_changed/last_updated`) — use the native "
+                    "`for:` field on a `state` trigger instead "
+                    "(e.g., `platform: state, entity_id: binary_sensor.motion, "
+                    "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
+                    "and doesn't re-evaluate on every state change."
+                    + _ref(skill_prefix, "automation-patterns.md#trigger-types")
+                )
+
 
 # ---------------------------------------------------------------------------
 # Mode + motion check

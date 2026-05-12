@@ -1418,3 +1418,19 @@ class TestDurationMathDetector:
         assert not _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
             "Bare Jinja variable 'last_changed' should not be mistaken for an entity attribute"
         )
+
+    def test_numeric_state_trigger_value_template_duration_math(self):
+        """numeric_state trigger value_template containing duration math is also flagged."""
+        config = {
+            "trigger": [{
+                "platform": "numeric_state",
+                "entity_id": "sensor.motion",
+                "value_template": "{{ (now() - states.sensor.motion.last_changed).total_seconds() }}",
+                "above": 300,
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
+            "Duration math inside numeric_state value_template should be flagged"
+        )
