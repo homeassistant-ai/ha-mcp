@@ -307,6 +307,10 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
     start = time.monotonic()
+    # Default for the response schema; both return paths re-assign before
+    # using the value, but the explicit init survives a future exit-path
+    # addition that would otherwise omit the field.
+    duration_ms = 0
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -382,13 +386,16 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["raw_json"] = raw_json
         return result
     except TimeoutError:
+        # Capture the timeout-firing instant before the cleanup work so the
+        # reported duration reflects "wall-clock until the command timed out"
+        # rather than "wall-clock including the orphan-process teardown".
+        duration_ms = int((time.monotonic() - start) * 1000)
         # Terminate the orphaned process
         try:
             proc.terminate()
             await asyncio.wait_for(proc.wait(), timeout=5)
         except (TimeoutError, ProcessLookupError):
             proc.kill()
-        duration_ms = int((time.monotonic() - start) * 1000)
         return {
             "completed": False,
             "output": "",
