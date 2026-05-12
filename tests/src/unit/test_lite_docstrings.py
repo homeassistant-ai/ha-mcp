@@ -268,11 +268,14 @@ class TestLiteDocstringsMappingInvariants:
         )
 
     def test_every_lite_description_starts_with_action_verb(self) -> None:
-        """AGENTS.md tool-docstring rule: first word is an action verb."""
+        """AGENTS.md tool-docstring rule: first word is an action verb.
+
+        Verb list mirrors AGENTS.md > Tool Docstrings > Required for
+        every tool. ``Create`` covers ``Create or update`` openers used
+        on the consolidated set_* tools.
+        """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        # Accept the verbs AGENTS.md lists plus "Inspect" (used for the
-        # dashboard get tool which has list / search / get modes).
         accepted = {
             "Get",
             "List",
@@ -284,13 +287,14 @@ class TestLiteDocstringsMappingInvariants:
             "Execute",
             "Call",
             "Manage",
-            "Retrieve",
-            "Inspect",
-            "Add,",
         }
+        # Strip trailing punctuation so multi-action openers (e.g.,
+        # "Update, replace, or remove ...") still validate against the
+        # leading verb.
+        punctuation = ",.;:"
         offenders: list[tuple[str, str]] = []
         for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
-            first_word = lite.split(maxsplit=1)[0]
+            first_word = lite.split(maxsplit=1)[0].rstrip(punctuation)
             if first_word not in accepted:
                 offenders.append((name, first_word))
 

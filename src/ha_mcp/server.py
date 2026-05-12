@@ -552,7 +552,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     # the dev-addon toggle, docs/beta.md, and a startup WARNING.
     _LITE_DOCSTRINGS: ClassVar[dict[str, str]] = {
         "ha_config_get_automation": (
-            "Retrieve a Home Assistant automation configuration by "
+            "Get a Home Assistant automation configuration by "
             "entity_id or unique_id. Returns the full config "
             "(trigger, condition, action, mode) plus a stable "
             "config_hash for use with python_transform on "
@@ -571,7 +571,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "guidance, see ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_get_script": (
-            "Retrieve a Home Assistant script configuration by "
+            "Get a Home Assistant script configuration by "
             "script_id or entity_id. Returns the full config (sequence, "
             "mode, fields) plus a stable config_hash for use with "
             "python_transform on ha_config_set_script.\n\n"
@@ -589,7 +589,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_get_scene": (
-            "Retrieve a Home Assistant scene configuration by "
+            "Get a Home Assistant scene configuration by "
             "scene_id or entity_id. Returns the full config plus a "
             "stable config_hash for use with python_transform on "
             "ha_config_set_scene.\n\n"
@@ -629,7 +629,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "use case), see ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_get_dashboard": (
-            "Inspect a Home Assistant dashboard.\n\n"
+            "Get Home Assistant dashboard info (list mode, search "
+            "mode, or full config).\n\n"
             "Three modes: (1) list — `list_only=True` returns all "
             "storage-mode dashboards with metadata. (2) search — pass "
             "any of `entity_id`, `card_type`, `heading` to find cards "
@@ -665,8 +666,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "see ha_get_skill_home_assistant_best_practices."
         ),
         "ha_config_set_yaml": (
-            "Add, replace, or remove a top-level YAML key in "
-            "configuration.yaml or packages/*.yaml (LAST RESORT).\n\n"
+            "Update raw YAML in configuration.yaml or packages/*.yaml "
+            "via add / replace / remove on a single top-level key "
+            "(LAST RESORT).\n\n"
             "Dedicated tools (ha_config_set_automation, "
             "ha_config_set_script, ha_config_set_scene, "
             "ha_config_set_helper) cover almost every use case and "
