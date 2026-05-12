@@ -804,7 +804,10 @@ async def run_stories(
                     await _run_mcp_steps(shared_mcp, setup_steps, "setup")
 
                 logger.info(f"[{agent}/{sid}] Running test prompt...")
-                prompt_start = time.monotonic()
+                # ``prompt_start`` is compared to file ``st_mtime`` in
+                # ``_find_latest_session_file`` below, so it MUST be a
+                # wall-clock Unix epoch (not ``time.monotonic()``).
+                prompt_start = time.time()
                 summary: dict | None
                 if use_inline:
                     assert (
