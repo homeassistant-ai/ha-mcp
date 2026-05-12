@@ -144,10 +144,10 @@ class HomeAssistantTestEnvironment:
         """Wait for Home Assistant to be ready."""
         logger.info("⏳ Waiting for Home Assistant to become ready...")
 
-        start_time = time.time()
+        start_time = time.monotonic()
         attempts = 0
 
-        while time.time() - start_time < timeout:
+        while time.monotonic() - start_time < timeout:
             attempts += 1
             try:
                 # Check frontend (no auth required) to see if HA is up
