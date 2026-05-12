@@ -14,6 +14,7 @@ import logging
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -37,6 +38,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from ..utils.data_paths import get_data_dir
 from .consent_form import create_consent_html, create_error_html
 
 logger = logging.getLogger(__name__)
@@ -66,9 +68,16 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     The consent form collects the user's Long-Lived Access Token (LLAT),
     which is encoded into both access and refresh tokens as base64 JSON.
-    No server-side token state is stored, so the server survives container
-    restarts without losing sessions (clients re-register via DCR
-    automatically).
+    Tokens are stateless (HMAC-signed base64 JSON) so no token state is
+    stored server-side.
+
+    DCR client registrations and the HMAC signing secret are persisted to
+    ``get_data_dir() / "oauth_clients.json"`` and
+    ``get_data_dir() / "oauth_hmac_secret"`` respectively, so registered
+    clients survive container restarts.  If the data directory is not
+    writable (e.g. Docker without a mounted volume) the server falls back
+    to in-memory-only storage and logs a warning; existing clients must
+    re-register after each restart in that case.
 
     Security comes from HTTPS transport and the LLAT itself being the
     authorization boundary — revoking the LLAT in Home Assistant
@@ -115,8 +124,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             required_scopes=required_scopes,
         )
 
-        # In-memory storage (session-scoped, not persisted)
-        self.clients: dict[str, OAuthClientInformationFull] = {}
+        # DCR client registry — persisted to disk so clients survive restarts.
+        self.clients: dict[str, OAuthClientInformationFull] = self._load_clients()
+
+        # Short-lived in-memory state (no persistence needed or wanted)
         self.auth_codes: dict[str, AuthorizationCode] = {}
 
         # Home Assistant credentials storage (keyed by client_id)
@@ -127,12 +138,115 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         self.pending_authorizations: dict[str, dict[str, Any]] = {}
 
         # Server-side secret for HMAC-protecting LLATs in refresh tokens.
-        # Regenerated each startup — existing refresh tokens become invalid
-        # on restart, but that's acceptable since access tokens still work
-        # and clients will re-authenticate via the consent form.
-        self._hmac_secret = secrets.token_bytes(32)
+        # Persisted so existing refresh tokens survive server restarts.
+        self._hmac_secret = self._load_hmac_secret()
 
         logger.info(f"HomeAssistantOAuthProvider initialized with base_url={base_url}")
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clients_file() -> Path:
+        return get_data_dir() / "oauth_clients.json"
+
+    @staticmethod
+    def _hmac_secret_file() -> Path:
+        return get_data_dir() / "oauth_hmac_secret"
+
+    def _load_clients(self) -> dict[str, OAuthClientInformationFull]:
+        """Load persisted DCR client registrations from disk.
+
+        Returns an empty dict if the file is absent, unreadable, or corrupt.
+        """
+        path = self._clients_file()
+        try:
+            data: dict[str, Any] = json.loads(path.read_text())
+            clients = {
+                cid: OAuthClientInformationFull.model_validate(c)
+                for cid, c in data.items()
+            }
+            logger.info("Loaded %d OAuth client(s) from %s", len(clients), path)
+            return clients
+        except FileNotFoundError:
+            logger.debug("No persistent OAuth client registry found at %s", path)
+            return {}
+        except Exception as exc:  # json error, pydantic validation error, OS error
+            logger.warning(
+                "Could not load OAuth client registry from %s (%s: %s); "
+                "starting with empty registry.",
+                path,
+                type(exc).__name__,
+                exc,
+            )
+            return {}
+
+    def _save_clients(self) -> None:
+        """Persist DCR client registrations to disk.
+
+        Failures are logged as warnings; the server continues with in-memory
+        state so existing sessions are not disrupted.
+        """
+        path = self._clients_file()
+        try:
+            data = {
+                cid: client.model_dump(mode="json")
+                for cid, client in self.clients.items()
+            }
+            path.write_text(json.dumps(data, indent=2))
+            logger.debug("Persisted %d OAuth client(s) to %s", len(data), path)
+        except OSError as exc:
+            logger.warning(
+                "Failed to persist OAuth client registry to %s (%s: %s). "
+                "Clients will need to re-register after the next restart. "
+                "Mount a persistent volume to fix this: "
+                "docker run -v ha_mcp_data:/home/mcpuser/.ha-mcp ...",
+                path,
+                type(exc).__name__,
+                exc,
+            )
+
+    def _load_hmac_secret(self) -> bytes:
+        """Load or generate the HMAC signing secret.
+
+        Persists a newly generated secret so refresh tokens survive restarts.
+        Falls back to a fresh (non-persisted) secret if the file is unreadable.
+        """
+        path = self._hmac_secret_file()
+        try:
+            hex_secret = path.read_text().strip()
+            secret = bytes.fromhex(hex_secret)
+            logger.debug("Loaded HMAC secret from %s", path)
+            return secret
+        except FileNotFoundError:
+            pass  # first start — generate and persist below
+        except Exception as exc:
+            logger.warning(
+                "Could not load HMAC secret from %s (%s: %s); "
+                "generating a new one — existing refresh tokens will be invalidated.",
+                path,
+                type(exc).__name__,
+                exc,
+            )
+
+        secret = secrets.token_bytes(32)
+        try:
+            path.write_text(secret.hex())
+            logger.debug("Persisted new HMAC secret to %s", path)
+        except OSError as exc:
+            logger.warning(
+                "Failed to persist HMAC secret to %s (%s: %s). "
+                "Refresh tokens will be invalidated on the next restart.",
+                path,
+                type(exc).__name__,
+                exc,
+            )
+        return secret
+
+    # ------------------------------------------------------------------
+    # OAuthProvider interface
+    # ------------------------------------------------------------------
 
     def _sign_payload(self, payload_json: bytes) -> str:
         """Compute HMAC-SHA256 signature of a token payload."""
@@ -371,6 +485,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         self.clients[client_info.client_id] = client_info
         logger.info(f"Registered OAuth client: {client_info.client_id}")
+        self._save_clients()
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
