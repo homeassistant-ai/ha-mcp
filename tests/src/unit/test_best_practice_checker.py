@@ -1389,3 +1389,32 @@ class TestDurationMathDetector:
         warnings = check_automation_config(config)
         generic_warnings = [w for w in warnings if "if this maps to a native option" in w]
         assert not generic_warnings, "Generic fallback should not fire alongside specific detector"
+
+    def test_trigger_warning_uses_trigger_types_anchor(self):
+        """Trigger-specific warning links to trigger-types, not native-conditions."""
+        config = {
+            "trigger": [{
+                "platform": "template",
+                "value_template": "{{ (now() - states.sensor.x.last_updated).total_seconds() > 60 }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
+        assert _has_warning_containing(warnings, "automation-patterns.md#trigger-types"), (
+            "Trigger warning should reference #trigger-types anchor"
+        )
+
+    def test_no_false_positive_bare_last_changed_variable(self):
+        """A Jinja variable literally named ``last_changed`` must not trigger the detector."""
+        config = {
+            "condition": [{
+                "condition": "template",
+                # Bare variable — not an entity attribute; should not match.
+                "value_template": "{{ last_changed < now() }}",
+            }],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
+            "Bare Jinja variable 'last_changed' should not be mistaken for an entity attribute"
+        )

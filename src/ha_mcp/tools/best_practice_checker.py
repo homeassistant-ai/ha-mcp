@@ -77,10 +77,12 @@ _RE_SUN = re.compile(r"(?:is_state|state_attr|states)\s*\(\s*['\"]sun\.sun['\"]"
 _RE_STATE_IN = re.compile(r"states\s*\([^)]+\)\s+in\s+[\[(]")
 # Unsafe direct state access: states.sensor.x.state
 _RE_DIRECT_STATE = re.compile(r"\bstates\.\w+\.\w+\.state\b")
-# Duration/recency checks via last_changed or last_updated arithmetic
+# Duration/recency checks via last_changed or last_updated arithmetic.
+# Both alternations require at least one dotted qualifier (e.g. ``states.sensor.x.``)
+# so bare Jinja variables named ``last_changed`` are not falsely flagged.
 _RE_DURATION_MATH = re.compile(
     r"\bnow\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b"
-    r"|\blast_(?:changed|updated)\s*<\s*now\(\)"
+    r"|\b(?:\w+\.)+last_(?:changed|updated)\s*<\s*now\(\)"
 )
 # Motion entity pattern
 _RE_MOTION = re.compile(r"binary_sensor\.\w*motion", re.IGNORECASE)
