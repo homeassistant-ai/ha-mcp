@@ -186,3 +186,28 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool(fields=["nonexistent_key"])
         assert result["success"] is True
         assert "nonexistent_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_bad_fields_integer_raises_tool_error(self, overview_tool):
+        """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.
+
+        Pins the early-validate raise path (``tools_search.py`` ha_get_overview)
+        so a regression dropping the try/except still surfaces a regression.
+        """
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await overview_tool(fields=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert error.get("parameter") == "fields"
+
+    @pytest.mark.asyncio
+    async def test_bad_json_fields_raises_tool_error(self, overview_tool):
+        """fields='[\"' (malformed JSON) raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            await overview_tool(fields='["')

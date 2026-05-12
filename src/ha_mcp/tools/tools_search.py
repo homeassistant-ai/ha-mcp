@@ -169,6 +169,18 @@ def _project_entity(
 
     Unlike ``project_fields``, this helper does not auto-retain ``success`` — entity
     records have no ``success`` field, so the asymmetry is intentional.
+
+    Non-dict ``attributes`` handling: when ``attribute_keys`` is set but the
+    record's ``attributes`` value is not a dict (``None``, a string, a list —
+    rare from HA's state API but possible from malformed records, partial
+    error payloads, or mocked fixtures), the key-set filter cannot be
+    applied and the ``attributes`` value is returned unchanged. A
+    ``debug``-level log line records the short-circuit so it can be traced
+    without spamming production logs. The bulk path shares this helper, so
+    both single- and bulk-entity calls behave identically here. This is
+    deliberately silent (no warning to the caller) because malformed
+    ``attributes`` is rare and the call still produces a usable record;
+    upgrade to a warning if real-world data starts exercising this branch.
     """
     if not isinstance(record, dict):
         return record  # non-dict (e.g. error path returning None) — skip projection
@@ -180,6 +192,17 @@ def _project_entity(
         if isinstance(attrs, dict):
             attr_keep = set(attribute_keys)
             record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attr_keep}}
+        elif "attributes" in record:
+            # ``attributes`` is present but not a dict — filter cannot apply.
+            # Log at debug so the silent no-op is traceable without
+            # polluting production logs (this branch is exercised rarely;
+            # see docstring for the rationale).
+            logger.debug(
+                "_project_entity: attribute_keys filter skipped — "
+                "'attributes' is %s (expected dict) for record keys=%r",
+                type(attrs).__name__,
+                list(record.keys()),
+            )
     return record
 
 
@@ -289,7 +312,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
-        # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
+        # Validate fields= early so a malformed value returns VALIDATION_FAILED
+        # with parameter="fields" instead of bubbling to the outer except and
+        # getting reclassified as a generic search failure.
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
@@ -938,8 +963,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
         """
-        # Validate fields= early so a malformed value returns VALIDATION_INVALID_PARAMETER
-        # (ha_get_overview has no outer try/except, so ValueError would escape uncaught)
+        # Validate fields= early so a malformed value returns VALIDATION_FAILED
+        # with parameter="fields" (ha_get_overview has no outer try/except, so
+        # a raw ValueError would escape uncaught).
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
@@ -1275,6 +1301,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         `attribute_keys=` further narrows the `attributes` sub-dict and is only applied
         when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
 
+        When `attribute_keys=` is set but has no effect (because `attributes` was
+        excluded by `fields=`), a `warning` key is emitted outside the projected
+        entity record(s): in bulk mode at the response wrapper level (sibling of
+        `success`/`count`/`states`); in single-entity mode at the top-level result
+        (sibling of `data`/`metadata`, since the projected record IS `data`).
+        The warning is never a record key, so `fields=["state"]` returns a record
+        with only `state` regardless of whether the no-effect warning fires.
+
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
@@ -1284,7 +1318,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Parse projection params once up front so the bulk loop doesn't re-parse
         # the same string/CSV input per entity (100 entities → 200 parses pre-fix).
         # parse_string_list_param raises ValueError on bad input; surface as
-        # VALIDATION_INVALID_PARAMETER via the normal ToolError flow.
+        # VALIDATION_FAILED with parameter="fields"/"attribute_keys" via the
+        # normal ToolError flow.
         try:
             parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
         except ValueError as e:
@@ -1311,14 +1346,38 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 result = await client.get_entity_state(entity_id)
                 entity_record = _project_entity(result, parsed_fields, parsed_attribute_keys)
-                if attribute_keys_no_effect:
-                    outer: dict[str, Any] = {**entity_record, "warning": (
+                # Wrap with timezone metadata first. ``add_timezone_metadata``
+                # returns ``{"data": entity_record, "metadata": {...}}`` — in
+                # single-entity mode the projected record becomes ``data``
+                # directly (its keys are not nested under a sub-key the way
+                # bulk's projected records live under ``data.states``).
+                wrapped = await add_timezone_metadata(client, entity_record)
+                # ``attribute_keys`` was specified but ``attributes`` is not
+                # in the projected ``fields=`` set. Attach the warning at
+                # the outer wrapper level (sibling of ``data``/``metadata``)
+                # rather than spreading it into ``data`` — the FIELDS
+                # PROJECTION contract is that ``fields=`` filters the keys
+                # of the returned record, and ``warning`` is not a record
+                # key. This mirrors the bulk path's intent of keeping
+                # ``warning`` outside the projected per-entity records
+                # (bulk nests them under ``data.states`` so ``warning`` at
+                # ``data`` level is structurally outside them; in single
+                # mode the projected record IS ``data``, so the analogous
+                # "outside" location is the top-level wrapper).
+                # The guard on ``isinstance(entity_record, dict)`` is
+                # required because ``_project_entity`` has a defensive
+                # short-circuit that returns non-dict inputs unchanged —
+                # without it a future shape change could cause
+                # ``add_timezone_metadata`` to receive a non-dict and the
+                # subsequent dict-write to raise ``TypeError`` (then get
+                # reclassified as ``INTERNAL_ERROR`` by the outer except).
+                if attribute_keys_no_effect and isinstance(entity_record, dict):
+                    wrapped["warning"] = (
                         "attribute_keys was ignored because 'attributes' is not in "
                         "fields=. Add 'attributes' to fields= (or omit fields=) to "
                         "apply attribute_keys."
-                    )}
-                    return await add_timezone_metadata(client, outer)
-                return await add_timezone_metadata(client, entity_record)
+                    )
+                return wrapped
             except ToolError:
                 raise
             except Exception as e:

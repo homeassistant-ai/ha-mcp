@@ -274,7 +274,12 @@ class TestHaGetStateSingleEntity:
     async def test_attribute_keys_no_effect_emits_warning_single(
         self, mock_client, get_state_tool
     ):
-        """Single-entity: warn when attribute_keys is set but attributes is excluded from fields."""
+        """Single-entity: warn when attribute_keys is set but attributes is excluded from fields.
+
+        Warning lives OUTSIDE the projected entity record (sibling of ``data``)
+        so that ``fields=["state"]`` returns a record with only ``state`` and
+        no extra warning key mixed into the projected entity-record keyspace.
+        """
         mock_client.get_entity_state = AsyncMock(
             return_value={
                 "entity_id": "light.kitchen",
@@ -289,10 +294,14 @@ class TestHaGetStateSingleEntity:
             attribute_keys=["brightness"],
         )
 
+        # FIELDS PROJECTION contract: fields=["state"] returns ONLY {"state": ...}
+        # in the projected record. ``warning`` must NOT leak into the record.
         data = result["data"]
-        assert "attributes" not in data
-        assert "warning" in data
-        assert "attribute_keys" in data["warning"]
+        assert data == {"state": "on"}
+        assert "warning" not in data
+        # Warning lives at the top-level result, sibling of ``data``/``metadata``.
+        assert "warning" in result
+        assert "attribute_keys" in result["warning"]
 
     @pytest.mark.asyncio
     async def test_attribute_keys_no_warning_when_attributes_included(
@@ -426,11 +435,18 @@ class TestHaGetStateFieldsValidation:
 
     @pytest.mark.asyncio
     async def test_bad_fields_integer_raises_tool_error(self, ha_get_state):
-        """fields=123 raises ToolError with VALIDATION_FAILED."""
+        """fields=123 raises ToolError with VALIDATION_FAILED and parameter='fields'.
+
+        Pins the parameter attribution so a regression swapping the two raise
+        sites (``fields`` vs ``attribute_keys``) can't silently pass — the
+        symmetric mirror test for ``attribute_keys`` asserts the same hint.
+        """
         with pytest.raises(ToolError) as exc_info:
             await ha_get_state(entity_id="light.kitchen", fields=123)
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_FAILED"
+        # parameter is surfaced at the top level of the error response
+        assert error.get("parameter") == "fields"
 
     @pytest.mark.asyncio
     async def test_bad_json_fields_raises_tool_error(self, ha_get_state):

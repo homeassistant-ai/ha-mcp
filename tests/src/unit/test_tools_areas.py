@@ -236,3 +236,20 @@ class TestHaConfigListAreasFieldsProjection:
     async def test_unknown_field_silently_omitted(self, tools):
         result = await tools.ha_config_list_areas(fields=["nonexistent_key"])
         assert set(result.keys()) == {"success"}
+
+    async def test_bad_fields_integer_raises_tool_error(self, tools):
+        """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.
+
+        Covers the early-validate raise path in ``ha_config_list_areas`` so a
+        regression dropping the try/except still surfaces.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_list_areas(fields=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert error.get("parameter") == "fields"
+
+    async def test_bad_json_fields_raises_tool_error(self, tools):
+        """fields='[\"' (malformed JSON) raises ToolError."""
+        with pytest.raises(ToolError):
+            await tools.ha_config_list_areas(fields='["')
