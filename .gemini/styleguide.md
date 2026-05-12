@@ -38,6 +38,18 @@ Use best judgement - not all changes require new tests, but the overall feature/
 - E2E tests (preferred for tools): `tests/src/e2e/`
 - Unit tests (utilities): `tests/src/unit/`
 
+## Exception Handling in Test Polling Loops
+
+Boot-phase verification helpers and async polling loops in `tests/src/e2e/` use **narrow `except (Specific1, Specific2, ...)` clauses + debug-level logging** for expected transient failures. Catch only the exception classes the polling target legitimately raises — e.g. `(requests.exceptions.RequestException, json.JSONDecodeError)` for direct HTTP polling, or the `_POLLING_TRANSIENT_ERRORS` tuple in `tests/src/e2e/utilities/wait_helpers.py` for MCP-client polling.
+
+Bugs — `TypeError`, `AttributeError`, `KeyError`, `AssertionError`, etc. — **must propagate** out of polling loops so they surface as clear test failures instead of being swallowed and retried until timeout.
+
+**Do NOT flag:**
+- Narrow `except (SpecificException, ...)` in polling/retry loops paired with `logger.debug(...)` — this is the intentional convention.
+- Broad `except Exception` at top-level setup/teardown handlers or cleanup loops marked `# pragma: no cover - cleanup best-effort`, where recovery is the same regardless of error class.
+
+See issue #1266.
+
 ## Security Patterns
 
 **Critical security checks (flag HIGH/CRITICAL severity):**
