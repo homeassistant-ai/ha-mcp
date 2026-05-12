@@ -563,9 +563,9 @@ def _dump_ha_readiness_diagnostics(
     only the generic counts.
 
     Without those arguments, the dump shows aggregate ``/api/services``
-    domain list and a ``/api/config/config_entries`` total — enough
-    context to distinguish "HA never finished starting" from "HA started
-    but a specific domain regressed".
+    and ``/api/config/config_entries`` domain lists — enough context to
+    distinguish "HA never finished starting" from "HA started but a
+    specific domain regressed".
 
     Each capture is wrapped in its own try/except so a single failure
     (container already exited, HA API gone) does not lose the other
@@ -621,6 +621,9 @@ def _dump_ha_readiness_diagnostics(
         )
         if entries_resp.status_code == 200:
             entries = entries_resp.json()
+            entry_domains = sorted(
+                {e.get("domain") for e in entries if e.get("domain")}
+            )
             if config_entry_domain:
                 matching = [
                     e for e in entries if e.get("domain") == config_entry_domain
@@ -637,12 +640,15 @@ def _dump_ha_readiness_diagnostics(
                 else:
                     logger.warning(
                         f"  config_entry[{config_entry_domain}]: NO entry "
-                        "visible in HA's config_entries — install step "
-                        "may have written to .storage but HA did not pick "
-                        "it up"
+                        f"visible in HA's config_entries (available: "
+                        f"{entry_domains}) — install step may have written "
+                        "to .storage but HA did not pick it up"
                     )
             else:
-                logger.warning(f"  /api/config/config_entries: {len(entries)} total")
+                logger.warning(
+                    f"  /api/config/config_entries: {len(entries)} total: "
+                    f"{entry_domains}"
+                )
         else:
             logger.warning(
                 f"  /api/config/config_entries: HTTP {entries_resp.status_code}"
@@ -1115,7 +1121,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             time.sleep(1)
         else:
             _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="input-boolean-warn"
+                container,
+                base_url,
+                headers,
+                label="input-boolean-warn",
+                service_domain="input_boolean",
             )
             logger.warning(
                 f"⚠️ input_boolean service not registered after {INPUT_BOOLEAN_WAIT}s "
@@ -1188,7 +1198,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             time.sleep(1)
         else:
             _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="sun-wait-warn"
+                container,
+                base_url,
+                headers,
+                label="sun-wait-warn",
+                config_entry_domain="sun",
             )
             logger.warning(
                 f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
