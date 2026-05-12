@@ -543,29 +543,39 @@ def _wait_for_ha_mcp_tools_services(
     return False
 
 
-def _dump_ha_mcp_tools_diagnostics(
+def _dump_ha_readiness_diagnostics(
     container: DockerContainer,
     base_url: str,
     headers: dict[str, str],
     label: str,
+    *,
+    service_domain: str | None = None,
+    config_entry_domain: str | None = None,
 ) -> None:
-    """Emit HA-side diagnostics for the ``ha_mcp_tools`` readiness gap.
+    """Emit HA-side diagnostics for any readiness-gate failure.
 
-    Called from the ``HA_MCP_TOOLS_WAIT`` timeout branch before each retry and
-    before the final ``pytest.fail`` so the CI artifact carries enough context
-    to disambiguate the root-cause class (import error / dependency-setup
-    delay / late event-driven registration / resource starvation) without
-    requiring a local reproduction of the flake.
+    Generic best-effort dump used by every readiness gate in
+    ``ha_container_with_fresh_config``. The optional ``service_domain``
+    and ``config_entry_domain`` arguments let the caller surface
+    domain-specific presence/absence information (e.g.
+    ``service_domain="ha_mcp_tools"`` makes the dump call out whether
+    that specific domain is missing from ``/api/services``) instead of
+    only the generic counts.
 
-    Best-effort: each capture is wrapped in its own try/except so a single
-    failure (container already exited, HA API gone) does not lose the other
-    captures. Surfaced at WARNING level so CI logs keep the lines visible
-    even with default filtering.
+    Without those arguments, the dump shows aggregate ``/api/services``
+    and ``/api/config/config_entries/entry`` domain lists — enough
+    context to distinguish "HA never finished starting" from "HA started
+    but a specific domain regressed".
+
+    Each capture is wrapped in its own try/except so a single failure
+    (container already exited, HA API gone) does not lose the other
+    captures. Surfaced at WARNING level so CI logs keep the lines
+    visible even with default filtering.
     """
     import docker as _docker
     import requests as _requests
 
-    logger.warning(f"📋 ha_mcp_tools diagnostics dump ({label}):")
+    logger.warning(f"📋 readiness diagnostics dump ({label}):")
 
     # /api/services snapshot — distinguishes "domain absent" from
     # "request errored at timeout edge".
@@ -575,15 +585,18 @@ def _dump_ha_mcp_tools_diagnostics(
             domains = sorted(
                 {s.get("domain") for s in svc_resp.json() if s.get("domain")}
             )
-            ha_mcp_present = "ha_mcp_tools" in domains
-            logger.warning(
-                f"  /api/services: {len(domains)} domains; "
-                f"ha_mcp_tools={'present' if ha_mcp_present else 'absent'}"
-            )
-            if not ha_mcp_present:
-                # Surface adjacent domains so a reader can rule out a
-                # regex / casing / typo class mismatch.
-                logger.warning(f"  /api/services domains: {domains}")
+            if service_domain:
+                present = service_domain in domains
+                logger.warning(
+                    f"  /api/services: {len(domains)} domains; "
+                    f"{service_domain}={'present' if present else 'absent'}"
+                )
+                if not present:
+                    # Surface adjacent domains so a reader can rule out a
+                    # regex / casing / typo class mismatch.
+                    logger.warning(f"  /api/services domains: {domains}")
+            else:
+                logger.warning(f"  /api/services: {len(domains)} domains: {domains}")
         else:
             logger.warning(
                 f"  /api/services: HTTP {svc_resp.status_code} {svc_resp.text[:200]}"
@@ -607,36 +620,49 @@ def _dump_ha_mcp_tools_diagnostics(
             headers=headers,
         )
         if entries_resp.status_code == 200:
-            ha_mcp_entries = [
-                e for e in entries_resp.json() if e.get("domain") == "ha_mcp_tools"
-            ]
-            if ha_mcp_entries:
-                for entry in ha_mcp_entries:
+            entries = entries_resp.json()
+            entry_domains = sorted(
+                {e.get("domain") for e in entries if e.get("domain")}
+            )
+            if config_entry_domain:
+                matching = [
+                    e for e in entries if e.get("domain") == config_entry_domain
+                ]
+                if matching:
+                    for entry in matching:
+                        logger.warning(
+                            f"  config_entry[{config_entry_domain}]: "
+                            f"id={entry.get('entry_id')} "
+                            f"state={entry.get('state')} "
+                            f"reason={entry.get('reason')} "
+                            f"source={entry.get('source')}"
+                        )
+                else:
                     logger.warning(
-                        f"  config_entry: id={entry.get('entry_id')} "
-                        f"state={entry.get('state')} "
-                        f"reason={entry.get('reason')} "
-                        f"source={entry.get('source')}"
+                        f"  config_entry[{config_entry_domain}]: NO entry "
+                        f"visible in HA's config_entries (available: "
+                        f"{entry_domains}) — install step may have written "
+                        "to .storage but HA did not pick it up"
                     )
             else:
                 logger.warning(
-                    "  config_entry: NO ha_mcp_tools entry visible in HA's "
-                    "config_entries — install step wrote to .storage but HA "
-                    "did not pick it up"
+                    f"  /api/config/config_entries/entry: {len(entries)} total: "
+                    f"{entry_domains}"
                 )
         else:
             logger.warning(
-                f"  /api/config/config_entries: HTTP {entries_resp.status_code}"
+                f"  /api/config/config_entries/entry: HTTP {entries_resp.status_code}"
             )
     except Exception as exc:
         # Same broad-catch rationale as the /api/services dump above.
         logger.warning(
-            f"  /api/config/config_entries: request failed: {type(exc).__name__}: {exc}"
+            f"  /api/config/config_entries/entry: request failed: {type(exc).__name__}: {exc}"
         )
 
     # docker logs --tail 100 + container state. The early ``tail=20`` grab
-    # at line ~625 fires immediately after container start and so does not
-    # cover the custom-component lifecycle that produces the symptom.
+    # inside ``ha_container_with_fresh_config`` fires immediately after
+    # container start and so does not cover the custom-component lifecycle
+    # that produces the symptom.
     try:
         docker_client = _docker.from_env()
         docker_container = docker_client.containers.get(
@@ -966,6 +992,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 
         logger.info("🔄 Waiting for Home Assistant API to become ready...")
         if not _wait_for_ha_api_ready(base_url, headers, timeout=60):
+            _dump_ha_readiness_diagnostics(
+                container, base_url, headers, label="api-not-ready"
+            )
             pytest.fail(
                 f"Home Assistant API at {base_url} did not become ready within 60 seconds.\n"
                 "The container may have failed to start. Check Docker logs for details."
@@ -1010,6 +1039,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 logger.debug(f"Stabilization check failed: {exc}")
             time.sleep(1)
         else:
+            _dump_ha_readiness_diagnostics(
+                container, base_url, headers, label="stabilization-timeout"
+            )
             pytest.fail(
                 f"Home Assistant component stabilization timed out after {STABILIZATION_TIMEOUT}s. "
                 f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS}). "
@@ -1053,6 +1085,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 logger.debug(f"Entity registration check failed: {exc}")
             time.sleep(1)
         else:
+            _dump_ha_readiness_diagnostics(
+                container, base_url, headers, label="entity-registration-timeout"
+            )
             pytest.fail(
                 f"Entity registration timed out after "
                 f"{ENTITY_STABILIZATION_TIMEOUT}s. "
@@ -1085,6 +1120,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 logger.debug(f"Service check failed: {exc}")
             time.sleep(1)
         else:
+            _dump_ha_readiness_diagnostics(
+                container,
+                base_url,
+                headers,
+                label="input-boolean-warn",
+                service_domain="input_boolean",
+            )
             logger.warning(
                 f"⚠️ input_boolean service not registered after {INPUT_BOOLEAN_WAIT}s "
                 f"— helper/automation tests may be flaky"
@@ -1098,7 +1140,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # test.
         #
         # On timeout the branch dumps HA-side diagnostics (``/api/services``
-        # snapshot, ``/api/config/config_entries`` entry state, ``docker
+        # snapshot, ``/api/config/config_entries/entry`` state, ``docker
         # logs --tail 100``, container state) and then fails fast. The
         # container-restart retry path that originally sat here added a
         # ~3-minute slow-failure penalty (matching the second readiness
@@ -1116,8 +1158,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             if not _wait_for_ha_mcp_tools_services(
                 base_url, headers, HA_MCP_TOOLS_WAIT
             ):
-                _dump_ha_mcp_tools_diagnostics(
-                    container, base_url, headers, label="timeout"
+                _dump_ha_readiness_diagnostics(
+                    container,
+                    base_url,
+                    headers,
+                    label="ha-mcp-tools-timeout",
+                    service_domain="ha_mcp_tools",
+                    config_entry_domain="ha_mcp_tools",
                 )
                 pytest.fail(
                     f"ha_mcp_tools services not registered after "
@@ -1150,6 +1197,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 logger.debug(f"sun.sun check failed: {exc}")
             time.sleep(1)
         else:
+            _dump_ha_readiness_diagnostics(
+                container,
+                base_url,
+                headers,
+                label="sun-wait-warn",
+                config_entry_domain="sun",
+            )
             logger.warning(
                 f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
             )
