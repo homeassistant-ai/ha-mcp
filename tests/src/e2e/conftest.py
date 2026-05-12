@@ -21,6 +21,7 @@ import http.server
 import json
 import logging
 import os
+import shlex
 import shutil
 import sqlite3
 import sys
@@ -436,6 +437,40 @@ def _install_custom_component(
     return True
 
 
+def _collect_manifest_requirements(config_path: Path) -> list[str]:
+    """Aggregate ``requirements`` from every installed custom-component manifest.
+
+    Returns a de-duplicated ordered list of pip-installable requirement
+    strings (e.g. ``["ruamel.yaml>=0.18.0"]``).
+
+    Used to pre-install third-party packages in the HA container's Python
+    env before HA boots: HA's runtime manifest-requirement-install does
+    not reliably fire for config entries that the e2e fixture pre-injects
+    via ``.storage/core.config_entries`` (the path
+    ``_install_custom_component`` takes), so an integration that imports
+    a third-party package at module load or in ``async_setup_entry``
+    would otherwise hit ``ModuleNotFoundError`` and end up in
+    ``state=setup_error``. Live evidence on PR #1268 ARM E2E
+    (2026-05-12): ``ruamel.yaml`` was never installed by HA on that run.
+    """
+    cc_dir = config_path / "custom_components"
+    if not cc_dir.exists():
+        return []
+    reqs: list[str] = []
+    for manifest_path in sorted(cc_dir.glob("*/manifest.json")):
+        try:
+            manifest_data = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                f"⚠️ Could not read {manifest_path}: {type(exc).__name__}: {exc}"
+            )
+            continue
+        for req in manifest_data.get("requirements", []):
+            if isinstance(req, str) and req not in reqs:
+                reqs.append(req)
+    return reqs
+
+
 def _wait_for_ha_api_ready(
     base_url: str,
     headers: dict[str, str],
@@ -443,9 +478,10 @@ def _wait_for_ha_api_ready(
 ) -> bool:
     """Poll ``/api/`` for HTTP 200. Returns True on success, False on timeout.
 
-    Extracted so the post-restart retry path in the ``HA_MCP_TOOLS_WAIT`` branch
-    re-uses the same API-readiness contract as the initial wait in
-    ``ha_container_with_fresh_config`` (lines ~637-657) without duplicating the
+    Called from the initial-boot path in ``ha_container_with_fresh_config``;
+    the helper extraction is preserved so a future call site (e.g. a
+    bounded retry after a real recoverable flake surfaces in the dump)
+    can re-use the same readiness contract without duplicating the
     polling loop.
     """
     import requests as _requests
@@ -476,9 +512,11 @@ def _wait_for_ha_mcp_tools_services(
 ) -> bool:
     """Poll ``/api/services`` for the ``ha_mcp_tools`` domain.
 
-    Returns True if the domain appears within ``timeout`` seconds, False on
-    timeout. Extracted from the inline loop at lines ~779-796 so the same wait
-    contract can be invoked twice on the restart-retry path.
+    Returns True if the domain appears within ``timeout`` seconds, False
+    on timeout. The single caller lives in ``ha_container_with_fresh_config``;
+    the helper extraction is preserved so a future bounded retry (if a
+    recoverable flake class surfaces in the dump) can re-use the same
+    wait contract without duplicating the polling loop.
     """
     import requests as _requests
 
@@ -625,46 +663,14 @@ def _dump_ha_mcp_tools_diagnostics(
         logger.warning(f"  docker client: failed: {type(exc).__name__}: {exc}")
 
 
-def _restart_ha_container_for_retry(container: DockerContainer) -> bool:
-    """Stop + start the HA container via the raw docker client.
-
-    Returns True on success (container reports ``status == "running"`` after
-    restart), False on any docker error.
-
-    Implementation note: ``docker stop`` + ``docker start`` preserve the
-    container's port-mapping configuration (unlike ``docker rm`` + ``docker
-    run``, which allocates new ports). This means ``base_url`` stays valid
-    across the restart and the existing port-binding does not need to be
-    re-plumbed through the fixture.
-    """
-    import docker as _docker
-
-    try:
-        docker_client = _docker.from_env()
-        docker_container = docker_client.containers.get(
-            container.get_wrapped_container().id
-        )
-        logger.warning("🔄 Restarting HA container for ha_mcp_tools recovery retry...")
-        docker_container.stop(timeout=10)
-        docker_container.start()
-        docker_container.reload()
-        logger.info(f"🐳 Container restarted; status={docker_container.status}")
-        # Explicit ``bool`` because ``docker_container.status`` is typed
-        # as ``Any`` (the docker SDK ships no stubs), and mypy would
-        # otherwise flag the comparison as ``no-any-return``.
-        return bool(docker_container.status == "running")
-    except _docker.errors.DockerException as exc:
-        logger.warning(f"⚠️ Container restart failed: {type(exc).__name__}: {exc}")
-        return False
-
-
 def _reset_ha_in_process_caches() -> None:
     """Clear in-process caches that reference the previous HA container.
 
-    Both the initial fixture setup (after first container start) and the
-    retry path (after ``_restart_ha_container_for_retry``) call this so
-    subsequent ``HomeAssistantClient`` lookups go through the new
-    container's URL instead of stale references to the prior container.
+    Called from the initial fixture setup so subsequent
+    ``HomeAssistantClient`` lookups go through the new container's URL
+    instead of stale references to a prior container. (A second call
+    site lived in a container-restart retry path that was dropped as a
+    post-#1262 simplification; the helper is kept for a future caller.)
 
     ``ha_mcp.config._settings`` caches the URL + token. ``WebSocketManager``
     pools live connections keyed by URL: ``_clients`` (plural dict) and
@@ -880,6 +886,30 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     container_kwargs: dict = {"privileged": True}
     if _blueprint_http_server.get("extra_hosts"):
         container_kwargs["extra_hosts"] = _blueprint_http_server["extra_hosts"]
+
+    # Pre-install custom-component manifest requirements into the HA
+    # container's Python env before HA boots. HA's own runtime manifest-
+    # install does not reliably fire when ``_install_custom_component``
+    # pre-injects a config entry via ``.storage/core.config_entries`` —
+    # observed on PR #1268 ARM E2E (2026-05-12) where ``ruamel.yaml``
+    # was never installed by HA on that run and the integration ended up
+    # in ``state=setup_error``. The wrapped entrypoint runs ``pip
+    # install`` first; ``&&`` short-circuits to ``/init`` only on success,
+    # so install failures surface as container-exit-non-zero rather than
+    # as an HA boot with missing dependencies.
+    manifest_reqs = _collect_manifest_requirements(config_path)
+    if manifest_reqs:
+        quoted = " ".join(shlex.quote(r) for r in manifest_reqs)
+        container_kwargs["entrypoint"] = [
+            "sh",
+            "-c",
+            f"pip install --no-cache-dir {quoted} && exec /init",
+        ]
+        logger.info(
+            f"📦 Pre-installing {len(manifest_reqs)} custom-component "
+            f"requirement(s) before HA boots: {manifest_reqs}"
+        )
+
     container = container.with_kwargs(**container_kwargs)
 
     # Remove any .HA_RESTORE file that might cause issues
@@ -925,11 +955,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         except Exception as e:
             logger.warning(f"⚠️ Could not inspect container: {e}")
 
-        # Wait for API to be ready. Use the module-level
-        # ``_wait_for_ha_api_ready`` helper so the initial-boot and the
-        # post-restart-retry paths share a single readiness contract — any
-        # future tweak to the polling semantics (timeout, sleep cadence,
-        # error handling) propagates to both call sites.
+        # Wait for API to be ready via the module-level
+        # ``_wait_for_ha_api_ready`` helper. The helper extraction is
+        # preserved as a single-contract surface in case a future bounded
+        # retry path is reintroduced.
         import requests
 
         # Use test token for API readiness checks
@@ -1068,14 +1097,17 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # the registration gap beats misattributing it to the calling
         # test.
         #
-        # On timeout the branch does not fail immediately: it dumps HA-side
-        # diagnostics (``/api/services`` snapshot, ``/api/config/config_entries``
-        # entry state, ``docker logs --tail 100``, container state) and then
-        # restarts the container once. The retry covers non-deterministic
-        # startup variance (dependency-setup delays, late event-driven service
-        # registration, runner resource starvation); a deterministic import
-        # error in ``custom_components/ha_mcp_tools`` would still fail on the
-        # retry and be surfaced by the final post-retry dump.
+        # On timeout the branch dumps HA-side diagnostics (``/api/services``
+        # snapshot, ``/api/config/config_entries`` entry state, ``docker
+        # logs --tail 100``, container state) and then fails fast. The
+        # container-restart retry path that originally sat here added a
+        # ~3-minute slow-failure penalty (matching the second readiness
+        # sequence) for negligible recovery value once the underlying
+        # H_LOAD class — the only flake-class observed live — was fixed by
+        # the ``ruamel`` defensive imports in
+        # ``custom_components/ha_mcp_tools/__init__.py``. Reintroduce a
+        # bounded retry only if a future dump surfaces a recoverable class
+        # (H_DEPS / H_LISTEN / H_RESOURCE) in the wild.
         HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
@@ -1083,68 +1115,16 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             if not _wait_for_ha_mcp_tools_services(
                 base_url, headers, HA_MCP_TOOLS_WAIT
             ):
-                # First wait expired. Diagnostic dump → container restart →
-                # one retry. See module-level docstrings on the helpers for
-                # the rationale.
                 _dump_ha_mcp_tools_diagnostics(
-                    container, base_url, headers, label="pre-retry"
+                    container, base_url, headers, label="timeout"
                 )
-
-                if not _restart_ha_container_for_retry(container):
-                    pytest.fail(
-                        f"ha_mcp_tools services not registered after "
-                        f"{HA_MCP_TOOLS_WAIT}s and container restart failed. "
-                        "See pre-retry diagnostic dump above. Required for "
-                        "filesystem and config-editing tests; a silent "
-                        "warning here would let those tests proceed into "
-                        "COMPONENT_NOT_INSTALLED on the first tool call."
-                    )
-
-                # Mirror the initial-fixture-setup reset so the post-restart
-                # client lookups go through the new container URL.
-                _reset_ha_in_process_caches()
-
-                # Re-wait for the API to come back up after the restart; the
-                # post-restart ha_mcp_tools wait depends on it. The 60s
-                # budget matches the initial API-readiness wait earlier in
-                # this fixture.
-                if not _wait_for_ha_api_ready(base_url, headers, timeout=60):
-                    _dump_ha_mcp_tools_diagnostics(
-                        container,
-                        base_url,
-                        headers,
-                        label="post-retry-api-failed",
-                    )
-                    pytest.fail(
-                        "HA API did not recover within 60s after container "
-                        "restart on the ha_mcp_tools retry path. See "
-                        "pre-retry and post-retry-api-failed diagnostic "
-                        "dumps above."
-                    )
-
-                # Second ha_mcp_tools wait. Same 180s budget so the retry
-                # gets the same chance the first attempt had.
-                if _wait_for_ha_mcp_tools_services(
-                    base_url, headers, HA_MCP_TOOLS_WAIT
-                ):
-                    logger.warning(
-                        "✅ ha_mcp_tools recovered after container restart "
-                        "(see pre-retry diagnostics for the original "
-                        "failure context)"
-                    )
-                else:
-                    _dump_ha_mcp_tools_diagnostics(
-                        container, base_url, headers, label="post-retry"
-                    )
-                    pytest.fail(
-                        f"ha_mcp_tools services not registered after "
-                        f"{HA_MCP_TOOLS_WAIT}s + container restart + "
-                        f"{HA_MCP_TOOLS_WAIT}s. See pre-retry and "
-                        "post-retry diagnostic dumps above. Required for "
-                        "filesystem and config-editing tests; a silent "
-                        "warning here would let those tests proceed into "
-                        "COMPONENT_NOT_INSTALLED on the first tool call."
-                    )
+                pytest.fail(
+                    f"ha_mcp_tools services not registered after "
+                    f"{HA_MCP_TOOLS_WAIT}s. See diagnostic dump above. "
+                    "Required for filesystem and config-editing tests; "
+                    "a silent warning here would let those tests proceed "
+                    "into COMPONENT_NOT_INSTALLED on the first tool call."
+                )
 
         # Wait for sun.sun to leave the 'unknown' state.  During HA startup the
         # sun integration reports 'unknown' until it computes the first position.
