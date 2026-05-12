@@ -189,13 +189,17 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         Failures are logged as warnings; the server continues with in-memory
         state so existing sessions are not disrupted.
         """
+        if not self.clients:
+            return
         path = self._clients_file()
+        tmp_path = path.with_suffix(".tmp")
         try:
             data = {
                 cid: client.model_dump(mode="json")
                 for cid, client in self.clients.items()
             }
-            path.write_text(json.dumps(data, indent=2))
+            tmp_path.write_text(json.dumps(data, indent=2))
+            tmp_path.replace(path)
             logger.debug("Persisted %d OAuth client(s) to %s", len(data), path)
         except (OSError, TypeError, ValueError) as exc:
             logger.warning(
@@ -220,6 +224,10 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             if not hex_secret:
                 raise ValueError("HMAC secret file is empty")
             secret = bytes.fromhex(hex_secret)
+            if len(secret) != 32:
+                raise ValueError(
+                    f"Invalid HMAC secret length: {len(secret)} bytes (expected 32)"
+                )
             logger.debug("Loaded HMAC secret from %s", path)
             return secret
         except FileNotFoundError:
