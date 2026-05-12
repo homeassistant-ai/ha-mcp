@@ -42,12 +42,12 @@ def _make_tool(name: str, *, description: str = "") -> Tool:
 
 
 _FULL_AUTOMATION = (
-    "Retrieve Home Assistant automation configuration.\n\n"
+    "Get Home Assistant automation configuration.\n\n"
     "Returns the complete configuration including triggers, conditions, "
     "actions, and mode settings. (... many more paragraphs ...)"
 )
 _LITE_AUTOMATION = (
-    "Retrieve a Home Assistant automation. See "
+    "Get a Home Assistant automation. See "
     "ha_get_skill_home_assistant_best_practices for schema."
 )
 

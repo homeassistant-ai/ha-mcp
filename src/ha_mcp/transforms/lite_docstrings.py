@@ -13,7 +13,6 @@ their existing descriptions without us having to enumerate them.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -23,8 +22,6 @@ from fastmcp.tools import Tool
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
     from fastmcp.utilities.versions import VersionSpec
-
-logger = logging.getLogger(__name__)
 
 
 class LiteDocstringsTransform(Transform):
