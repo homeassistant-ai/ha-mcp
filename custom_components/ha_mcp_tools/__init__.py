@@ -27,7 +27,27 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
-from ruamel.yaml import YAMLError
+
+# Defensive imports: ``ruamel.yaml`` is declared in ``manifest.json``
+# ``requirements``, but the requirement install can lag behind the first
+# ``importlib`` resolution of this module — observed on PR #1262's ARM
+# E2E run where the module loaded before Home Assistant had installed
+# ``ruamel.yaml``, surfacing as ``ModuleNotFoundError: No module named
+# 'ruamel'`` and leaving the integration in ``state=not_loaded``.
+#
+# Two defensive shapes:
+#   * ``YAMLError`` falls back to ``Exception`` so the module loads past
+#     the import. The four ``except YAMLError`` clauses below still
+#     catch the real ``ruamel.yaml.YAMLError`` at runtime via its
+#     ``Exception`` base class.
+#   * ``make_yaml`` / ``yaml_dumps`` move to a lazy import inside
+#     ``_build_edit_yaml_config_handler`` (the only caller). By the time
+#     that function runs in ``async_setup_entry`` the requirement
+#     install has completed and ``ruamel.yaml`` is importable.
+try:
+    from ruamel.yaml import YAMLError
+except ImportError:  # pragma: no cover - early-import path only
+    YAMLError = Exception  # type: ignore[misc, assignment]
 
 from .const import (
     ALLOWED_READ_DIRS,
@@ -40,7 +60,6 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
-from .yaml_rt import make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -315,6 +334,13 @@ def _build_edit_yaml_config_handler(hass):
     Extracted to module level so it can be tested without registering
     the full integration.
     """
+    # Lazy import: see the ``ruamel.yaml`` defensive-import comment at
+    # the top of this module. ``_build_edit_yaml_config_handler`` is
+    # invoked from ``async_setup_entry``, by which point Home Assistant
+    # has installed the ``manifest.json`` requirements (``ruamel.yaml``
+    # among them), so the import here is reliable.
+    from .yaml_rt import make_yaml, yaml_dumps
+
     config_dir = Path(hass.config.config_dir)
 
     async def handle_edit_yaml_config(call: ServiceCall) -> dict[str, Any]:
