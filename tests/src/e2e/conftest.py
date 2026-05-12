@@ -649,7 +649,10 @@ def _restart_ha_container_for_retry(container: DockerContainer) -> bool:
         docker_container.start()
         docker_container.reload()
         logger.info(f"🐳 Container restarted; status={docker_container.status}")
-        return docker_container.status == "running"
+        # Explicit ``bool`` because ``docker_container.status`` is typed
+        # as ``Any`` (the docker SDK ships no stubs), and mypy would
+        # otherwise flag the comparison as ``no-any-return``.
+        return bool(docker_container.status == "running")
     except _docker.errors.DockerException as exc:
         logger.warning(f"⚠️ Container restart failed: {type(exc).__name__}: {exc}")
         return False
