@@ -78,9 +78,14 @@ def _script_config(index: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def bulk_automations(mcp_client):
-    """Create a batch of test automations and tear them down after the test."""
+    """Create a batch of test automations once per module and tear them down after the module.
+
+    Module-scoped because every test in this file is read-only against the
+    created automations (search/list only; no modify/remove), so a single
+    setup amortises ~20s of fixture overhead per consuming test (refs #366).
+    """
     created_ids = []
 
     for i in range(_AUTOMATION_COUNT):
@@ -127,9 +132,13 @@ async def bulk_automations(mcp_client):
     logger.info(f"Cleaned up {len(created_ids)} bulk test automations")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def bulk_scripts(mcp_client):
-    """Create a batch of test scripts and tear them down after the test."""
+    """Create a batch of test scripts once per module and tear them down after the module.
+
+    Module-scoped for the same reason as ``bulk_automations`` above: every
+    consuming test in this file is read-only against the created scripts.
+    """
     created_ids = []
 
     for i in range(_SCRIPT_COUNT):
