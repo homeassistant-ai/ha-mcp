@@ -33,6 +33,16 @@ _MARKER = f"bft{_RUN_ID}"
 _AUTOMATION_COUNT = 10
 _SCRIPT_COUNT = 5
 
+# Concurrency cap for the fixture-create gather (refs #366). Unbounded
+# asyncio.gather at _AUTOMATION_COUNT-wide reproducibly dropped 1-of-10
+# automations on both ubuntu-latest and ubuntu-24.04-arm (PR #1276 first
+# CI run, deterministic ``total_matches should be >= 10, got 9`` in
+# ``test_deep_search_pagination_basic``). Suspected HA-side
+# read-modify-write race on automation-config persistence — capping the
+# in-flight concurrency narrows the race window. N=2 is conservative;
+# if CI surfaces residual races at this level, fall back further.
+_CREATE_CONCURRENCY = 2
+
 
 def _automation_config(index: int) -> dict:
     """Build a test automation config with a unique, searchable token in the action."""
@@ -89,16 +99,20 @@ async def bulk_automations(mcp_client):
     """
     created_ids = []
 
-    # Parallelise the 10 sequential creates with asyncio.gather (refs #366).
-    # Order-preserving: gather returns results in submission order, so iterating
-    # with enumerate matches the i used to build each config.
-    results = await asyncio.gather(*[
-        mcp_client.call_tool(
-            "ha_config_set_automation",
-            {"config": _automation_config(i)},
-        )
-        for i in range(_AUTOMATION_COUNT)
-    ])
+    # Parallelise the 10 sequential creates with a Semaphore-bounded gather
+    # (refs #366). See ``_CREATE_CONCURRENCY`` above for the race rationale.
+    # Order-preserving: gather returns results in submission order, so
+    # iterating with enumerate matches the i used to build each config.
+    sem = asyncio.Semaphore(_CREATE_CONCURRENCY)
+
+    async def _create(i: int):
+        async with sem:
+            return await mcp_client.call_tool(
+                "ha_config_set_automation",
+                {"config": _automation_config(i)},
+            )
+
+    results = await asyncio.gather(*[_create(i) for i in range(_AUTOMATION_COUNT)])
     for i, result in enumerate(results):
         data = assert_mcp_success(result, f"Create bulk automation {i}")
         # Use the actual entity_id returned by HA (handles conflicts with _2 suffix)
@@ -148,16 +162,20 @@ async def bulk_scripts(mcp_client):
     """
     created_ids = []
 
-    # Parallelise the 5 sequential creates with asyncio.gather (refs #366).
-    # script_id is deterministic from i, so we can compute it inside the
-    # comprehension and re-derive in the post-loop iteration without race risk.
-    results = await asyncio.gather(*[
-        mcp_client.call_tool(
-            "ha_config_set_script",
-            {"script_id": f"{_MARKER}_script_{i}", "config": _script_config(i)},
-        )
-        for i in range(_SCRIPT_COUNT)
-    ])
+    # Parallelise the 5 sequential creates with a Semaphore-bounded gather
+    # (refs #366). Same race-mitigation as ``bulk_automations`` — see
+    # ``_CREATE_CONCURRENCY`` for the rationale. script_id is deterministic
+    # from i, so we re-derive it in the post-loop iteration.
+    sem = asyncio.Semaphore(_CREATE_CONCURRENCY)
+
+    async def _create(i: int):
+        async with sem:
+            return await mcp_client.call_tool(
+                "ha_config_set_script",
+                {"script_id": f"{_MARKER}_script_{i}", "config": _script_config(i)},
+            )
+
+    results = await asyncio.gather(*[_create(i) for i in range(_SCRIPT_COUNT)])
     for i, result in enumerate(results):
         script_id = f"{_MARKER}_script_{i}"
         assert_mcp_success(result, f"Create bulk script {i}")
