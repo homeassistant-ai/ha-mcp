@@ -1101,7 +1101,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # (sun is intentionally not polled here — it registers sun.sun as an
         # entity but never a service domain, so it would always time out.
         # sun.sun readiness is gated by the state check below.)
-        INPUT_BOOLEAN_WAIT = 30
+        INPUT_BOOLEAN_WAIT = 10
         logger.info("⏳ Waiting for input_boolean service domain to register...")
         # Wall-clock-bound polling — same rationale as the loops above.
         ib_start = time.monotonic()
