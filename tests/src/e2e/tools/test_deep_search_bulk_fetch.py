@@ -13,6 +13,7 @@ single-entity search correctness. These tests specifically validate:
   - Results include the config object (proving bulk fetch worked)
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -88,11 +89,17 @@ async def bulk_automations(mcp_client):
     """
     created_ids = []
 
-    for i in range(_AUTOMATION_COUNT):
-        result = await mcp_client.call_tool(
+    # Parallelise the 10 sequential creates with asyncio.gather (refs #366).
+    # Order-preserving: gather returns results in submission order, so iterating
+    # with enumerate matches the i used to build each config.
+    results = await asyncio.gather(*[
+        mcp_client.call_tool(
             "ha_config_set_automation",
             {"config": _automation_config(i)},
         )
+        for i in range(_AUTOMATION_COUNT)
+    ])
+    for i, result in enumerate(results):
         data = assert_mcp_success(result, f"Create bulk automation {i}")
         # Use the actual entity_id returned by HA (handles conflicts with _2 suffix)
         entity_id = data.get("entity_id")
@@ -141,12 +148,18 @@ async def bulk_scripts(mcp_client):
     """
     created_ids = []
 
-    for i in range(_SCRIPT_COUNT):
-        script_id = f"{_MARKER}_script_{i}"
-        result = await mcp_client.call_tool(
+    # Parallelise the 5 sequential creates with asyncio.gather (refs #366).
+    # script_id is deterministic from i, so we can compute it inside the
+    # comprehension and re-derive in the post-loop iteration without race risk.
+    results = await asyncio.gather(*[
+        mcp_client.call_tool(
             "ha_config_set_script",
-            {"script_id": script_id, "config": _script_config(i)},
+            {"script_id": f"{_MARKER}_script_{i}", "config": _script_config(i)},
         )
+        for i in range(_SCRIPT_COUNT)
+    ])
+    for i, result in enumerate(results):
+        script_id = f"{_MARKER}_script_{i}"
         assert_mcp_success(result, f"Create bulk script {i}")
         created_ids.append(script_id)
         logger.info(f"Created script {i}/{_SCRIPT_COUNT}: {script_id}")
