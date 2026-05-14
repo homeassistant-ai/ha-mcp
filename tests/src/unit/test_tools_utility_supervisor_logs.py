@@ -637,6 +637,74 @@ class TestGetSystemServiceLogs:
         assert exc_info.value.status_code == 404
 
 
+class TestGetSystemServiceLogsBranchSelection:
+    """`_get_system_service_logs()` mirrors `get_addon_logs()`'s
+    `is_running_in_addon()` branch. Pre-#1260 this method had only the
+    Supervisor-direct branch, so non-addon installs (Docker image, uvx
+    ha-mcp, etc.) fell straight through to the SUPERVISOR_TOKEN fail-fast
+    in `_supervisor_logs_get` for every service slug. Pin both directions
+    so a future refactor of the gate doesn't silently regress either.
+    """
+
+    @pytest.mark.parametrize(
+        "service",
+        ["supervisor", "host", "core", "dns", "audio", "multicast", "observer"],
+    )
+    @pytest.mark.asyncio
+    async def test_non_addon_install_uses_ha_core_proxy(self, mock_client, service):
+        """`is_running_in_addon()` False → HA-Core-proxy path for every slug.
+
+        HA Core's hassio HTTP proxy (PATHS_ADMIN in
+        `homeassistant/components/hassio/http.py`) whitelists all seven
+        Supervisor service-log paths, so an admin LLA can reach any of them
+        from outside the addon. Parametrize over the full set so a future
+        proxy regression for a single slug surfaces here.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = f"{service} via proxy\n"
+        mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
+
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            result = await mock_client._get_system_service_logs(service)
+
+        assert f"{service} via proxy" in result
+        mock_client.httpx_client.request.assert_called_once()
+        args, _ = mock_client.httpx_client.request.call_args
+        assert args[1] == f"/hassio/{service}/logs"
+
+    @pytest.mark.asyncio
+    async def test_addon_install_does_not_call_ha_core_proxy(self, mock_client):
+        """`is_running_in_addon()` True → HA-Core-proxy path must be skipped.
+
+        URL/auth contract for the Supervisor-direct branch is pinned by
+        `TestGetSystemServiceLogs`; this test only verifies the gate
+        consultation.
+        """
+        inner_client = MagicMock()
+        inner_client.get = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+        inner_client.get.return_value = mock_response
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "ha_mcp.client.rest_client.is_running_in_addon",
+                return_value=True,
+            ),
+            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token-branch"}),
+            patch("httpx.AsyncClient", return_value=cm),
+        ):
+            await mock_client._get_system_service_logs("supervisor")
+
+        mock_client.httpx_client.request.assert_not_called()
+
+
 class TestRawRequestEmptyBodyFallback:
     """Error message must stay actionable even when the 4xx body is empty.
 
