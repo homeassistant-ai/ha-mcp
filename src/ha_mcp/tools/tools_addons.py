@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -183,9 +183,7 @@ def _apply_response_transform(response: Any, expr: str) -> Any:
     try:
         return safe_execute_expression(expr, {"response": response}, "response")
     except PythonSandboxError as e:
-        message, suggestions = format_sandbox_error(
-            e, expr, variable_name="response"
-        )
+        message, suggestions = format_sandbox_error(e, expr, variable_name="response")
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,
@@ -516,7 +514,9 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     """
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
-        return response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        return (
+            response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
+        )
 
     addon = response["result"] if isinstance(response["result"], dict) else {}
     result: dict[str, Any] = {"success": True, "addon": addon}
@@ -549,8 +549,7 @@ def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
 
     schema = addon.get("schema")
     if isinstance(schema, list) and any(
-        isinstance(item, dict) and item.get("name") == "log_level"
-        for item in schema
+        isinstance(item, dict) and item.get("name") == "log_level" for item in schema
     ):
         return "default"
 
@@ -1086,9 +1085,12 @@ def _apply_array_ops(
         IDs only, no full payloads — so the response stays compact even when
         the underlying array is large.
     """
-    working = list(items)  # shallow copy of the outer list; items themselves
-    # are mutated in place by patch ops, which is fine
-    # because we're going to POST the working list back
+    # Shallow copy of the outer list. The inner item dicts are NOT copied —
+    # patch ops mutate them in place via `target.update(...)`. Callers must
+    # not retain references to `items` and expect them unchanged; this is
+    # safe here because the dispatcher only uses `items` to build the POST
+    # body and then discards it.
+    working = list(items)
 
     summary: dict[str, list[Any]] = {
         "patched": [],
@@ -1814,11 +1816,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 description=(
                     "Array-patch mode: atomically GET a JSON array endpoint, "
                     "apply ordered ops, then POST the mutated array back. "
-                    "Shape: {'id_field': '<key>' (default 'id'), "
-                    "'operations': [{'op': 'patch'|'delete'|'add'|'delete_where', ...}, ...]}. "
-                    "Use for addon APIs that expose 'edit-the-whole-collection' write contracts "
-                    "(Node-RED /flows, similar) — avoids the model holding the full array in context. "
-                    "Requires 'path'; mutually exclusive with body/websocket/offset/limit and config params."
+                    "Requires 'path'; mutually exclusive with body / websocket / "
+                    "offset / limit and config params. See the docstring Examples "
+                    "and ha_get_skill_home_assistant_best_practices for op shapes."
                 ),
                 default=None,
             ),
@@ -2032,6 +2032,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                         parameter="array_patch",
                     )
                 )
+            id_field = array_patch.get("id_field", "id")
+            if not isinstance(id_field, str) or not id_field:
+                raise_tool_error(
+                    create_validation_error(
+                        "array_patch.id_field must be a non-empty string",
+                        parameter="array_patch.id_field",
+                    )
+                )
             ops = array_patch.get("operations")
             if not isinstance(ops, list) or not ops:
                 raise_tool_error(
@@ -2138,16 +2146,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         # Array-patch mode: GET → mutate → POST atomically.
         # Done before the websocket/HTTP branches so it can fully own the
         # response shape and skip the truncation/pagination paths.
+        # id_field and ops were validated in the early validation block above.
         if array_patch is not None:
-            id_field = array_patch.get("id_field", "id")
-            if not isinstance(id_field, str) or not id_field:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch.id_field must be a non-empty string",
-                        parameter="array_patch.id_field",
-                    )
-                )
-
             fetch_result = await _call_addon_api(
                 client=client,
                 slug=slug,
@@ -2171,11 +2171,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     )
                 )
 
-            # Re-narrow operations for the type checker — the earlier
-            # validation block established this but the narrowing doesn't
-            # carry across the intervening config_data branch.
-            assert isinstance(ops, list)
-            new_array, summary = _apply_array_ops(fetched, ops, id_field)
+            # Re-narrow operations for the type checker — the early validation
+            # block established `ops` is a non-empty list, but the narrowing
+            # doesn't carry across the intervening config_data branch.
+            # cast() (vs assert) keeps the narrowing under `python -O`.
+            new_array, summary = _apply_array_ops(
+                fetched, cast(list[Any], ops), id_field
+            )
 
             # POST response is small (deploy revision string or status); skip
             # raw mode here so the size-based truncation guard is in effect.

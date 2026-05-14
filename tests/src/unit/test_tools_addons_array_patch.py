@@ -20,6 +20,32 @@ def _parse_tool_error(exc: pytest.ExceptionInfo[ToolError]) -> dict:
     return json.loads(str(exc.value))
 
 
+@pytest.fixture
+def _registered_tool():
+    """Resolve the raw ha_manage_addon function from the @tool decorator stack.
+
+    Shared by every TestHaManageAddon* class — they all need the same
+    pre-registration unwrap to call the tool function directly.
+    """
+    from ha_mcp.tools.tools_addons import register_addon_tools
+
+    captured: dict = {}
+
+    class _MockMCP:
+        def tool(self, *args, **kwargs):
+            def deco(fn):
+                captured.setdefault(fn.__name__, fn)
+                return fn
+
+            return deco
+
+    register_addon_tools(_MockMCP(), client=AsyncMock())
+    fn = captured["ha_manage_addon"]
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    return fn
+
+
 # ---------------------------------------------------------------------------
 # _apply_array_ops — happy paths
 # ---------------------------------------------------------------------------
@@ -233,26 +259,6 @@ class TestHaManageAddonArrayPatchDispatch:
     apply); mutated array is sent; response shape is the compact summary.
     """
 
-    @pytest.fixture
-    def _registered_tool(self):
-        from ha_mcp.tools.tools_addons import register_addon_tools
-
-        captured: dict = {}
-
-        class _MockMCP:
-            def tool(self, *args, **kwargs):
-                def deco(fn):
-                    captured.setdefault(fn.__name__, fn)
-                    return fn
-
-                return deco
-
-        register_addon_tools(_MockMCP(), client=AsyncMock())
-        fn = captured["ha_manage_addon"]
-        while hasattr(fn, "__wrapped__"):
-            fn = fn.__wrapped__
-        return fn
-
     @pytest.mark.asyncio
     async def test_dispatch_fetches_then_posts_mutated_array(self, _registered_tool):
         fetched_array = [
@@ -376,6 +382,97 @@ class TestHaManageAddonArrayPatchDispatch:
         assert post_called is False
 
     @pytest.mark.asyncio
+    async def test_dispatch_raises_when_fetch_fails(self, _registered_tool):
+        """A failed GET must surface as ToolError and skip the POST entirely.
+
+        Guards against a regression where a swallowed fetch failure would let
+        the dispatcher synthesise success on stale/empty state.
+        """
+        post_called = False
+
+        async def fake_call(**kwargs):
+            nonlocal post_called
+            if kwargs.get("method", "GET") == "GET":
+                return {
+                    "success": False,
+                    "status_code": 502,
+                    "error": "Add-on API returned HTTP 502",
+                    "addon_name": "Node-RED",
+                    "slug": kwargs["slug"],
+                }
+            post_called = True
+            return {"success": True, "response": "ok", "status_code": 200}
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._call_addon_api",
+                new=AsyncMock(side_effect=fake_call),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/flows",
+                array_patch={
+                    "operations": [{"op": "patch", "id": "n1", "patches": {"x": 1}}],
+                },
+            )
+
+        assert post_called is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_raises_when_post_fails(self, _registered_tool):
+        """A failed POST must surface as ToolError, not be reported as success.
+
+        Without this guard a failed write would still return `success: True`
+        with the in-memory `items_after` even though the addon rejected it.
+        """
+        fetched_array = [{"id": "n1", "name": "old"}]
+        get_called = False
+        post_called = False
+
+        async def fake_call(**kwargs):
+            nonlocal get_called, post_called
+            if kwargs.get("method", "GET") == "GET":
+                get_called = True
+                return {
+                    "success": True,
+                    "response": fetched_array,
+                    "addon_name": "Node-RED",
+                    "slug": kwargs["slug"],
+                    "status_code": 200,
+                }
+            post_called = True
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": "Add-on API returned HTTP 400",
+                "response": "deploy rejected",
+                "addon_name": "Node-RED",
+                "slug": kwargs["slug"],
+            }
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._call_addon_api",
+                new=AsyncMock(side_effect=fake_call),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/flows",
+                array_patch={
+                    "operations": [
+                        {"op": "patch", "id": "n1", "patches": {"name": "new"}},
+                    ],
+                },
+            )
+
+        assert get_called is True
+        assert post_called is True
+
+    @pytest.mark.asyncio
     async def test_dispatch_rejects_websocket_combo(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
             await _registered_tool(
@@ -428,32 +525,12 @@ class TestHaManageAddonRequestHeaders:
     _call_addon_api in proxy mode and array_patch mode (both GET and POST).
     """
 
-    @pytest.fixture
-    def _registered_tool(self):
-        from ha_mcp.tools.tools_addons import register_addon_tools
-
-        captured: dict = {}
-
-        class _MockMCP:
-            def tool(self, *args, **kwargs):
-                def deco(fn):
-                    captured.setdefault(fn.__name__, fn)
-                    return fn
-
-                return deco
-
-        register_addon_tools(_MockMCP(), client=AsyncMock())
-        fn = captured["ha_manage_addon"]
-        while hasattr(fn, "__wrapped__"):
-            fn = fn.__wrapped__
-        return fn
-
     @pytest.mark.asyncio
     async def test_proxy_mode_forwards_request_headers(self, _registered_tool):
         captured_headers: list[dict | None] = []
 
         async def fake_call(**kwargs):
-            captured_headers.append(kwargs.get("headers"))
+            captured_headers.append(kwargs.get("extra_headers"))
             return {
                 "success": True,
                 "response": {"ok": True},
@@ -481,7 +558,7 @@ class TestHaManageAddonRequestHeaders:
         captured_headers: list[dict | None] = []
 
         async def fake_call(**kwargs):
-            captured_headers.append(kwargs.get("headers"))
+            captured_headers.append(kwargs.get("extra_headers"))
             if kwargs.get("method", "GET") == "GET":
                 return {
                     "success": True,
@@ -569,6 +646,10 @@ class TestCallAddonApiHeaderMerge:
                 return_value=addon_info,
             ),
             patch(
+                "ha_mcp.tools.tools_addons.is_running_in_addon",
+                return_value=True,
+            ),
+            patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
             ) as mock_httpx,
         ):
@@ -583,7 +664,7 @@ class TestCallAddonApiHeaderMerge:
                 path="/api/state",
                 method="POST",
                 body={"x": 1},
-                headers={
+                extra_headers={
                     "X-Ingress-Path": "/api/hassio_ingress/EVIL",
                     "X-Hass-Source": "spoofed",
                     "Content-Type": "application/x-attack",
