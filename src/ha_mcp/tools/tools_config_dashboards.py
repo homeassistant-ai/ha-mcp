@@ -1097,18 +1097,17 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
                     message, suggestions = format_sandbox_error(e, python_transform)
-                    # Runtime IndexError/KeyError almost always means the agent
-                    # constructed a path that doesn't match the actual dashboard
-                    # shape (wrong view, missing sections wrapper, etc). Point
-                    # them at search mode so the next attempt uses a verified
-                    # jq_path instead of guessing indices.
-                    if isinstance(e, PythonSandboxExecutionError) and (
-                        "IndexError" in str(e) or "KeyError" in str(e)
+                    # A path-shape mismatch (IndexError/KeyError) is almost always
+                    # a hallucinated path; steer the retry toward search mode so
+                    # the next transform is built from a verified jq_path.
+                    if isinstance(e, PythonSandboxExecutionError) and isinstance(
+                        e.__cause__, (IndexError, KeyError)
                     ):
                         suggestions = [
-                            "Use ha_config_get_dashboard(url_path=..., card_type=...) "
-                            "or (entity_id=...) to get the verified jq_path, then "
-                            "build python_transform from that path",
+                            "Call ha_config_get_dashboard with card_type=..., "
+                            "entity_id=..., or heading=... to get the verified "
+                            "jq_path for the target card, then build "
+                            "python_transform from that path",
                             *suggestions,
                         ]
                     raise_tool_error(

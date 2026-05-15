@@ -362,12 +362,7 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
 @pytest.mark.asyncio
 async def test_python_transform_replace_string_method(mcp_client, ha_client):
-    """Issue #1279: str.replace() is allowed inside python_transform.
-
-    A weaker agent hit ``Forbidden method: replace`` while sanitizing a
-    markdown card. ``replace`` is now whitelisted alongside other pure
-    string methods (``split``/``join``/``strip``).
-    """
+    """``str.replace`` works inside ``python_transform``."""
     mcp = MCPAssertions(mcp_client)
 
     await mcp.call_tool_success(
@@ -408,16 +403,14 @@ async def test_python_transform_replace_string_method(mcp_client, ha_client):
     assert verify["config"]["views"][0]["cards"][0]["content"] == "abc"
 
 
+def _hint_suggestions(result: dict) -> list[str]:
+    error = result["error"] if isinstance(result["error"], dict) else {}
+    return list(error.get("suggestions", []))
+
+
 @pytest.mark.asyncio
 async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_client):
-    """Issue #1279: IndexError from a bad path nudges the agent toward search mode.
-
-    Weaker models hallucinate dashboard structure and construct paths like
-    ``config['views'][3]['sections'][0]...`` against a single-view dashboard.
-    The IndexError is correct tool behavior, but the failure message should
-    point the agent at ``ha_config_get_dashboard(card_type=...)`` so the
-    retry uses a verified jq_path.
-    """
+    """IndexError from a bad path surfaces the search-mode hint first."""
     mcp = MCPAssertions(mcp_client)
 
     await mcp.call_tool_success(
@@ -441,9 +434,78 @@ async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_
         },
     )
 
-    error = result["error"] if isinstance(result["error"], dict) else {}
-    suggestions = error.get("suggestions", [])
+    suggestions = _hint_suggestions(result)
+    assert suggestions, "expected suggestions in error response"
+    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+        f"Expected search-mode hint as first suggestion, got: {suggestions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_key_error_hints_at_search_mode(mcp_client, ha_client):
+    """KeyError from a missing dict key also surfaces the search-mode hint."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-key",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-bad-key"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-key",
+            "config_hash": get_result["config_hash"],
+            # 'sections' doesn't exist on this view — KeyError, not IndexError.
+            "python_transform": "config['views'][0]['sections'][0]['cards'][0]['type'] = 'tile'",
+        },
+    )
+
+    suggestions = _hint_suggestions(result)
+    assert suggestions, "expected suggestions in error response"
+    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+        f"Expected search-mode hint as first suggestion, got: {suggestions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_unrelated_runtime_error_no_search_hint(
+    mcp_client, ha_client
+):
+    """A non-path runtime error (TypeError) must not get the dashboard hint."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-type-error",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-type-error"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-type-error",
+            "config_hash": get_result["config_hash"],
+            # str + int is a TypeError at runtime.
+            "python_transform": "config['views'][0]['title'] = 'x' + 1",
+        },
+    )
+
+    suggestions = _hint_suggestions(result)
     joined = " ".join(suggestions)
-    assert "jq_path" in joined or "ha_config_get_dashboard" in joined, (
-        f"Expected dashboard search-mode hint in suggestions, got: {suggestions}"
+    assert "card_type" not in joined, (
+        f"Unrelated TypeError should not get the search-mode hint, got: {suggestions}"
     )

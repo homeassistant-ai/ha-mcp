@@ -431,15 +431,8 @@ class TestBlockedOperations:
         assert "Call" in error
 
 
-class TestStringMethods1279:
-    """Regression tests for issue #1279 — str.replace() missing from whitelist.
-
-    A weaker agent (Gemini flash) hit ``Forbidden method: replace`` while
-    sanitizing a markdown card. ``replace`` is a pure, side-effect-free
-    string method on par with ``split``/``join``/``strip`` (already
-    allowed), so its omission was an oversight rather than a deliberate
-    block. These pin the gap shut.
-    """
+class TestReplaceMethod:
+    """``str.replace`` is in the safe whitelist — pure, side-effect-free."""
 
     def test_replace_validates(self):
         valid, error = validate_expression(
