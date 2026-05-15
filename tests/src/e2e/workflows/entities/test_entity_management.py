@@ -33,7 +33,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         logger.info(f"Created test entity: {entity_id}")
@@ -81,7 +81,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Create and assign to area
@@ -131,7 +131,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Update name and icon
@@ -197,7 +197,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Set aliases
@@ -255,7 +255,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Disable entity using enabled=False
@@ -299,7 +299,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Hide entity using hidden=True
@@ -343,7 +343,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
         # Create a test area
@@ -437,7 +437,7 @@ class TestEntityManagement:
             },
         )
         data1 = assert_mcp_success(create_result1, "Create first test entity")
-        entity_id1 = data1.get("entity_id") or f"input_boolean.{data1['helper_data']['id']}"
+        entity_id1 = data1.get("entity_id") or f"input_boolean.{data1['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id1)
 
         # Create second test helper
@@ -450,7 +450,7 @@ class TestEntityManagement:
             },
         )
         data2 = assert_mcp_success(create_result2, "Create second test entity")
-        entity_id2 = data2.get("entity_id") or f"input_boolean.{data2['helper_data']['id']}"
+        entity_id2 = data2.get("entity_id") or f"input_boolean.{data2['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id2)
 
         # Call ha_get_entity with list of 2 entity_ids
@@ -533,7 +533,7 @@ class TestEntityManagement:
             },
         )
         data = assert_mcp_success(create_result, "Create test entity")
-        valid_entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        valid_entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", valid_entity_id)
 
         nonexistent_entity_id = "sensor.nonexistent_partial_test"

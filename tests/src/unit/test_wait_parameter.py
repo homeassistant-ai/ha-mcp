@@ -457,7 +457,9 @@ class TestHelperWaitParameter:
                 name="Test Switch",
             )
             assert result["success"] is True
-            assert "warning" in result.get("helper_data", {})
+            # Issue #1293: warnings are now a top-level list, not nested in data.
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("verification failed" in w for w in result["warnings"])
 
 
 class TestServiceCallWaitParameter:
@@ -499,9 +501,7 @@ class TestServiceCallWaitParameter:
             assert result.get("verified_state") == "on"
             mock_wait.assert_called_once()
 
-    async def test_call_service_wait_false_skips_verification(
-        self, tools, mock_client
-    ):
+    async def test_call_service_wait_false_skips_verification(self, tools, mock_client):
         """wait=False skips state verification."""
         with patch(
             "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
@@ -575,9 +575,7 @@ class TestServiceCallWaitParameter:
                 or call_kwargs[0][2] is None
             )
 
-    async def test_call_service_wait_exception_still_succeeds(
-        self, tools, mock_client
-    ):
+    async def test_call_service_wait_exception_still_succeeds(self, tools, mock_client):
         """Wait exception doesn't collapse the successful service call."""
         with patch(
             "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock

@@ -365,19 +365,19 @@ class TestConfigToolCategories:
                 "category": category_id,
             },
         )
-        helper_data = assert_mcp_success(helper_result, "Create helper with category")
-        # entity_id may be None for some helper types — derive from helper_data.id
-        entity_id = helper_data.get("entity_id")
-        inner_data = helper_data.get("helper_data", {})
+        helper_response = assert_mcp_success(helper_result, "Create helper with category")
+        # entity_id may be None for some helper types — derive from data.id
+        entity_id = helper_response.get("entity_id")
+        inner_data = helper_response.get("data", {})
         helper_id = inner_data.get("id")
         if not entity_id and helper_id:
             entity_id = f"input_boolean.{helper_id}"
-        assert entity_id, f"Missing entity_id and helper_data.id: {helper_data}"
+        assert entity_id, f"Missing entity_id and data.id: {helper_response}"
         cleanup_tracker.track("input_boolean", entity_id)
 
-        # Check category was applied (in helper_data sub-dict)
+        # Check category was applied (in data sub-dict)
         assert inner_data.get("category") == category_id, (
-            f"Category not set in helper response: {helper_data}"
+            f"Category not set in helper response: {helper_response}"
         )
         logger.info(f"Created helper {entity_id} with category {category_id}")
 

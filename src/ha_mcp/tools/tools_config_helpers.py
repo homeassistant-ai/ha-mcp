@@ -1563,6 +1563,11 @@ async def _handle_flow_helper(
         )
 
     entry_id = flow_result.get("entry_id")
+    # ``data`` mirrors the HA flow_result payload for cross-action uniformity
+    # with the create/update branches (issue #1293). ``entry_id`` and ``title``
+    # also stay flat as convenience accessors — they are the primary identifiers
+    # callers reach for, and remain heavily used by per-action metadata
+    # consumers throughout the codebase.
     result: dict[str, Any] = {
         "success": True,
         "action": action,
@@ -1570,6 +1575,7 @@ async def _handle_flow_helper(
         "method": "config_flow",
         "entry_id": entry_id,
         "title": flow_result.get("title"),
+        "data": {"entry_id": entry_id, "title": flow_result.get("title")},
         "message": flow_result.get("message"),
     }
     if action == "update":
@@ -2616,6 +2622,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if not entity_id and helper_data.get("id"):
                         entity_id = f"{helper_type}.{helper_data['id']}"
 
+                    # Issue #1293: collect warnings in a top-level list rather
+                    # than nest them in the payload dict. Aligns this branch
+                    # with the flow-helper path and lets callers do
+                    # ``result.get("warnings", [])`` uniformly.
+                    warnings: list[str] = []
+
                     # Wait for entity to be properly registered before proceeding
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
                     if wait_bool and entity_id:
@@ -2624,11 +2636,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 client, entity_id
                             )
                             if not registered:
-                                helper_data["warning"] = (
+                                warnings.append(
                                     f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
                                 )
                         except Exception as e:
-                            helper_data["warning"] = (
+                            warnings.append(
                                 f"Helper created but verification failed: {e}"
                             )
 
@@ -2658,7 +2670,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if isinstance(error_detail, dict)
                                 else str(error_detail)
                             )
-                            helper_data["warning"] = (
+                            warnings.append(
                                 f"Helper created but entity registry update failed: {error_msg}"
                             )
 
@@ -2673,14 +2685,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "helper",
                         )
 
-                    return {
+                    response: dict[str, Any] = {
                         "success": True,
                         "action": "create",
                         "helper_type": helper_type,
-                        "helper_data": helper_data,
+                        "data": helper_data,
                         "entity_id": entity_id,
                         "message": f"Successfully created {helper_type}: {name}",
                     }
+                    if warnings:
+                        response["warnings"] = warnings
+                    return response
                 else:
                     raise_tool_error(
                         create_error_response(
@@ -2728,6 +2743,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
                 updated_data: dict[str, Any] = {}
+                # Issue #1293: collect warnings in a top-level list for the
+                # update path too, mirroring create + flow-helper branches.
+                # (No re-annotation — the create branch above already defined
+                # ``warnings: list[str]``; mypy treats this as the same binding.)
+                warnings = []
 
                 if helper_type == "tag":
                     # Tags use their own registry — no entity registry entries.
@@ -2762,12 +2782,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Tags don't have entity registry entries, so return directly
                     # without wait_for_entity_registered (they're not entities).
+                    # Issue #1293: ``data`` wrapper key + top-level ``warnings`` list.
                     return {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
                         "entity_id": entity_id,
-                        "updated_data": updated_data,
+                        "data": updated_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
 
@@ -3240,7 +3261,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             logger.warning(
                                 f"Entity registry update failed for {entity_id}: {error_msg}"
                             )
-                            updated_data["warning"] = (
+                            warnings.append(
                                 f"Config updated but entity registry update failed: {error_msg}"
                             )
 
@@ -3300,25 +3321,29 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)
-                response: dict[str, Any] = {
-                    "success": True,
-                    "action": "update",
-                    "helper_type": helper_type,
-                    "entity_id": entity_id,
-                    "updated_data": updated_data,
-                    "message": f"Successfully updated {helper_type}: {entity_id}",
-                }
                 if wait_bool:
                     try:
                         registered = await wait_for_entity_registered(client, entity_id)
                         if not registered:
-                            response["warning"] = (
+                            warnings.append(
                                 f"Update applied but {entity_id} not yet queryable."
                             )
                     except Exception as e:
-                        response["warning"] = (
-                            f"Update applied but verification failed: {e}"
-                        )
+                        warnings.append(f"Update applied but verification failed: {e}")
+
+                # Issue #1293: ``data`` wrapper key + top-level ``warnings`` list.
+                # (No re-annotation — the create branch above already defined
+                # ``response: dict[str, Any]``; mypy treats this as the same binding.)
+                response = {
+                    "success": True,
+                    "action": "update",
+                    "helper_type": helper_type,
+                    "entity_id": entity_id,
+                    "data": updated_data,
+                    "message": f"Successfully updated {helper_type}: {entity_id}",
+                }
+                if warnings:
+                    response["warnings"] = warnings
                 return response
 
             # This should never be reached since action is either "create" or "update"
