@@ -209,6 +209,17 @@ class HistoryTools:
                 default=None,
             ),
         ] = None,
+        order: Annotated[
+            Literal["asc", "desc"],
+            Field(
+                default="desc",
+                description=(
+                    'Sort order for history entries. "desc" (default): newest first. '
+                    '"asc": oldest first (chronological, as returned by HA API). '
+                    'Ignored when source="statistics".'
+                ),
+            ),
+        ] = "desc",
         fields: Annotated[
             str | list[str] | None,
             Field(
@@ -357,6 +368,7 @@ class HistoryTools:
                         start_dt, end_dt, minimal_response,
                         significant_changes_only, limit, offset,
                         _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
+                        order=order,
                     )
                 await safe_progress(
                     ctx,
@@ -369,7 +381,7 @@ class HistoryTools:
                 # wraps the result in {"data": ..., "metadata": ...} which would
                 # otherwise force a bespoke unwrap-project-rewrap site.
                 projected = project_fields(inner, parsed_fields)
-                return await add_timezone_metadata(self._client, projected)
+                return await add_timezone_metadata(self._client, projected, include_metadata=parsed_fields is None)
             finally:
                 if ws_client:
                     await ws_client.disconnect()
@@ -476,6 +488,7 @@ async def _fetch_history(
     offset: int | str | None,
     default_limit: int,
     max_limit: int,
+    order: str = "desc",
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
 
@@ -544,6 +557,8 @@ async def _fetch_history(
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
+        if order == "desc":
+            entity_states = list(reversed(entity_states))
         paged_states = entity_states[effective_offset : effective_offset + effective_limit]
 
         formatted_states = []
@@ -591,6 +606,7 @@ async def _fetch_history(
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
             "offset": effective_offset,
+            "order": order,
         },
     }
 

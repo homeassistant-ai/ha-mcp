@@ -146,6 +146,18 @@ class AreaTools:
                 ),
             ),
         ] = None,
+        area_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each area record to only the specified keys. "
+                    'E.g. ["area_id", "name"] returns slim area records. '
+                    "None = full records (default). Unknown keys yield empty records. "
+                    "Available keys: area_id, name, icon, floor_id, aliases, picture, labels."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         List all Home Assistant areas (rooms).
@@ -158,6 +170,14 @@ class AreaTools:
                 parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+        parsed_area_fields: list[str] | None = None
+        if area_fields is not None:
+            try:
+                parsed_area_fields = parse_string_list_param(area_fields, "area_fields", allow_csv=True)
+                if parsed_area_fields is not None and len(parsed_area_fields) == 0:
+                    raise ValueError("area_fields must contain at least one key")
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="area_fields"))
         try:
             message: dict[str, Any] = {
                 "type": "config/area_registry/list",
@@ -167,6 +187,11 @@ class AreaTools:
 
             if result.get("success"):
                 areas = result.get("result", [])
+                if parsed_area_fields is not None:
+                    areas = [
+                        {k: v for k, v in a.items() if k in parsed_area_fields}
+                        for a in areas
+                    ]
                 response: dict[str, Any] = {
                     "success": True,
                     "count": len(areas),

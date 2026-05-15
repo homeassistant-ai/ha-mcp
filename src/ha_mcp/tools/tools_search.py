@@ -52,6 +52,7 @@ async def _exact_match_search(
     limit: int,
     offset: int = 0,
     include_hidden: bool = True,
+    state_filter: str | None = None,
 ) -> dict[str, Any]:
     """
     Search entities by substring on entity_id + friendly_name.
@@ -136,6 +137,9 @@ async def _exact_match_search(
                     "match_type": "exact_match",
                 }
             )
+
+    if state_filter:
+        results = [r for r in results if r.get("state") == state_filter]
 
     # Sort by score descending, tie-break on entity_id for stable
     # pagination when many results share a score (visible substring
@@ -284,6 +288,47 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        per_domain_limit: Annotated[
+            int | str | None,
+            Field(
+                default=None,
+                description=(
+                    "When group_by_domain=True, cap results per domain to this number. "
+                    "Applied after the global limit — use a high limit (e.g. limit=200) "
+                    "with per_domain_limit=5 to get up to 5 entities from each domain. "
+                    "None = no per-domain cap (default)."
+                ),
+            ),
+        ] = None,
+        state_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter results to entities in a specific state "
+                    '(e.g. "on", "off", "unavailable"). Case-sensitive; '
+                    "HA states are typically lowercase. Applied server-side after "
+                    "search results are collected. For exact-match and domain-listing "
+                    "searches, total_matches reflects the filtered count. For fuzzy "
+                    "searches, state_filter is page-only and total_matches remains "
+                    "unfiltered (see state_filter_note in the response). "
+                    "None = no state filter (default)."
+                ),
+            ),
+        ] = None,
+        result_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each entity record in results[] to only the specified keys. "
+                    'E.g. ["entity_id", "state"] returns slim entity records. '
+                    "None = full records (default). Unknown keys yield empty records; "
+                    "omit result_fields to see all available keys. "
+                    "Available keys: entity_id, friendly_name, domain, state, score, match_type."
+                ),
+            ),
+        ] = None,
         fields: Annotated[
             str | list[str] | None,
             Field(
@@ -295,7 +340,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Available keys: success, query, results, total_matches, count, "
                     "offset, limit, has_more, next_offset, search_type, "
                     "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warning, partial, message, note."
+                    "by_domain, warning, partial, message, note, state_filter."
                 ),
             ),
         ] = None,
@@ -319,6 +364,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+        parsed_result_fields: list[str] | None = None
+        if result_fields is not None:
+            try:
+                parsed_result_fields = parse_string_list_param(result_fields, "result_fields", allow_csv=True)
+                if parsed_result_fields is not None and len(parsed_result_fields) == 0:
+                    raise ValueError("result_fields must contain at least one key")
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="result_fields"))
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
         # HA domains are canonically lowercase, no whitespace; agents
@@ -366,6 +419,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
             limit = coerce_int_param(limit, "limit", default=10, min_value=1)
+            per_domain_limit_int = (
+                coerce_int_param(per_domain_limit, "per_domain_limit", default=None, min_value=1)
+                if per_domain_limit is not None
+                else None
+            )
 
             # If area_filter is provided, use area-based search
             if area_filter:
@@ -475,6 +533,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         for match in matches
                     ]
 
+                    if state_filter:
+                        results = [r for r in results if r.get("state") == state_filter]
+
                     pagination = _build_pagination_metadata(
                         total_matches, offset, limit, results
                     )
@@ -489,6 +550,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                     if domain_filter:
                         search_data["domain_filter"] = domain_filter
+                    if state_filter:
+                        search_data["state_filter"] = state_filter
+                        # Area+query uses fuzzy pagination internally; state_filter
+                        # is applied to the returned page, not the full dataset.
+                        search_data["state_filter_note"] = (
+                            "state_filter applied to this page only; "
+                            "total_matches reflects the unfiltered fuzzy-search count"
+                        )
 
                     if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
@@ -497,9 +566,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             if domain not in by_domain:
                                 by_domain[domain] = []
                             by_domain[domain].append(item)
+                        if per_domain_limit_int is not None:
+                            by_domain = {
+                                d: entities[:per_domain_limit_int]
+                                for d, entities in by_domain.items()
+                            }
+                        if parsed_result_fields is not None:
+                            by_domain = {
+                                d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                                for d, entities in by_domain.items()
+                            }
                         search_data["by_domain"] = by_domain
 
-                    return await add_timezone_metadata(client, project_fields(search_data, parsed_fields))
+                    if parsed_result_fields is not None and "results" in search_data:
+                        search_data["results"] = [
+                            {k: v for k, v in r.items() if k in parsed_result_fields}
+                            for r in search_data["results"]
+                        ]
+
+                    return await add_timezone_metadata(client, project_fields(search_data, parsed_fields), include_metadata=parsed_fields is None)
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -559,6 +644,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         all_results.sort(
                             key=lambda x: (-x["score"], x["entity_id"])
                         )
+                        if state_filter:
+                            all_results = [r for r in all_results if r.get("state") == state_filter]
                         paginated = all_results[offset : offset + limit]
 
                         area_search_data: dict[str, Any] = {
@@ -582,6 +669,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
+                        if state_filter:
+                            area_search_data["state_filter"] = state_filter
                         # Mirror the empty-area branch's message when
                         # the area resolved but a domain_filter wiped
                         # out every entity in it — otherwise the caller
@@ -600,8 +689,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 paginated_by_domain.setdefault(
                                     entity["domain"], []
                                 ).append(entity)
+                            if per_domain_limit_int is not None:
+                                paginated_by_domain = {
+                                    d: entities[:per_domain_limit_int]
+                                    for d, entities in paginated_by_domain.items()
+                                }
+                            if parsed_result_fields is not None:
+                                paginated_by_domain = {
+                                    d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                                    for d, entities in paginated_by_domain.items()
+                                }
                             area_search_data["by_domain"] = paginated_by_domain
-                        return await add_timezone_metadata(client, project_fields(area_search_data, parsed_fields))
+                        if parsed_result_fields is not None and "results" in area_search_data:
+                            area_search_data["results"] = [
+                                {k: v for k, v in r.items() if k in parsed_result_fields}
+                                for r in area_search_data["results"]
+                            ]
+                        return await add_timezone_metadata(client, project_fields(area_search_data, parsed_fields), include_metadata=parsed_fields is None)
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -618,9 +722,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             empty_area_data["domain_filter"] = domain_filter
+                        if state_filter:
+                            empty_area_data["state_filter"] = state_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, project_fields(empty_area_data, parsed_fields))
+                        return await add_timezone_metadata(client, project_fields(empty_area_data, parsed_fields), include_metadata=parsed_fields is None)
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -699,6 +805,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 scored_entities.sort(
                     key=lambda x: (-x["score"], x["entity_id"])
                 )
+                if state_filter:
+                    scored_entities = [e for e in scored_entities if e.get("state") == state_filter]
                 results = scored_entities[offset : offset + limit]
 
                 domain_list_data: dict[str, Any] = {
@@ -712,9 +820,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
+                if state_filter:
+                    domain_list_data["state_filter"] = state_filter
+                if parsed_result_fields is not None:
+                    domain_list_data["results"] = [
+                        {k: v for k, v in r.items() if k in parsed_result_fields}
+                        for r in results
+                    ]
                 if group_by_domain_bool:
-                    domain_list_data["by_domain"] = {domain_filter: results}
-                return await add_timezone_metadata(client, project_fields(domain_list_data, parsed_fields))
+                    domain_list_results = results[:per_domain_limit_int] if per_domain_limit_int is not None else results
+                    if parsed_result_fields is not None:
+                        domain_list_results = [
+                            {k: v for k, v in r.items() if k in parsed_result_fields}
+                            for r in domain_list_results
+                        ]
+                    domain_list_data["by_domain"] = {domain_filter: domain_list_results}
+                return await add_timezone_metadata(client, project_fields(domain_list_data, parsed_fields), include_metadata=parsed_fields is None)
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -741,6 +862,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     limit,
                     offset,
                     include_hidden=include_hidden_bool,
+                    state_filter=state_filter,
                 )
                 search_type = "exact_match"
             else:
@@ -772,6 +894,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         limit,
                         offset,
                         include_hidden=include_hidden_bool,
+                        state_filter=state_filter,
                     )
                     warning = "Fuzzy search unavailable, using substring match"
                     search_type = "exact_match"
@@ -798,7 +921,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result["offset"] + limit if result["has_more"] else None
                 )
 
-            # Group by domain if requested
+            # Apply state_filter to fuzzy results BEFORE grouping so by_domain stays
+            # consistent with results[].
+            # Note: for fuzzy_search, state_filter is page-only — smart_entity_search
+            # already paginated internally, so we cannot know the pre-filter total.
+            # total_matches and has_more reflect the unfiltered fuzzy-search dataset;
+            # only count is updated to match the filtered page.
+            if state_filter and "results" in result and search_type == "fuzzy_search":
+                filtered = [r for r in result["results"] if r.get("state") == state_filter]
+                result["results"] = filtered
+                result["count"] = len(filtered)
+                # Signal that state_filter is page-only for fuzzy mode
+                result["state_filter_note"] = (
+                    "state_filter applied to this page only; "
+                    "total_matches reflects the unfiltered fuzzy-search count"
+                )
+
+            # Group by domain if requested (built from already-filtered results)
             if group_by_domain_bool and "results" in result:
                 by_domain = {}
                 for entity in result["results"]:
@@ -806,16 +945,37 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if domain not in by_domain:
                         by_domain[domain] = []
                     by_domain[domain].append(entity)
+                if per_domain_limit_int is not None:
+                    by_domain = {
+                        d: entities[:per_domain_limit_int]
+                        for d, entities in by_domain.items()
+                    }
                 result["by_domain"] = by_domain
 
             result["search_type"] = search_type
+
+            # Echo state_filter in response so callers can see what filter was applied
+            if state_filter:
+                result["state_filter"] = state_filter
 
             # Add warning and partial flag if fallback was used
             if warning:
                 result["warning"] = warning
                 result["partial"] = True
 
-            return await add_timezone_metadata(client, project_fields(result, parsed_fields))
+            # Apply per-record projection to results and by_domain
+            if parsed_result_fields is not None and "results" in result:
+                result["results"] = [
+                    {k: v for k, v in r.items() if k in parsed_result_fields}
+                    for r in result["results"]
+                ]
+            if parsed_result_fields is not None and "by_domain" in result:
+                result["by_domain"] = {
+                    d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                    for d, entities in result["by_domain"].items()
+                }
+
+            return await add_timezone_metadata(client, project_fields(result, parsed_fields), include_metadata=parsed_fields is None)
 
         except ToolError:
             raise
@@ -1033,6 +1193,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                 )
             result["system_info"] = system_info
+            # Enrich system_summary with HA version (config already fetched above)
+            if "system_summary" in result:
+                result["system_summary"]["version"] = config.get("version")
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
 

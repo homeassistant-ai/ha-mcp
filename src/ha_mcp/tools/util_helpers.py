@@ -414,8 +414,17 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     return levels
 
 
-async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
-    """Add Home Assistant timezone to tool responses for local time context."""
+async def add_timezone_metadata(
+    client: Any, data: dict[str, Any], include_metadata: bool = True
+) -> dict[str, Any]:
+    """Add Home Assistant timezone to tool responses for local time context.
+
+    Pass ``include_metadata=False`` to return *data* unchanged — useful when
+    ``fields=`` projection is already shrinking the response and the caller
+    does not want the ``{"data": ..., "metadata": {...}}`` wrapper.
+    """
+    if not include_metadata:
+        return data
     try:
         config = await client.get_config()
         ha_timezone = config.get("time_zone", "UTC")
