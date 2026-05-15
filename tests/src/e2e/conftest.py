@@ -1325,9 +1325,10 @@ async def stdio_mcp_client(
         "HA_MAX_RETRIES": "1",
     }
 
-    # `args` is a required positional in this fastmcp version (the docs
-    # show it as optional, but the installed StdioTransport.__init__
-    # disagrees — pass an explicit empty list).
+    # ``args`` is a required positional on the base ``StdioTransport``
+    # (subclasses like ``PythonStdioTransport`` default it to ``None``,
+    # but the base requires ``list[str]``). Pass an explicit empty list
+    # since ``ha-mcp`` takes no positional args in stdio mode.
     transport = StdioTransport(command="ha-mcp", args=[], env=env)
     client = Client(transport)
     async with client:
