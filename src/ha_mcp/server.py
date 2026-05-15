@@ -313,9 +313,21 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             logger.warning("Frontmatter is not a mapping in %s", main_file)
             return None
 
-        if not frontmatter.get("description", ""):
+        description = frontmatter.get("description", "")
+        if not description:
             logger.warning(
                 "No description in frontmatter for %s", main_file.parent.name
+            )
+            return None
+        if not isinstance(description, str):
+            # Truthy non-string values (e.g. `description: [foo]` or
+            # `description: 42`) would later crash on `.strip()` in the
+            # callers. Fail closed here so malformed bundles only break
+            # themselves, not the whole skill registration.
+            logger.warning(
+                "Description in frontmatter for %s is not a string (got %s); skipping",
+                main_file.parent.name,
+                type(description).__name__,
             )
             return None
 
@@ -1048,6 +1060,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 ),
             ] = None,
         ) -> dict[str, Any]:
+            # ``skills_dir`` is captured from the enclosing scope at
+            # registration time. The current ``_get_skills_dir()`` is
+            # effectively static per process (it inspects an on-disk
+            # path that doesn't change), so the closure is fine. If a
+            # future change makes the skills location dynamic (env-var
+            # override, etc.), the closure won't pick that up — re-read
+            # via ``self._get_skills_dir()`` here instead.
             return self._handle_skill_guide_call(skills_dir, skill, file)
 
         self.mcp.tool(
@@ -1088,8 +1107,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # silently believing the tool list is just empty.
         if skills_dir is None:
             if not skill:
+                # Explicit ``degraded`` flag so LLM clients can detect the
+                # misconfiguration signal without parsing the
+                # ``how_to_use`` prose. ``success: True`` is kept so
+                # generic "call succeeded" predicates don't trip — the
+                # tool DID return a structured response — but
+                # ``degraded`` is the actionable branch.
                 return {
                     "success": True,
+                    "degraded": True,
                     "skills": [],
                     "how_to_use": (
                         "No skill bundles are available on this server. "
@@ -1138,17 +1164,25 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             }
 
         skill_dir = skills_dir / skill
-        # Reject traversal AND symlinks in the ``skill`` arg itself.
-        # Tier 3's path-resolve check catches files inside a valid skill,
-        # but tier 2 (list files) needs its own guard so '../something'
-        # can't list an unrelated directory. The is_symlink() rejection
-        # matches the symlink filter in _list_skill_files (a tier-2
-        # response should never enumerate from a directory the listing
-        # itself wouldn't expose). Also reject skill values that resolve
-        # to the skills root itself (``"."``, ``"./"``, ``"x/.."``):
-        # those would silently downgrade tier 2 from "list one skill's
-        # files" to "list every file across every bundle," which is a
-        # contract mismatch even though it's not a security escape.
+        # Reject four classes of bad ``skill`` argument before any I/O on
+        # the resolved path:
+        #
+        # (a) Traversal — ``"../something"`` lets tier 2 list directories
+        #     above the skills root.
+        # (b) Symlinked skill DIRECTORY — applies the same anti-symlink
+        #     stance as ``_list_skill_files`` (which filters symlinks
+        #     per-file inside a skill) one level up, at the skill-dir
+        #     entry point. The two scopes differ but the intent is the
+        #     same: don't follow symlinks added to the skill bundle.
+        # (c) Root-aliases — ``"."``, ``"./"``, ``"x/.."`` all resolve
+        #     to the skills root itself. Without this check tier 2
+        #     silently downgrades from "list one skill's files" to
+        #     "list every file across every bundle." Not a security
+        #     escape (skills are bundled content) but a contract
+        #     mismatch with tier 1.
+        # (d) Resolve failures — bubble as a structured INTERNAL_ERROR
+        #     rather than a generic INTERNAL_ERROR from fastmcp's
+        #     wrapper, mirroring tier 3.
         try:
             skill_resolved = skill_dir.resolve()
             skills_resolved = skills_dir.resolve()
@@ -1203,10 +1237,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Tier 3: skill + file → read content.
         #
-        # Symlink check happens BEFORE resolve() — resolve() follows
-        # symlinks, so by the time you call is_symlink() on the resolved
-        # path it always returns False. Pre-resolve check matches the
-        # is_symlink() filter in _list_skill_files (tier 2 listings hide
+        # Check ``candidate.is_symlink()`` HERE, before ``candidate.resolve()``.
+        # ``resolve()`` returns the canonical non-symlink path, so a
+        # post-resolve ``is_symlink()`` check would always be False —
+        # the pre-resolve check is the only one that actually catches a
+        # symlink. Matches the is_symlink() filter in _list_skill_files
+        # (tier 2 listings hide
         # symlinks, so tier 3 must reject them with the same semantics).
         candidate = skill_dir / file
         if candidate.is_symlink():

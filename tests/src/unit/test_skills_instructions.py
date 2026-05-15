@@ -93,6 +93,27 @@ class TestParseSkillFrontmatter:
         result = server._parse_skill_frontmatter(skill_md)
         assert result is None
 
+    @pytest.mark.parametrize(
+        "yaml_desc",
+        [
+            "description: 42",  # int — truthy non-string
+            "description: 3.14",  # float — truthy non-string
+            "description: [a, b]",  # list — truthy non-string
+            "description: {key: value}",  # dict — truthy non-string
+            "description: true",  # bool — truthy non-string
+        ],
+    )
+    def test_non_string_description_returns_none(self, server, tmp_path, yaml_desc):
+        """Truthy non-string descriptions would later crash on .strip() —
+        callers do ``fm["description"].strip()`` without checking type.
+        Fail closed at the parser so malformed bundles only break
+        themselves, not the whole registration."""
+        skill_md = tmp_path / "bad-type" / "SKILL.md"
+        skill_md.parent.mkdir()
+        skill_md.write_text(f"---\nname: bad-type\n{yaml_desc}\n---\n# Body\n")
+        result = server._parse_skill_frontmatter(skill_md)
+        assert result is None
+
     def test_file_not_readable(self, server, tmp_path):
         """Unreadable file returns None."""
         skill_md = tmp_path / "missing" / "SKILL.md"
@@ -377,16 +398,34 @@ class TestHandleSkillGuideCall:
             )
 
     def test_degraded_mode_tier1_returns_empty_listing(self, server):
-        """No skills dir → tier 1 returns an empty list with an explanation.
+        """No skills dir → tier 1 returns an empty list with an explanation
+        and an explicit ``degraded`` flag.
 
         This is the always-registered-tool contract: callers see a
         structured response explaining the situation, not a missing
-        tool, when the skills submodule is uninitialized.
+        tool, when the skills submodule is uninitialized. The
+        ``degraded`` flag distinguishes this from a healthy server with
+        zero bundled skills (same response shape otherwise).
         """
         result = server._handle_skill_guide_call(None, None, None)
         assert result["success"] is True
+        assert result["degraded"] is True, (
+            "Degraded mode must flip ``degraded`` to True so LLM clients "
+            "can branch on misconfiguration without parsing prose."
+        )
         assert result["skills"] == []
         assert "submodule" in result["how_to_use"].lower()
+
+    def test_healthy_empty_skills_dir_is_not_degraded(self, server, tmp_path):
+        """Healthy server with an empty skills directory must NOT report
+        degraded — that signal is reserved for missing-submodule and
+        equivalent server-side misconfigurations."""
+        result = server._handle_skill_guide_call(tmp_path, None, None)
+        assert result["success"] is True
+        assert result["skills"] == []
+        # Crucially absent (or False), so the LLM treats this as
+        # "healthy server, no bundles installed yet."
+        assert result.get("degraded") is not True
 
     def test_degraded_mode_tier2_raises(self, server):
         """No skills dir → asking for a specific skill raises explicitly."""
@@ -791,3 +830,154 @@ class TestSymlinkRejection:
                 dir_with_symlink, "best-practices", "evil.md"
             )
         assert "symlink" in str(excinfo.value).lower()
+
+
+class TestRegisterSkillsOrchestration:
+    """End-to-end coverage of `_register_skills` — the outer method that
+    sequences resource provider registration and tool registration.
+
+    The always-registered-tool contract says: provider failure (import
+    error, init error, add_provider error) must NOT prevent the
+    polymorphic tool from being registered. Conversely, a tool
+    registration failure must NOT crash server startup; it should set
+    `status["tool"] = "failed"` and let the summary log emit a WARNING.
+    """
+
+    @pytest.fixture
+    def populated_dir(self, tmp_path):
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
+        )
+        return tmp_path
+
+    def test_provider_import_error_still_registers_tool(
+        self, server, populated_dir, monkeypatch, caplog
+    ):
+        """If ``SkillsDirectoryProvider`` is unavailable in fastmcp, the
+        tool still registers and the summary log warns rather than
+        aborting boot."""
+        import builtins
+
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "fastmcp.server.providers.skills":
+                raise ImportError("simulated missing SkillsDirectoryProvider")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
+
+        registered: list[str | None] = []
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = lambda **kwargs: (
+            lambda _fn: registered.append(kwargs.get("name"))
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            server._register_skills()
+
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        assert SKILL_TOOL_NAME in registered, (
+            "Provider ImportError must NOT prevent tool registration — that's "
+            "the always-registered contract from #1134."
+        )
+        # Summary must warn (provider=skipped or failed, not ok).
+        assert any(
+            "Skill system summary" in rec.message and rec.levelno == logging.WARNING
+            for rec in caplog.records
+        )
+
+    def test_provider_add_failure_still_registers_tool(
+        self, server, populated_dir, monkeypatch, caplog
+    ):
+        """If ``mcp.add_provider`` raises (FastMCP regression / bad
+        provider state), the tool still registers and the summary
+        marks provider=failed but tool=ok."""
+        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
+
+        registered: list[str | None] = []
+        server.mcp = MagicMock()
+        server.mcp.add_provider.side_effect = RuntimeError(
+            "simulated provider registration crash"
+        )
+        server.mcp.tool.side_effect = lambda **kwargs: (
+            lambda _fn: registered.append(kwargs.get("name"))
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            server._register_skills()
+
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        assert SKILL_TOOL_NAME in registered
+        # The exception from add_provider must be logged but not propagate.
+        assert any(
+            "Failed to register skills as resources" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_tool_registration_failure_marks_status_failed(
+        self, server, populated_dir, monkeypatch, caplog
+    ):
+        """A registration-time failure (FastMCP API regression) must
+        emit a WARNING summary, not crash server startup."""
+        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
+
+        server.mcp = MagicMock()
+        # Make the inner tool() call raise. add_provider succeeds so we
+        # isolate the tool-registration failure path.
+        server.mcp.tool.side_effect = RuntimeError(
+            "simulated mcp.tool() signature regression"
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            # Must NOT raise — the wrap inside _register_skills swallows it.
+            server._register_skills()
+
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        # The catch must log a specific error mentioning the tool name.
+        assert any(
+            SKILL_TOOL_NAME in rec.message and "Failed to register" in rec.message
+            for rec in caplog.records
+        )
+        # And the summary must be a WARNING (tool=failed).
+        summaries = [
+            rec for rec in caplog.records if "Skill system summary" in rec.message
+        ]
+        assert len(summaries) == 1
+        assert summaries[0].levelno == logging.WARNING
+
+    def test_missing_skills_dir_still_registers_tool(self, server, monkeypatch, caplog):
+        """When the skills submodule isn't checked out at all
+        (`_get_skills_dir()` returns None), the tool must still
+        register — degraded mode is the always-registered contract's
+        explicit signal."""
+        monkeypatch.setattr(server, "_get_skills_dir", lambda: None)
+
+        registered: list[str | None] = []
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = lambda **kwargs: (
+            lambda _fn: registered.append(kwargs.get("name"))
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
+            server._register_skills()
+
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        assert SKILL_TOOL_NAME in registered, (
+            "Missing skills submodule must not prevent tool registration."
+        )
