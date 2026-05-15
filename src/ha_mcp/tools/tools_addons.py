@@ -1135,6 +1135,14 @@ def _apply_array_ops(
                         parameter=f"array_patch.operations[{index}].patches",
                     )
                 )
+            if not patches:
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch patch op #{index} 'patches' cannot be empty "
+                        "(no fields to update)",
+                        parameter=f"array_patch.operations[{index}].patches",
+                    )
+                )
             target = next(
                 (
                     it
@@ -1197,6 +1205,17 @@ def _apply_array_ops(
                     )
                 )
             new_id = new_item[id_field]
+            if new_id is None or new_id == "":
+                # Items missing the id field have `dict.get(id_field) == None`
+                # by default, so allowing None/"" ids would let later patch /
+                # delete ops match unrelated items.
+                raise_tool_error(
+                    create_validation_error(
+                        f"array_patch add op #{index} item {id_field!r} cannot be "
+                        "None or an empty string",
+                        parameter=f"array_patch.operations[{index}].item.{id_field}",
+                    )
+                )
             if any(
                 isinstance(it, dict) and it.get(id_field) == new_id for it in working
             ):
@@ -1235,9 +1254,18 @@ def _apply_array_ops(
                 if not (isinstance(it, dict) and it.get(field) == value)
             ]
             removed = before - len(working)
-            summary["deleted_where"].append(
-                {"field": field, "value": value, "count": removed}
-            )
+            entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
+            # Distinguish "value not present" from "field name unknown to any
+            # item" — the latter is almost always a typo and would otherwise
+            # be a silent count=0.
+            if removed == 0 and not any(
+                isinstance(it, dict) and field in it for it in working
+            ):
+                entry["warning"] = (
+                    f"field {field!r} is not present on any item — "
+                    "check for a typo in the field name"
+                )
+            summary["deleted_where"].append(entry)
 
     return working, summary
 
@@ -1830,9 +1858,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     "Proxy/array-patch mode: extra HTTP headers to send to the addon API. "
                     "Useful for addon-specific requirements such as Node-RED's "
                     "`Node-RED-Deployment-Type: full`. The proxy's internal framing "
-                    "(`X-Ingress-Path`, `X-Hass-Source`, `Content-Type`) is layered on "
-                    "top, so caller-supplied values for those keys are overridden. "
-                    "Not valid in config mode."
+                    "(`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is "
+                    "layered on top, so caller-supplied values for those keys are "
+                    "overridden. Not valid in config or websocket mode."
                 ),
                 default=None,
             ),
@@ -2048,6 +2076,19 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                         parameter="array_patch.operations",
                     )
                 )
+
+        # request_headers applies only to HTTP / array_patch mode.
+        # _call_addon_ws does not accept caller headers — reject the combo
+        # rather than silently dropping them (matches the fail-loud-on-misroute
+        # pattern used for message_limit / message_offset / summarize on HTTP).
+        if request_headers is not None and websocket:
+            raise_tool_error(
+                create_validation_error(
+                    "request_headers applies only to HTTP and array_patch modes; "
+                    "remove it or set websocket=False",
+                    parameter="request_headers",
+                )
+            )
 
         # Config mode: update Supervisor settings
         if config_data:
