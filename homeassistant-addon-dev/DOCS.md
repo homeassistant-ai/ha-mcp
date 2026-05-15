@@ -23,7 +23,9 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
 | `verify_ssl` | Verify the HA server's TLS certificate. Disable for self-signed certs or hostname mismatches. Weakens security — leave on unless needed. | `true` |
 
-*Removed in 7.4.x:* `enable_skills` *and* `enable_skills_as_tools`*. Bundled skills are now always served; to hide* `ha_list_resources` *or* `ha_read_resource` *from the catalog, disable them from the Tool Settings Web UI (see below).*
+*Removed in 7.4.x:* `enable_skills` *and* `enable_skills_as_tools`*. Bundled skills are now always served via* `skill://` *resources (for resource-capable clients) and via the* `ha_get_skill_guide` *tool (for tool-only clients).*
+
+*Changed in 7.5.x:* *The three prior skill tools (*`ha_list_resources`*,* `ha_read_resource`*, and the per-skill* `ha_get_skill_*` *guidance tools) have been consolidated into a single polymorphic* `ha_get_skill_guide` *tool (see #1134). The new tool is mandatory-pinned and cannot be disabled from the Tool Settings Web UI — its description carries the bundled best-practice trigger conditions that tool-only clients rely on.*
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
 

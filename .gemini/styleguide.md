@@ -108,8 +108,8 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 **Flag MEDIUM severity when a new or modified tool docstring:**
 - Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
 - Is missing entirely or is still a placeholder
-- References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
-- Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
+- References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_guide`)
+- Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
 - Multi-line docstring does not follow the structure template: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, (4) caveats. See AGENTS.md "Tool Docstrings" for details.
 

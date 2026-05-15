@@ -213,8 +213,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         try:
             entries = sorted(skills_dir.iterdir())
-        except OSError:
-            logger.warning("Could not read skills directory: %s", skills_dir)
+        except OSError as e:
+            logger.warning("Could not read skills directory %s: %s", skills_dir, e)
             return None
 
         skill_blocks: list[str] = []
@@ -291,8 +291,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """
         try:
             content = main_file.read_text(encoding="utf-8")
-        except OSError:
-            logger.warning("Could not read %s", main_file)
+        except OSError as e:
+            logger.warning("Could not read %s: %s", main_file, e)
             return None
 
         parts = content.split("---", 2)
@@ -302,8 +302,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         try:
             frontmatter = yaml.safe_load(parts[1])
-        except yaml.YAMLError:
-            logger.warning("Could not parse YAML frontmatter in %s", main_file)
+        except yaml.YAMLError as e:
+            # yaml.YAMLError exposes `.problem` and `.problem_mark` for
+            # parse errors — both are the entire debugging payload for
+            # an operator trying to fix the SKILL.md.
+            logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
             return None
 
         if not isinstance(frontmatter, dict):
@@ -727,8 +730,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         Replaces the full tool catalog with a unified BM25 search tool and
         three categorized call proxies (read/write/delete). Pinned tools
         remain directly visible in list_tools() for individual permission
-        gating. The polymorphic ``ha_get_skill_guide`` tool is also pinned
-        so the bundled skill trigger-conditions stay in the catalog.
+        gating. The polymorphic ``ha_get_skill_guide`` tool is pinned via
+        ``DEFAULT_PINNED_TOOLS`` (transforms/categorized_search.py) so the
+        bundled skill trigger-conditions stay in the catalog — no explicit
+        ``pinned.append(...)`` for it here.
 
         Note: ``_apply_search_keyword_enrichment`` already ran before this
         method and installed ``SearchKeywordsTransform`` — the enriched
@@ -916,8 +921,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """
         try:
             entries = sorted(skills_dir.iterdir())
-        except OSError:
-            logger.warning("Could not read skills directory: %s", skills_dir)
+        except OSError as e:
+            logger.warning("Could not read skills directory %s: %s", skills_dir, e)
             return []
 
         skills: list[tuple[str, Path, dict[str, Any]]] = []
@@ -948,8 +953,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 if not f.resolve().is_relative_to(resolved_root):
                     continue
                 files.append(str(f.relative_to(skill_dir)))
-        except OSError:
-            logger.warning("Error reading skill files in %s", skill_dir)
+        except OSError as e:
+            logger.warning("Error reading skill files in %s: %s", skill_dir, e)
         return files
 
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
@@ -997,13 +1002,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # Degraded mode: tool registered but skills directory is
             # missing/empty. The description signals this so the LLM
             # doesn't keep retrying calls expecting content.
+            # Even in degraded mode, append the action-phrased keyword
+            # block so BM25 retrieval still ranks this tool for the
+            # workflow positions the description covers — the tool is
+            # mandatory-pinned, so it stays in the catalog regardless,
+            # but the keywords keep ranking sane for tool-search.
             tool_description = (
                 "Get bundled Home Assistant best-practice skill guides. "
                 "No skill bundles are currently available on this server — "
                 "the skills directory is missing, empty, or all SKILL.md "
                 "files failed to parse. Calls return an empty listing; "
                 "ask the operator to verify the skills-vendor submodule "
-                "is initialized.\n\n" + _OLD_SKILL_TOOL_ALIASES
+                f"is initialized.\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
+                + _OLD_SKILL_TOOL_ALIASES
             )
 
         async def ha_get_skill_guide(
@@ -1118,10 +1129,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             }
 
         skill_dir = skills_dir / skill
-        # Reject traversal in the ``skill`` arg itself — the path-resolve
-        # check on tier 3 catches files inside a valid skill, but tier 2
-        # (list files) needs its own guard so '../something' can't list
-        # an unrelated directory.
+        # Reject traversal AND symlinks in the ``skill`` arg itself.
+        # Tier 3's path-resolve check catches files inside a valid skill,
+        # but tier 2 (list files) needs its own guard so '../something'
+        # can't list an unrelated directory. The is_symlink() rejection
+        # matches the symlink filter in _list_skill_files (a tier-2
+        # response should never enumerate from a directory the listing
+        # itself wouldn't expose).
         if (
             not skill_dir.exists()
             or not skill_dir.is_dir()
@@ -1158,13 +1172,48 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 ),
             }
 
-        # Tier 3: skill + file → read content
-        target = (skill_dir / file).resolve()
-        if (
-            not target.is_relative_to(skill_dir.resolve())
-            or not target.is_file()
-            or target.is_symlink()
-        ):
+        # Tier 3: skill + file → read content.
+        #
+        # Symlink check happens BEFORE resolve() — resolve() follows
+        # symlinks, so by the time you call is_symlink() on the resolved
+        # path it always returns False. Pre-resolve check matches the
+        # is_symlink() filter in _list_skill_files (tier 2 listings hide
+        # symlinks, so tier 3 must reject them with the same semantics).
+        candidate = skill_dir / file
+        if candidate.is_symlink():
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    message=(
+                        f"Refusing to follow symlink at {file!r} in skill {skill!r}."
+                    ),
+                    context={"skill": skill, "file": file},
+                    suggestions=[
+                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to see the "
+                        "non-symlink files this skill exposes.",
+                        "Ask the operator to replace the symlink with a "
+                        "regular file inside the skill directory.",
+                    ],
+                )
+            )
+        try:
+            target = candidate.resolve()
+        except OSError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    message=(
+                        f"Could not resolve path for file {file!r} in skill "
+                        f"{skill!r}: {e}"
+                    ),
+                    context={"skill": skill, "file": file},
+                    suggestions=[
+                        "Check filesystem permissions on the skills-vendor directory.",
+                        "Check the server logs for the underlying OSError.",
+                    ],
+                )
+            )
+        if not target.is_relative_to(skill_dir.resolve()) or not target.is_file():
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
@@ -1183,7 +1232,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         except OSError as e:
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
+                    ErrorCode.INTERNAL_ERROR,
                     message=f"Could not read file {file!r} in skill {skill!r}: {e}",
                     context={"skill": skill, "file": file},
                     suggestions=[

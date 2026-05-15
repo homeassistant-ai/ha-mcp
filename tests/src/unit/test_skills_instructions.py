@@ -1,6 +1,7 @@
 """Unit tests for _parse_skill_frontmatter(), _build_skill_block(),
 and _build_skills_instructions()."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -502,3 +503,273 @@ class TestSkillToolAliasKeywords:
 
         assert "ha_list_resources" in desc
         assert "ha_get_skill_home_assistant_best_practices" in desc
+
+
+class TestSkillToolRegistration:
+    """Registration-time invariants that aren't covered by tier-dispatch
+    tests in TestHandleSkillGuideCall.
+
+    These guard against silent regressions in `mcp.tool()` arguments —
+    annotations and tags don't show up in the description, so the
+    description-based tests above don't catch a flip from
+    `readOnlyHint: True` to `destructiveHint: True`.
+    """
+
+    @pytest.fixture
+    def populated_dir(self, tmp_path):
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
+        )
+        (skill / "reference.md").write_text("# Ref\n")
+        return tmp_path
+
+    @pytest.fixture
+    def captor(self):
+        """A ``mcp.tool`` side_effect that records args and returns a no-op decorator."""
+        captured: dict = {}
+
+        def fake_tool(*, name, description, annotations=None, tags=None, **_kwargs):
+            def _decorator(fn):
+                captured[name] = {
+                    "description": description,
+                    "annotations": annotations or {},
+                    "tags": tags or set(),
+                    "fn": fn,
+                }
+                return fn
+
+            return _decorator
+
+        return captured, fake_tool
+
+    def test_register_returns_skill_count(self, server, populated_dir, captor):
+        """The return value feeds _log_skill_registration_summary's
+        guidance_count key — a regression to ``return 0`` (or returning
+        the description length) would silently flip the operator log
+        line from info to warning."""
+        captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        result = server._register_skill_guide_tool(populated_dir)
+
+        assert result == 1, (
+            "Return value should equal the number of parseable bundled "
+            f"skills (1 here); got {result}."
+        )
+
+    def test_register_returns_zero_for_missing_dir(self, server, captor):
+        """Degraded branch returns 0 so the summary log flags 'shipped
+        but exposes nothing'."""
+        _captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        result = server._register_skill_guide_tool(None)
+
+        assert result == 0
+
+    def test_tool_annotations_are_correct(self, server, populated_dir, captor):
+        """readOnlyHint + idempotentHint must stay set — a flip to
+        destructiveHint would weaken client-side permission gating."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(populated_dir)
+        annotations = captured[SKILL_TOOL_NAME]["annotations"]
+
+        assert annotations.get("readOnlyHint") is True
+        assert annotations.get("idempotentHint") is True
+        assert annotations.get("destructiveHint") is not True
+
+    def test_tool_tags_are_correct(self, server, populated_dir, captor):
+        """``System`` tag drives settings-UI placement; a missing tag
+        would land the tool in ``Other`` in _get_tool_metadata."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(populated_dir)
+        assert "System" in captured[SKILL_TOOL_NAME]["tags"]
+
+    def test_populated_description_includes_keyword_block(
+        self, server, populated_dir, captor
+    ):
+        """``_SKILL_USE_BEFORE_KEYWORDS`` must appear in the populated-
+        mode description so BM25 retrieval ranks this tool for the
+        action-phrased queries it lists. Replaces equivalent coverage
+        from the deleted test_ha_resources_as_tools.py."""
+        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
+
+        captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(populated_dir)
+        desc = captured[SKILL_TOOL_NAME]["description"]
+
+        # Spot-check a few action-phrased anchors from the keyword block
+        # rather than the full string (description ordering is not part
+        # of the contract).
+        for anchor in (
+            "Use BEFORE:",
+            "creating or editing automations",
+            "writing triggers",
+            "ha_config_set_automation",
+        ):
+            assert anchor in desc, (
+                f"Populated description missing {anchor!r} from "
+                f"HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS — "
+                "BM25 retrieval will rank worse on action-phrased queries."
+            )
+        # Sanity: the static block must equal what the class exposes,
+        # so a future rename of the attribute would also fail here.
+        assert HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS in desc
+
+    def test_degraded_description_includes_keyword_block(self, server, captor):
+        """Same retrieval-ranking guarantee in the degraded branch — the
+        tool is mandatory-pinned so it stays in the catalog regardless,
+        but BM25 still needs the keyword block to rank it for the
+        relevant queries."""
+        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
+
+        captured, fake_tool = captor
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(None)
+        desc = captured[SKILL_TOOL_NAME]["description"]
+
+        assert HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS in desc
+
+
+class TestHandleSkillGuideCallReadFailures:
+    """Coverage of the OSError-on-read branch (server.py tier 3).
+
+    The earlier traversal/missing-file tests exercise the structural
+    failure modes but never force `read_text` to raise. A regression
+    that swallows the OSError into a 200 with empty content would slip
+    past — these tests pin the contract by either pointing at an
+    unreadable path or by patching `read_text` to raise.
+    """
+
+    @pytest.fixture
+    def populated_dir(self, tmp_path):
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
+        )
+        (skill / "reference.md").write_text("# Ref\n")
+        return tmp_path
+
+    def test_oserror_on_read_raises_tool_error(
+        self, server, populated_dir, monkeypatch
+    ):
+        """`read_text` raising OSError must surface as ToolError with
+        INTERNAL_ERROR, not as a success payload with empty content."""
+        from fastmcp.exceptions import ToolError
+
+        original_read_text = Path.read_text
+
+        def boom(self, *args, **kwargs):
+            # Only blow up on the skill file; leave SKILL.md parsing
+            # (called during _list_bundled_skills) untouched.
+            if self.name == "reference.md":
+                raise PermissionError("simulated EACCES")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", boom)
+
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(
+                populated_dir, "best-practices", "reference.md"
+            )
+
+        # The structured-error payload should mention the file name so
+        # operators can correlate with logs, and carry INTERNAL_ERROR
+        # (not SERVICE_CALL_FAILED — file reads aren't HA service calls).
+        payload = str(excinfo.value)
+        assert "reference.md" in payload
+        assert "INTERNAL_ERROR" in payload
+
+    def test_resolve_oserror_raises_tool_error(
+        self, server, populated_dir, monkeypatch
+    ):
+        """`Path.resolve` raising OSError (rare; some platforms) must
+        surface as ToolError, not bubble as INTERNAL_ERROR via
+        fastmcp's generic wrapper."""
+        from fastmcp.exceptions import ToolError
+
+        original_resolve = Path.resolve
+
+        def boom(self, *args, **kwargs):
+            # Force the failure on the tier-3 candidate path; leave the
+            # skills_dir.resolve() in the is_relative_to check (called
+            # later) intact by name-checking.
+            if self.name == "reference.md":
+                raise OSError("simulated resolve failure")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", boom)
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(
+                populated_dir, "best-practices", "reference.md"
+            )
+
+
+class TestSymlinkRejection:
+    """Symlinks in skill bundles must be filtered in both directions
+    (tier 2 listing) and rejected (tier 3 read).
+
+    The e2e path-traversal tests cover string-based traversal in the
+    args; this class covers on-disk symlinks placed inside an
+    otherwise-valid skill directory. Without these tests, a regression
+    that removed the `is_symlink()` filter from `_list_skill_files`
+    or the tier-3 candidate check would not fail.
+    """
+
+    @pytest.fixture
+    def dir_with_symlink(self, tmp_path):
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
+        )
+        (skill / "regular.md").write_text("# Regular\n")
+
+        # Symlink pointing outside the skill dir (worst case).
+        outside_target = tmp_path / "outside.md"
+        outside_target.write_text("# Outside\n")
+        (skill / "evil.md").symlink_to(outside_target)
+
+        return tmp_path
+
+    def test_list_skill_files_skips_symlinks(self, server, dir_with_symlink):
+        files = server._list_skill_files(dir_with_symlink / "best-practices")
+        assert "regular.md" in files
+        assert "SKILL.md" in files
+        assert "evil.md" not in files, (
+            "_list_skill_files must filter symlinks — a malicious or "
+            "misconfigured skill bundle could otherwise expose files "
+            "outside the skill directory via tier 2 listings."
+        )
+
+    def test_tier3_rejects_symlink_file(self, server, dir_with_symlink):
+        """Tier 3 read on the symlink name must raise, not return the
+        outside file's content."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(
+                dir_with_symlink, "best-practices", "evil.md"
+            )
+        assert "symlink" in str(excinfo.value).lower()
