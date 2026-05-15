@@ -16,6 +16,7 @@ from ..errors import ErrorCode, create_error_response, create_resource_not_found
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    PythonSandboxExecutionError,
     format_sandbox_error,
     get_security_documentation,
     safe_execute,
@@ -1096,6 +1097,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
                     message, suggestions = format_sandbox_error(e, python_transform)
+                    # Runtime IndexError/KeyError almost always means the agent
+                    # constructed a path that doesn't match the actual dashboard
+                    # shape (wrong view, missing sections wrapper, etc). Point
+                    # them at search mode so the next attempt uses a verified
+                    # jq_path instead of guessing indices.
+                    if isinstance(e, PythonSandboxExecutionError) and (
+                        "IndexError" in str(e) or "KeyError" in str(e)
+                    ):
+                        suggestions = [
+                            "Use ha_config_get_dashboard(url_path=..., card_type=...) "
+                            "or (entity_id=...) to get the verified jq_path, then "
+                            "build python_transform from that path",
+                            *suggestions,
+                        ]
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,

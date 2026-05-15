@@ -431,6 +431,33 @@ class TestBlockedOperations:
         assert "Call" in error
 
 
+class TestStringMethods1279:
+    """Regression tests for issue #1279 — str.replace() missing from whitelist.
+
+    A weaker agent (Gemini flash) hit ``Forbidden method: replace`` while
+    sanitizing a markdown card. ``replace`` is a pure, side-effect-free
+    string method on par with ``split``/``join``/``strip`` (already
+    allowed), so its omission was an oversight rather than a deliberate
+    block. These pin the gap shut.
+    """
+
+    def test_replace_validates(self):
+        valid, error = validate_expression(
+            "config['views'][0]['cards'][0]['content'] = "
+            "config['views'][0]['cards'][0]['content'].replace('\\\\', '')"
+        )
+        assert valid is True, error
+
+    def test_replace_executes(self):
+        config = {"views": [{"cards": [{"content": "a\\b\\c"}]}]}
+        expr = (
+            "config['views'][0]['cards'][0]['content'] = "
+            "config['views'][0]['cards'][0]['content'].replace('\\\\', '')"
+        )
+        result = safe_execute(expr, config)
+        assert result["views"][0]["cards"][0]["content"] == "abc"
+
+
 class TestSafeExecute:
     """Test safe execution of expressions."""
 

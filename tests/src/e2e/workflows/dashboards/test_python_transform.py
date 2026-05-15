@@ -358,3 +358,92 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
     assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
+
+
+@pytest.mark.asyncio
+async def test_python_transform_replace_string_method(mcp_client, ha_client):
+    """Issue #1279: str.replace() is allowed inside python_transform.
+
+    A weaker agent hit ``Forbidden method: replace`` while sanitizing a
+    markdown card. ``replace`` is now whitelisted alongside other pure
+    string methods (``split``/``join``/``strip``).
+    """
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-replace",
+            "config": {
+                "views": [
+                    {
+                        "cards": [
+                            {"type": "markdown", "content": "a\\b\\c"},
+                        ]
+                    }
+                ]
+            },
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-replace"}
+    )
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-replace",
+            "config_hash": get_result["config_hash"],
+            "python_transform": (
+                "card = config['views'][0]['cards'][0]\n"
+                "card['content'] = card['content'].replace('\\\\', '')"
+            ),
+        },
+    )
+
+    verify = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-replace"}
+    )
+    assert verify["config"]["views"][0]["cards"][0]["content"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_client):
+    """Issue #1279: IndexError from a bad path nudges the agent toward search mode.
+
+    Weaker models hallucinate dashboard structure and construct paths like
+    ``config['views'][3]['sections'][0]...`` against a single-view dashboard.
+    The IndexError is correct tool behavior, but the failure message should
+    point the agent at ``ha_config_get_dashboard(card_type=...)`` so the
+    retry uses a verified jq_path.
+    """
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-index",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-bad-index"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-index",
+            "config_hash": get_result["config_hash"],
+            "python_transform": "config['views'][3]['cards'][0]['type'] = 'tile'",
+        },
+    )
+
+    error = result["error"] if isinstance(result["error"], dict) else {}
+    suggestions = error.get("suggestions", [])
+    joined = " ".join(suggestions)
+    assert "jq_path" in joined or "ha_config_get_dashboard" in joined, (
+        f"Expected dashboard search-mode hint in suggestions, got: {suggestions}"
+    )

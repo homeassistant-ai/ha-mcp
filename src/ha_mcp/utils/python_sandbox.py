@@ -192,6 +192,7 @@ SAFE_METHODS = {
     "strip",
     "split",
     "join",
+    "replace",
 }
 
 # Blocked function names
@@ -514,7 +515,7 @@ PYTHON TRANSFORM SECURITY:
 - Dict unpacking (**) in calls and dict literals: {**d, 'k': v}
 - Keyword arguments: func(key=value)
 - Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])
-- String methods: startswith, endswith, lower, upper, split, join
+- String methods: startswith, endswith, lower, upper, strip, split, join, replace
 - Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,
   min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,
   tuple, set
