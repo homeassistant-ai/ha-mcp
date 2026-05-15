@@ -527,7 +527,7 @@ class HomeAssistantClient:
 
         - ``"addons/<slug>"`` for add-on container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
-          multicast, observer}) for system-service logs
+          cli, multicast, observer}) for system-service logs
 
         Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
         endpoint uses a different base URL (``http://supervisor``) and a
@@ -645,18 +645,42 @@ class HomeAssistantClient:
         return await self._supervisor_logs_get(f"addons/{slug}")
 
     async def _get_system_service_logs(self, service: str) -> str:
-        """Fetch HA system-service logs directly from Supervisor's REST API.
+        """Fetch HA system-service logs.
 
-        Hits ``http://supervisor/{service}/logs``. ``service`` must be one of
-        the seven Supervisor-managed services: ``supervisor``, ``host``,
-        ``core``, ``dns``, ``audio``, ``multicast``, ``observer``. Caller is
-        responsible for validating ``service`` against the allowed set; this
-        helper does no validation and will raise ``HomeAssistantAPIError`` on
-        any unknown path (404 from Supervisor).
+        ``service`` must be one of the eight Supervisor-managed services:
+        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
+        ``multicast``, ``observer``. Caller is responsible for validating
+        ``service`` against the allowed set; this helper does no validation
+        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
 
-        Requires ``hassio_role: manager`` like the addon-logs path.
+        Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
+        inside the addon container goes directly to Supervisor at
+        ``http://supervisor/{service}/logs`` with the Supervisor token
+        (``hassio_role: manager`` required). On non-addon installs (Docker
+        without Supervisor, pyinstaller, pip pointing at a normal HA URL),
+        falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
+
+        All seven slugs are whitelisted in HA Core's hassio proxy
+        (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
+        an admin LLA is sufficient to reach any of them from outside the
+        addon.
+
+        Closes #1260: pre-fix this method had only the addon-direct branch,
+        so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the
+        ``SUPERVISOR_TOKEN``-absent fail-fast in ``_supervisor_logs_get`` for
+        every service, while the sibling ``source="supervisor"`` (addon
+        logs) call kept working through its own Core-proxy fallback.
         """
-        return await self._supervisor_logs_get(service)
+        if is_running_in_addon():
+            return await self._supervisor_logs_get(service)
+
+        logger.debug(f"Fetching {service} logs via HA Core proxy")
+        response = await self._raw_request(
+            "GET",
+            f"/hassio/{service}/logs",
+            headers={"Accept": "text/plain"},
+        )
+        return response.text
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """
