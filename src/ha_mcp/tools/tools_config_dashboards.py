@@ -27,6 +27,57 @@ from .util_helpers import parse_json_param
 logger = logging.getLogger(__name__)
 
 
+async def _get_dashboard_config_internal(
+    client: Any, url_path: str | None
+) -> tuple[dict[str, Any], str]:
+    """Fetch dashboard config from HA and compute its hash.
+
+    Returns ``(config, config_hash)`` tuple where ``config`` is the
+    authoritative Lovelace config dict returned by HA's ``lovelace/config``
+    WebSocket call (with ``force=True`` to bypass any cache) and
+    ``config_hash`` is computed from that config via ``compute_config_hash``.
+
+    Used internally to obtain the authoritative post-save hash and as the
+    fetch+hash building block for the optimistic-locking pre-read paths.
+    Mirrors the ``_get_<entity>_config_internal`` helpers in the sibling
+    files (``tools_config_scripts.py``, ``tools_config_automations.py``,
+    ``tools_config_scenes.py``).
+
+    Raises ``ToolError`` with ``ErrorCode.SERVICE_CALL_FAILED`` if the
+    WebSocket call reports failure or the response is not a dict; callers
+    can rely on the returned tuple being populated.
+    """
+    get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+    if url_path:
+        get_data["url_path"] = url_path
+
+    response = await client.send_websocket_message(get_data)
+
+    if isinstance(response, dict) and not response.get("success", True):
+        error_msg = response.get("error", {})
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Dashboard fetch failed: {error_msg}",
+                context={"url_path": url_path},
+            )
+        )
+
+    config = response.get("result") if isinstance(response, dict) else response
+    if not isinstance(config, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Dashboard config response was not a dict",
+                context={"url_path": url_path},
+            )
+        )
+
+    return cast(dict[str, Any], config), compute_config_hash(config)
+
+
 async def _verify_config_unchanged(
     client: Any,
     url_path: str,
@@ -1029,21 +1080,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                # Fetch current dashboard config
-                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-                if url_path:
-                    get_data["url_path"] = url_path
-
-                response = await client.send_websocket_message(get_data)
-
-                if isinstance(response, dict) and not response.get("success", True):
-                    error_msg = response.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
+                # Fetch current dashboard config + hash via the shared helper.
+                # Re-wrap helper's generic fetch error with python_transform-
+                # specific UX suggestions so the caller learns this branch
+                # requires an existing dashboard.
+                try:
+                    current_config, current_hash = (
+                        await _get_dashboard_config_internal(client, url_path)
+                    )
+                except ToolError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Dashboard not found or inaccessible: {error_msg}",
+                            f"Dashboard not found or inaccessible: {e}",
                             suggestions=[
                                 "python_transform requires an existing dashboard",
                                 "Use 'config' parameter to create a new dashboard",
@@ -1056,26 +1105,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                current_config = (
-                    response.get("result") if isinstance(response, dict) else response
-                )
-                if not isinstance(current_config, dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Current dashboard config is invalid",
-                            suggestions=[
-                                "Initialize dashboard with 'config' parameter first"
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "url_path": url_path,
-                            },
-                        )
-                    )
-
                 # Validate config_hash for optimistic locking
-                current_hash = compute_config_hash(current_config)
                 if current_hash != config_hash:
                     raise_tool_error(
                         create_error_response(
@@ -1153,8 +1183,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                # Compute new hash for potential chaining
-                new_config_hash = compute_config_hash(transformed_config)
+                # Re-fetch to get authoritative hash (HA may normalize after save)
+                _, new_config_hash = await _get_dashboard_config_internal(
+                    client, url_path
+                )
 
                 transform_result: dict[str, Any] = {
                     "success": True,
@@ -1309,38 +1341,37 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 # For existing dashboards, optionally validate config_hash and warn on large replacement
                 if dashboard_exists:
-                    # Fetch current config for validation/comparison
-                    get_data = {
-                        "type": "lovelace/config",
-                        "force": True,
-                    }
-                    if url_path:
-                        get_data["url_path"] = url_path
-                    current_response = await client.send_websocket_message(get_data)
-                    current_config = (
-                        current_response.get("result")
-                        if isinstance(current_response, dict)
-                        else current_response
-                    )
+                    # Fetch current config + hash via the shared helper.
+                    # Tolerate fetch failures here — full-config replacement
+                    # should still proceed even if the pre-read can't load
+                    # the current state (force-replace path). The strict
+                    # ``ToolError`` raised by the helper is downgraded to a
+                    # skip of both the optimistic-locking check and the
+                    # large-config soft warning, matching the prior
+                    # silently-fall-through behaviour.
+                    try:
+                        current_config, current_hash = (
+                            await _get_dashboard_config_internal(client, url_path)
+                        )
+                    except ToolError:
+                        current_config, current_hash = None, None
 
                     if isinstance(current_config, dict):
                         existing_config_size = len(json.dumps(current_config))
 
                         # Optional config_hash validation for full replacement
-                        if config_hash is not None:
-                            current_hash = compute_config_hash(current_config)
-                            if current_hash != config_hash:
-                                raise_tool_error(
-                                    create_error_response(
-                                        ErrorCode.SERVICE_CALL_FAILED,
-                                        "Dashboard modified since last read (conflict)",
-                                        suggestions=[
-                                            "Call ha_config_get_dashboard() again",
-                                            "Use the fresh config_hash, or omit config_hash to force replace",
-                                        ],
-                                        context={"action": "set", "url_path": url_path},
-                                    )
+                        if config_hash is not None and current_hash != config_hash:
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.SERVICE_CALL_FAILED,
+                                    "Dashboard modified since last read (conflict)",
+                                    suggestions=[
+                                        "Call ha_config_get_dashboard() again",
+                                        "Use the fresh config_hash, or omit config_hash to force replace",
+                                    ],
+                                    context={"action": "set", "url_path": url_path},
                                 )
+                            )
 
                         # Soft warning for large config full replacement (10KB ≈ 2-3k tokens)
                         if existing_config_size >= 10000:

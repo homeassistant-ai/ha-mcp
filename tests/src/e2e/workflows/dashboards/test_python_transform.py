@@ -509,3 +509,101 @@ async def test_python_transform_unrelated_runtime_error_no_search_hint(
     assert "card_type" not in joined, (
         f"Unrelated TypeError should not get the search-mode hint, got: {suggestions}"
     )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_returns_authoritative_post_save_hash(
+    mcp_client, ha_client
+):
+    """Regression for #1291: the hash returned by set(python_transform) must
+    equal the hash a subsequent get returns — i.e. the post-save authoritative
+    state, not the pre-save in-memory transformed dict.
+
+    Before the fix, ``new_config_hash = compute_config_hash(transformed_config)``
+    (tools_config_dashboards.py, around L1157) silently drifted whenever HA
+    normalised on save (key reorder, default injection, empty-container
+    stripping). A subsequent ``set(python_transform=..., config_hash=<returned>)``
+    would then trip ``Dashboard modified since last read`` even with no
+    concurrent writes. The fix re-fetches via ``_get_dashboard_config_internal``
+    to obtain the authoritative hash, matching the sibling pattern in
+    ``tools_config_scripts.py`` / ``tools_config_scenes.py`` /
+    ``tools_config_automations.py``.
+
+    Hash invariance is a pre-condition for chained python_transform calls and
+    for the styleguide's "Dashboard updates use content hashing, not session
+    tracking" contract.
+    """
+    mcp = MCPAssertions(mcp_client)
+    url_path = "test-1291-hash-auth"
+
+    try:
+        # Create dashboard
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config": {
+                    "views": [
+                        {
+                            "cards": [
+                                {"type": "markdown", "content": "v1"}
+                            ]
+                        }
+                    ]
+                },
+            },
+        )
+
+        get_initial = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": url_path}
+        )
+        initial_hash = get_initial["config_hash"]
+
+        # Apply python_transform; capture returned hash.
+        transform_result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config_hash": initial_hash,
+                "python_transform": (
+                    "config['views'][0]['cards'][0]['content'] = 'transformed'"
+                ),
+            },
+        )
+        returned_hash = transform_result["config_hash"]
+
+        # Re-read to obtain HA's authoritative post-save hash.
+        verify_get = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": url_path}
+        )
+        post_save_hash = verify_get["config_hash"]
+
+        # Invariant: hash returned by set(python_transform) must equal a
+        # subsequent get's hash. Master computes it from the pre-save dict;
+        # the fix re-fetches and computes it from HA's authoritative response.
+        assert returned_hash == post_save_hash, (
+            "set(python_transform) returned a config_hash that does not match "
+            "the hash from a subsequent get — the optimistic-locking chain is "
+            "broken (next chained python_transform call would fail with "
+            "'Dashboard modified since last read'). "
+            f"returned={returned_hash!r} post_save={post_save_hash!r}"
+        )
+
+        # Chain a second python_transform using the returned hash — this is
+        # the user-visible scenario that breaks when the invariant fails.
+        chain_result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config_hash": returned_hash,
+                "python_transform": (
+                    "config['views'][0]['cards'][0]['content'] = 'chained'"
+                ),
+            },
+        )
+        assert chain_result["success"] is True
+        assert chain_result["action"] == "python_transform"
+    finally:
+        await mcp.call_tool_success(
+            "ha_config_delete_dashboard", {"url_path": url_path}
+        )
