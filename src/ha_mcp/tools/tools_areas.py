@@ -12,14 +12,14 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import parse_string_list_param
+from .util_helpers import parse_string_list_param, project_fields
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +132,52 @@ class AreaTools:
         annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"},
     )
     @log_tool_usage
-    async def ha_config_list_areas(self) -> dict[str, Any]:
+    async def ha_config_list_areas(
+        self,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["areas"]). '
+                    "None = full response (default). "
+                    "Available keys: success, count, areas, message."
+                ),
+            ),
+        ] = None,
+        area_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each area record to only the specified keys. "
+                    'E.g. ["area_id", "name"] returns slim area records. '
+                    "None = full records (default). Unknown keys yield empty records. "
+                    "Available keys: area_id, name, icon, floor_id, aliases, picture, labels."
+                ),
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """
         List all Home Assistant areas (rooms).
 
         Returns area ID, name, icon, floor assignment, aliases, and picture URL.
         """
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+        parsed_area_fields: list[str] | None = None
+        if area_fields is not None:
+            try:
+                parsed_area_fields = parse_string_list_param(area_fields, "area_fields", allow_csv=True)
+                if parsed_area_fields is not None and len(parsed_area_fields) == 0:
+                    raise ValueError("area_fields must contain at least one key")
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="area_fields"))
         try:
             message: dict[str, Any] = {
                 "type": "config/area_registry/list",
@@ -147,12 +187,18 @@ class AreaTools:
 
             if result.get("success"):
                 areas = result.get("result", [])
-                return {
+                if parsed_area_fields is not None:
+                    areas = [
+                        {k: v for k, v in a.items() if k in parsed_area_fields}
+                        for a in areas
+                    ]
+                response: dict[str, Any] = {
                     "success": True,
                     "count": len(areas),
                     "areas": areas,
                     "message": f"Found {len(areas)} area(s)",
                 }
+                return project_fields(response, parsed_fields)
             else:
                 raise_tool_error(create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

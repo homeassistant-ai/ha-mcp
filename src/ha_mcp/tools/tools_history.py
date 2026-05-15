@@ -19,7 +19,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -34,6 +34,7 @@ from .util_helpers import (
     build_pagination_metadata,
     coerce_int_param,
     parse_string_list_param,
+    project_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,30 @@ class HistoryTools:
                 default=None,
             ),
         ] = None,
+        order: Annotated[
+            Literal["asc", "desc"],
+            Field(
+                default="desc",
+                description=(
+                    'Sort order for history entries. "desc" (default): newest first. '
+                    '"asc": oldest first (chronological, as returned by HA API). '
+                    'Ignored when source="statistics".'
+                ),
+            ),
+        ] = "desc",
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    "response size. None = full response (default). "
+                    "History keys: success, source, entities, period, query_params. "
+                    "Statistics keys: success, source, entities, period_type, time_range, "
+                    "statistic_types, query_params, warnings."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
@@ -254,6 +279,12 @@ class HistoryTools:
                        start_time="30d", period="5minute", limit=100, offset=200)
         ```
         """
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
             # Parse entity_ids
             entity_id_list = _parse_entity_ids(entity_ids)
@@ -326,17 +357,18 @@ class HistoryTools:
 
             try:
                 if source == "statistics":
-                    result = await _fetch_statistics(
-                        ws_client, self._client, entity_id_list,
+                    inner = await _fetch_statistics(
+                        ws_client, entity_id_list,
                         start_dt, end_dt, period, statistic_types,
                         limit, offset,
                     )
                 else:
-                    result = await _fetch_history(
-                        ws_client, self._client, entity_id_list,
+                    inner = await _fetch_history(
+                        ws_client, entity_id_list,
                         start_dt, end_dt, minimal_response,
                         significant_changes_only, limit, offset,
                         _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
+                        order=order,
                     )
                 await safe_progress(
                     ctx,
@@ -344,7 +376,13 @@ class HistoryTools:
                     total=3,
                     message="recorder query complete",
                 )
-                return result
+                # Wrap first so the outer {"data": ..., "metadata": ...} shape
+                # is always present; then project the inner data dict in-place
+                # when caller requested field projection.
+                _r = await add_timezone_metadata(self._client, inner)
+                if parsed_fields is not None:
+                    _r["data"] = project_fields(_r["data"], parsed_fields)
+                return _r
             finally:
                 if ws_client:
                     await ws_client.disconnect()
@@ -442,7 +480,6 @@ def _parse_time_range(
 
 async def _fetch_history(
     ws_client: Any,
-    client: Any,
     entity_id_list: list[str],
     start_dt: datetime,
     end_dt: datetime,
@@ -452,8 +489,13 @@ async def _fetch_history(
     offset: int | str | None,
     default_limit: int,
     max_limit: int,
+    order: str = "desc",
 ) -> dict[str, Any]:
-    """Execute the history/history_during_period WebSocket call."""
+    """Execute the history/history_during_period WebSocket call.
+
+    Returns the unwrapped history dict; the caller is responsible for projection
+    and wrapping with ``add_timezone_metadata``.
+    """
     try:
         effective_limit = coerce_int_param(
             limit,
@@ -516,6 +558,8 @@ async def _fetch_history(
 
     for entity_id in entity_id_list:
         entity_states = result_data.get(entity_id, [])
+        if order == "desc":
+            entity_states = list(reversed(entity_states))
         paged_states = entity_states[effective_offset : effective_offset + effective_limit]
 
         formatted_states = []
@@ -563,15 +607,15 @@ async def _fetch_history(
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
             "offset": effective_offset,
+            "order": order,
         },
     }
 
-    return await add_timezone_metadata(client, history_data)
+    return history_data
 
 
 async def _fetch_statistics(
     ws_client: Any,
-    client: Any,
     entity_id_list: list[str],
     start_dt: datetime,
     end_dt: datetime,
@@ -580,7 +624,11 @@ async def _fetch_statistics(
     limit: int | str | None,
     offset: int | str | None,
 ) -> dict[str, Any]:
-    """Execute the recorder/statistics_during_period WebSocket call."""
+    """Execute the recorder/statistics_during_period WebSocket call.
+
+    Returns the unwrapped statistics dict; the caller is responsible for projection
+    and wrapping with ``add_timezone_metadata``.
+    """
     try:
         effective_limit = coerce_int_param(
             limit,
@@ -740,4 +788,4 @@ async def _fetch_statistics(
             "These entities may not have state_class attribute or may not have recorded data yet."
         ]
 
-    return await add_timezone_metadata(client, statistics_data)
+    return statistics_data

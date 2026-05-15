@@ -91,7 +91,7 @@ class TestStatisticTypesValidation:
             return_value=(ws, None),
         ), patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -120,7 +120,7 @@ class TestStatisticTypesValidation:
             return_value=(ws, None),
         ), patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -148,7 +148,7 @@ class TestStatisticTypesValidation:
             return_value=(ws, None),
         ), patch(
             "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+            side_effect=lambda _c, d, **_kw: d,
         ):
             await history_tool(
                 entity_ids="sensor.test",

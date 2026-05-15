@@ -140,7 +140,10 @@ async def test_ha_get_history_works_without_ctx() -> None:
     ):
         result = await history_tool(entity_ids="sensor.test")
 
-    assert result is fake_result
+    # ha_get_history wraps the inner _fetch_history result via add_timezone_metadata
+    # — the inner payload must round-trip unchanged under fields=None.
+    assert result["data"] == fake_result
+    assert "metadata" in result
     fake_ws.disconnect.assert_awaited_once()
 
 
@@ -167,7 +170,8 @@ async def test_ha_get_history_emits_progress_with_ctx() -> None:
     ):
         result = await history_tool(entity_ids="sensor.test", ctx=ctx)
 
-    assert result is fake_result
+    assert result["data"] == fake_result
+    assert "metadata" in result
     ctx.info.assert_awaited()
     # Three events: connect, query dispatch, completion (progress jumps 1 -> 3).
     assert ctx.report_progress.await_count == 3
@@ -526,7 +530,8 @@ async def test_ha_get_history_statistics_emits_progress() -> None:
             entity_ids="sensor.test", source="statistics", period="day", ctx=ctx
         )
 
-    assert result is fake_result
+    assert result["data"] == fake_result
+    assert "metadata" in result
     assert ctx.report_progress.await_count == 3
     messages = _progress_messages(ctx)
     assert "querying recorder (statistics)" in messages[1]

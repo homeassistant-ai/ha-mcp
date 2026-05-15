@@ -753,3 +753,31 @@ class TestSystemToolsIntegration:
             assert not_found, "Test notification should be dismissed"
 
         logger.info("Notification lifecycle test completed successfully")
+
+    @pytest.mark.asyncio
+    async def test_overview_fields_projection(self, mcp_client):
+        """fields= returns only the requested top-level keys (plus success).
+
+        Validates the 94% token-reduction path from issue #1199: callers that
+        need only one section receive a projected response with all other
+        top-level keys absent.
+        """
+        logger.info("Testing ha_get_overview fields= projection")
+
+        result = await mcp_client.call_tool(
+            "ha_get_overview",
+            {"fields": ["system_info"]},
+        )
+        data = parse_mcp_result(result)
+
+        assert data.get("success") is True
+        assert "system_info" in data, "requested field must be present"
+        assert "version" in data["system_info"], "system_info must be populated"
+
+        # All unrequested top-level keys must be absent.
+        for absent_key in ("domains", "entity_summary", "total_entities", "repair_count"):
+            assert absent_key not in data, (
+                f"key {absent_key!r} should be projected out when fields=[\"system_info\"]"
+            )
+
+        logger.info("fields= projection test passed")
