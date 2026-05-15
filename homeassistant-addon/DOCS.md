@@ -513,7 +513,7 @@ The add-on provides 89+ MCP tools for controlling Home Assistant:
 
 <!-- ADDON_TOOLS_END -->
 
-For domain-specific Home Assistant documentation, use the `ha_get_skill_home_assistant_best_practices` resource.
+For domain-specific Home Assistant documentation, use the `ha_get_skill_guide` tool (or read the `skill://` resources directly if your MCP client supports resources).
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 
