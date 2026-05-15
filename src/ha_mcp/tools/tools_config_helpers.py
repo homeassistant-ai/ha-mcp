@@ -909,7 +909,15 @@ def _validate_datetime_has_date_or_time(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "At least one of has_date or has_time must be True for input_datetime",
-                context=_simple_helper_error_context("input_datetime"),
+                context=_simple_helper_error_context(
+                    "input_datetime",
+                    has_date=has_date,
+                    has_time=has_time,
+                ),
+                suggestions=[
+                    "Set has_date=True to keep the date component.",
+                    "Set has_time=True to keep the time component.",
+                ],
             )
         )
 
