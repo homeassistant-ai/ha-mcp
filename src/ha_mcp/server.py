@@ -843,10 +843,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
           for tool-only clients (claude.ai, etc. that don't read server
           instructions). Three tiers: no args lists skills with their
           frontmatter descriptions; ``skill`` arg lists reference files;
-          ``skill`` + ``file`` reads file content. **Always registered**
-          so its absence isn't a silent failure mode — even if the skills
-          submodule is missing, the tool surfaces that fact at call time
-          via an explanatory empty listing.
+          ``skill`` + ``file`` reads file content. **Registration is
+          always attempted** so an absent tool isn't a silent failure
+          mode — even if the skills submodule is missing, the tool
+          surfaces that fact at call time via an explanatory empty
+          listing with ``degraded: True``. A genuine registration
+          failure (FastMCP API regression, etc.) is caught at the call
+          site, logged with full traceback, and flips
+          ``status["tool"] = "failed"`` so the summary log warns
+          rather than aborting server startup.
         """
         status: dict[str, str | int] = {
             "provider": "skipped",
@@ -1094,13 +1099,23 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         unit-testable without round-tripping through the MCP tool layer.
         Synchronous because every operation is bounded local disk I/O.
 
+        Return shape per tier:
+        - Tier 1 (no args): ``{"success": True, "skills": [...], "how_to_use": ...}``
+        - Tier 2 (skill): ``{"success": True, "skill": ..., "files": [...], ...}``
+        - Tier 3 (skill+file): ``{"success": True, "skill": ..., "file": ..., "content": ...}``
+
         ``skills_dir`` is ``None`` when no skills directory exists on
-        disk — in that case Tier 1 returns an empty listing with an
-        explanation, and Tier 2/3 raise so the caller gets a clear
-        error instead of a confusing empty result. Tool-level failures
-        raise ``ToolError`` (via ``raise_tool_error``) per AGENTS.md, so
-        clients see ``isError=true`` rather than a success payload with
-        an embedded error.
+        disk. In that case Tier 1 returns ``{"success": True,
+        "degraded": True, "skills": [], ...}`` — the explicit
+        ``degraded`` flag lets LLM clients branch on the
+        misconfiguration without parsing the ``how_to_use`` prose,
+        while ``success: True`` keeps generic "call succeeded"
+        predicates honest. Tier 2/3 in degraded mode raise so the
+        caller gets a clear error instead of a confusing empty result.
+        Tool-level failures raise ``ToolError`` (via
+        ``raise_tool_error``) per AGENTS.md, so clients see
+        ``isError=true`` rather than a success payload with an
+        embedded error.
         """
         # Degraded mode: no skills directory. Always return a structured
         # response so callers can detect the situation rather than
