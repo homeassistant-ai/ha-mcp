@@ -145,6 +145,34 @@ class TestApplyArrayOps:
         assert entry["count"] == 0
         assert "warning" not in entry
 
+    def test_delete_where_against_empty_array_no_warning(self):
+        """Empty input array is not a typo signal — there are no items to
+        check. Without this guard, `any(... for [])` is False and the typo
+        warning would fire unconditionally."""
+        new, summary = _apply_array_ops(
+            [],
+            [{"op": "delete_where", "field": "z", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == []
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" not in entry
+
+    def test_delete_where_against_non_dict_items_no_warning(self):
+        """Arrays of scalars (or other non-dict items) are not a typo signal
+        either — `field in it` is meaningless for non-dicts, so suggesting
+        a typo would be misleading."""
+        new, summary = _apply_array_ops(
+            [1, 2, "x"],
+            [{"op": "delete_where", "field": "z", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == [1, 2, "x"]
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" not in entry
+
     def test_delete_where_zero_matches_is_not_an_error(self):
         items = self._flows_fixture()
         new, summary = _apply_array_ops(
@@ -264,6 +292,16 @@ class TestApplyArrayOpsValidation:
                 [], [{"op": "add", "item": {"id": None, "type": "x"}}], id_field="id"
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_add_with_integer_zero_id_is_accepted(self):
+        """The check uses `is None or == ""` (not `not new_id`) so falsy
+        but valid ids like 0 / 0.0 / False are accepted. Pin this down so
+        a future refactor to `if not new_id:` doesn't silently regress."""
+        new, summary = _apply_array_ops(
+            [], [{"op": "add", "item": {"id": 0, "type": "x"}}], id_field="id"
+        )
+        assert summary["added"] == [{"id": 0}]
+        assert new == [{"id": 0, "type": "x"}]
 
     def test_patch_with_empty_patches_raises(self):
         """Empty `patches` is a silent no-op — reject up-front so the caller

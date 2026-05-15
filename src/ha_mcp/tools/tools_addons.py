@@ -1136,6 +1136,9 @@ def _apply_array_ops(
                     )
                 )
             if not patches:
+                # `target.update({})` is a no-op; reject so the caller learns
+                # their op was meaningless rather than seeing a silent
+                # `summary["patched"]` entry with `"fields": []`.
                 raise_tool_error(
                     create_validation_error(
                         f"array_patch patch op #{index} 'patches' cannot be empty "
@@ -1257,9 +1260,14 @@ def _apply_array_ops(
             entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
             # Distinguish "value not present" from "field name unknown to any
             # item" — the latter is almost always a typo and would otherwise
-            # be a silent count=0.
-            if removed == 0 and not any(
-                isinstance(it, dict) and field in it for it in working
+            # be a silent count=0. Only warn when there are dict items to
+            # inspect; an empty array or all-non-dict array would `not any(...)`
+            # trivially and produce a misleading typo suggestion.
+            inspectable = [it for it in working if isinstance(it, dict)]
+            if (
+                removed == 0
+                and inspectable
+                and not any(field in it for it in inspectable)
             ):
                 entry["warning"] = (
                     f"field {field!r} is not present on any item — "
