@@ -2674,16 +2674,25 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 f"Helper created but entity registry update failed: {error_msg}"
                             )
 
-                    # Apply category via shared helper (consistent with automations/scripts)
+                    # Apply category via shared helper (consistent with automations/scripts).
+                    # Issue #1293: route the success/failure through ``cat_result`` so any
+                    # ``category_warning`` lands in the top-level ``warnings`` list instead
+                    # of leaking nested into ``helper_data``. Mirrors the precedent in
+                    # ``_handle_flow_helper`` (lines 1395-1407).
                     if category and entity_id:
+                        cat_result: dict[str, Any] = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            helper_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            helper_data["category"] = cat_result["category"]
+                        elif "category_warning" in cat_result:
+                            warnings.append(cat_result["category_warning"])
 
                     response: dict[str, Any] = {
                         "success": True,
@@ -3257,7 +3266,17 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         reg_result = await client.send_websocket_message(
                             registry_update
                         )
-                        if not reg_result.get("success"):
+                        if reg_result.get("success"):
+                            # Issue #1293: mirror the create branch by propagating the
+                            # registry writes into ``updated_data`` so the response's
+                            # ``data`` reflects the post-update state. Icon is
+                            # intentionally left out to match the create-branch's
+                            # current behavior (tracked as a separate consistency item).
+                            if area_id is not None:
+                                updated_data["area_id"] = area_id if area_id else None
+                            if labels is not None:
+                                updated_data["labels"] = labels
+                        else:
                             error_detail = reg_result.get("error", {})
                             error_msg = (
                                 error_detail.get("message", "Unknown error")
@@ -3271,16 +3290,23 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 f"Config updated but entity registry update failed: {error_msg}"
                             )
 
-                    # Apply category via shared helper
+                    # Apply category via shared helper. Issue #1293: route through
+                    # ``cat_result`` so any ``category_warning`` lands in the top-level
+                    # ``warnings`` list instead of nested in ``updated_data``.
                     if category:
+                        cat_result = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            updated_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            updated_data["category"] = cat_result["category"]
+                        elif "category_warning" in cat_result:
+                            warnings.append(cat_result["category_warning"])
 
                 else:
                     # Fallback for unknown/future helper types: entity registry update only
@@ -3314,16 +3340,22 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
 
-                    # Apply category via shared helper
+                    # Apply category via shared helper. Issue #1293: same temp-dict
+                    # routing as the simple-helper branch above.
                     if category:
+                        cat_result = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            updated_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            updated_data["category"] = cat_result["category"]
+                        elif "category_warning" in cat_result:
+                            warnings.append(cat_result["category_warning"])
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)

@@ -242,6 +242,132 @@ class TestUniformResponseShape:
         _assert_uniform_shape(result, expect_warnings=True)
         assert any("verification failed" in w for w in result["warnings"])
 
+    async def test_create_failed_category_apply_surfaces_top_level_warning(
+        self, register_tools, mock_client
+    ):
+        """Failed ``apply_entity_category`` on create → warning at top level, not nested in data.
+
+        Issue #1293 close-out: the helper used to leak a ``category_warning`` key
+        into ``helper_data`` because ``apply_entity_category`` mutates its
+        target dict in-place. The fix routes through a temp dict and lifts the
+        warning to the top-level ``warnings`` list (mirrors the precedent in
+        ``_handle_flow_helper`` at lines 1395-1407).
+        """
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/category_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"category_id": "cat-123", "name": "Test Cat"}],
+                }
+            return {
+                "success": True,
+                "result": {"id": "abc123", "name": "Test Switch"},
+            }
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        async def fake_apply(
+            client, entity_id, category, scope, result_dict, entity_type
+        ):
+            result_dict["category_warning"] = (
+                "Helper saved but failed to set category: forced failure"
+            )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "ha_mcp.tools.tools_config_helpers.apply_entity_category",
+                side_effect=fake_apply,
+            ),
+        ):
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test Switch",
+                category="cat-123",
+            )
+        _assert_uniform_shape(result, expect_warnings=True)
+        assert "category_warning" not in result["data"], (
+            "category_warning leaked into data payload"
+        )
+        assert "category" not in result["data"], (
+            "category should not be set in data when apply failed"
+        )
+        assert any("failed to set category" in w for w in result["warnings"])
+
+    async def test_update_failed_category_apply_surfaces_top_level_warning(
+        self, register_tools, mock_client
+    ):
+        """Failed ``apply_entity_category`` on update → warning at top level, not nested in data.
+
+        Mirror of the create-side test on the simple/registry update branch.
+        """
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/get":
+                return {
+                    "success": True,
+                    "result": {
+                        "entity_id": msg["entity_id"],
+                        "unique_id": "abc123",
+                        "platform": "input_boolean",
+                    },
+                }
+            if msg_type == "config/category_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"category_id": "cat-123", "name": "Test Cat"}],
+                }
+            if msg_type.endswith("/list"):
+                return {
+                    "success": True,
+                    "result": [{"id": "abc123", "name": "Existing"}],
+                }
+            if msg_type.endswith("/update"):
+                return {"success": True, "result": {"id": "abc123"}}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        async def fake_apply(
+            client, entity_id, category, scope, result_dict, entity_type
+        ):
+            result_dict["category_warning"] = (
+                "Helper saved but failed to set category: forced failure"
+            )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "ha_mcp.tools.tools_config_helpers.apply_entity_category",
+                side_effect=fake_apply,
+            ),
+        ):
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                helper_id="input_boolean.existing",
+                name="Renamed",
+                category="cat-123",
+            )
+        _assert_uniform_shape(result, expect_warnings=True)
+        assert "category_warning" not in result["data"], (
+            "category_warning leaked into data payload"
+        )
+        assert "category" not in result["data"], (
+            "category should not be set in data when apply failed"
+        )
+        assert any("failed to set category" in w for w in result["warnings"])
+
     async def test_no_singular_warning_key_at_top_level_or_nested(
         self, register_tools, mock_client
     ):
