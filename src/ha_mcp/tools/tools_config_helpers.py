@@ -873,8 +873,12 @@ def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
     The create-branch guard (#1150) and the update-branch guard (#1292) call
     this with the resolved values — caller-supplied or merged from the
     existing config. ``initial=None`` is the unset case and passes through.
+    The ``isinstance(options, list)`` guard mirrors the defensive shape check
+    in ``_validate_input_select_options`` below — both current callers feed a
+    list, but the guard keeps a future non-list caller from raising a confusing
+    ``TypeError`` on ``initial not in options``.
     """
-    if initial is None:
+    if not isinstance(options, list) or initial is None:
         return
     if initial not in options:
         raise_tool_error(
@@ -889,7 +893,7 @@ def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
                 ),
                 suggestions=[
                     "Pick an `initial` value that's in `options`.",
-                    "Or omit `initial` so the entity starts unset.",
+                    "Or omit `initial` to use the default or existing value.",
                 ],
             )
         )
