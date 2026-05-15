@@ -1,7 +1,7 @@
 """Unit tests for _parse_skill_frontmatter(), _build_skill_block(),
 and _build_skills_instructions()."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -378,3 +378,123 @@ class TestHandleSkillGuideCall:
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(None, "best-practices", "SKILL.md")
+
+
+class TestSkillToolMandatoryPinning:
+    """Mandatory-pinning invariants for the consolidated skill tool.
+
+    The skill guide carries the bundled best-practices trigger
+    conditions in its description — when tool search hides the catalog,
+    only pinned tools stay visible. Disabling or unpinning it would
+    silently break the "consult skill before writing config" workflow,
+    so both the default-pinned tuple AND the always-enabled set must
+    include it. These tests fail loudly if a future refactor drops
+    either side.
+    """
+
+    def test_default_pinned_tools_includes_skill_guide(self):
+        from ha_mcp.server import SKILL_TOOL_NAME
+        from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
+
+        assert SKILL_TOOL_NAME in DEFAULT_PINNED_TOOLS
+
+    def test_mandatory_tools_includes_skill_guide(self):
+        from ha_mcp.server import SKILL_TOOL_NAME
+        from ha_mcp.settings_ui import MANDATORY_TOOLS
+
+        assert SKILL_TOOL_NAME in MANDATORY_TOOLS
+
+    def test_tool_name_fits_cloudflare_cap(self):
+        """#1121: Cloudflare MCP portal rejects tool names > 40 chars."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        assert len(SKILL_TOOL_NAME) <= 40
+
+
+class TestSkillToolAliasKeywords:
+    """The consolidated tool must mention the names it replaced.
+
+    Two surfaces: (1) BM25 keyword enrichment so agents searching for
+    the old tool names get routed to the new one; (2) the tool's own
+    description so a human or LLM reading the catalog sees the redirect
+    inline. Both regress silently if the alias text disappears.
+    """
+
+    def test_search_keywords_mention_old_tools(self):
+        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
+
+        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS.get(SKILL_TOOL_NAME)
+        assert keywords is not None, (
+            f"{SKILL_TOOL_NAME} must have an entry in _SEARCH_KEYWORDS so "
+            "BM25 retrieval on old tool names routes to the replacement."
+        )
+        for old_name in (
+            "ha_list_resources",
+            "ha_read_resource",
+            "ha_get_skill_home_assistant_best_practices",
+        ):
+            assert old_name in keywords, (
+                f"BM25 keywords for {SKILL_TOOL_NAME} should mention {old_name} "
+                "so retrieval on the pre-#1134 name finds the replacement."
+            )
+
+    def test_tool_description_mentions_old_tools(self, server, tmp_path):
+        """The description passed to mcp.tool() must include the alias text."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        # Build a minimal valid skill so the populated-mode description
+        # branch runs.
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\ndescription: |\n"
+            "  Best practices for HA tasks.\n---\n"
+        )
+
+        captured: dict = {}
+
+        def fake_tool(*, name, description, **kwargs):
+            def _decorator(fn):
+                captured[name] = description
+                return fn
+
+            return _decorator
+
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(tmp_path)
+        desc = captured[SKILL_TOOL_NAME]
+
+        for old_name in (
+            "ha_list_resources",
+            "ha_read_resource",
+            "ha_get_skill_home_assistant_best_practices",
+        ):
+            assert old_name in desc, (
+                f"Tool description for {SKILL_TOOL_NAME} should mention "
+                f"{old_name} (alias redirect for agents trained on the "
+                "pre-#1134 catalog)."
+            )
+
+    def test_degraded_description_also_mentions_old_tools(self, server):
+        """Even in the no-skills-available branch, the alias text appears."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
+        captured: dict = {}
+
+        def fake_tool(*, name, description, **kwargs):
+            def _decorator(fn):
+                captured[name] = description
+                return fn
+
+            return _decorator
+
+        server.mcp = MagicMock()
+        server.mcp.tool.side_effect = fake_tool
+
+        server._register_skill_guide_tool(None)
+        desc = captured[SKILL_TOOL_NAME]
+
+        assert "ha_list_resources" in desc
+        assert "ha_get_skill_home_assistant_best_practices" in desc

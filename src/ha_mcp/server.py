@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 # Cloudflare's MCP portal enforces (#1121).
 SKILL_TOOL_NAME = "ha_get_skill_guide"
 
+# Names this tool replaced in #1134. Appended to the catalog description
+# so agents trained on the prior catalog (or pasting old instructions)
+# see the redirect inside the tool itself, not just via BM25 keyword
+# enrichment.
+_OLD_SKILL_TOOL_ALIASES = (
+    "Replaces (and supersedes) the prior tools: ha_list_resources, "
+    "ha_read_resource, and ha_get_skill_home_assistant_best_practices. "
+    "If you were going to call any of those, call this instead."
+)
+
 
 # Server icon configuration using GitHub-hosted images
 # These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
@@ -436,6 +446,18 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "ssh samba grafana influxdb deconz motioneye compile validate upload "
             "deploy firmware ota flash yaml device logs flows events stats"
         ),
+        # Old tool names from before #1134 consolidation. BM25 retrieval
+        # on agents that still know the previous catalog ("call
+        # ha_list_resources", "use ha_get_skill_home_assistant_best_practices")
+        # routes them to the replacement instead of failing tool lookup.
+        "ha_get_skill_guide": (
+            "best practices skill skills guide guides reference references "
+            "documentation docs help tutorial automation script scene helper "
+            "dashboard "
+            "ha_list_resources ha_read_resource list_resources read_resource "
+            "ha_get_skill_home_assistant_best_practices "
+            "ha_get_skill_home_assistant home_assistant_best_practices"
+        ),
     }
 
     # Lite docstrings — beta opt-in (enable_lite_docstrings, #1062).
@@ -722,15 +744,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list: defaults + user-configured pins
+        # Build the always_visible list: defaults + user-configured pins.
+        # The skill guide tool is part of DEFAULT_PINNED_TOOLS and is
+        # also in MANDATORY_TOOLS (settings UI strips it from any
+        # disable list before applying), so the catalog presence is
+        # protected from both the search transform and user disables.
         pinned = list(self._PINNED_TOOLS)
         pinned.extend(self._user_pinned_tools)
-
-        # Pin the polymorphic skill tool so it remains visible when
-        # search-based discovery is on. The settings UI's mcp.disable()
-        # flow runs after this transform is appended, so a per-tool
-        # disable still wins over this pin.
-        pinned.append(SKILL_TOOL_NAME)
 
         # Pin code mode tool so it gets individual permission gating
         # rather than being hidden behind the BM25 search proxy.
@@ -968,7 +988,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "- skill + file args: read the file content.\n\n"
                 "Bundled skills:\n\n"
                 + "\n\n".join(skill_blocks)
-                + f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}"
+                + f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
+                + _OLD_SKILL_TOOL_ALIASES
             )
         else:
             # Degraded mode: tool registered but skills directory is
@@ -980,7 +1001,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "the skills directory is missing, empty, or all SKILL.md "
                 "files failed to parse. Calls return an empty listing; "
                 "ask the operator to verify the skills-vendor submodule "
-                "is initialized."
+                "is initialized.\n\n" + _OLD_SKILL_TOOL_ALIASES
             )
 
         async def ha_get_skill_guide(

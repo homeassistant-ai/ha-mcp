@@ -68,6 +68,11 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",
+    # Skill guide carries the bundled best-practices trigger conditions
+    # in its description — tool-only clients (claude.ai, etc.) rely on
+    # seeing it in the catalog. Disabling it would silently break the
+    # "consult skill before writing config" workflow.
+    "ha_get_skill_guide",
 }
 
 # Tools created by FastMCP transforms (not registered through
