@@ -1854,7 +1854,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     "apply ordered ops, then POST the mutated array back. "
                     "Requires 'path'; mutually exclusive with body / websocket / "
                     "offset / limit and config params. See the docstring Examples "
-                    "and ha_get_skill_home_assistant_best_practices for op shapes."
+                    "and ha_get_skill_guide for op shapes."
                 ),
                 default=None,
             ),

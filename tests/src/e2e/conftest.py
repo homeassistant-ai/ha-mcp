@@ -1287,6 +1287,55 @@ async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
         yield client
 
 
+@pytest.fixture(scope="session")
+async def stdio_mcp_client(
+    ha_container_with_fresh_config,
+) -> AsyncGenerator[Client]:
+    """Spawn ``ha-mcp`` as a subprocess and connect via stdio JSON-RPC.
+
+    Distinct from the default ``mcp_client`` fixture, which uses an
+    in-memory transport (``Client(server.mcp)``) that bypasses subprocess
+    startup, JSON serialization framing, and the installed-wheel side of
+    the contract. This fixture is the only path that validates the
+    transport real users hit when running ha-mcp via Claude Desktop,
+    claude CLI, ``uvx``, or Docker stdio mode.
+
+    Catches a different class of bug than the in-memory client:
+    packaging regressions (e.g. skills missing from the installed
+    package — #1280), entry-point startup failures, and JSON
+    serialization issues. Without this fixture, stdio-only regressions
+    can land green on CI.
+    """
+    import os
+
+    from fastmcp.client.transports import StdioTransport
+
+    container_info = ha_container_with_fresh_config
+
+    # Subprocess inherits no env by default — forward only what ha-mcp
+    # actually needs at startup. PATH so the subprocess resolves its
+    # own dependencies via the test venv's site-packages.
+    env = {
+        "HOMEASSISTANT_URL": container_info["base_url"],
+        "HOMEASSISTANT_TOKEN": TEST_TOKEN,
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        # Keep startup snappy — the connection retry is irrelevant here,
+        # the test container is already up by the time this fixture runs.
+        "HA_MAX_RETRIES": "1",
+    }
+
+    # ``args`` is a required positional on the base ``StdioTransport``
+    # (subclasses like ``PythonStdioTransport`` default it to ``None``,
+    # but the base requires ``list[str]``). Pass an explicit empty list
+    # since ``ha-mcp`` takes no positional args in stdio mode.
+    transport = StdioTransport(command="ha-mcp", args=[], env=env)
+    client = Client(transport)
+    async with client:
+        logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
+        yield client
+
+
 # Test session information
 @pytest.fixture(scope="session", autouse=True)
 async def test_session_info(ha_client, ha_container_with_fresh_config):

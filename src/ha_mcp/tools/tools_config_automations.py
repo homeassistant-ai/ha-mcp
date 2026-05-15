@@ -283,7 +283,7 @@ class AutomationConfigTools:
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
 
-        For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
+        For comprehensive automation documentation, use ha_get_skill_guide.
         """
         try:
             normalized_config, config_hash = await self._get_automation_config_internal(identifier)
@@ -313,7 +313,7 @@ class AutomationConfigTools:
                 suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -413,7 +413,7 @@ class AutomationConfigTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_home_assistant_best_practices`.
+        For comprehensive guidance, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -527,7 +527,7 @@ class AutomationConfigTools:
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
         For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: ha_get_skill_home_assistant_best_practices
+        - Use: ha_get_skill_guide
         - Or visit: https://www.home-assistant.io/docs/automation/
 
         TROUBLESHOOTING:
@@ -731,7 +731,7 @@ class AutomationConfigTools:
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search_entities(domain_filter='automation') to find automations",
-                "Use ha_get_skill_home_assistant_best_practices for help",
+                "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
                 suggestions.append(

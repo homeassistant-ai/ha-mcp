@@ -115,7 +115,7 @@ class Settings(BaseSettings):
 
     # Lite docstrings — replace selected heavy tool descriptions with
     # shorter variants that defer detailed guidance to the
-    # ``ha_get_skill_home_assistant_best_practices`` skill tool/resource.
+    # ``ha_get_skill_guide`` skill tool/resource.
     # Reduces idle catalog token usage at the cost of relying on the LLM
     # to actually consult the skill when it needs detail. Beta feature
     # (issue #1062); a startup WARNING is emitted when enabled so

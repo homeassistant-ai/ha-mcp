@@ -2,7 +2,7 @@
 
 Replaces the description on a configurable set of tools with a shorter,
 "lite" variant that defers detailed guidance to the
-``ha_get_skill_home_assistant_best_practices`` tool (or its skill://
+``ha_get_skill_guide`` tool (or its skill://
 resource). Trades catalog token usage for the assumption that the LLM
 will read the skill when it needs more detail — see issue #1062.
 
@@ -34,7 +34,7 @@ class LiteDocstringsTransform(Transform):
     the transform self-contained.
 
     The transform deliberately does not auto-append a pointer to
-    ``ha_get_skill_home_assistant_best_practices`` — the mapped lite
+    ``ha_get_skill_guide`` — the mapped lite
     description owns its own pointer text so per-tool wording can stay
     natural.
     """

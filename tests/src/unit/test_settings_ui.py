@@ -245,34 +245,32 @@ class TestSaveToolConfig:
 
 
 class TestTransformGeneratedTools:
-    """The ResourcesAsTools pair must be advertised to the settings UI even
-    though they're appended at runtime by the FastMCP transform."""
+    """``TRANSFORM_GENERATED_TOOLS`` is the injection point for runtime-
+    appended transform tools. No transforms currently append tools that
+    need settings-UI visibility (#1134 consolidated the prior pair into
+    the normally-registered ``ha_get_skill_guide``), so the dict is
+    empty. Keeping the type/contract intact so future transform-appended
+    tools have a place to land without re-introducing the dispatch path.
+    """
 
-    def test_ha_list_resources_is_advertised(self):
-        assert "ha_list_resources" in TRANSFORM_GENERATED_TOOLS
-
-    def test_ha_read_resource_is_advertised(self):
-        assert "ha_read_resource" in TRANSFORM_GENERATED_TOOLS
+    def test_dict_exists_and_is_empty(self):
+        assert TRANSFORM_GENERATED_TOOLS == {}
 
     @pytest.mark.asyncio
-    async def test_metadata_includes_ha_resource_tools_when_local_provider_omits_them(
-        self,
-    ):
-        """Closes the gap from #1133: transform tools never reach
-        local_provider, so _get_tool_metadata must inject stubs."""
+    async def test_metadata_omits_pre_consolidation_tools(self):
+        """With no transform stubs, _get_tool_metadata must not surface
+        the pre-#1134 ha_list_resources / ha_read_resource pair. Feature-
+        gated stubs are still injected by a separate path (covered in
+        TestFeatureGatedTools) so the result isn't empty.
+        """
         server = MagicMock()
         server.mcp.local_provider._list_tools = AsyncMock(return_value=[])
 
         tools = await _get_tool_metadata(server)
         names = {t["name"] for t in tools}
 
-        assert "ha_list_resources" in names
-        assert "ha_read_resource" in names
-        # Stubs are not feature-gated; no `disabled_by` should be set.
-        for entry in tools:
-            if entry["name"] in {"ha_list_resources", "ha_read_resource"}:
-                assert "disabled_by" not in entry
-                assert entry["annotations"].get("readOnlyHint") is True
+        assert "ha_list_resources" not in names
+        assert "ha_read_resource" not in names
 
 
 class TestFeatureGatedTools:

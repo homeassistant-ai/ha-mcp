@@ -68,40 +68,21 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",
+    # Skill guide carries the bundled best-practices trigger conditions
+    # in its description — tool-only clients (claude.ai, etc.) rely on
+    # seeing it in the catalog. Disabling it would silently break the
+    # "consult skill before writing config" workflow.
+    "ha_get_skill_guide",
 }
 
 # Tools created by FastMCP transforms (not registered through
-# local_provider). The ``ResourcesAsTools`` transform — subclassed in
-# server.py as ``HaResourcesAsTools`` — appends ``ha_list_resources`` and
-# ``ha_read_resource`` at runtime, so they never show up in
-# ``local_provider._list_tools()``. Inject stub metadata so the UI can
-# render them and ``mcp.disable()`` can hide them from the catalog.
-#
-# Keys MUST match ``HaResourcesAsTools.LIST_TOOL_NAME`` / ``READ_TOOL_NAME``;
-# server.py is not imported here to avoid a top-level cycle, but the
-# ``test_transform_generated_tool_names_match_class_constants`` unit test
-# fails fast if either side drifts.
-TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {
-    "ha_list_resources": {
-        "title": "List Resources",
-        "primary_tag": "System",
-        "description": (
-            "List bundled skill files and other MCP resources exposed via "
-            "skill:// URIs. Fallback for clients that do not support MCP "
-            "resources natively."
-        ),
-        "readOnlyHint": True,
-    },
-    "ha_read_resource": {
-        "title": "Read Resource",
-        "primary_tag": "System",
-        "description": (
-            "Read a skill or resource by URI. Fallback for clients that do "
-            "not support MCP resources natively."
-        ),
-        "readOnlyHint": True,
-    },
-}
+# local_provider). No transform-generated tools are currently in use —
+# ``ha_get_skill_guide`` is registered the normal way and is visible
+# through ``local_provider._list_tools()``. Kept as an empty dict so
+# UI rendering, type contracts, and tests don't need to special-case
+# the "no transform tools" path; populate when a future transform
+# appends tools that need settings-UI visibility.
+TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 
 # Tools that exist in the codebase but are only registered when a
 # corresponding feature flag/env var is set. When the flag is off, these

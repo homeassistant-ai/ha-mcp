@@ -52,7 +52,7 @@ configuration:
       handful of heavy ha-mcp tools (automations, scripts, scenes, helpers,
       dashboards, ha_call_service, ha_config_set_yaml) with shorter
       variants that defer schema and example detail to the
-      ha_get_skill_home_assistant_best_practices tool (or its skill://
+      ha_get_skill_guide tool (or its skill://
       resource). WARNING: this reduces idle token usage, but may degrade
       LLM performance — the trimmed descriptions rely on the LLM
       actually calling the skill tool or reading the skill resource for

@@ -99,7 +99,7 @@ class ConfigScriptTools:
         - Get script: ha_config_get_script("morning_routine")
         - Get script: ha_config_get_script("backup_script")
 
-        For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
             config_result = await self._client.get_script_config(script_id)
@@ -130,7 +130,7 @@ class ConfigScriptTools:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -296,7 +296,7 @@ class ConfigScriptTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_home_assistant_best_practices`.
+        For comprehensive guidance, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -566,7 +566,7 @@ class ConfigScriptTools:
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
                 "Use ha_search_entities(domain_filter='script') to find scripts",
-                "Use ha_get_skill_home_assistant_best_practices for help",
+                "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
                 suggestions.append(
@@ -642,7 +642,7 @@ class ConfigScriptTools:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check if script is being used by automations",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 

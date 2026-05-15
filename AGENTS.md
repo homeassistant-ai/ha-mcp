@@ -545,7 +545,7 @@ class DomainTools:
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
         # When NOT to use: route to preferred alternatives
         # Caveats: destructive side-effects, non-obvious gotchas
-        # For complex schemas: use ha_get_skill_home_assistant_best_practices
+        # For complex schemas: use ha_get_skill_guide
 
 def register_<domain>_tools(mcp, client, **kwargs):
     register_tool_methods(mcp, DomainTools(client))
@@ -579,7 +579,7 @@ A backup is created before every edit." Route safety concerns through `annotatio
 (`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
 
 **Defer complex schemas** instead of embedding them:
-`# For complex schemas: use ha_get_skill_home_assistant_best_practices`
+`# For complex schemas: use ha_get_skill_guide`
 
 **What NOT to include:** full parameter documentation, type descriptions already in the
 signature, HA domain internals the model already knows, or motivational prose.
@@ -689,7 +689,7 @@ Provide minimum context needed; let models fetch more on demand. LLM context is 
 **Principles:**
 - **Favor statelessness** — use content-derived identifiers (hashes, IDs) instead of server-side state. Example: dashboard optimistic locking via content hash.
 - **Delegate validation** to HA backend (voluptuous schemas with clear errors). Tool-side logic adds value for: format normalization, JSON string parsing, combining multiple API calls.
-- **Progressive disclosure** — docs on demand (`ha_get_skill_home_assistant_best_practices`), workflow hints between tools, error-driven discovery via `suggestions` arrays, layered params (required first, optional with defaults), focused returns (IDs/names; full state via follow-up).
+- **Progressive disclosure** — docs on demand (`ha_get_skill_guide`), workflow hints between tools, error-driven discovery via `suggestions` arrays, layered params (required first, optional with defaults), focused returns (IDs/names; full state via follow-up).
 
 ### Testing Model Knowledge
 

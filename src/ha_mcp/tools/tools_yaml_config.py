@@ -194,7 +194,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         comments and HA tags (``!include``, ``!secret``) on round-trip;
         ``replace`` swaps the subtree as-is.
 
-        For detailed routing guidance, use ha_get_skill_home_assistant_best_practices.
+        For detailed routing guidance, use ha_get_skill_guide.
         """
         try:
             # Validate action

@@ -1757,7 +1757,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
-        For detailed helper documentation, use ha_get_skill_home_assistant_best_practices.
+        For detailed helper documentation, use ha_get_skill_guide.
         """
         try:
             # Use the websocket list endpoint for the helper type
@@ -2159,7 +2159,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         For complex schemas and per-type parameter details, use ha_get_helper_schema.
         For broader helper-design guidance (when to pick which helper type, YAML
-        examples), use ha_get_skill_home_assistant_best_practices — the skill's
+        examples), use ha_get_skill_guide — the skill's
         `helper-selection.md` reference covers the `input_*` family, `counter`,
         `timer`, and `schedule` with worked examples and a decision matrix.
         """
