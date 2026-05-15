@@ -643,7 +643,9 @@ class TestGetSystemServiceLogsBranchSelection:
     Supervisor-direct branch, so non-addon installs (Docker image, uvx
     ha-mcp, etc.) fell straight through to the SUPERVISOR_TOKEN fail-fast
     in `_supervisor_logs_get` for every service slug. Pin both directions
-    so a future refactor of the gate doesn't silently regress either.
+    so a future refactor of the gate doesn't silently regress either,
+    plus a non-addon-branch error-path smoke test so the proxy delegation
+    doesn't accidentally swallow ``_raw_request``'s exception envelope.
     """
 
     @pytest.mark.parametrize(
@@ -659,6 +661,11 @@ class TestGetSystemServiceLogsBranchSelection:
         Supervisor service-log paths, so an admin LLA can reach any of them
         from outside the addon. Parametrize over the full set so a future
         proxy regression for a single slug surfaces here.
+
+        Also pins ``Accept: text/plain`` on the request: without it the HA
+        Core proxy negotiates ``application/json`` and the body stops being
+        raw log text — same silent-failure signature #950 describes one
+        layer up.
         """
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -670,8 +677,38 @@ class TestGetSystemServiceLogsBranchSelection:
 
         assert f"{service} via proxy" in result
         mock_client.httpx_client.request.assert_called_once()
-        args, _ = mock_client.httpx_client.request.call_args
+        args, kwargs = mock_client.httpx_client.request.call_args
         assert args[1] == f"/hassio/{service}/logs"
+        assert kwargs["headers"]["Accept"] == "text/plain"
+
+    @pytest.mark.asyncio
+    async def test_non_addon_install_404_raises_api_error_with_service_context(
+        self, mock_client
+    ):
+        """Proxy returns 404 → ``HomeAssistantAPIError(status_code=404)``.
+
+        Anchors the live "observer returned 404 on hubs that don't run it"
+        case from the #1260 end-to-end verification. ``_raw_request`` is
+        what raises (one layer down), but this test guards against a future
+        refactor wrapping the proxy call in a swallow-and-return-empty
+        try/except in ``_get_system_service_logs`` itself — which would
+        break the bug-report flow that depends on these exceptions.
+        Parallels ``TestGetAddonLogs.test_raises_api_error_on_404_with_slug_context``.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "service not available"
+        mock_response.json = MagicMock(side_effect=ValueError("not json"))
+        mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
+
+        with (
+            patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False),
+            pytest.raises(HomeAssistantAPIError) as exc_info,
+        ):
+            await mock_client._get_system_service_logs("observer")
+
+        assert exc_info.value.status_code == 404
+        assert "service not available" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_addon_install_does_not_call_ha_core_proxy(self, mock_client):
