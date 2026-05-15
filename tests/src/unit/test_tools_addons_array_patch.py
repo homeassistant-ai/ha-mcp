@@ -114,6 +114,65 @@ class TestApplyArrayOps:
         assert {it["id"] for it in new} == {"tab1", "tab2", "n3"}
         assert summary["deleted_where"] == [{"field": "z", "value": "tab1", "count": 2}]
 
+    def test_delete_where_field_absent_on_all_items_emits_warning(self):
+        """count=0 with a misspelled or unknown field is the silent-failure
+        case — distinguish it from "field exists, value didn't match" by
+        attaching a warning to the summary entry. Doesn't raise (preserves
+        the deliberate best-effort semantics of delete_where)."""
+        items = [{"id": "a"}, {"id": "b"}]
+        new, summary = _apply_array_ops(
+            items,
+            [{"op": "delete_where", "field": "zzz_misspelled", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == items
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" in entry
+        assert "zzz_misspelled" in entry["warning"]
+
+    def test_delete_where_field_present_but_no_match_no_warning(self):
+        """count=0 when the field exists on items but no value matched is
+        not the silent-failure case — no warning, just count=0."""
+        items = [{"id": "a", "z": "tab9"}, {"id": "b", "z": "tab9"}]
+        new, summary = _apply_array_ops(
+            items,
+            [{"op": "delete_where", "field": "z", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == items
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" not in entry
+
+    def test_delete_where_against_empty_array_no_warning(self):
+        """Empty input array is not a typo signal — there are no items to
+        check. Without this guard, `any(... for [])` is False and the typo
+        warning would fire unconditionally."""
+        new, summary = _apply_array_ops(
+            [],
+            [{"op": "delete_where", "field": "z", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == []
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" not in entry
+
+    def test_delete_where_against_non_dict_items_no_warning(self):
+        """Arrays of scalars (or other non-dict items) are not a typo signal
+        either — `field in it` is meaningless for non-dicts, so suggesting
+        a typo would be misleading."""
+        new, summary = _apply_array_ops(
+            [1, 2, "x"],
+            [{"op": "delete_where", "field": "z", "value": "tab1"}],
+            id_field="id",
+        )
+        assert new == [1, 2, "x"]
+        entry = summary["deleted_where"][0]
+        assert entry["count"] == 0
+        assert "warning" not in entry
+
     def test_delete_where_zero_matches_is_not_an_error(self):
         items = self._flows_fixture()
         new, summary = _apply_array_ops(
@@ -214,6 +273,45 @@ class TestApplyArrayOpsValidation:
     def test_add_missing_id_field_raises(self):
         with pytest.raises(ToolError) as exc:
             _apply_array_ops([], [{"op": "add", "item": {"type": "x"}}], id_field="id")
+        assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_add_with_empty_string_id_raises(self):
+        """`id_field not in item` only checks key presence, not value validity.
+        Empty-string ids enable cross-contamination with items that legitimately
+        lack the id field (`dict.get(id_field)` returns `None`/`""`)."""
+        with pytest.raises(ToolError) as exc:
+            _apply_array_ops(
+                [], [{"op": "add", "item": {"id": "", "type": "x"}}], id_field="id"
+            )
+        assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_add_with_none_id_raises(self):
+        """Same rationale as empty-string: `id` cannot be None."""
+        with pytest.raises(ToolError) as exc:
+            _apply_array_ops(
+                [], [{"op": "add", "item": {"id": None, "type": "x"}}], id_field="id"
+            )
+        assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_add_with_integer_zero_id_is_accepted(self):
+        """The check uses `is None or == ""` (not `not new_id`) so falsy
+        but valid ids like 0 / 0.0 / False are accepted. Pin this down so
+        a future refactor to `if not new_id:` doesn't silently regress."""
+        new, summary = _apply_array_ops(
+            [], [{"op": "add", "item": {"id": 0, "type": "x"}}], id_field="id"
+        )
+        assert summary["added"] == [{"id": 0}]
+        assert new == [{"id": 0, "type": "x"}]
+
+    def test_patch_with_empty_patches_raises(self):
+        """Empty `patches` is a silent no-op — reject up-front so the caller
+        knows their op was meaningless."""
+        with pytest.raises(ToolError) as exc:
+            _apply_array_ops(
+                [{"id": "a"}],
+                [{"op": "patch", "id": "a", "patches": {}}],
+                id_field="id",
+            )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
     def test_delete_where_with_explicit_none_value_is_allowed(self):
@@ -588,6 +686,22 @@ class TestHaManageAddonRequestHeaders:
         assert len(captured_headers) == 2
         assert captured_headers[0] == {"Node-RED-Deployment-Type": "full"}
         assert captured_headers[1] == {"Node-RED-Deployment-Type": "full"}
+
+    @pytest.mark.asyncio
+    async def test_request_headers_rejected_with_websocket(self, _registered_tool):
+        """`_call_addon_ws` doesn't accept caller headers. Without an explicit
+        rejection, request_headers would be silently dropped in WebSocket mode
+        — inconsistent with the existing fail-loud-on-misroute pattern (e.g.
+        message_limit rejection on HTTP)."""
+        with pytest.raises(ToolError) as exc:
+            await _registered_tool(
+                slug="a0d7b954_nodered",
+                path="/logs",
+                websocket=True,
+                request_headers={"X-Custom": "v"},
+            )
+        err = _parse_tool_error(exc)
+        assert err["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
     async def test_request_headers_rejected_in_config_mode(self, _registered_tool):
