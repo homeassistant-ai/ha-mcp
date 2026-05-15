@@ -21,7 +21,12 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    extract_tool_error_message,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
@@ -1085,14 +1090,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # specific UX suggestions so the caller learns this branch
                 # requires an existing dashboard.
                 try:
-                    current_config, current_hash = (
-                        await _get_dashboard_config_internal(client, url_path)
+                    current_config, current_hash = await _get_dashboard_config_internal(
+                        client, url_path
                     )
                 except ToolError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Dashboard not found or inaccessible: {e}",
+                            f"Dashboard not found or inaccessible: {extract_tool_error_message(e)}",
                             suggestions=[
                                 "python_transform requires an existing dashboard",
                                 "Use 'config' parameter to create a new dashboard",
@@ -1349,18 +1354,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     # skip of both the optimistic-locking check and the
                     # large-config soft warning, matching the prior
                     # silently-fall-through behaviour.
+                    # Distinct names from the python_transform branch's
+                    # ``current_config``/``current_hash`` so the optional
+                    # type here doesn't redefine the non-optional binding
+                    # mypy infers there.
+                    existing_config: dict[str, Any] | None = None
+                    existing_hash: str | None = None
                     try:
-                        current_config, current_hash = (
-                            await _get_dashboard_config_internal(client, url_path)
-                        )
+                        (
+                            existing_config,
+                            existing_hash,
+                        ) = await _get_dashboard_config_internal(client, url_path)
                     except ToolError:
-                        current_config, current_hash = None, None
+                        pass
 
-                    if isinstance(current_config, dict):
-                        existing_config_size = len(json.dumps(current_config))
+                    if isinstance(existing_config, dict):
+                        existing_config_size = len(json.dumps(existing_config))
 
                         # Optional config_hash validation for full replacement
-                        if config_hash is not None and current_hash != config_hash:
+                        if config_hash is not None and existing_hash != config_hash:
                             raise_tool_error(
                                 create_error_response(
                                     ErrorCode.SERVICE_CALL_FAILED,
