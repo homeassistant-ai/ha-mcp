@@ -980,7 +980,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 for name, _dir, fm in skills
             ]
             tool_description = (
-                "Access bundled Home Assistant best-practice skill guides. "
+                "Get bundled Home Assistant best-practice skill guides. "
                 "CALL THIS FIRST before performing matching actions.\n\n"
                 "Three modes (progressive disclosure):\n"
                 "- No args: list bundled skills with their trigger conditions.\n"
@@ -996,7 +996,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # missing/empty. The description signals this so the LLM
             # doesn't keep retrying calls expecting content.
             tool_description = (
-                "Access bundled Home Assistant best-practice skill guides. "
+                "Get bundled Home Assistant best-practice skill guides. "
                 "No skill bundles are currently available on this server — "
                 "the skills directory is missing, empty, or all SKILL.md "
                 "files failed to parse. Calls return an empty listing; "
@@ -1056,9 +1056,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ``skills_dir`` is ``None`` when no skills directory exists on
         disk — in that case Tier 1 returns an empty listing with an
         explanation, and Tier 2/3 raise so the caller gets a clear
-        error instead of a confusing empty result.
+        error instead of a confusing empty result. Tool-level failures
+        raise ``ToolError`` (via ``raise_tool_error``) per AGENTS.md, so
+        clients see ``isError=true`` rather than a success payload with
+        an embedded error.
         """
-        from fastmcp.exceptions import ToolError
+        from .errors import ErrorCode, create_error_response
+        from .tools.helpers import raise_tool_error
 
         # Degraded mode: no skills directory. Always return a structured
         # response so callers can detect the situation rather than
@@ -1066,6 +1070,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         if skills_dir is None:
             if not skill:
                 return {
+                    "success": True,
                     "skills": [],
                     "how_to_use": (
                         "No skill bundles are available on this server. "
@@ -1073,15 +1078,29 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                         "uninitialized. Contact the server operator."
                     ),
                 }
-            raise ToolError(
-                "Cannot read skill: no skills directory is available on this "
-                f"server. Call {SKILL_TOOL_NAME}() with no args to confirm."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    message=(
+                        "Cannot read skill: no skills directory is available "
+                        "on this server."
+                    ),
+                    context={"skill": skill, "file": file},
+                    suggestions=[
+                        f"Call {SKILL_TOOL_NAME}() with no args to confirm "
+                        "skill availability.",
+                        "Ask the server operator to initialize the "
+                        "skills-vendor submodule "
+                        "(`git submodule update --init`).",
+                    ],
+                )
             )
 
         # Tier 1: no args → list bundled skills with frontmatter
         if not skill:
             skills = self._list_bundled_skills(skills_dir)
             return {
+                "success": True,
                 "skills": [
                     {
                         "skill": name,
@@ -1110,15 +1129,24 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             or not skill_dir.resolve().is_relative_to(skills_dir.resolve())
             or skill_dir.is_symlink()
         ):
-            raise ToolError(
-                f"Unknown skill: {skill!r}. "
-                f"Call {SKILL_TOOL_NAME}() with no args to list available skills."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    message=f"Unknown skill: {skill!r}.",
+                    context={"skill": skill},
+                    suggestions=[
+                        f"Call {SKILL_TOOL_NAME}() with no args to list "
+                        "available skills.",
+                        "Check the skill name for typos or path separators.",
+                    ],
+                )
             )
 
         # Tier 2: skill only → list reference files
         if not file:
             files = self._list_skill_files(skill_dir)
             return {
+                "success": True,
                 "skill": skill,
                 "uri": f"skill://{skill}/SKILL.md",
                 "files": [
@@ -1138,18 +1166,36 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             or not target.is_file()
             or target.is_symlink()
         ):
-            raise ToolError(
-                f"Unknown file {file!r} in skill {skill!r}. "
-                f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to list available files."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    message=f"Unknown file {file!r} in skill {skill!r}.",
+                    context={"skill": skill, "file": file},
+                    suggestions=[
+                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to list "
+                        "available files.",
+                        "Verify the file path is relative to the skill "
+                        "directory (e.g., 'references/foo.md').",
+                    ],
+                )
             )
         try:
             content = target.read_text(encoding="utf-8")
         except OSError as e:
-            raise ToolError(
-                f"Could not read file {file!r} in skill {skill!r}: {e}"
-            ) from e
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    message=f"Could not read file {file!r} in skill {skill!r}: {e}",
+                    context={"skill": skill, "file": file},
+                    suggestions=[
+                        "Check filesystem permissions on the skills-vendor directory.",
+                        "Check the server logs for the underlying OSError.",
+                    ],
+                )
+            )
 
         return {
+            "success": True,
             "skill": skill,
             "file": file,
             "uri": f"skill://{skill}/{file}",

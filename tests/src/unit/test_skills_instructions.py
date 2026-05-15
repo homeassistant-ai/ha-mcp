@@ -294,6 +294,7 @@ class TestHandleSkillGuideCall:
     def test_tier1_lists_only_valid_skills(self, server, populated_skills_dir):
         """No-args call lists only dirs with parseable SKILL.md."""
         result = server._handle_skill_guide_call(populated_skills_dir, None, None)
+        assert result["success"] is True
         assert "skills" in result
         names = [s["skill"] for s in result["skills"]]
         assert names == ["best-practices"]
@@ -305,6 +306,7 @@ class TestHandleSkillGuideCall:
         result = server._handle_skill_guide_call(
             populated_skills_dir, "best-practices", None
         )
+        assert result["success"] is True
         assert result["skill"] == "best-practices"
         names = sorted(f["name"] for f in result["files"])
         assert names == ["SKILL.md", "reference.md"]
@@ -314,6 +316,7 @@ class TestHandleSkillGuideCall:
         result = server._handle_skill_guide_call(
             populated_skills_dir, "best-practices", "reference.md"
         )
+        assert result["success"] is True
         assert result["skill"] == "best-practices"
         assert result["file"] == "reference.md"
         assert "Real reference" in result["content"]
@@ -362,6 +365,7 @@ class TestHandleSkillGuideCall:
         tool, when the skills submodule is uninitialized.
         """
         result = server._handle_skill_guide_call(None, None, None)
+        assert result["success"] is True
         assert result["skills"] == []
         assert "submodule" in result["how_to_use"].lower()
 
