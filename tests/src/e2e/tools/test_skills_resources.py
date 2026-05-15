@@ -12,6 +12,7 @@ Verifies that:
 """
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,21 @@ logger = logging.getLogger(__name__)
 
 SKILL_TOOL_NAME = "ha_get_skill_guide"
 EXPECTED_BUNDLED_SKILL = "home-assistant-best-practices"
+
+# Source-tree skills directory — the same path production code resolves
+# at runtime via `_get_skills_dir()`. Computed at module import so async
+# tests can reference it without tripping ASYNC240. This is intentionally
+# NOT a tmp_path or test fixture: the stdio regression tests below need
+# to compare what the subprocess returns against the REAL on-disk source
+# the production code reads from.
+_SOURCE_TREE_SKILLS_DIR = (
+    Path(__file__).resolve().parents[4]
+    / "src"
+    / "ha_mcp"
+    / "resources"
+    / "skills-vendor"
+    / "skills"
+)
 
 SKILLS_MISSING_HINT = (
     "Skills directory not found. Ensure the git submodule at "
@@ -248,3 +264,175 @@ async def test_skill_guide_rejects_path_traversal(mcp_client):
             SKILL_TOOL_NAME,
             {"skill": EXPECTED_BUNDLED_SKILL, "file": "../../../etc/passwd"},
         )
+
+
+# ---------------------------------------------------------------------------
+# Stdio-transport coverage
+#
+# Everything above this line uses the default ``mcp_client`` fixture, which
+# is an in-memory transport — same dispatch code as production, but bypasses
+# subprocess startup, JSON serialization framing, and the installed-wheel
+# side of the contract. These tests are the only ones that validate the
+# transport real users hit (Claude Desktop, claude CLI, uvx, Docker stdio).
+#
+# #1280 was exactly the class of bug the in-memory tests can't catch: the
+# skills-vendor submodule wasn't packaged into the stable PyPI wheel, so
+# stdio installs saw the tool surface but with no bundled skills behind
+# it. The in-memory transport reads files from the source tree directly
+# and could never reproduce it. These stdio tests close that gap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stdio_skill_guide_tool_registered(stdio_mcp_client):
+    """Spawning ha-mcp as a subprocess and listing tools must include the
+    skill guide. Catches packaging regressions (missing entry point,
+    broken module discovery) and subprocess startup hangs."""
+    tools = await stdio_mcp_client.list_tools()
+    names = {t.name for t in tools}
+    assert SKILL_TOOL_NAME in names, (
+        f"{SKILL_TOOL_NAME} missing from stdio subprocess catalog — "
+        f"the wheel may not be packaging the tool correctly. "
+        f"Got first 25: {sorted(names)[:25]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stdio_skill_guide_tier1_lists_bundled_skill(stdio_mcp_client):
+    """Tier-1 call over real stdio JSON-RPC must surface the bundled skill
+    from the SAME location production code resolves to.
+
+    This is the #1280 regression test in spirit. The subprocess imports
+    ``ha_mcp`` from the test venv's site-packages (an editable install in
+    CI, a real wheel install in a real user's environment). In both
+    cases ``_get_skills_dir()`` resolves to
+    ``<ha_mcp package>/resources/skills-vendor/skills/`` — no tmp_path
+    monkey-patching, no test fixture directory. If the bundled skill
+    files are missing from that real location (e.g., the submodule
+    wasn't initialized, or the wheel was built without it), this test
+    fails loudly.
+
+    Strengthened assertion: the set of skills the subprocess reports
+    must EXACTLY equal the set of skill directories visible on disk in
+    the source-tree submodule that the test process can see. A drift
+    here means either the subprocess is reading a different location
+    than expected (mock/test fixture), or the source-tree submodule
+    isn't initialized — both of which would invalidate this regression
+    test's premise.
+    """
+    import json
+
+    # The source-tree skills dir is computed at module level
+    # (_SOURCE_TREE_SKILLS_DIR). Check it's populated; the subprocess
+    # MUST be reading from this same on-disk location.
+    assert _SOURCE_TREE_SKILLS_DIR.is_dir(), (
+        f"Source-tree skills dir missing at {_SOURCE_TREE_SKILLS_DIR}. "
+        f"Run `git submodule update --init` and re-run the test."
+    )
+    on_disk_skills = {
+        d.name
+        for d in _SOURCE_TREE_SKILLS_DIR.iterdir()
+        if d.is_dir() and (d / "SKILL.md").exists()
+    }
+    assert on_disk_skills, (
+        f"Source-tree skills dir {_SOURCE_TREE_SKILLS_DIR} contains no "
+        f"valid skill subdirectories — submodule may be empty."
+    )
+
+    result = await stdio_mcp_client.call_tool(SKILL_TOOL_NAME, {})
+    payload = _payload(result)
+
+    # Degraded flag MUST be absent in a healthy install. If it's set,
+    # the subprocess couldn't find the skills directory at all — wheel
+    # packaging regression (#1280) or submodule-not-initialized.
+    assert '"degraded": true' not in payload.lower(), (
+        f"Tier 1 reports degraded: True on stdio — the subprocess can't "
+        f"find {_SOURCE_TREE_SKILLS_DIR}. Wheel packaging regression "
+        f"(see #1280) or uninitialized submodule. Got: {payload[:400]}"
+    )
+
+    # Parse and compare: the subprocess's reported skills must match the
+    # on-disk set the test process sees. Equal sets prove the subprocess
+    # is reading from the production location, not a mock.
+    # Payload is JSON inside a TextContent; tolerate either raw dict or
+    # JSON-string-of-dict.
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        # Fall back to a permissive substring check if the test runner
+        # wraps the payload unexpectedly.
+        for name in on_disk_skills:
+            assert name in payload, (
+                f"On-disk skill {name!r} missing from stdio tier-1 payload "
+                f"(JSON parse failed too). Got: {payload[:400]}"
+            )
+        return
+
+    subprocess_skills = {s["skill"] for s in data.get("skills", [])}
+    assert subprocess_skills == on_disk_skills, (
+        "Subprocess reports a different set of bundled skills than the "
+        "source-tree submodule:\n"
+        f"  on-disk in {_SOURCE_TREE_SKILLS_DIR}: {sorted(on_disk_skills)}\n"
+        f"  reported by ha-mcp subprocess: {sorted(subprocess_skills)}\n"
+        "Possible causes: (a) wheel packaging dropped some skill dirs "
+        "(#1280-class regression), (b) the subprocess is reading from a "
+        "different ha_mcp installation than the test venv, (c) a stale "
+        "submodule on disk. Investigate before merging."
+    )
+    # Belt-and-suspenders: the canonical bundled skill must be present.
+    assert EXPECTED_BUNDLED_SKILL in subprocess_skills, (
+        f"{EXPECTED_BUNDLED_SKILL!r} (canonical bundled skill) missing "
+        f"from subprocess tier-1 list: {sorted(subprocess_skills)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stdio_skill_guide_tier3_reads_large_payload(stdio_mcp_client):
+    """Tier-3 call over real stdio must return the exact on-disk content.
+
+    SKILL.md is several KB. The in-memory transport doesn't exercise
+    JSON framing or pipe buffering at all; this call proves the full
+    serialization + transport pipeline handles a real-world response
+    size without truncation, framing errors, or buffer-related hangs.
+
+    Strengthened: rather than checking just for the ``content`` key, we
+    independently read the on-disk SKILL.md and assert it matches what
+    the subprocess returns byte-for-byte. This catches three classes of
+    bug at once: (1) the subprocess is reading from a different
+    location than the test process (mock/test fixture), (2) JSON
+    serialization is silently dropping or corrupting bytes, (3) the
+    bundled file in the wheel diverges from the source tree.
+    """
+    import json
+
+    # The canonical on-disk SKILL.md (same source production reads).
+    on_disk_skill_md = _SOURCE_TREE_SKILLS_DIR / EXPECTED_BUNDLED_SKILL / "SKILL.md"
+    assert on_disk_skill_md.is_file(), (
+        f"Source-tree SKILL.md missing at {on_disk_skill_md}. "
+        f"Run `git submodule update --init`."
+    )
+    expected_content = on_disk_skill_md.read_text(encoding="utf-8")
+
+    result = await stdio_mcp_client.call_tool(
+        SKILL_TOOL_NAME,
+        {"skill": EXPECTED_BUNDLED_SKILL, "file": "SKILL.md"},
+    )
+    payload = _payload(result)
+    data = json.loads(payload)
+
+    assert data.get("success") is True, (
+        f"Tier 3 stdio response not success-flagged: {payload[:400]}"
+    )
+    assert "content" in data, (
+        f"Tier 3 stdio response missing 'content' key: {payload[:400]}"
+    )
+    assert data["content"] == expected_content, (
+        "Tier 3 stdio content does NOT match the on-disk source — the "
+        "subprocess is either reading from a different location than the "
+        "test process, or JSON serialization is corrupting bytes.\n"
+        f"  on-disk path: {on_disk_skill_md}\n"
+        f"  on-disk length: {len(expected_content)}\n"
+        f"  subprocess length: {len(data['content'])}\n"
+        f"  on-disk first 200: {expected_content[:200]!r}\n"
+        f"  subprocess first 200: {data['content'][:200]!r}"
+    )
