@@ -7,10 +7,11 @@ Covers two REST-client paths and their tools_utility wrappers:
   `http://supervisor/addons/{slug}/logs` (the HA-Core proxy rejects the
   Supervisor token there — see #1116); otherwise falls back to
   `/api/hassio/addons/{slug}/logs` (returned as text/plain — see #950).
-- `HomeAssistantClient._get_system_service_logs()` — fetches HA-Supervisor
-  system-service logs at `http://supervisor/{service}/logs` for
-  service ∈ {supervisor, host, core, dns, audio, multicast, observer} (#1116
-  scope-add).
+- `HomeAssistantClient._get_system_service_logs()` — branches on
+  `is_running_in_addon()` like `get_addon_logs`: in-addon hits
+  `http://supervisor/{service}/logs`; non-addon falls back to the HA Core
+  proxy at `/api/hassio/{service}/logs` (#1260 fix on top of #1116 scope).
+  service ∈ {supervisor, host, core, dns, audio, cli, multicast, observer}.
 - The wrappers (`_get_supervisor_log`, `_get_system_service_log`) — response
   shape, tail slicing, search filter, slug-enum validation, and structured-
   error translation.
@@ -449,8 +450,8 @@ class TestGetAddonLogsViaSupervisor:
 
 class TestGetAddonLogsBranchSelection:
     """The branch decision is made via `is_running_in_addon()`. Pin both
-    directions so a future refactor of the gate (e.g. inlining the env-var
-    check) doesn't silently regress one branch.
+    directions so a future refactor of the gate (e.g. inlining the
+    ``SUPERVISOR_TOKEN`` env-var check) doesn't silently regress one branch.
     """
 
     @pytest.mark.asyncio
@@ -641,16 +642,17 @@ class TestGetSystemServiceLogsBranchSelection:
     """`_get_system_service_logs()` mirrors `get_addon_logs()`'s
     `is_running_in_addon()` branch. Pre-#1260 this method had only the
     Supervisor-direct branch, so non-addon installs (Docker image, uvx
-    ha-mcp, etc.) fell straight through to the SUPERVISOR_TOKEN fail-fast
-    in `_supervisor_logs_get` for every service slug. Pin both directions
-    so a future refactor of the gate doesn't silently regress either,
-    plus a non-addon-branch error-path smoke test so the proxy delegation
-    doesn't accidentally swallow ``_raw_request``'s exception envelope.
+    ``ha-mcp``, etc.) fell straight through to the ``SUPERVISOR_TOKEN``
+    fail-fast in ``_supervisor_logs_get`` for every service slug. Pin both
+    directions so a future refactor of the gate doesn't silently regress
+    either, plus a non-addon-branch error-path smoke test so the proxy
+    delegation doesn't accidentally swallow ``_raw_request``'s exception
+    envelope.
     """
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
     )
     @pytest.mark.asyncio
     async def test_non_addon_install_uses_ha_core_proxy(self, mock_client, service):
@@ -962,6 +964,60 @@ class TestGetSupervisorLogWrapper:
             f"Expected level/supervisor warning, got: {result['warnings']}"
         )
 
+    @pytest.mark.asyncio
+    async def test_auth_error_in_addon_suggests_supervisor_token(
+        self, client_with_logs
+    ):
+        """In-addon ``HomeAssistantAuthError`` on the addon-logs path → the
+        ``SUPERVISOR_TOKEN`` suggestion (the env var the Supervisor-direct
+        call site actually reads)."""
+        client_with_logs.get_addon_logs.side_effect = HomeAssistantAuthError(
+            "Invalid Supervisor token for /addons/core_mosquitto/logs"
+        )
+        tools = _register_and_collect(client_with_logs)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("SUPERVISOR_TOKEN" in s for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_auth_error_non_addon_suggests_admin_lla(
+        self, client_with_logs
+    ):
+        """Non-addon ``HomeAssistantAuthError`` on the addon-logs path
+        (Docker/uvx hitting ``/api/hassio/addons/{slug}/logs`` with a
+        bad/expired LLA) → admin-LLA suggestion, NOT the ``SUPERVISOR_TOKEN``
+        hint. Companion to the #1260 wrapper-message split on the
+        system_service source.
+        """
+        client_with_logs.get_addon_logs.side_effect = HomeAssistantAuthError(
+            "Invalid authentication token"
+        )
+        tools = _register_and_collect(client_with_logs)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=False,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("Long-Lived Access Token" in s for s in suggestions)
+        assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
+
 
 class TestSlugParameterIncompatibilityWarning:
     """`slug` only applies to `source='supervisor'` and `source='system_service'`.
@@ -1091,10 +1147,10 @@ class TestGetSystemServiceLogWrapper:
 
     @pytest.mark.parametrize(
         "service",
-        ["supervisor", "host", "core", "dns", "audio", "multicast", "observer"],
+        ["supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"],
     )
     @pytest.mark.asyncio
-    async def test_all_seven_allowed_services_dispatch(
+    async def test_all_allowed_services_dispatch(
         self, client_with_system_logs, service
     ):
         """Every allowed service routes through to the client helper. Catches
@@ -1112,7 +1168,14 @@ class TestGetSystemServiceLogWrapper:
         )
 
     @pytest.mark.asyncio
-    async def test_403_role_hint_suggestion(self, client_with_system_logs):
+    async def test_403_in_addon_suggests_hassio_role(self, client_with_system_logs):
+        """In-addon branch (#1116): Supervisor returns 403 when ``hassio_role``
+        is below ``manager``. Suggestion must point at the role bump.
+
+        Mocks ``is_running_in_addon`` True explicitly — without the mock the
+        wrapper's branch defaults to the non-addon admin-LLA suggestion
+        (#1260's wrapper-message split) and this assertion would fail.
+        """
         client_with_system_logs._get_system_service_logs.side_effect = (
             HomeAssistantAPIError(
                 "Supervisor forbids /core/logs (403) — addon's hassio_role "
@@ -1123,12 +1186,104 @@ class TestGetSystemServiceLogWrapper:
         )
         tools = _register_and_collect(client_with_system_logs)
 
-        with pytest.raises(ToolError) as exc_info:
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await tools["ha_get_logs"](source="system_service", slug="core")
 
         body = _parse_tool_error(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("hassio_role" in s and "manager" in s for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_403_non_addon_suggests_admin_lla_privileges(
+        self, client_with_system_logs
+    ):
+        """Non-addon branch (#1260): HA Core's hassio proxy returns 403 when
+        the LLA's user lacks admin privileges — completely different
+        remediation from the addon's ``hassio_role`` case. Suggestion must
+        steer toward the admin-LLA fix, NOT the role bump.
+        """
+        client_with_system_logs._get_system_service_logs.side_effect = (
+            HomeAssistantAPIError(
+                "API error: 403 - Unauthorized",
+                status_code=403,
+                response_data={"message": "Unauthorized"},
+            )
+        )
+        tools = _register_and_collect(client_with_system_logs)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=False,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools["ha_get_logs"](source="system_service", slug="core")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("admin" in s.lower() for s in suggestions)
+        # Crucially: the role-bump suggestion that's appropriate inside the
+        # addon must NOT fire here — it would send a Docker/uvx user on a
+        # wild goose chase.
+        assert not any("hassio_role" in s for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_auth_error_in_addon_suggests_supervisor_token(
+        self, client_with_system_logs
+    ):
+        """In-addon AuthError → SUPERVISOR_TOKEN suggestion (the env var the
+        Supervisor-direct call site actually reads)."""
+        client_with_system_logs._get_system_service_logs.side_effect = (
+            HomeAssistantAuthError("Invalid Supervisor token for /core/logs")
+        )
+        tools = _register_and_collect(client_with_system_logs)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools["ha_get_logs"](source="system_service", slug="core")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("SUPERVISOR_TOKEN" in s for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_auth_error_non_addon_suggests_admin_lla(
+        self, client_with_system_logs
+    ):
+        """Non-addon AuthError (#1260) → admin-LLA suggestion. The
+        SUPERVISOR_TOKEN hint must NOT appear — Docker/uvx callers don't
+        have one, and pointing at it sends them looking in the wrong place.
+        """
+        client_with_system_logs._get_system_service_logs.side_effect = (
+            HomeAssistantAuthError("Invalid authentication token")
+        )
+        tools = _register_and_collect(client_with_system_logs)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                return_value=False,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools["ha_get_logs"](source="system_service", slug="core")
+
+        body = _parse_tool_error(exc_info)
+        suggestions = body["error"]["suggestions"]
+        assert any("Long-Lived Access Token" in s for s in suggestions)
+        assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
 
     @pytest.mark.asyncio
     async def test_level_param_emits_warning_for_system_service_source(

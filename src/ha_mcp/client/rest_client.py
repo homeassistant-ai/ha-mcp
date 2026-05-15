@@ -527,7 +527,7 @@ class HomeAssistantClient:
 
         - ``"addons/<slug>"`` for add-on container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
-          multicast, observer}) for system-service logs
+          cli, multicast, observer}) for system-service logs
 
         Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
         endpoint uses a different base URL (``http://supervisor``) and a
@@ -647,11 +647,11 @@ class HomeAssistantClient:
     async def _get_system_service_logs(self, service: str) -> str:
         """Fetch HA system-service logs.
 
-        ``service`` must be one of the seven Supervisor-managed services:
-        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``multicast``,
-        ``observer``. Caller is responsible for validating ``service`` against
-        the allowed set; this helper does no validation and will raise
-        ``HomeAssistantAPIError`` on any unknown path (404).
+        ``service`` must be one of the eight Supervisor-managed services:
+        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
+        ``multicast``, ``observer``. Caller is responsible for validating
+        ``service`` against the allowed set; this helper does no validation
+        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the addon container goes directly to Supervisor at
