@@ -376,12 +376,13 @@ class HistoryTools:
                     total=3,
                     message="recorder query complete",
                 )
-                # Project BEFORE wrapping so the helper applies at the same shape
-                # as every other tool (raw response dict). add_timezone_metadata
-                # wraps the result in {"data": ..., "metadata": ...} which would
-                # otherwise force a bespoke unwrap-project-rewrap site.
-                projected = project_fields(inner, parsed_fields)
-                return await add_timezone_metadata(self._client, projected, include_metadata=parsed_fields is None)
+                # Wrap first so the outer {"data": ..., "metadata": ...} shape
+                # is always present; then project the inner data dict in-place
+                # when caller requested field projection.
+                _r = await add_timezone_metadata(self._client, inner)
+                if parsed_fields is not None:
+                    _r["data"] = project_fields(_r["data"], parsed_fields)
+                return _r
             finally:
                 if ws_client:
                     await ws_client.disconnect()

@@ -584,7 +584,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for r in search_data["results"]
                         ]
 
-                    return await add_timezone_metadata(client, project_fields(search_data, parsed_fields), include_metadata=parsed_fields is None)
+                    _r = await add_timezone_metadata(client, search_data)
+                    if parsed_fields is not None:
+                        _r["data"] = project_fields(_r["data"], parsed_fields)
+                    return _r
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -705,7 +708,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 {k: v for k, v in r.items() if k in parsed_result_fields}
                                 for r in area_search_data["results"]
                             ]
-                        return await add_timezone_metadata(client, project_fields(area_search_data, parsed_fields), include_metadata=parsed_fields is None)
+                        _r = await add_timezone_metadata(client, area_search_data)
+                        if parsed_fields is not None:
+                            _r["data"] = project_fields(_r["data"], parsed_fields)
+                        return _r
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -726,7 +732,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             empty_area_data["state_filter"] = state_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, project_fields(empty_area_data, parsed_fields), include_metadata=parsed_fields is None)
+                        _r = await add_timezone_metadata(client, empty_area_data)
+                        if parsed_fields is not None:
+                            _r["data"] = project_fields(_r["data"], parsed_fields)
+                        return _r
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -835,7 +844,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for r in domain_list_results
                         ]
                     domain_list_data["by_domain"] = {domain_filter: domain_list_results}
-                return await add_timezone_metadata(client, project_fields(domain_list_data, parsed_fields), include_metadata=parsed_fields is None)
+                _r = await add_timezone_metadata(client, domain_list_data)
+                if parsed_fields is not None:
+                    _r["data"] = project_fields(_r["data"], parsed_fields)
+                return _r
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -975,7 +987,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     for d, entities in result["by_domain"].items()
                 }
 
-            return await add_timezone_metadata(client, project_fields(result, parsed_fields), include_metadata=parsed_fields is None)
+            _r = await add_timezone_metadata(client, result)
+            if parsed_fields is not None:
+                _r["data"] = project_fields(_r["data"], parsed_fields)
+            return _r
 
         except ToolError:
             raise
