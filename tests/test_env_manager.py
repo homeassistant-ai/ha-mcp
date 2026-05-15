@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import docker.errors
 import requests
 from testcontainers.core.container import DockerContainer
 
@@ -319,7 +320,7 @@ def main():
                             sys.exit(1)
             except KeyboardInterrupt:
                 logger.info("\n🛑 Received interrupt signal")
-            except (OSError, RuntimeError) as e:
+            except (OSError, RuntimeError, docker.errors.DockerException) as e:
                 logger.error(f"❌ Watchdog failure: {e}, exiting for restart...")
                 sys.exit(1)
         else:
