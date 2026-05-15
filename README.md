@@ -226,9 +226,9 @@ An MCP server can create automations, helpers, and dashboards, but it has no opi
 
 ### Bundled Skills (built-in)
 
-Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients, the same skills are also exposed as `ha_list_resources` / `ha_read_resource` tools. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients (claude.ai, etc.), the same skills are reachable through the polymorphic `ha_get_skill_guide` tool — call it with no args to list bundled skills, with a `skill` arg to list its files, or with `skill` + `file` to read content. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
 
-If you want to hide either tool from the catalog, disable it from the web settings UI like any other tool.
+`ha_get_skill_guide` is mandatory-pinned: the catalog always exposes it so tool-only clients never see a silently missing skill surface.
 
 Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
 
