@@ -319,6 +319,9 @@ def main():
                             sys.exit(1)
             except KeyboardInterrupt:
                 logger.info("\n🛑 Received interrupt signal")
+            except (OSError, RuntimeError) as e:
+                logger.error(f"❌ Watchdog failure: {e}, exiting for restart...")
+                sys.exit(1)
         else:
             # Interactive menu loop
             while True:
