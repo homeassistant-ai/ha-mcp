@@ -19,7 +19,9 @@ from mcp.types import Icon
 from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
+from .errors import ErrorCode, create_error_response
 from .tools.enhanced import EnhancedToolsMixin
+from .tools.helpers import raise_tool_error
 from .tools.util_helpers import strip_internal_fields
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -1061,9 +1063,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         clients see ``isError=true`` rather than a success payload with
         an embedded error.
         """
-        from .errors import ErrorCode, create_error_response
-        from .tools.helpers import raise_tool_error
-
         # Degraded mode: no skills directory. Always return a structured
         # response so callers can detect the situation rather than
         # silently believing the tool list is just empty.
