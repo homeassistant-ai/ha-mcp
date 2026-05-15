@@ -876,7 +876,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         DASHBOARD DOCUMENTATION (via MCP skills):
         - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
         - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
-        - ha_get_skill_home_assistant_best_practices — guidance on card types and configuration
+        - ha_get_skill_guide — guidance on card types and configuration
 
         EXAMPLES:
 

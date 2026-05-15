@@ -215,7 +215,7 @@ class ConfigSceneTools:
         - ha_config_set_scene — pass the returned ``config_hash`` for
           ``python_transform`` updates.
 
-        For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` previously
@@ -278,7 +278,7 @@ class ConfigSceneTools:
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -514,7 +514,7 @@ class ConfigSceneTools:
             "icon": "mdi:movie",
         })
 
-        For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
@@ -895,7 +895,7 @@ class ConfigSceneTools:
                     "Ensure config includes an 'entities' field (a dict keyed by entity_id)",
                     "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
                     "Use ha_search_entities(domain_filter='scene') to find scenes",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -1003,7 +1003,7 @@ class ConfigSceneTools:
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
                     "Check if scene is being used by automations or scripts",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 

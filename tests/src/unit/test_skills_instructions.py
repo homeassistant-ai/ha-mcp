@@ -21,9 +21,7 @@ def server():
 
         # Patch out tool registration and skills registration
         with (
-            patch(
-                "ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"
-            ),
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"),
             patch(
                 "ha_mcp.server.HomeAssistantSmartMCPServer._build_skills_instructions",
                 return_value=None,
@@ -140,7 +138,9 @@ class TestBuildSkillsInstructions:
 
     def test_valid_skill_produces_instructions(self, server, tmp_path):
         """Valid skill directory produces instruction text with the
-        ha_*_resource fallback referenced in the access method."""
+        ha_get_skill_guide fallback referenced in the access method."""
+        from ha_mcp.server import SKILL_TOOL_NAME
+
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
@@ -157,8 +157,10 @@ class TestBuildSkillsInstructions:
         assert "IMPORTANT" in result
         assert "resources/read" in result
         assert "### Skill: my-skill" in result
-        assert "ha_list_resources" in result
-        assert "ha_read_resource" in result
+        assert SKILL_TOOL_NAME in result
+        # The pre-consolidation pair must no longer appear (#1134).
+        assert "ha_list_resources" not in result
+        assert "ha_read_resource" not in result
 
     def test_empty_skills_dir(self, server, tmp_path):
         """Empty skills directory returns None."""
@@ -195,13 +197,11 @@ class TestLogSkillRegistrationSummary:
 
         return HomeAssistantSmartMCPServer._log_skill_registration_summary
 
-    def test_logs_info_when_all_phases_ok_and_guidance_present(
-        self, emit, caplog
-    ):
+    def test_logs_info_when_all_phases_ok_and_guidance_present(self, emit, caplog):
         import logging
 
         with caplog.at_level(logging.INFO, logger="ha_mcp.server"):
-            emit({"provider": "ok", "transform": "ok", "guidance_tools": 3})
+            emit({"provider": "ok", "tool": "ok", "guidance_count": 3})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.INFO
@@ -210,16 +210,16 @@ class TestLogSkillRegistrationSummary:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            emit({"provider": "failed", "transform": "skipped", "guidance_tools": 0})
+            emit({"provider": "failed", "tool": "skipped", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
 
-    def test_logs_warning_when_transform_failed(self, emit, caplog):
+    def test_logs_warning_when_tool_failed(self, emit, caplog):
         import logging
 
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            emit({"provider": "ok", "transform": "failed", "guidance_tools": 2})
+            emit({"provider": "ok", "tool": "failed", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
@@ -229,7 +229,7 @@ class TestLogSkillRegistrationSummary:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            emit({"provider": "skipped", "transform": "skipped", "guidance_tools": 0})
+            emit({"provider": "skipped", "tool": "skipped", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
@@ -244,7 +244,7 @@ class TestLogSkillRegistrationSummary:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            emit({"provider": "ok", "transform": "ok", "guidance_tools": 0})
+            emit({"provider": "ok", "tool": "ok", "guidance_count": 0})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
@@ -253,8 +253,128 @@ class TestLogSkillRegistrationSummary:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            emit({"provider": "ok", "transform": "ok"})
+            emit({"provider": "ok", "tool": "ok"})
         records = [r for r in caplog.records if "Skill system summary" in r.message]
         assert len(records) == 1
         assert records[0].levelno == logging.WARNING
-        assert "guidance_tools=0" in records[0].getMessage()
+        assert "guidance_count=0" in records[0].getMessage()
+
+
+class TestHandleSkillGuideCall:
+    """Tests for the three-tier ha_get_skill_guide handler.
+
+    Validates the tier dispatch, path-traversal guards, and the
+    degraded-mode behavior when no skills directory exists. The handler
+    is split out from the registered tool closure specifically so it
+    can be unit-tested without an MCP client round-trip.
+    """
+
+    @pytest.fixture
+    def populated_skills_dir(self, tmp_path):
+        """A tmp skills dir with one valid skill and one ignored entry."""
+        skill = tmp_path / "best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: best-practices\n"
+            "description: |\n"
+            "  Best practices for HA tasks.\n"
+            "---\n# Best practices\nReal content here.\n"
+        )
+        (skill / "reference.md").write_text("# Reference\nReal reference.\n")
+
+        # Ignored: not a directory.
+        (tmp_path / "stray.txt").write_text("ignored")
+
+        # Ignored: dir without SKILL.md.
+        (tmp_path / "no-skill-md").mkdir()
+        (tmp_path / "no-skill-md" / "other.md").write_text("ignored")
+
+        return tmp_path
+
+    def test_tier1_lists_only_valid_skills(self, server, populated_skills_dir):
+        """No-args call lists only dirs with parseable SKILL.md."""
+        result = server._handle_skill_guide_call(populated_skills_dir, None, None)
+        assert "skills" in result
+        names = [s["skill"] for s in result["skills"]]
+        assert names == ["best-practices"]
+        assert result["skills"][0]["uri"] == "skill://best-practices/SKILL.md"
+        assert "Best practices" in result["skills"][0]["description"]
+
+    def test_tier2_lists_files(self, server, populated_skills_dir):
+        """skill arg lists every file in the skill dir."""
+        result = server._handle_skill_guide_call(
+            populated_skills_dir, "best-practices", None
+        )
+        assert result["skill"] == "best-practices"
+        names = sorted(f["name"] for f in result["files"])
+        assert names == ["SKILL.md", "reference.md"]
+
+    def test_tier3_reads_content(self, server, populated_skills_dir):
+        """skill + file args read the file content verbatim."""
+        result = server._handle_skill_guide_call(
+            populated_skills_dir, "best-practices", "reference.md"
+        )
+        assert result["skill"] == "best-practices"
+        assert result["file"] == "reference.md"
+        assert "Real reference" in result["content"]
+
+    def test_unknown_skill_raises(self, server, populated_skills_dir):
+        """An unknown skill name raises ToolError, not silent empty dict."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(
+                populated_skills_dir, "does-not-exist", None
+            )
+
+    def test_skill_traversal_raises(self, server, populated_skills_dir):
+        """``../`` in the skill arg must not escape the skills dir."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(populated_skills_dir, "../..", None)
+
+    def test_file_traversal_raises(self, server, populated_skills_dir):
+        """``../`` in the file arg must not escape the skill dir."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(
+                populated_skills_dir,
+                "best-practices",
+                "../../etc/passwd",
+            )
+
+    def test_missing_file_raises(self, server, populated_skills_dir):
+        """A file that doesn't exist in a valid skill raises rather than 404s."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(
+                populated_skills_dir, "best-practices", "missing.md"
+            )
+
+    def test_degraded_mode_tier1_returns_empty_listing(self, server):
+        """No skills dir → tier 1 returns an empty list with an explanation.
+
+        This is the always-registered-tool contract: callers see a
+        structured response explaining the situation, not a missing
+        tool, when the skills submodule is uninitialized.
+        """
+        result = server._handle_skill_guide_call(None, None, None)
+        assert result["skills"] == []
+        assert "submodule" in result["how_to_use"].lower()
+
+    def test_degraded_mode_tier2_raises(self, server):
+        """No skills dir → asking for a specific skill raises explicitly."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(None, "best-practices", None)
+
+    def test_degraded_mode_tier3_raises(self, server):
+        """No skills dir → asking for a file raises explicitly."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(None, "best-practices", "SKILL.md")

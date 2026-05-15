@@ -10,7 +10,7 @@ Covers three layers:
    ``add_transform`` failure path. Uses the ``MagicMock`` stub pattern
    from ``test_categorized_search.TestApplySearchKeywordEnrichment``.
 3. The ``_LITE_DOCSTRINGS`` mapping invariant — every lite description
-   names ``ha_get_skill_home_assistant_best_practices`` (or
+   names ``ha_get_skill_guide`` (or
    ``ha_get_helper_schema`` for the helper entries) so the LLM still
    has a path to detailed guidance from inside the trimmed text.
 """
@@ -48,7 +48,7 @@ _FULL_AUTOMATION = (
 )
 _LITE_AUTOMATION = (
     "Get a Home Assistant automation. See "
-    "ha_get_skill_home_assistant_best_practices for schema."
+    "ha_get_skill_guide for schema."
 )
 
 
@@ -254,7 +254,7 @@ class TestLiteDocstringsMappingInvariants:
         # the two helper entries since it serves the same role
         # (deferred per-type schema lookup).
         acceptable_pointers = (
-            "ha_get_skill_home_assistant_best_practices",
+            "ha_get_skill_guide",
             "ha_get_helper_schema",
         )
         offenders: list[str] = []
