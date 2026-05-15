@@ -122,7 +122,7 @@
           "default": null
         },
         "request_headers": {
-          "type": "Annotated[dict[str, str] | None, Field(description=\"Proxy/array-patch mode: extra HTTP headers to send to the addon API. Useful for addon-specific requirements such as Node-RED's `Node-RED-Deployment-Type: full`. The proxy's internal framing (`X-Ingress-Path`, `X-Hass-Source`, `Content-Type`) is layered on top, so caller-supplied values for those keys are overridden. Not valid in config mode.\", default=None)]",
+          "type": "Annotated[dict[str, str] | None, Field(description=\"Proxy/array-patch mode: extra HTTP headers to send to the addon API. Useful for addon-specific requirements such as Node-RED's `Node-RED-Deployment-Type: full`. The proxy's internal framing (`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is layered on top, so caller-supplied values for those keys are overridden. Not valid in config or websocket mode.\", default=None)]",
           "default": null
         }
       },
