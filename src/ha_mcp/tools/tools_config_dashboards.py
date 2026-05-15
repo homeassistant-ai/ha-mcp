@@ -16,6 +16,7 @@ from ..errors import ErrorCode, create_error_response, create_resource_not_found
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    PythonSandboxExecutionError,
     format_sandbox_error,
     get_security_documentation,
     safe_execute,
@@ -1096,6 +1097,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
                     message, suggestions = format_sandbox_error(e, python_transform)
+                    # A path-shape mismatch (IndexError/KeyError) is almost always
+                    # a hallucinated path; steer the retry toward search mode so
+                    # the next transform is built from a verified jq_path.
+                    if isinstance(e, PythonSandboxExecutionError) and isinstance(
+                        e.__cause__, (IndexError, KeyError)
+                    ):
+                        suggestions = [
+                            "Call ha_config_get_dashboard with card_type=..., "
+                            "entity_id=..., or heading=... to get the verified "
+                            "jq_path for the target card, then build "
+                            "python_transform from that path",
+                            *suggestions,
+                        ]
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
