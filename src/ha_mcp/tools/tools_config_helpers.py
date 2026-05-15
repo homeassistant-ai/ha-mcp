@@ -2783,7 +2783,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Tags don't have entity registry entries, so return directly
                     # without wait_for_entity_registered (they're not entities).
                     # Issue #1293: ``data`` wrapper key + top-level ``warnings`` list.
-                    return {
+                    # No producer appends to ``warnings`` on the tag path today,
+                    # but the conditional mirrors the sibling create/update
+                    # branches so future warnings flow through the same contract.
+                    response = {
                         "success": True,
                         "action": "update",
                         "helper_type": helper_type,
@@ -2791,6 +2794,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "data": updated_data,
                         "message": f"Successfully updated {helper_type}: {entity_id}",
                     }
+                    if warnings:
+                        response["warnings"] = warnings
+                    return response
 
                 elif helper_type in config_store_types:
                     # Person and zone: look up unique_id from entity registry
