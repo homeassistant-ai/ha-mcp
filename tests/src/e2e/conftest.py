@@ -1325,7 +1325,10 @@ async def stdio_mcp_client(
         "HA_MAX_RETRIES": "1",
     }
 
-    transport = StdioTransport(command="ha-mcp", env=env)
+    # `args` is a required positional in this fastmcp version (the docs
+    # show it as optional, but the installed StdioTransport.__init__
+    # disagrees — pass an explicit empty list).
+    transport = StdioTransport(command="ha-mcp", args=[], env=env)
     client = Client(transport)
     async with client:
         logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
