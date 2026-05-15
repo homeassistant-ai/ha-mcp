@@ -257,14 +257,20 @@ class TestTransformGeneratedTools:
         assert TRANSFORM_GENERATED_TOOLS == {}
 
     @pytest.mark.asyncio
-    async def test_metadata_returns_local_tools_when_no_transform_stubs(self):
-        """With no transform stubs, _get_tool_metadata should pass through
-        whatever local_provider returns without injecting extras."""
+    async def test_metadata_omits_pre_consolidation_tools(self):
+        """With no transform stubs, _get_tool_metadata must not surface
+        the pre-#1134 ha_list_resources / ha_read_resource pair. Feature-
+        gated stubs are still injected by a separate path (covered in
+        TestFeatureGatedTools) so the result isn't empty.
+        """
         server = MagicMock()
         server.mcp.local_provider._list_tools = AsyncMock(return_value=[])
 
         tools = await _get_tool_metadata(server)
-        assert tools == []
+        names = {t["name"] for t in tools}
+
+        assert "ha_list_resources" not in names
+        assert "ha_read_resource" not in names
 
 
 class TestFeatureGatedTools:
