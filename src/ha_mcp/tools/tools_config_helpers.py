@@ -867,6 +867,53 @@ def _validate_numeric_range(
             )
 
 
+def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
+    """Reject input_select ``initial`` values not in ``options`` (Bug 4a, issue #1150).
+
+    The create-branch guard (#1150) and the update-branch guard (#1292) call
+    this with the resolved values — caller-supplied or merged from the
+    existing config. ``initial=None`` is the unset case and passes through.
+    """
+    if initial is None:
+        return
+    if initial not in options:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"initial={initial!r} must be one of options "
+                f"{options!r} for input_select.",
+                context=_simple_helper_error_context(
+                    "input_select",
+                    initial=initial,
+                    options=options,
+                ),
+                suggestions=[
+                    "Pick an `initial` value that's in `options`.",
+                    "Or omit `initial` so the entity starts unset.",
+                ],
+            )
+        )
+
+
+def _validate_datetime_has_date_or_time(
+    has_date: bool | None, has_time: bool | None
+) -> None:
+    """Reject ``input_datetime`` payloads where both components are False (#1292).
+
+    Mirrors the create-branch guard onto the update branch. Treats ``None``
+    as "not constrained" — only the explicit (False, False) case is flagged,
+    since that's what reaches HA as the broken-entity payload.
+    """
+    if has_date is False and has_time is False:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "At least one of has_date or has_time must be True for input_datetime",
+                context=_simple_helper_error_context("input_datetime"),
+            )
+        )
+
+
 def _validate_input_select_options(options: Any) -> None:
     """Reject input_select option lists containing duplicates (Bug 17, issue #1150).
 
@@ -2400,26 +2447,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     message["options"] = options
                     # Bug 4a (issue #1150): if `initial` was passed but isn't
                     # one of the options, reject explicitly instead of silently
-                    # dropping. The previous `if initial and initial in options`
-                    # check stripped invalid initials with `success: true`.
+                    # dropping. Shared with the update branch via the helper
+                    # (issue #1292).
+                    _validate_initial_in_options(options, initial)
                     if initial is not None:
-                        if initial not in options:
-                            raise_tool_error(
-                                create_error_response(
-                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                    f"initial={initial!r} must be one of options "
-                                    f"{options!r} for input_select.",
-                                    context=_simple_helper_error_context(
-                                        helper_type,
-                                        initial=initial,
-                                        options=options,
-                                    ),
-                                    suggestions=[
-                                        "Pick an `initial` value that's in `options`.",
-                                        "Or omit `initial` so the entity starts unset.",
-                                    ],
-                                )
-                            )
                         message["initial"] = initial
 
                 elif helper_type == "input_number":
@@ -2477,15 +2508,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["has_date"] = has_date
                         message["has_time"] = has_time
 
-                    # Validate that at least one is True
-                    if not message["has_date"] and not message["has_time"]:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                "At least one of has_date or has_time must be True for input_datetime",
-                                context=_simple_helper_error_context(helper_type),
-                            )
-                        )
+                    # Validate that at least one is True — shared with the
+                    # update branch via the helper (issue #1292).
+                    _validate_datetime_has_date_or_time(
+                        message["has_date"], message["has_time"]
+                    )
 
                     if initial is not None:
                         message["initial"] = initial
@@ -3048,6 +3075,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if initial is not None
                                 else existing.get("initial")
                             )
+                            # Issue #1292: parity with the create-branch guard.
+                            # Resolves to (new options, new initial) /
+                            # (new options, old initial) / (old options,
+                            # new initial) — any combination that excludes
+                            # initial from the final options list is caught.
+                            _validate_initial_in_options(
+                                update_msg["options"], initial_val
+                            )
                             if initial_val is not None:
                                 update_msg["initial"] = initial_val
 
@@ -3139,6 +3174,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 has_time
                                 if has_time is not None
                                 else existing.get("has_time", False)
+                            )
+                            # Issue #1292: parity with create-branch guard.
+                            # A merge that resolves to (False, False) — caller
+                            # disabling the one component the existing entity
+                            # had — would otherwise write a broken-entity
+                            # payload and surface HA's cryptic generic error.
+                            _validate_datetime_has_date_or_time(
+                                update_msg["has_date"], update_msg["has_time"]
                             )
                             initial_val = (
                                 initial
