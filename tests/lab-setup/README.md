@@ -37,7 +37,7 @@ The setup script is **idempotent** (safe to re-run) and performs:
 3. **Docker** — Via official get.docker.com script
 4. **uv** — Python package manager for running ha-mcp
 5. **ha-mcp repo** — Clones to `~/ha-mcp` (or pulls if it already exists)
-6. **Systemd service** — Creates `hamcp-demo.service` (starts on boot, restarts on failure) and `hamcp-demo-update.timer` (daily at 3am: git pull, docker image prune, service restart)
+6. **Systemd service** — Creates `hamcp-demo.service` (starts on boot, exits+restarts if HA container dies) and two timers: `hamcp-demo-reset.timer` (daily at 19:00 UTC: fresh HA restart, 2h before nightly CI check) and `hamcp-demo-update.timer` (daily at 03:00 UTC: git pull, docker image prune, service restart)
 7. **Caddy** — Reverse proxy with automatic Let's Encrypt TLS for your domain
 8. **Unattended upgrades** — Auto-updates OS packages, reboots at 4am if needed
 9. **Container cleanup** — Removes stale HA containers and any leaked processes
@@ -65,9 +65,13 @@ sudo systemctl restart hamcp-demo
 # Live logs
 sudo journalctl -u hamcp-demo -f
 
-# Weekly update timer — next run and last result
+# Daily update timer (03:00 UTC) — next run and last result
 sudo systemctl list-timers hamcp-demo-update.timer
 sudo journalctl -u hamcp-demo-update --no-pager -n 20
+
+# Daily reset timer (19:00 UTC) — next run and last result
+sudo systemctl list-timers hamcp-demo-reset.timer
+sudo journalctl -u hamcp-demo-reset --no-pager -n 10
 ```
 
 ## Logs
