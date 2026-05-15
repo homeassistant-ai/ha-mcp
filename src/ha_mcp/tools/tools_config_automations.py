@@ -16,7 +16,6 @@ from ..errors import (
     ErrorCode,
     create_config_error,
     create_error_response,
-    create_resource_not_found_error,
     create_validation_error,
 )
 from ..utils.config_hash import compute_config_hash
@@ -304,26 +303,9 @@ class AutomationConfigTools:
                 "config": normalized_config,
                 "config_hash": config_hash,
             }
+        except ToolError:
+            raise
         except Exception as e:
-            # Handle 404 errors gracefully (often used to verify deletion)
-            error_str = str(e)
-            if (
-                "404" in error_str
-                or "not found" in error_str.lower()
-                or "entity not found" in error_str.lower()
-            ):
-                logger.debug(
-                    f"Automation {identifier} not found (expected for deletion verification)"
-                )
-                error_response = create_resource_not_found_error(
-                    "Automation",
-                    identifier,
-                    details=f"Automation '{identifier}' does not exist in Home Assistant",
-                )
-                error_response["action"] = "get"
-                error_response["reason"] = "not_found"
-                raise_tool_error(error_response)
-
             logger.error(f"Error getting automation: {e}")
             exception_to_structured_error(
                 e,
@@ -1003,30 +985,19 @@ class AutomationConfigTools:
                     result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
             return {"success": True, "action": "delete", **result}
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting automation: {e}")
-            error_str = str(e).lower()
-            if "404" in error_str or "not found" in error_str:
-                error_response = create_resource_not_found_error(
-                    "Automation",
-                    identifier,
-                    details=f"Automation '{identifier}' does not exist",
-                )
-            else:
-                error_response = exception_to_structured_error(
-                    e,
-                    context={"identifier": identifier},
-                    raise_error=False,
-                )
-            error_response["action"] = "delete"
-            # Add automation-specific suggestions
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+            exception_to_structured_error(
+                e,
+                context={"identifier": identifier, "action": "delete"},
+                suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
-                ]
-            raise_tool_error(error_response)
+                ],
+            )
 
 
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
