@@ -302,11 +302,21 @@ def main():
         env.print_status()
 
         if args.no_interactive:
-            # Non-interactive mode: just wait for interrupt
+            # Non-interactive mode: wait for interrupt, and exit if the container dies
+            # so systemd's Restart=on-failure kicks in with a fresh instance.
             logger.info("🔄 Running in non-interactive mode. Press Ctrl+C to stop.")
             try:
                 while True:
-                    time.sleep(1)
+                    time.sleep(30)
+                    if env.container:
+                        wrapped = env.container.get_wrapped_container()
+                        wrapped.reload()
+                        if wrapped.status not in ("running",):
+                            logger.error(
+                                f"❌ Container stopped unexpectedly "
+                                f"(status: {wrapped.status}), exiting for restart..."
+                            )
+                            sys.exit(1)
             except KeyboardInterrupt:
                 logger.info("\n🛑 Received interrupt signal")
         else:

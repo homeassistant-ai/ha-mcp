@@ -129,11 +129,36 @@ SVCEOF
 
 cat > /etc/systemd/system/hamcp-demo-update.timer << SVCEOF
 [Unit]
-Description=HA-MCP Demo Weekly Update Timer
+Description=HA-MCP Demo Daily Update Timer
 
 [Timer]
-OnCalendar=*-*-* 03:00:00
+OnCalendar=*-*-* 03:00:00 UTC
 AccuracySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SVCEOF
+
+# Daily reset at 19:00 UTC — 2 hours before the CI check-demo-env workflow (21:00 UTC).
+# Restarts the service so HA comes up fresh for the nightly health check.
+cat > /etc/systemd/system/hamcp-demo-reset.service << SVCEOF
+[Unit]
+Description=HA-MCP Demo Daily Reset
+After=hamcp-demo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart hamcp-demo
+SVCEOF
+
+cat > /etc/systemd/system/hamcp-demo-reset.timer << SVCEOF
+[Unit]
+Description=HA-MCP Demo Daily Reset Timer
+
+[Timer]
+OnCalendar=*-*-* 19:00:00 UTC
+AccuracySec=5m
 Persistent=true
 
 [Install]
@@ -147,6 +172,8 @@ systemctl daemon-reload
 systemctl enable hamcp-demo.service
 systemctl enable hamcp-demo-update.timer
 systemctl start hamcp-demo-update.timer
+systemctl enable hamcp-demo-reset.timer
+systemctl start hamcp-demo-reset.timer
 
 #=============================================================================
 # 7. CADDY
