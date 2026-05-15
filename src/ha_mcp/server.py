@@ -879,10 +879,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Phase 3: Register the polymorphic tool unconditionally. Tool
         # absence would be a silent failure for tool-only clients; an
         # always-registered tool that reports "no skills available" is
-        # the loud-failure alternative.
-        guidance_count = self._register_skill_guide_tool(skills_dir)
-        status["tool"] = "ok"
-        status["guidance_count"] = guidance_count
+        # the loud-failure alternative. Wrap the registration call so a
+        # FastMCP-side regression (renamed mcp.tool kwargs, etc.) emits a
+        # WARNING-level summary instead of aborting server startup.
+        try:
+            guidance_count = self._register_skill_guide_tool(skills_dir)
+            status["tool"] = "ok"
+            status["guidance_count"] = guidance_count
+        except Exception:
+            logger.exception(
+                "Failed to register %s — tool-only clients will not see skill guidance",
+                SKILL_TOOL_NAME,
+            )
+            status["tool"] = "failed"
 
         self._log_skill_registration_summary(status)
 
@@ -1135,11 +1144,31 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # can't list an unrelated directory. The is_symlink() rejection
         # matches the symlink filter in _list_skill_files (a tier-2
         # response should never enumerate from a directory the listing
-        # itself wouldn't expose).
+        # itself wouldn't expose). Also reject skill values that resolve
+        # to the skills root itself (``"."``, ``"./"``, ``"x/.."``):
+        # those would silently downgrade tier 2 from "list one skill's
+        # files" to "list every file across every bundle," which is a
+        # contract mismatch even though it's not a security escape.
+        try:
+            skill_resolved = skill_dir.resolve()
+            skills_resolved = skills_dir.resolve()
+        except OSError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    message=(f"Could not resolve path for skill {skill!r}: {e}"),
+                    context={"skill": skill},
+                    suggestions=[
+                        "Check filesystem permissions on the skills-vendor directory.",
+                        "Check the server logs for the underlying OSError.",
+                    ],
+                )
+            )
         if (
             not skill_dir.exists()
             or not skill_dir.is_dir()
-            or not skill_dir.resolve().is_relative_to(skills_dir.resolve())
+            or not skill_resolved.is_relative_to(skills_resolved)
+            or skill_resolved == skills_resolved
             or skill_dir.is_symlink()
         ):
             raise_tool_error(

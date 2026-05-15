@@ -338,6 +338,24 @@ class TestHandleSkillGuideCall:
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(populated_skills_dir, "../..", None)
 
+    @pytest.mark.parametrize(
+        "skill", [".", "./", "./best-practices/..", "best-practices/.."]
+    )
+    def test_skill_dot_aliases_to_root_are_rejected(
+        self, server, populated_skills_dir, skill
+    ):
+        """``"."``, ``"./"``, and ``"x/.."`` all resolve to the skills root.
+
+        Without an explicit guard, all four guards (exists, is_dir,
+        is_relative_to, is_symlink) pass and tier 2 silently enumerates
+        every file under every bundled skill. That contradicts tier 1's
+        "one skill at a time" contract. Reject with RESOURCE_NOT_FOUND.
+        """
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            server._handle_skill_guide_call(populated_skills_dir, skill, None)
+
     def test_file_traversal_raises(self, server, populated_skills_dir):
         """``../`` in the file arg must not escape the skill dir."""
         from fastmcp.exceptions import ToolError
