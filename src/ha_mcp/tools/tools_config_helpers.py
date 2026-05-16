@@ -1409,6 +1409,69 @@ async def _apply_registry_updates_to_entity(
     return applied
 
 
+class HelperResponse(TypedDict, total=False):
+    """Uniform response contract for ``ha_config_set_helper`` (issue #1293).
+
+    Documents the legal key set across all three branches (create, update,
+    flow). ``total=False`` because per-branch fields (entity_id, flow extras,
+    warnings) are conditional. Consumed by ``_helper_response`` below — all
+    return literals in this module funnel through that builder so the shape
+    has a single point of construction.
+    """
+
+    success: bool
+    action: str  # "create" | "update"
+    helper_type: str
+    data: dict[str, Any]
+    entity_id: str  # absent on flow branch (use entity_ids[] for multi-entity)
+    message: str | None
+    warnings: list[str]  # omitted when empty
+    # Flow-helper convenience accessors (only set on the flow branch).
+    method: str
+    entry_id: str | None
+    title: str | None
+    updated: bool
+    entity_ids: list[str]
+    area_id: str | None
+    labels: list[str]
+    category: str
+    applied: list[dict[str, Any]]
+
+
+def _helper_response(
+    action: str,
+    helper_type: str,
+    *,
+    data: dict[str, Any],
+    entity_id: str | None = None,
+    message: str | None = None,
+    warnings: list[str] | None = None,
+    **extras: Any,
+) -> dict[str, Any]:
+    """Single construction point for the ``ha_config_set_helper`` response.
+
+    Enforces the uniform shape from issue #1293: ``success`` → ``action`` →
+    ``helper_type`` → ``data`` → ``entity_id`` (when present) → ``message`` →
+    flow-helper extras → ``warnings`` (only when non-empty). Returning
+    ``dict[str, Any]`` rather than ``HelperResponse`` keeps the call sites
+    free of mypy gymnastics around the dynamic ``**extras`` keys; the
+    TypedDict serves as the readable contract anchor instead.
+    """
+    resp: dict[str, Any] = {
+        "success": True,
+        "action": action,
+        "helper_type": helper_type,
+        "data": data,
+    }
+    if entity_id is not None:
+        resp["entity_id"] = entity_id
+    resp["message"] = message
+    resp.update(extras)
+    if warnings:
+        resp["warnings"] = warnings
+    return resp
+
+
 async def _handle_flow_helper(
     client: Any,
     helper_type: str,
@@ -1562,24 +1625,15 @@ async def _handle_flow_helper(
             helper_id,  # type: ignore[arg-type]
         )
 
+    # Cache the flow_result keys read multiple times below (issue #1293
+    # follow-up: reduces three .get() lookups for entry_id and two for title
+    # to one each, and makes the post-flow logic readable as a sequence of
+    # named values rather than repeated dict access). ``.get()`` is kept —
+    # ``create_flow_helper`` propagates HA's optional entry_id via ``.get()``
+    # too (tools_config_entry_flow.py:L700), so a missing key must surface as
+    # None for the ``if entry_id:`` guard below, not raise KeyError.
     entry_id = flow_result.get("entry_id")
-    # ``data`` mirrors the HA flow_result payload for cross-action uniformity
-    # with the create/update branches (issue #1293). ``entry_id`` and ``title``
-    # also stay flat as convenience accessors — they are the primary identifiers
-    # callers reach for, and remain heavily used by per-action metadata
-    # consumers throughout the codebase.
-    result: dict[str, Any] = {
-        "success": True,
-        "action": action,
-        "helper_type": helper_type,
-        "method": "config_flow",
-        "entry_id": entry_id,
-        "title": flow_result.get("title"),
-        "data": {"entry_id": entry_id, "title": flow_result.get("title")},
-        "message": flow_result.get("message"),
-    }
-    if action == "update":
-        result["updated"] = True
+    title = flow_result.get("title")
 
     # Resolve all entities for this config entry (multi-entity helpers handled naturally).
     # For create with wait=True, poll briefly for at least one entity to appear —
@@ -1623,7 +1677,22 @@ async def _handle_flow_helper(
         else:
             entities = await _get_entities_for_config_entry(client, entry_id, warnings)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
-    result["entity_ids"] = entity_ids
+
+    # ``data`` mirrors the HA flow_result payload for cross-action uniformity
+    # with the create/update branches (issue #1293). ``entry_id`` and ``title``
+    # also stay flat as convenience accessors — they are the primary identifiers
+    # callers reach for, and remain heavily used by per-action metadata
+    # consumers throughout the codebase. Per-entity registry-write outcomes
+    # live in the ``applied`` flat array, not nested in ``data``, because one
+    # flow can yield N entities with different per-entity results.
+    extras: dict[str, Any] = {
+        "method": "config_flow",
+        "entry_id": entry_id,
+        "title": title,
+        "entity_ids": entity_ids,
+    }
+    if action == "update":
+        extras["updated"] = True
 
     # Apply registry updates (area_id / labels / category) to every entity.
     # Use `is not None` so an explicit empty value (area_id="" or labels=[])
@@ -1646,17 +1715,21 @@ async def _handle_flow_helper(
             )
         )
         if area_id is not None:
-            result["area_id"] = area_id if area_id else None
+            extras["area_id"] = area_id if area_id else None
         if labels_list is not None:
-            result["labels"] = labels_list
+            extras["labels"] = labels_list
         if category:
-            result["category"] = category
-        result["applied"] = applied_per_entity
+            extras["category"] = category
+        extras["applied"] = applied_per_entity
 
-    if warnings:
-        result["warnings"] = warnings
-
-    return result
+    return _helper_response(
+        action,
+        helper_type,
+        data={"entry_id": entry_id, "title": title},
+        message=flow_result.get("message"),
+        warnings=warnings,
+        **extras,
+    )
 
 
 def _format_schedule_days(
@@ -2678,7 +2751,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # Issue #1293: route the success/failure through ``cat_result`` so any
                     # ``category_warning`` lands in the top-level ``warnings`` list instead
                     # of leaking nested into ``helper_data``. Mirrors the precedent in
-                    # ``_handle_flow_helper`` (lines 1395-1407).
+                    # ``_handle_flow_helper`` (the ``cat_result`` block near the end of
+                    # ``_apply_registry_updates_to_entity``).
                     if category and entity_id:
                         cat_result: dict[str, Any] = {}
                         await apply_entity_category(
@@ -2694,17 +2768,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         elif "category_warning" in cat_result:
                             warnings.append(cat_result["category_warning"])
 
-                    response: dict[str, Any] = {
-                        "success": True,
-                        "action": "create",
-                        "helper_type": helper_type,
-                        "data": helper_data,
-                        "entity_id": entity_id,
-                        "message": f"Successfully created {helper_type}: {name}",
-                    }
-                    if warnings:
-                        response["warnings"] = warnings
-                    return response
+                    return _helper_response(
+                        "create",
+                        helper_type,
+                        data=helper_data,
+                        entity_id=entity_id,
+                        message=f"Successfully created {helper_type}: {name}",
+                        warnings=warnings,
+                    )
                 else:
                     raise_tool_error(
                         create_error_response(
@@ -2791,21 +2862,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Tags don't have entity registry entries, so return directly
                     # without wait_for_entity_registered (they're not entities).
-                    # Issue #1293: ``data`` wrapper key + top-level ``warnings`` list.
-                    # No producer appends to ``warnings`` on the tag path today,
-                    # but the conditional mirrors the sibling create/update
-                    # branches so future warnings flow through the same contract.
-                    response = {
-                        "success": True,
-                        "action": "update",
-                        "helper_type": helper_type,
-                        "entity_id": entity_id,
-                        "data": updated_data,
-                        "message": f"Successfully updated {helper_type}: {entity_id}",
-                    }
-                    if warnings:
-                        response["warnings"] = warnings
-                    return response
+                    # Issue #1293: same uniform builder as the sibling create/update
+                    # branches. No producer appends to ``warnings`` on the tag path
+                    # today, but ``_helper_response`` already omits the key when the
+                    # list is empty — future warnings flow through the same contract
+                    # without further plumbing.
+                    return _helper_response(
+                        "update",
+                        helper_type,
+                        data=updated_data,
+                        entity_id=entity_id,
+                        message=f"Successfully updated {helper_type}: {entity_id}",
+                        warnings=warnings,
+                    )
 
                 elif helper_type in config_store_types:
                     # Person and zone: look up unique_id from entity registry
@@ -3269,9 +3338,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if reg_result.get("success"):
                             # Issue #1293: mirror the create branch by propagating the
                             # registry writes into ``updated_data`` so the response's
-                            # ``data`` reflects the post-update state. Icon is
-                            # intentionally left out to match the create-branch's
-                            # current behavior (tracked as a separate consistency item).
+                            # ``data`` reflects the post-update state.
+                            if icon is not None:
+                                updated_data["icon"] = icon if icon else None
                             if area_id is not None:
                                 updated_data["area_id"] = area_id if area_id else None
                             if labels is not None:
@@ -3283,9 +3352,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if isinstance(error_detail, dict)
                                 else str(error_detail)
                             )
-                            logger.warning(
-                                f"Entity registry update failed for {entity_id}: {error_msg}"
-                            )
+                            # No ``logger.warning`` here — the create-branch and
+                            # flow-helper registry-update failure paths surface this
+                            # via ``warnings.append`` only, and the response carries
+                            # the message to the caller in the top-level ``warnings``
+                            # list. Logging again would double-report.
                             warnings.append(
                                 f"Config updated but entity registry update failed: {error_msg}"
                             )
@@ -3369,20 +3440,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     except Exception as e:
                         warnings.append(f"Update applied but verification failed: {e}")
 
-                # Issue #1293: ``data`` wrapper key + top-level ``warnings`` list.
-                # (No re-annotation — the create branch above already defined
-                # ``response: dict[str, Any]``; mypy treats this as the same binding.)
-                response = {
-                    "success": True,
-                    "action": "update",
-                    "helper_type": helper_type,
-                    "entity_id": entity_id,
-                    "data": updated_data,
-                    "message": f"Successfully updated {helper_type}: {entity_id}",
-                }
-                if warnings:
-                    response["warnings"] = warnings
-                return response
+                return _helper_response(
+                    "update",
+                    helper_type,
+                    data=updated_data,
+                    entity_id=entity_id,
+                    message=f"Successfully updated {helper_type}: {entity_id}",
+                    warnings=warnings,
+                )
 
             # This should never be reached since action is either "create" or "update"
             raise_tool_error(

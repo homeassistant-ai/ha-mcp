@@ -242,6 +242,124 @@ class TestUniformResponseShape:
         _assert_uniform_shape(result, expect_warnings=True)
         assert any("verification failed" in w for w in result["warnings"])
 
+    async def test_create_failed_registry_update_surfaces_top_level_warning(
+        self, register_tools, mock_client
+    ):
+        """Failed ``config/entity_registry/update`` on create → warning at top level, not nested in data.
+
+        Locks the create-branch registry-write failure path
+        (``warnings.append("Helper created but entity registry update failed: ...")``).
+        A regression that re-nests this string under ``data``, or drops the
+        ``warnings.append`` entirely, would slip past the category test —
+        this fills that gap. The ``area.kitchen`` is registered (so the
+        upstream ``_validate_registry_ids`` lookup passes) and the failure
+        happens at the post-create registry-update step itself.
+        """
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
+                }
+            if msg_type == "config/entity_registry/update":
+                return {
+                    "success": False,
+                    "error": {"message": "registry write rejected"},
+                }
+            return {
+                "success": True,
+                "result": {"id": "abc123", "name": "Test Switch"},
+            }
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test Switch",
+                area_id="area.kitchen",
+            )
+        _assert_uniform_shape(result, expect_warnings=True)
+        # Warning must surface at top level — never nested under ``data``.
+        assert "warning" not in result["data"]
+        assert "warnings" not in result["data"]
+        assert any(
+            "entity registry update failed" in w for w in result["warnings"]
+        )
+        assert any("registry write rejected" in w for w in result["warnings"])
+        # Successful registry-write would have propagated area_id into data;
+        # the failure must not silently mark data as if it succeeded.
+        assert "area_id" not in result["data"]
+
+    async def test_update_failed_registry_update_surfaces_top_level_warning(
+        self, register_tools, mock_client
+    ):
+        """Failed ``config/entity_registry/update`` on update → warning at top level, not nested in data.
+
+        Mirror of the create-side test on the simple-update branch.
+        ``logger.warning`` was previously emitted alongside the
+        ``warnings.append`` here (create-side never logged); the post-#1303
+        contract is ``warnings.append`` only, with the message carried to
+        the caller via the response. ``area.kitchen`` is registered so
+        upstream validation passes and the failure occurs at the registry
+        write itself.
+        """
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/entity_registry/get":
+                return {
+                    "success": True,
+                    "result": {
+                        "entity_id": msg["entity_id"],
+                        "unique_id": "abc123",
+                        "platform": "input_boolean",
+                    },
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
+                }
+            if msg_type == "config/entity_registry/update":
+                return {
+                    "success": False,
+                    "error": {"message": "registry write rejected"},
+                }
+            if msg_type.endswith("/list"):
+                return {
+                    "success": True,
+                    "result": [{"id": "abc123", "name": "Existing"}],
+                }
+            if msg_type.endswith("/update"):
+                return {"success": True, "result": {"id": "abc123"}}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                helper_id="input_boolean.existing",
+                area_id="area.kitchen",
+            )
+        _assert_uniform_shape(result, expect_warnings=True)
+        assert "warning" not in result["data"]
+        assert "warnings" not in result["data"]
+        assert any(
+            "entity registry update failed" in w for w in result["warnings"]
+        )
+        assert any("registry write rejected" in w for w in result["warnings"])
+        assert "area_id" not in result["data"]
+
     async def test_create_failed_category_apply_surfaces_top_level_warning(
         self, register_tools, mock_client
     ):
@@ -251,7 +369,8 @@ class TestUniformResponseShape:
         into ``helper_data`` because ``apply_entity_category`` mutates its
         target dict in-place. The fix routes through a temp dict and lifts the
         warning to the top-level ``warnings`` list (mirrors the precedent in
-        ``_handle_flow_helper`` at lines 1395-1407).
+        ``_handle_flow_helper``'s ``cat_result`` block in
+        ``_apply_registry_updates_to_entity``).
         """
 
         async def ws_handler(msg: dict) -> dict:
