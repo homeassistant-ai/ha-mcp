@@ -640,11 +640,13 @@ Only use `raise_error=False` on `exception_to_structured_error` when you need to
 
 ### Return Values
 ```python
-{"success": True, "data": result}                    # Success
-{"success": True, "partial": True, "warning": "..."}  # Degraded
-raise ToolError(json.dumps({...}))                   # Tool-level failure (isError=true)
-{"success": False, "error": {...}}                   # Batch item failure only (in results list)
+{"success": True, "data": result}                     # Success
+{"success": True, "data": result, "warnings": [...]}  # Degraded (top-level list[str], omit when empty)
+raise ToolError(json.dumps({...}))                    # Tool-level failure (isError=true)
+{"success": False, "error": {...}}                    # Batch item failure only (in results list)
 ```
+
+`warnings` is always a top-level `list[str]`, never nested inside `data` and never a singular `"warning": "..."` string. See `tools_config_helpers.py::HelperResponse` / `_helper_response` for the canonical shape and `tests/src/unit/test_helper_response_shape.py` for the contract assertions.
 
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.

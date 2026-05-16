@@ -352,8 +352,8 @@ def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from helper create response."""
     entity_id = data.get("entity_id")
     if not entity_id:
-        # Try to get from helper_data.id
-        helper_id = data.get("helper_data", {}).get("id")
+        # Try to get from data.id (issue #1293 renamed wrapper key from helper_data)
+        helper_id = data.get("data", {}).get("id")
         if helper_id:
             entity_id = f"{helper_type}.{helper_id}"
     return entity_id

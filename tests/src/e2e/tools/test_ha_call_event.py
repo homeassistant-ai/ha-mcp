@@ -85,7 +85,7 @@ async def test_call_event_delivery_verified(mcp_client):
     boolean_data = assert_mcp_success(boolean_result, "Create input_boolean flag")
     boolean_id = (
         boolean_data.get("entity_id")
-        or f"input_boolean.{boolean_data['helper_data']['id']}"
+        or f"input_boolean.{boolean_data['data']['id']}"
     )
     logger.info("Created flag entity: %s", boolean_id)
 

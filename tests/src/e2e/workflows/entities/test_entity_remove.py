@@ -26,7 +26,7 @@ class TestEntityRemove:
             },
         )
         data = assert_mcp_success(create_result, "Create test helper")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         logger.info(f"Created test entity: {entity_id}")
 
         # Remove the entity

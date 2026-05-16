@@ -67,7 +67,7 @@ def _entity_id_from_create(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from the ``ha_config_set_helper`` create response."""
     entity_id = data.get("entity_id")
     if not entity_id:
-        helper_id = data.get("helper_data", {}).get("id")
+        helper_id = data.get("data", {}).get("id")
         if helper_id:
             entity_id = f"{helper_type}.{helper_id}"
     return entity_id

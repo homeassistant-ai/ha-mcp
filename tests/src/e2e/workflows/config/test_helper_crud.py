@@ -58,11 +58,11 @@ def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from helper create response.
 
     The API may return entity_id directly or we may need to construct it
-    from helper_data.id.
+    from data.id (issue #1293 renamed the wrapper key from helper_data).
     """
     entity_id = data.get("entity_id")
     if not entity_id:
-        helper_id = data.get("helper_data", {}).get("id")
+        helper_id = data.get("data", {}).get("id")
         if helper_id:
             entity_id = f"{helper_type}.{helper_id}"
     return entity_id
@@ -1070,8 +1070,8 @@ class TestScheduleCRUD:
         cleanup_tracker.track("schedule", entity_id)
         logger.info(f"Created schedule with data: {entity_id}")
 
-        # Verify the helper_data includes the data field in time blocks
-        helper_data = create_data.get("helper_data", {})
+        # Verify the response data includes the schedule day blocks
+        helper_data = create_data.get("data", {})
         monday_blocks = helper_data.get("monday", [])
         assert len(monday_blocks) == 2, f"Expected 2 Monday blocks, got {len(monday_blocks)}"
 
@@ -1465,8 +1465,8 @@ class TestPersonCRUD:
         logger.info(f"Person updated: {update_data.get('message')}")
 
         # VERIFY the update succeeded and returned person config (not entity registry entry)
-        updated = update_data.get("updated_data", {})
-        assert updated, f"No updated_data in response: {update_data}"
+        updated = update_data.get("data", {})
+        assert updated, f"No data field in response: {update_data}"
         # person/update response includes the person config with 'name' and 'id'
         assert updated.get("name") == "E2E Person Update Test Renamed", (
             f"Name not updated in config store response — got: {updated.get('name')}. "
@@ -1522,7 +1522,7 @@ class TestTagCRUD:
         create_data = assert_mcp_success(create_result, "Create tag")
         entity_id = get_entity_id_from_response(create_data, "tag")
         # Tag may not return entity_id in same format
-        tag_id = create_data.get("helper_data", {}).get("id") or test_tag_id
+        tag_id = create_data.get("data", {}).get("id") or test_tag_id
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 
@@ -1564,7 +1564,7 @@ class TestTagCRUD:
             },
         )
         create_data = assert_mcp_success(create_result, "Create tag for update test")
-        tag_id = create_data.get("helper_data", {}).get("id") or test_tag_id
+        tag_id = create_data.get("data", {}).get("id") or test_tag_id
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 
