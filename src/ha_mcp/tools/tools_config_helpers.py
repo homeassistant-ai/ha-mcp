@@ -2732,6 +2732,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_message
                         )
                         if update_result.get("success"):
+                            # Mirror the update branch's icon propagation
+                            # (line ~3343) so the create response's ``data``
+                            # carries the same registry-write echo set.
+                            if icon is not None:
+                                helper_data["icon"] = icon if icon else None
                             if area_id is not None:
                                 helper_data["area_id"] = area_id if area_id else None
                             if labels is not None:

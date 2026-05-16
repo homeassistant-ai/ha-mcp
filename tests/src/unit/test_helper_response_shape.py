@@ -288,13 +288,59 @@ class TestUniformResponseShape:
         # Warning must surface at top level — never nested under ``data``.
         assert "warning" not in result["data"]
         assert "warnings" not in result["data"]
-        assert any(
-            "entity registry update failed" in w for w in result["warnings"]
-        )
+        assert any("entity registry update failed" in w for w in result["warnings"])
         assert any("registry write rejected" in w for w in result["warnings"])
         # Successful registry-write would have propagated area_id into data;
         # the failure must not silently mark data as if it succeeded.
         assert "area_id" not in result["data"]
+
+    async def test_create_propagates_icon_into_data_after_registry_update(
+        self, register_tools, mock_client
+    ):
+        """Successful create-path registry write echoes ``icon`` into ``data``.
+
+        Locks the icon-propagation symmetry with the update branch
+        (``tools_config_helpers.py:3343``). Previously the create-side
+        success branch echoed ``area_id`` and ``labels`` into
+        ``helper_data`` but skipped ``icon`` — a silent asymmetry now
+        closed. The WS create response intentionally omits ``icon`` so
+        the assertion fails closed if the propagation line ever gets
+        dropped or moved out of the success branch.
+        """
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
+                }
+            if msg_type == "config/entity_registry/update":
+                return {"success": True, "result": {}}
+            # Helper create — deliberately omit ``icon`` from the result so the
+            # only way it lands in ``data`` is via the post-registry-write
+            # propagation we're locking here.
+            return {
+                "success": True,
+                "result": {"id": "abc123", "name": "Test Switch"},
+            }
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test Switch",
+                icon="mdi:toggle-switch",
+                area_id="area.kitchen",
+            )
+        _assert_uniform_shape(result, expect_warnings=False)
+        assert result["action"] == "create"
+        assert result["data"]["icon"] == "mdi:toggle-switch"
+        assert result["data"]["area_id"] == "area.kitchen"
 
     async def test_update_failed_registry_update_surfaces_top_level_warning(
         self, register_tools, mock_client
@@ -354,9 +400,7 @@ class TestUniformResponseShape:
         _assert_uniform_shape(result, expect_warnings=True)
         assert "warning" not in result["data"]
         assert "warnings" not in result["data"]
-        assert any(
-            "entity registry update failed" in w for w in result["warnings"]
-        )
+        assert any("entity registry update failed" in w for w in result["warnings"])
         assert any("registry write rejected" in w for w in result["warnings"])
         assert "area_id" not in result["data"]
 
