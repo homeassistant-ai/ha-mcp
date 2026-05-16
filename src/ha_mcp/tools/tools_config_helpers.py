@@ -1222,11 +1222,12 @@ async def _check_name_collision(
     duplicate entity instead of updating the original. Detect and reject before
     we send the create message, pointing the caller at the existing helper_id.
 
-    Empty / missing `name` is left to the existing name-required check downstream
-    so the user sees the standard "name is required" error rather than a
-    spurious collision miss.
+    Empty / missing / whitespace-only `name` is left to the existing
+    name-required check downstream so the user sees the standard "name is
+    required" error rather than a spurious collision miss (or a wasted WS
+    round-trip on a name the validator is about to reject anyway).
     """
-    if not name:
+    if not name or not name.strip():
         return
 
     target_slug = _slugify_helper_name(name)
@@ -2495,7 +2496,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if action == "create":
-                if not name:
+                # Issue #1294: ``if not name`` lets whitespace-only ``"   "``
+                # through because ``bool(" ") is True`` — upgrade to a strip
+                # check so the rich validation message also catches that
+                # class without delegating to HA.
+                if not name or not name.strip():
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2838,7 +2843,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
             elif action == "update":
-                if not helper_id:
+                # Issue #1294: same whitespace-upgrade as the create-name
+                # check above. ``if not helper_id`` lets ``"   "`` through.
+                if not helper_id or not helper_id.strip():
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,

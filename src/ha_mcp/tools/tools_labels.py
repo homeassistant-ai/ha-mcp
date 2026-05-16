@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,20 @@ class LabelTools:
         Use ha_set_entity(labels=["label1", "label2"]) to assign labels to entities.
         """
         try:
+            # Issue #1294: an explicit empty/whitespace ``label_id`` should
+            # surface a structured validation error rather than fall through
+            # to a generic "Label not found:  " response. ``None`` is the
+            # documented "list all" sentinel and stays untouched.
+            if label_id is not None:
+                validate_identifier_not_empty(
+                    label_id,
+                    "label_id",
+                    suggestions=[
+                        "Omit label_id entirely to list all labels",
+                        "Pass a valid non-empty label_id",
+                    ],
+                    context={"action": "get"},
+                )
             message: dict[str, Any] = {
                 "type": "config/label_registry/list",
             }
@@ -171,6 +186,19 @@ class LabelTools:
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities.
         """
         try:
+            # Issue #1294: empty/whitespace ``label_id`` previously routed
+            # silently to ``create`` via ``action = "update" if label_id ...``
+            # — destructive intent loss when an update was intended.
+            if label_id is not None:
+                validate_identifier_not_empty(
+                    label_id,
+                    "label_id",
+                    suggestions=[
+                        "Omit label_id entirely to create a new label",
+                        "Pass a valid label_id to update an existing label",
+                    ],
+                    context={"action": "set", "name": name},
+                )
             action = "update" if label_id else "create"
 
             message: dict[str, Any] = {
@@ -246,6 +274,16 @@ class LabelTools:
         This action cannot be undone.
         """
         try:
+            # Issue #1294: empty/whitespace ``label_id`` would propagate to
+            # the HA backend and surface as a misleading delete-failure.
+            validate_identifier_not_empty(
+                label_id,
+                "label_id",
+                suggestions=[
+                    "Pass a valid label_id (use ha_config_get_label() to list)",
+                ],
+                context={"action": "remove"},
+            )
             message: dict[str, Any] = {
                 "type": "config/label_registry/delete",
                 "label_id": label_id,

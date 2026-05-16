@@ -78,6 +78,72 @@ def extract_tool_error_message(te: ToolError) -> str:
         return str(te)
 
 
+def validate_identifier_not_empty(
+    value: str | None,
+    param_name: str,
+    *,
+    suggestions: list[str] | None = None,
+    context: dict[str, Any] | None = None,
+) -> None:
+    """Reject ``None``, empty, or whitespace-only identifier values.
+
+    Centralises the pre-flight check first introduced in
+    ``tools_config_scenes.py`` (per PR #1168) so every CRUD-style tool in the
+    ``tools_config_*`` family — plus the registry-metadata tools
+    (``tools_labels.py``, ``tools_categories.py``, ``tools_areas.py``) — can
+    surface a structured ``VALIDATION_INVALID_PARAMETER`` response instead of
+    silently routing on Python falsy semantics or relying on Home Assistant
+    to translate a missing identifier into a generic ``RESOURCE_NOT_FOUND``.
+
+    The destructive class this protects against:
+    ``action = "update" if label_id else "create"`` — passing ``""`` as
+    ``label_id`` silently routes to ``create`` when the caller intended
+    ``update``. The whitespace class this protects against: ``" "`` is truthy
+    in Python so ``if not value:`` lets it through, but Home Assistant has
+    no entry with id ``" "``.
+
+    Args:
+        value: Identifier string supplied by the caller. ``None`` is also
+            treated as invalid because every consuming tool requires an
+            identifier when this helper is called.
+        param_name: Name of the parameter, used in the structured error
+            response's ``context`` and the human-readable message.
+        suggestions: Optional list of guidance strings for the response's
+            ``suggestions`` field. Defaults to a generic
+            "provide a non-empty value" hint.
+        context: Optional additional context fields merged into the error
+            response (e.g. ``{"action": "update"}``). The keys ``parameter``
+            and ``value`` are always set and take precedence.
+
+    Raises:
+        ToolError: When ``value`` is ``None``, empty, or whitespace-only —
+            carrying a structured ``VALIDATION_INVALID_PARAMETER`` response
+            with the parameter name, the offending value (for diagnostics),
+            and the suggestions.
+
+    Example:
+        >>> validate_identifier_not_empty(label_id, "label_id",
+        ...     suggestions=["Omit label_id to create a new label"])
+    """
+    if value is not None and value.strip():
+        return
+
+    final_context: dict[str, Any] = {}
+    if context:
+        final_context.update(context)
+    final_context["parameter"] = param_name
+    final_context["value"] = value
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{param_name} must be a non-empty, non-whitespace string",
+            suggestions=suggestions
+            or [f"Provide a valid non-empty value for {param_name}"],
+            context=final_context,
+        )
+    )
+
+
 async def get_connected_ws_client(
     base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:

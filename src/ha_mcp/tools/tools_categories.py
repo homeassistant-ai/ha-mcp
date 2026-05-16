@@ -21,6 +21,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,20 @@ class CategoryTools:
         Use ha_set_entity(categories={"automation": "category_id"}) to assign categories to entities.
         """
         try:
+            # Issue #1294: an explicit empty/whitespace ``category_id`` should
+            # surface a structured validation error rather than fall through
+            # to a generic "Category not found:  " response. ``None`` is the
+            # documented "list all" sentinel and stays untouched.
+            if category_id is not None:
+                validate_identifier_not_empty(
+                    category_id,
+                    "category_id",
+                    suggestions=[
+                        "Omit category_id to list all categories for the scope",
+                        "Pass a valid non-empty category_id",
+                    ],
+                    context={"action": "get", "scope": scope},
+                )
             message: dict[str, Any] = {
                 "type": "config/category_registry/list",
                 "scope": scope,
@@ -194,6 +209,19 @@ class CategoryTools:
         After creating a category, use ha_set_entity(categories={"automation": "category_id"}) to assign it.
         """
         try:
+            # Issue #1294: empty/whitespace ``category_id`` previously routed
+            # silently to ``create`` via ``action = "update" if category_id ...``
+            # — destructive intent loss when an update was intended.
+            if category_id is not None:
+                validate_identifier_not_empty(
+                    category_id,
+                    "category_id",
+                    suggestions=[
+                        "Omit category_id entirely to create a new category",
+                        "Pass a valid category_id to update an existing category",
+                    ],
+                    context={"action": "set", "scope": scope, "name": name},
+                )
             action = "update" if category_id else "create"
 
             message: dict[str, Any] = {
@@ -282,6 +310,16 @@ class CategoryTools:
         This action cannot be undone.
         """
         try:
+            # Issue #1294: empty/whitespace ``category_id`` would propagate
+            # to the HA backend and surface as a misleading delete-failure.
+            validate_identifier_not_empty(
+                category_id,
+                "category_id",
+                suggestions=[
+                    "Pass a valid category_id (use ha_config_get_category() to list)",
+                ],
+                context={"action": "remove", "scope": scope},
+            )
             message: dict[str, Any] = {
                 "type": "config/category_registry/delete",
                 "scope": scope,

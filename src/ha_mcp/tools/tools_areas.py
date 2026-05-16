@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import parse_string_list_param
 
@@ -465,19 +466,22 @@ class AreaTools:
                     ],
                 ))
 
-            # Reject empty-string id explicitly. `if id:` below treats it as
-            # falsy and would silently route to the create branch — destructive
-            # if the caller intended an update.
-            if id == "":
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "id must be a non-empty string when provided (omit to create)",
-                    context={"kind": kind},
+            # Reject empty/whitespace-only id explicitly. `if id:` below
+            # treats them as falsy and would silently route to the create
+            # branch — destructive intent loss if the caller intended an
+            # update. Issue #1294 broadened the original ``id == ""`` guard
+            # (PR #1139) to also catch whitespace-only strings via the
+            # shared ``validate_identifier_not_empty`` helper.
+            if id is not None:
+                validate_identifier_not_empty(
+                    id,
+                    "id",
                     suggestions=[
                         "Omit id entirely to create a new entry",
                         "Pass a real area_id/floor_id to update an existing entry",
                     ],
-                ))
+                    context={"kind": kind},
+                )
 
             if kind == "area":
                 if id:
@@ -486,12 +490,18 @@ class AreaTools:
                     )
                     operation = "update"
                 else:
-                    if not name:
+                    # Issue #1294: ``if not name`` lets whitespace-only
+                    # ``"   "`` through because ``bool(" ") is True``.
+                    # Kept inline (rather than using the shared
+                    # ``validate_identifier_not_empty`` helper) so mypy can
+                    # narrow ``name`` from ``str | None`` to ``str`` for
+                    # the build-message call below.
+                    if not name or not name.strip():
                         raise_tool_error(create_error_response(
-                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
                             "name is required when creating a new area",
                             context={"operation": "create_area"},
-                            suggestions=["Provide a name for the new area"],
+                            suggestions=["Provide a non-empty name for the new area"],
                         ))
                     message = self._build_area_create_message(
                         name, floor_id, icon, parsed_aliases, picture,
@@ -506,12 +516,14 @@ class AreaTools:
                     )
                     operation = "update"
                 else:
-                    if not name:
+                    # Issue #1294: same whitespace-rejection upgrade as the
+                    # area-create branch above.
+                    if not name or not name.strip():
                         raise_tool_error(create_error_response(
-                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
                             "name is required when creating a new floor",
                             context={"operation": "create_floor"},
-                            suggestions=["Provide a name for the new floor"],
+                            suggestions=["Provide a non-empty name for the new floor"],
                         ))
                     message = self._build_floor_create_message(
                         name, level, icon, parsed_aliases,
@@ -590,6 +602,16 @@ class AreaTools:
         registry = "area_registry" if kind == "area" else "floor_registry"
         id_key = "area_id" if kind == "area" else "floor_id"
         try:
+            # Issue #1294: empty/whitespace ``id`` would propagate to HA
+            # and surface as a misleading delete-failure.
+            validate_identifier_not_empty(
+                id,
+                "id",
+                suggestions=[
+                    f"Pass a valid {id_key} (use ha_list_floors_areas() to list)",
+                ],
+                context={"action": "remove", "kind": kind},
+            )
             message: dict[str, Any] = {
                 "type": f"config/{registry}/delete",
                 id_key: id,
