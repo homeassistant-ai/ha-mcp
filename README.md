@@ -244,7 +244,7 @@ For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT Ope
 
 ### Enable search-based discovery
 
-Set `ENABLE_TOOL_SEARCH=true` (or toggle the option in the HA add-on). The full catalog is replaced with four entry points plus a small set of always-visible "pinned" tools (`ha_search_entities`, `ha_get_overview`, `ha_restart`, etc.):
+Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search_entities, ha_get_overview, ha_restart, etc.). All tools remain callable directly by name once discovered:
 
 | Tool | Purpose |
 |------|---------|
@@ -264,7 +264,7 @@ The proxy split lets MCP clients apply different permission policies per categor
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, ChatGPT or any model without native deferred tool support** — large idle-context savings.
-- **MCP clients that cap total tool count** (some cap at 100) — surfaces ~4 tools instead of 86.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.
