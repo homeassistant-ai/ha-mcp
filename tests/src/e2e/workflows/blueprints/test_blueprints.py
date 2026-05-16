@@ -15,7 +15,7 @@ import pytest
 
 from ...utilities.assertions import (
     MCPAssertions,
-    _extract_error_message,
+    extract_error_message,
     safe_call_tool,
     wait_for_automation,
 )
@@ -300,7 +300,7 @@ class TestBlueprintManagement:
                 logger.info("Blueprint appears in list after import")
             else:
                 # Only acceptable failure is "already exists"
-                error_msg = _extract_error_message(result)
+                error_msg = extract_error_message(result)
                 assert "already exists" in error_msg.lower(), \
                     f"Expected 'already exists' error, got: {result}"
                 logger.info("Blueprint already existed (prior test run), still valid")

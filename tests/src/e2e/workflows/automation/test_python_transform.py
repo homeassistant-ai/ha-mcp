@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions
+from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -128,7 +128,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
             "python_transform": "config['action'] = []",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "config_hash" in error_msg.lower()
 
 
@@ -144,7 +144,7 @@ async def test_python_transform_requires_identifier(mcp_client, ha_client):
             "python_transform": "config['action'] = []",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "identifier" in error_msg.lower()
 
 
@@ -161,7 +161,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
             "python_transform": "config['action'] = []",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "cannot use both" in error_msg.lower()
 
 
@@ -207,7 +207,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "python_transform": "config['action'][0]['data'] = {'brightness': 100}",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
 
@@ -241,7 +241,7 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
             "python_transform": "import os; os.system('echo pwned')",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
 
 
@@ -358,7 +358,7 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
             "python_transform": "del config['action']",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "action" in error_msg.lower() or "missing" in error_msg.lower()
 
 
@@ -520,7 +520,7 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             },
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions
+from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         },
     )
     # Verify error message mentions import or forbidden
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
 
 
@@ -154,7 +154,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {"url_path": "test-python-hash", "python_transform": "config['views'] = []"},
     )
     # Verify error message mentions config_hash
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "config_hash" in error_msg.lower()
 
 
@@ -173,7 +173,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
         },
     )
     # Verify error message mentions mutual exclusivity
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "cannot use both" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
 
 
@@ -304,7 +304,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         },
     )
     # Verify error message mentions conflict
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
 

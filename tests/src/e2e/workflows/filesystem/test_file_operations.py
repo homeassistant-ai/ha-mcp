@@ -27,7 +27,11 @@ import uuid
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -239,7 +243,8 @@ class TestListFiles:
 
         # Should fail with security error
         assert data.get("success") is False, f"Should have failed: {data}"
-        assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
+        error_msg = extract_error_message(data).lower()
+        assert "not allowed" in error_msg or "must be in" in error_msg, (
             f"Wrong error message: {data.get('error')}"
         )
         logger.info("Correctly rejected listing disallowed directory")
@@ -351,7 +356,8 @@ class TestReadFile:
         )
 
         assert data.get("success") is False, f"Should have failed: {data}"
-        assert "not exist" in data.get("error", "").lower() or "not allowed" in data.get("error", "").lower(), (
+        error_msg = extract_error_message(data).lower()
+        assert "not exist" in error_msg or "not allowed" in error_msg, (
             f"Wrong error: {data.get('error')}"
         )
         logger.info("Correctly handled nonexistent file")
@@ -442,7 +448,9 @@ class TestWriteFile:
         )
 
         assert data.get("success") is False, f"Should have failed without overwrite: {data}"
-        assert "exists" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
+        assert "exists" in extract_error_message(data).lower(), (
+            f"Wrong error: {data.get('error')}"
+        )
 
         logger.info("Correctly blocked overwrite without flag")
 
@@ -559,7 +567,9 @@ class TestDeleteFile:
         )
 
         assert data.get("success") is False, f"Should have failed: {data}"
-        assert "not exist" in data.get("error", "").lower(), f"Wrong error: {data.get('error')}"
+        assert "not exist" in extract_error_message(data).lower(), (
+            f"Wrong error: {data.get('error')}"
+        )
 
         logger.info("Correctly handled delete of nonexistent file")
 
@@ -580,7 +590,8 @@ class TestSecurityBoundaries:
         )
 
         assert data.get("success") is False, f"Should block writing to config: {data}"
-        assert "not allowed" in data.get("error", "").lower() or "must be in" in data.get("error", "").lower(), (
+        error_msg = extract_error_message(data).lower()
+        assert "not allowed" in error_msg or "must be in" in error_msg, (
             f"Wrong error message: {data.get('error')}"
         )
 
@@ -733,7 +744,8 @@ class TestFullCRUDWorkflow:
         )
 
         assert final_data.get("success") is False
-        assert "not exist" in final_data.get("error", "").lower() or "not allowed" in final_data.get("error", "").lower()
+        error_msg = extract_error_message(final_data).lower()
+        assert "not exist" in error_msg or "not allowed" in error_msg
         logger.info("   Deletion verified")
 
         logger.info("Complete CRUD lifecycle test PASSED")

@@ -21,7 +21,11 @@ import os
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -123,7 +127,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Disallowed file should fail: {data}"
-        assert "not allowed" in inner.get("error", "").lower()
+        assert "not allowed" in extract_error_message(inner).lower()
         logger.info("Correctly rejected disallowed file")
 
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
@@ -142,7 +146,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Blocked key should fail: {data}"
-        assert "not in the allowed list" in inner.get("error", "").lower()
+        assert "not in the allowed list" in extract_error_message(inner).lower()
         logger.info("Correctly rejected blocked key")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
@@ -401,7 +405,7 @@ class TestYamlConfigOperations:
         )
         inner = data
         assert inner.get("success") is False, f"Type mismatch should error: {data}"
-        assert "type mismatch" in inner.get("error", "").lower()
+        assert "type mismatch" in extract_error_message(inner).lower()
         logger.info("Correctly errored on type mismatch")
 
 
