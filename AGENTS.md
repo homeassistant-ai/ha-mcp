@@ -109,7 +109,7 @@ When implementing features or debugging, consult these resources:
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
-| `needs-choice` | Multiple approaches, needs stakeholder input |
+| `needs-choices` | Multiple approaches, needs stakeholder input |
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
 | `triaged` | Automated Gemini triage complete |

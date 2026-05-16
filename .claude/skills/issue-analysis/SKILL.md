@@ -40,7 +40,7 @@ gh issue list --repo homeassistant-ai/ha-mcp --state open --json number,title,la
 
 | Situation | Label |
 |-----------|-------|
-| Multiple valid directions needing a decision | `needs-choice` |
+| Multiple valid directions needing a decision | `needs-choices` |
 | Clear implementation path | `ready-to-implement` |
 | Missing info from reporter | `needs-info` |
 
@@ -60,8 +60,7 @@ Once approved, apply labels and post the comment:
 
 ```bash
 gh issue edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp \
-  --add-label "issue-analyzed,<classification>,<priority>" \
-  --remove-label "triaged"
+  --add-label "issue-analyzed,<classification>,<priority>"
 
 gh issue comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "$(cat <<'EOF'
 [approved comment text]
