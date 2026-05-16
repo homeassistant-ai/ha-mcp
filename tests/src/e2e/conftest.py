@@ -72,7 +72,7 @@ _READINESS_TIMINGS: list[dict[str, Any]] = []
 _ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 
 
-def _log_readiness_timing(gate: str, elapsed_s: int, **extras: Any) -> None:
+def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     """Record a fixture-side readiness-gate timing data point.
 
     The data points are routed to the master process and rendered at
@@ -122,8 +122,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         return
     terminalreporter.section("Readiness gate timings")
     for point in timings:
-        rendered = " ".join(f"{key}={value}" for key, value in point.items())
-        terminalreporter.write_line(f"[READINESS_GATE_TIMING] {rendered}")
+        parts = []
+        for key, value in point.items():
+            if isinstance(value, float):
+                parts.append(f"{key}={value:.2f}")
+            else:
+                parts.append(f"{key}={value}")
+        terminalreporter.write_line("[READINESS_GATE_TIMING] " + " ".join(parts))
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -1085,10 +1090,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if config_resp.status_code == 200:
                     component_count = len(config_resp.json().get("components", []))
                     if component_count >= MIN_COMPONENTS:
-                        elapsed = int(time.monotonic() - stabilize_start)
+                        elapsed = time.monotonic() - stabilize_start
                         logger.info(
                             f"✅ Home Assistant stabilized with {component_count} components "
-                            f"after {elapsed}s"
+                            f"after {elapsed:.1f}s"
                         )
                         _log_readiness_timing(
                             "components", elapsed, count=component_count
@@ -1138,9 +1143,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if states_resp.status_code == 200:
                     entity_count = len(states_resp.json())
                     if entity_count >= MIN_ENTITIES:
-                        elapsed = int(time.monotonic() - entity_start)
+                        elapsed = time.monotonic() - entity_start
                         logger.info(
-                            f"✅ {entity_count} entities registered after {elapsed}s"
+                            f"✅ {entity_count} entities registered after {elapsed:.1f}s"
                         )
                         _log_readiness_timing("entities", elapsed, count=entity_count)
                         break
@@ -1182,8 +1187,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if svc_resp.status_code == 200:
                     domains = {s.get("domain") for s in svc_resp.json()}
                     if "input_boolean" in domains:
-                        elapsed = int(time.monotonic() - ib_start)
-                        logger.info(f"✅ input_boolean service ready after {elapsed}s")
+                        elapsed = time.monotonic() - ib_start
+                        logger.info(
+                            f"✅ input_boolean service ready after {elapsed:.1f}s"
+                        )
                         _log_readiness_timing("input_boolean", elapsed)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
@@ -1260,8 +1267,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if sun_resp.status_code == 200:
                     sun_state = sun_resp.json().get("state", "unknown")
                     if sun_state != "unknown":
-                        elapsed = int(time.monotonic() - sun_start)
-                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed}s")
+                        elapsed = time.monotonic() - sun_start
+                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed:.1f}s")
                         _log_readiness_timing("sun", elapsed, state=sun_state)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
