@@ -139,8 +139,9 @@ class TestEntityRename:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await wait_for_entity_registration(mcp_client, original_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
         # 2. RENAME: With name and icon updates
         rename_data = await safe_call_tool(
             mcp_client,
@@ -157,7 +158,9 @@ class TestEntityRename:
         logger.info("Renamed entity with name and icon update")
 
         # 3. VERIFY: New entity has updated attributes
-        await wait_for_entity_registration(mcp_client, new_entity_id)
+        assert await wait_for_entity_registration(mcp_client, new_entity_id), (
+            f"Entity not registered: {new_entity_id}"
+        )
         state_data = await safe_call_tool(
             mcp_client, "ha_get_state", {"entity_id": new_entity_id}
         )
@@ -299,8 +302,9 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
     new_id = "input_button.test_quick_renamed"
     cleanup_tracker.track("input_button", new_id)
 
-    await wait_for_entity_registration(mcp_client, original_id)
-
+    assert await wait_for_entity_registration(mcp_client, original_id), (
+        f"Entity not registered: {original_id}"
+    )
     # Rename
     rename_data = await safe_call_tool(
         mcp_client,
@@ -312,8 +316,9 @@ async def test_rename_entity_basic(mcp_client, cleanup_tracker):
     )
     assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
-    await wait_for_entity_registration(mcp_client, new_id)
-
+    assert await wait_for_entity_registration(mcp_client, new_id), (
+        f"Entity not registered: {new_id}"
+    )
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
@@ -366,8 +371,9 @@ class TestEntityRenameVoiceExposure:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await wait_for_entity_registration(mcp_client, original_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
         # 2. EXPOSE: Entity to conversation assistant
         expose_data = await safe_call_tool(
             mcp_client,
@@ -391,8 +397,9 @@ class TestEntityRenameVoiceExposure:
         )
         assert rename_data.get("success"), f"Failed to rename entity: {rename_data}"
 
-        await wait_for_entity_registration(mcp_client, new_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, new_entity_id), (
+            f"Entity not registered: {new_entity_id}"
+        )
         # 4. VERIFY: New entity still has exposure settings (preserved by HA Core)
         check_data = await safe_call_tool(
             mcp_client,
@@ -442,8 +449,9 @@ class TestRenameEntityWithDevice:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await wait_for_entity_registration(mcp_client, original_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
         # 2. RENAME: Using convenience wrapper
         rename_data = await safe_call_tool(
             mcp_client,
@@ -466,8 +474,9 @@ class TestRenameEntityWithDevice:
         )
         logger.info(f"Device rename result: {device_result}")
 
-        await wait_for_entity_registration(mcp_client, new_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, new_entity_id), (
+            f"Entity not registered: {new_entity_id}"
+        )
         # 3. VERIFY: New entity exists
         state_data = await safe_call_tool(
             mcp_client, "ha_get_state", {"entity_id": new_entity_id}
@@ -508,8 +517,9 @@ class TestRenameEntityWithDevice:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await wait_for_entity_registration(mcp_client, original_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
         # 2. RENAME: Without new_device_name
         rename_data = await safe_call_tool(
             mcp_client,
@@ -557,8 +567,9 @@ class TestRenameEntityWithDevice:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await wait_for_entity_registration(mcp_client, original_entity_id)
-
+        assert await wait_for_entity_registration(mcp_client, original_entity_id), (
+            f"Entity not registered: {original_entity_id}"
+        )
         # 2. RENAME: With new entity friendly name
         rename_data = await safe_call_tool(
             mcp_client,
@@ -605,8 +616,9 @@ async def test_rename_entity_with_device_basic(mcp_client, cleanup_tracker):
     new_id = "input_button.test_combo_quick_new"
     cleanup_tracker.track("input_button", new_id)
 
-    await wait_for_entity_registration(mcp_client, original_id)
-
+    assert await wait_for_entity_registration(mcp_client, original_id), (
+        f"Entity not registered: {original_id}"
+    )
     # Rename using convenience wrapper
     rename_data = await safe_call_tool(
         mcp_client,
@@ -618,8 +630,9 @@ async def test_rename_entity_with_device_basic(mcp_client, cleanup_tracker):
     )
     assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
-    await wait_for_entity_registration(mcp_client, new_id)
-
+    assert await wait_for_entity_registration(mcp_client, new_id), (
+        f"Entity not registered: {new_id}"
+    )
     # Cleanup
     delete_data = await safe_call_tool(
         mcp_client,
