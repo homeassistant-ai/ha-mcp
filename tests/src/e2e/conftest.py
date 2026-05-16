@@ -61,6 +61,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _log_readiness_timing(gate: str, elapsed_s: int, **extras: Any) -> None:
+    """Emit a fixture-side readiness-gate timing line that survives pytest-xdist capture.
+
+    The default ``logger.info`` path is captured by pytest-xdist on passing
+    runs, hiding fixture-side timing data even with ``log_cli=true``.
+    Writing directly to ``sys.stderr`` with an explicit flush bypasses the
+    per-worker capture buffer so the elapsed times surface in CI job logs,
+    enabling data-driven tightening of the 30s ``STABILIZATION_TIMEOUT`` /
+    ``ENTITY_STABILIZATION_TIMEOUT`` / ``SUN_WAIT`` budgets (refs #366,
+    follow-up to #1273 which lowered the only previously-measured gate
+    ``INPUT_BOOLEAN_WAIT`` from 30s to 10s based on a 1s observed-resolve).
+    """
+    parts = [f"gate={gate}", f"elapsed_s={elapsed_s}"]
+    for key, value in extras.items():
+        parts.append(f"{key}={value}")
+    sys.stderr.write("[READINESS_GATE_TIMING] " + " ".join(parts) + "\n")
+    sys.stderr.flush()
+
+
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
     """Return True only for benign 'schema drift' errors (column/table missing).
 
@@ -1025,6 +1044,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                             f"✅ Home Assistant stabilized with {component_count} components "
                             f"after {elapsed}s"
                         )
+                        _log_readiness_timing(
+                            "components", elapsed, count=component_count
+                        )
                         break
                     if component_count != last_count:
                         logger.info(
@@ -1074,6 +1096,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                         logger.info(
                             f"✅ {entity_count} entities registered after {elapsed}s"
                         )
+                        _log_readiness_timing("entities", elapsed, count=entity_count)
                         break
                     if entity_count != last_entity_count:
                         logger.info(
@@ -1115,6 +1138,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     if "input_boolean" in domains:
                         elapsed = int(time.monotonic() - ib_start)
                         logger.info(f"✅ input_boolean service ready after {elapsed}s")
+                        _log_readiness_timing("input_boolean", elapsed)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"Service check failed: {exc}")
@@ -1192,6 +1216,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     if sun_state != "unknown":
                         elapsed = int(time.monotonic() - sun_start)
                         logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed}s")
+                        _log_readiness_timing("sun", elapsed, state=sun_state)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"sun.sun check failed: {exc}")
