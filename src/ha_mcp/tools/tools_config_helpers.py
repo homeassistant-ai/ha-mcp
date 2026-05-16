@@ -867,16 +867,19 @@ def _validate_numeric_range(
             )
 
 
-def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
-    """Reject input_select ``initial`` values not in ``options`` (Bug 4a, issue #1150).
+def _validate_initial_in_options(
+    options: Any, initial: Any, helper_type: str = "input_select"
+) -> None:
+    """Reject ``initial`` values not in ``options``.
 
-    The create-branch guard (#1150) and the update-branch guard (#1292) call
-    this with the resolved values — caller-supplied or merged from the
-    existing config. ``initial=None`` is the unset case and passes through.
-    The ``isinstance(options, list)`` guard mirrors the defensive shape check
-    in ``_validate_input_select_options`` below — both current callers feed a
-    list, but the guard keeps a future non-list caller from raising a confusing
-    ``TypeError`` on ``initial not in options``.
+    Called from both create and update branches with the resolved values —
+    caller-supplied on create, merged with the existing config on update.
+    ``initial=None`` is the unset case and passes through. The
+    ``isinstance(options, list)`` early-return mirrors the defensive shape
+    check in ``_validate_input_select_options`` below — both validators are
+    invariant gates, not type contracts; a future non-list caller is
+    silently skipped rather than raising a confusing ``TypeError`` on
+    ``initial not in options``.
     """
     if not isinstance(options, list) or initial is None:
         return
@@ -885,9 +888,9 @@ def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"initial={initial!r} must be one of options "
-                f"{options!r} for input_select.",
+                f"{options!r} for {helper_type}.",
                 context=_simple_helper_error_context(
-                    "input_select",
+                    helper_type,
                     initial=initial,
                     options=options,
                 ),
@@ -902,11 +905,12 @@ def _validate_initial_in_options(options: list[Any], initial: Any) -> None:
 def _validate_datetime_has_date_or_time(
     has_date: bool | None, has_time: bool | None
 ) -> None:
-    """Reject ``input_datetime`` payloads where both components are False (#1292).
+    """Reject ``input_datetime`` payloads where both components are False.
 
-    Mirrors the create-branch guard onto the update branch. Treats ``None``
-    as "not constrained" — only the explicit (False, False) case is flagged,
-    since that's what reaches HA as the broken-entity payload.
+    Treats ``None`` as "not constrained" — only the explicit (False, False)
+    case is flagged, since that's what reaches HA as the broken-entity
+    payload. Both the create and update branches call this with the
+    resolved-after-merge ``has_date`` / ``has_time`` pair.
     """
     if has_date is False and has_time is False:
         raise_tool_error(
@@ -2457,10 +2461,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
                     message["options"] = options
-                    # Bug 4a (issue #1150): if `initial` was passed but isn't
-                    # one of the options, reject explicitly instead of silently
-                    # dropping. Shared with the update branch via the helper
-                    # (issue #1292).
+                    # If `initial` was passed but isn't one of the options,
+                    # reject explicitly instead of silently dropping. Shared
+                    # with the update branch via the helper so the same
+                    # invariant fires on both code paths.
                     _validate_initial_in_options(options, initial)
                     if initial is not None:
                         message["initial"] = initial
@@ -2521,7 +2525,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["has_time"] = has_time
 
                     # Validate that at least one is True — shared with the
-                    # update branch via the helper (issue #1292).
+                    # update branch via the helper so the same invariant
+                    # fires on both code paths.
                     _validate_datetime_has_date_or_time(
                         message["has_date"], message["has_time"]
                     )
@@ -3087,11 +3092,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if initial is not None
                                 else existing.get("initial")
                             )
-                            # Issue #1292: parity with the create-branch guard.
-                            # Resolves to (new options, new initial) /
-                            # (new options, old initial) / (old options,
-                            # new initial) — any combination that excludes
-                            # initial from the final options list is caught.
+                            # Parity with the create-branch guard. Resolves to
+                            # (new options, new initial) / (new options, old
+                            # initial) / (old options, new initial) — any
+                            # combination that excludes initial from the final
+                            # options list is caught.
                             _validate_initial_in_options(
                                 update_msg["options"], initial_val
                             )
@@ -3187,8 +3192,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if has_time is not None
                                 else existing.get("has_time", False)
                             )
-                            # Issue #1292: parity with create-branch guard.
-                            # A merge that resolves to (False, False) — caller
+                            # Parity with the create-branch guard. A merge
+                            # that resolves to (False, False) — caller
                             # disabling the one component the existing entity
                             # had — would otherwise write a broken-entity
                             # payload and surface HA's cryptic generic error.
