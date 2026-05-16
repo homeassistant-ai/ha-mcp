@@ -14,10 +14,15 @@ from fastmcp.exceptions import ToolError
 logger = logging.getLogger(__name__)
 
 
-def _extract_error_message(data: dict[str, Any]) -> str:
-    """Extract error message string from a failure result dict.
+def extract_error_message(data: dict[str, Any]) -> str:
+    """Extract an error-message string from a parsed MCP failure result.
 
-    Handles both string errors and dict errors with a 'message' key.
+    Handles both string errors and the modern structured-error dict-form
+    (`{"error": {"code": ..., "message": ...}}`) returned by
+    `create_error_response` in `src/ha_mcp/errors.py`. Returns an empty
+    string when the result has no error key, so callers can chain
+    `.lower()` / `in` membership checks without needing a `isinstance`
+    guard at the call site (refs #366).
     """
     error_obj = data.get("error", "")
     if isinstance(error_obj, dict):
@@ -163,7 +168,7 @@ def assert_mcp_failure(
 
     # If expected error specified, check for it
     if expected_error:
-        error_msg = _extract_error_message(data)
+        error_msg = extract_error_message(data)
         if expected_error.lower() not in error_msg.lower():
             raise AssertionError(
                 f"{operation_name} failed but error message doesn't contain '{expected_error}'. "
@@ -345,7 +350,7 @@ class MCPAssertions:
                 ) from exc
             # Check expected error if specified
             if expected_error:
-                error_msg = _extract_error_message(data)
+                error_msg = extract_error_message(data)
                 if expected_error.lower() not in error_msg.lower():
                     raise AssertionError(
                         f"{operation_name} failed but error message doesn't contain "

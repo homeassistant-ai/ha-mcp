@@ -11,7 +11,12 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    assert_mcp_success,
+    extract_error_message,
+    parse_mcp_result,
+    safe_call_tool,
+)
 from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
 
 logger = logging.getLogger(__name__)
@@ -708,7 +713,7 @@ class TestInputButtonCRUD:
         assert get_data.get("success", True) is False, (
             f"Entity still present in registry after delete: {get_data}"
         )
-        err_msg = (get_data.get("error", {}).get("message") or "").lower()
+        err_msg = extract_error_message(get_data).lower()
         assert "not found" in err_msg, (
             f"Expected 'not found' in error message, got: {get_data}"
         )
