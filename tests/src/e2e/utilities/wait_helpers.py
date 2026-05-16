@@ -14,7 +14,7 @@ from typing import Any
 from fastmcp.exceptions import ClientError, FastMCPError
 from mcp import McpError
 
-from .assertions import parse_mcp_result
+from .assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -328,3 +328,55 @@ async def wait_for_tool_result(
                 f"{description}: timed out after {timeout}s (predicate not satisfied)"
             )
         await asyncio.sleep(poll_interval)
+
+
+async def wait_for_entity_registration(
+    mcp_client, entity_id: str, timeout: int = 20
+) -> bool:
+    """
+    Wait for entity to be registered and queryable via API.
+
+    Does not check for a specific state — only that the entity exists and is
+    visible to ``ha_get_state``. Useful after ``ha_config_set_helper`` or
+    ``ha_set_entity``, where the tool returns success before Home Assistant
+    finishes the async entity-registry update.
+
+    Args:
+        mcp_client: FastMCP client instance
+        entity_id: Entity to wait for
+        timeout: Maximum wait time in seconds
+
+    Returns:
+        True if entity becomes queryable within timeout, False otherwise.
+    """
+    start_time = time.monotonic()
+    attempt = 0
+
+    async def entity_exists():
+        nonlocal attempt
+        attempt += 1
+        data = await safe_call_tool(
+            mcp_client, "ha_get_state", {"entity_id": entity_id}
+        )
+        # Check if 'data' key exists (not 'success' key)
+        success = "data" in data and data["data"] is not None
+
+        # Log every attempt with full details
+        elapsed = time.monotonic() - start_time
+        logger.info(
+            f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
+            f"success={success}, data keys={list(data.keys())}"
+        )
+
+        if success:
+            state = data.get("data", {}).get("state", "N/A")
+            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
+        else:
+            error = data.get("error", "No error message")
+            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
+
+        return success
+
+    return await wait_for_condition(
+        entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
+    )

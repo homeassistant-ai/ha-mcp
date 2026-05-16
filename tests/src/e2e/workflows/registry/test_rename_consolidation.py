@@ -5,12 +5,12 @@ Tests the new_device_name parameter behavior and response format
 differences between entity-only and entity+device rename paths.
 """
 
-import asyncio
 import logging
 
 import pytest
 
 from ...utilities.assertions import safe_call_tool
+from ...utilities.wait_helpers import wait_for_entity_registration
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class TestRenameConsolidationEdgeCases:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await asyncio.sleep(1.0)
+        await wait_for_entity_registration(mcp_client, original_entity_id)
 
         # Rename without new_device_name
         rename_data = await safe_call_tool(
@@ -99,7 +99,7 @@ class TestRenameConsolidationEdgeCases:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await asyncio.sleep(1.0)
+        await wait_for_entity_registration(mcp_client, original_entity_id)
 
         # Rename WITH new_device_name
         rename_data = await safe_call_tool(
@@ -159,7 +159,7 @@ class TestRenameConsolidationEdgeCases:
         new_entity_id = f"input_boolean.{new_name}"
         cleanup_tracker.track("input_boolean", new_entity_id)
 
-        await asyncio.sleep(1.0)
+        await wait_for_entity_registration(mcp_client, original_entity_id)
 
         # Rename with empty new_device_name — should be treated as None
         rename_data = await safe_call_tool(
