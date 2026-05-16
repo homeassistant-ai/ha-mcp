@@ -1,17 +1,11 @@
-"""Unit tests for tool-side identifier validation policy (issue #1294).
-
-The maintainer signal on #1294 from kingpanther13 endorses a
-"belt and suspenders" approach with per-tool nuance: tool-side
-empty/whitespace identifier rejection is valuable for the destructive
-intent-loss class (``action = "update" if id else "create"`` on the
-registry-metadata tools) and for partial guards that miss whitespace-only
-strings on the simple-helper writes.
+"""Unit tests for tool-side identifier validation policy.
 
 Two layers of coverage live here:
 
 1. **Helper-level** — direct unit tests for
    ``ha_mcp.tools.helpers.validate_identifier_not_empty``: every reject
-   case (``None``, ``""``, ``"   "``, tab/newline-only) raises
+   case (``None``, ``""``, ``"   "``, tab/newline-only, carriage return,
+   vertical tab, non-breaking space, ideographic space) raises
    ``VALIDATION_INVALID_PARAMETER`` with the parameter name in
    ``context``; every accept case (``"abc"``, ``" abc "``) is a no-op.
 
@@ -24,11 +18,11 @@ Two layers of coverage live here:
    - the ``None`` "list-all" or "create-new" sentinel still works (the
      guard does not regress the documented routing).
 
-The destructive class this PR closes:
+The destructive class these tests pin down:
 
-  ``action = "update" if label_id else "create"`` previously routed an
-  empty-string ``label_id`` to ``create`` silently. After this PR, the
-  caller sees a structured validation error naming ``label_id`` instead.
+  ``action = "update" if label_id else "create"`` would route an
+  empty-string ``label_id`` silently to ``create``. The guard surfaces a
+  structured validation error naming ``label_id`` instead.
 """
 
 from typing import Any
@@ -47,7 +41,22 @@ from ha_mcp.tools.helpers import validate_identifier_not_empty
 class TestValidateIdentifierNotEmptyHelper:
     """Direct tests for the shared validator."""
 
-    @pytest.mark.parametrize("bad", [None, "", " ", "   ", "\t", "\n", " \t\n "])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            None,
+            "",
+            " ",
+            "   ",
+            "\t",
+            "\n",
+            " \t\n ",
+            "\r",
+            "\v",
+            "\xa0",  # non-breaking space (U+00A0)
+            "　",  # ideographic space (U+3000)
+        ],
+    )
     def test_rejects_empty_or_whitespace(self, bad):
         with pytest.raises(ToolError) as excinfo:
             validate_identifier_not_empty(bad, "test_param")
@@ -57,8 +66,9 @@ class TestValidateIdentifierNotEmptyHelper:
 
     @pytest.mark.parametrize("good", ["abc", " abc ", "x", "scene.movie_night", "0"])
     def test_accepts_valid_identifier(self, good):
-        # Returns None — must not raise on legitimate values.
-        assert validate_identifier_not_empty(good, "test_param") is None
+        # Helper returns the validated value untouched so call sites can
+        # rebind to narrow ``str | None`` → ``str`` for mypy.
+        assert validate_identifier_not_empty(good, "test_param") == good
 
     def test_merges_caller_context_into_error(self):
         with pytest.raises(ToolError) as excinfo:
@@ -73,6 +83,21 @@ class TestValidateIdentifierNotEmptyHelper:
         assert "Omit label_id" in msg
         assert "action" in msg and "set" in msg
         assert "Critical" in msg
+
+    def test_message_override_replaces_default_text(self):
+        # The ``message`` override is used by call sites that want a tighter
+        # context-specific phrase (e.g. "name is required when creating a
+        # new area") while still routing through the shared helper.
+        with pytest.raises(ToolError) as excinfo:
+            validate_identifier_not_empty(
+                "",
+                "name",
+                message="name is required when creating a new area",
+            )
+        msg = str(excinfo.value)
+        assert "name is required when creating a new area" in msg
+        # Default phrasing must not also appear when an override is supplied.
+        assert "must be a non-empty, non-whitespace string" not in msg
 
     def test_caller_context_does_not_shadow_parameter_name(self):
         # The helper always records the canonical ``parameter`` and ``value``
@@ -252,6 +277,28 @@ class TestAreasIdentifierValidation:
         _assert_invalid_param(excinfo)
         tools._client.send_websocket_message.assert_not_called()
 
+    async def test_set_with_none_id_routes_to_create_for_area(self, tools):
+        # Control symmetry with the labels/categories twins: None remains the
+        # documented "create-new" sentinel and routes to area_registry/create.
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"area_id": "x", "name": "X"},
+        }
+        result = await tools.ha_set_area_or_floor(kind="area", name="X")
+        assert result["success"] is True
+        sent = tools._client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "config/area_registry/create"
+
+    async def test_set_with_none_id_routes_to_create_for_floor(self, tools):
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"floor_id": "x", "name": "X"},
+        }
+        result = await tools.ha_set_area_or_floor(kind="floor", name="X")
+        assert result["success"] is True
+        sent = tools._client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "config/floor_registry/create"
+
 
 # --- tools_config_helpers.py (partial-guard whitespace upgrade) -----------
 
@@ -300,4 +347,76 @@ class TestSetHelperWhitespaceUpgrade:
                 name="X",
             )
         _assert_invalid_param(excinfo)
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    async def test_implicit_action_with_empty_helper_id_rejects(
+        self, register_tools, mock_ws_client
+    ):
+        # Implicit-discriminator path: ``action`` omitted, ``helper_id=""``.
+        # Without the up-front guard, ``bool("")`` would be False so the
+        # discriminator below silently routes to ``create`` instead of
+        # ``update`` — destructive intent-loss class.
+        set_helper = register_tools["ha_config_set_helper"]
+        for bad in ("", "   "):
+            mock_ws_client.send_websocket_message.reset_mock()
+            with pytest.raises(ToolError) as excinfo:
+                await set_helper(
+                    helper_type="input_boolean", helper_id=bad, name="X"
+                )
+            _assert_invalid_param(excinfo)
+            mock_ws_client.send_websocket_message.assert_not_called()
+
+    async def test_flow_helper_create_rejects_whitespace_name(
+        self, register_tools, mock_ws_client
+    ):
+        # Flow-helper create gate parity with the simple-helper twin: the
+        # top-level ``name`` arg must be non-whitespace, otherwise the
+        # downstream config-flow build proceeds with a name HA cannot use.
+        set_helper = register_tools["ha_config_set_helper"]
+        with pytest.raises(ToolError) as excinfo:
+            await set_helper(
+                helper_type="utility_meter", action="create", name="   "
+            )
+        _assert_invalid_param(excinfo)
+        # The pre-flow gate runs before any flow start — no WS round-trip.
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    async def test_flow_helper_create_rejects_whitespace_config_name(
+        self, register_tools, mock_ws_client
+    ):
+        # Coverage for the other half of the name-required gate: when the
+        # top-level ``name`` is None/empty, ``config_dict["name"]`` must also
+        # be non-whitespace.
+        set_helper = register_tools["ha_config_set_helper"]
+        with pytest.raises(ToolError) as excinfo:
+            await set_helper(
+                helper_type="utility_meter",
+                action="create",
+                config={"name": "   "},
+            )
+        _assert_invalid_param(excinfo)
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+
+class TestCheckNameCollisionWhitespaceSkip:
+    """Direct test for the ``_check_name_collision`` dedupe-skip at L1229.
+
+    The downstream name-required gate at the simple-helper create branch
+    will reject whitespace-only names, but the collision check runs first
+    and would otherwise burn a WebSocket round-trip on a name HA is about
+    to reject. Locks the early-return on whitespace-only ``name`` so the
+    optimisation is not regressed by a refactor.
+    """
+
+    @pytest.mark.parametrize("bad_name", [None, "", " ", "   ", "\t", "\n"])
+    async def test_skips_ws_call_on_empty_or_whitespace_name(
+        self, mock_ws_client, bad_name
+    ):
+        from ha_mcp.tools.tools_config_helpers import _check_name_collision
+
+        # The early-return runs before any WS message is constructed.
+        result = await _check_name_collision(
+            mock_ws_client, "input_boolean", bad_name
+        )
+        assert result is None
         mock_ws_client.send_websocket_message.assert_not_called()

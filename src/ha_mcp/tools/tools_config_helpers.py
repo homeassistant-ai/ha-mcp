@@ -16,7 +16,12 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    validate_identifier_not_empty,
+)
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
@@ -1563,6 +1568,22 @@ async def _handle_flow_helper(
     is consistent has already happened upstream in ha_config_set_helper.
     """
     if action is None:
+        # Defence in depth: when reached via the legacy implicit-action
+        # path, an empty/whitespace ``helper_id`` would otherwise be falsy
+        # and silently route to ``create`` — same destructive intent-loss
+        # class as the registry-metadata twins. ``None`` stays the
+        # documented "create-new" sentinel.
+        if helper_id is not None:
+            validate_identifier_not_empty(
+                helper_id,
+                "helper_id",
+                suggestions=[
+                    "Omit helper_id entirely to create a new flow helper",
+                    "Pass a valid helper_id to update an existing one",
+                    "Or pass action='create' / action='update' explicitly",
+                ],
+                context={"helper_type": helper_type},
+            )
         action = "update" if helper_id else "create"
 
     # Normalize empty string to None, matching ha_config_set_helper's treatment
@@ -1618,7 +1639,7 @@ async def _handle_flow_helper(
     # caller-supplied `name` (you cannot rename a flow helper through its
     # options flow). Strip `name` from config_dict and emit a warning so the
     # caller learns their attempted rename was a no-op.
-    if action == "create" and name and "name" not in config_dict:
+    if action == "create" and name and name.strip() and "name" not in config_dict:
         schema_fields = await get_user_step_field_names(client, helper_type)
         if schema_fields is None or "name" in schema_fields:
             config_dict["name"] = name
@@ -1661,7 +1682,12 @@ async def _handle_flow_helper(
         # Some helpers (switch_as_x) deliberately don't have `name` injected into
         # config_dict because their schema rejects it — but the tool still
         # requires `name` to be supplied so callers fail fast and consistently.
-        if not (name or config_dict.get("name")):
+        # Reject whitespace-only too (``" "`` is truthy in Python) so the
+        # flow-helper create gate is coherent with the simple-helper twin.
+        config_name = config_dict.get("name")
+        config_name_ok = isinstance(config_name, str) and bool(config_name.strip())
+        name_ok = name is not None and bool(name.strip())
+        if not (name_ok or config_name_ok):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2376,6 +2402,23 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 # Implicit discriminator (back-compat). Pass action='create'
                 # or action='update' explicitly to avoid the inference.
+                # Reject empty/whitespace helper_id up front: ``bool("")`` is
+                # False, so without this gate ``helper_id=""`` silently routes
+                # to ``create`` even when the caller's intent was ``update``,
+                # producing a destructive intent-loss class identical to the
+                # one closed for labels/categories. ``None`` stays the
+                # documented "create-new" sentinel.
+                if helper_id is not None:
+                    validate_identifier_not_empty(
+                        helper_id,
+                        "helper_id",
+                        suggestions=[
+                            "Omit helper_id entirely to create a new helper",
+                            "Pass a valid helper_id to update an existing helper",
+                            "Or pass action='create' / action='update' explicitly to declare intent",
+                        ],
+                        context={"helper_type": helper_type},
+                    )
                 action = "update" if helper_id else "create"
 
             # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
@@ -2496,10 +2539,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if action == "create":
-                # Issue #1294: ``if not name`` lets whitespace-only ``"   "``
-                # through because ``bool(" ") is True`` — upgrade to a strip
-                # check so the rich validation message also catches that
-                # class without delegating to HA.
+                # ``bool(" ")`` is True, so plain ``if not name`` would let
+                # whitespace-only names through to a downstream HA error.
                 if not name or not name.strip():
                     raise_tool_error(
                         create_error_response(
@@ -2843,8 +2884,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
             elif action == "update":
-                # Issue #1294: same whitespace-upgrade as the create-name
-                # check above. ``if not helper_id`` lets ``"   "`` through.
+                # Same whitespace-upgrade rationale as the create-name check
+                # above — ``if not helper_id`` would let ``"   "`` through.
                 if not helper_id or not helper_id.strip():
                     raise_tool_error(
                         create_error_response(

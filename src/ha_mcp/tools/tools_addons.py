@@ -1208,14 +1208,16 @@ def _apply_array_ops(
                     )
                 )
             new_id = new_item[id_field]
-            if new_id is None or new_id == "":
+            if new_id is None or (isinstance(new_id, str) and not new_id.strip()):
                 # Items missing the id field have `dict.get(id_field) == None`
-                # by default, so allowing None/"" ids would let later patch /
-                # delete ops match unrelated items.
+                # by default, so allowing None/""/whitespace-only ids would
+                # let later patch / delete ops match unrelated items.
+                # Non-string ids (e.g. integers) stay valid by design — see
+                # ``test_add_with_integer_zero_id_is_accepted``.
                 raise_tool_error(
                     create_validation_error(
                         f"array_patch add op #{index} item {id_field!r} cannot be "
-                        "None or an empty string",
+                        "None, empty, or whitespace-only",
                         parameter=f"array_patch.operations[{index}].item.{id_field}",
                     )
                 )

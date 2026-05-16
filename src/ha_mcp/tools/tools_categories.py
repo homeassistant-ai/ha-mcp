@@ -77,10 +77,8 @@ class CategoryTools:
         Use ha_set_entity(categories={"automation": "category_id"}) to assign categories to entities.
         """
         try:
-            # Issue #1294: an explicit empty/whitespace ``category_id`` should
-            # surface a structured validation error rather than fall through
-            # to a generic "Category not found:  " response. ``None`` is the
-            # documented "list all" sentinel and stays untouched.
+            # ``None`` stays the documented "list-all" sentinel; explicit
+            # empty/whitespace is rejected by ``validate_identifier_not_empty``.
             if category_id is not None:
                 validate_identifier_not_empty(
                     category_id,
@@ -209,9 +207,9 @@ class CategoryTools:
         After creating a category, use ha_set_entity(categories={"automation": "category_id"}) to assign it.
         """
         try:
-            # Issue #1294: empty/whitespace ``category_id`` previously routed
-            # silently to ``create`` via ``action = "update" if category_id ...``
-            # — destructive intent loss when an update was intended.
+            # ``None`` stays the documented "create-new" sentinel; explicit
+            # empty/whitespace is rejected so the create/update discriminator
+            # below cannot silently route an intended update to create.
             if category_id is not None:
                 validate_identifier_not_empty(
                     category_id,
@@ -310,8 +308,7 @@ class CategoryTools:
         This action cannot be undone.
         """
         try:
-            # Issue #1294: empty/whitespace ``category_id`` would propagate
-            # to the HA backend and surface as a misleading delete-failure.
+            # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
                 category_id,
                 "category_id",
