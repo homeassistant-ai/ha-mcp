@@ -1,9 +1,12 @@
 """Unit tests for inline helper-schema attach in ``ha_config_set_helper``.
 
-``ha_get_helper_schema`` covers simple-helper types alongside flow types,
-and every reachable validation-error path in ``ha_config_set_helper``
-attaches the helper's ``data_schema`` to the response context so an LLM
-can self-correct from a 4xx without a separate discovery round-trip.
+Every reachable validation-error path in ``ha_config_set_helper`` attaches
+the helper's ``data_schema`` to the response context so an LLM can
+self-correct from a 4xx without a separate discovery round-trip. For
+menu-rooted helpers (``template``/``group``) where no sub-type has been
+picked yet, the context carries a
+``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
+plus the legal sub-types under ``menu_options`` (issue #1186).
 
 Tests in this module:
 
@@ -11,18 +14,15 @@ Tests in this module:
    schema entry, every entry has a uniform ``{name, required, selector}``
    shape, ``name`` is required for every simple type, the import-time
    drift guard matches the ``SIMPLE_HELPER_TYPES`` set.
-2. ``ha_get_helper_schema`` simple-type dispatch — returns the static dict
-   without any HA round-trip; flow-types still drive the introspection
-   flow; ``menu_option`` is rejected for simple types.
-3. Simple-helper validation errors carry the schema — ``name``-required,
+2. Simple-helper validation errors carry the schema — ``name``-required,
    ``options``-required, ``latitude``/``longitude``-required, etc., all
    surface ``data_schema`` in the response context.
-4. Flow pre-flow validation gates carry the schema — the gates in
+3. Flow pre-flow validation gates carry the schema — the gates in
    ``_handle_flow_helper`` (``name``-required for create, malformed
    ``config``, etc.) attach the data_schema fetched via the introspection
    flow, with menu-rooted types surfacing a
-   ``data_schema_unavailable_reason`` marker when no menu choice can be
-   inferred.
+   ``data_schema_unavailable_reason`` marker + ``menu_options`` list when
+   no menu choice can be inferred.
 """
 
 from __future__ import annotations
@@ -35,11 +35,8 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_entry_flow import (
-    ALL_HELPER_TYPES,
     FLOW_HELPER_TYPES,
-    SUPPORTED_HELPERS,
-    ConfigEntryFlowTools,
-    _FlowType,
+    fetch_helper_menu_options,
 )
 from ha_mcp.tools.tools_config_helpers import (
     SIMPLE_HELPER_SCHEMAS,
@@ -153,9 +150,9 @@ class TestSimpleHelperSchemasInvariants:
 
 
 class TestGetSimpleHelperSchema:
-    """get_simple_helper_schema is the single accessor used by both
-    ``ha_get_helper_schema`` (dispatch path) and the validation-error-attach
-    path; behaviour must stay consistent."""
+    """get_simple_helper_schema is the accessor used by the
+    validation-error-attach path so a 4xx carries the helper's field
+    shape inline."""
 
     def test_returns_schema_for_each_simple_type(self) -> None:
         for helper_type in SIMPLE_HELPER_TYPES:
@@ -246,8 +243,9 @@ class TestFlowHelperErrorContext:
     ) -> None:
         # A menu-rooted flow type (``template``, ``group``) without a
         # derivable menu_choice can't be schema-fetched without picking a
-        # branch — surface the marker so the LLM has a non-silent signal to
-        # call ``ha_get_helper_schema(template, menu_option=...)``.
+        # branch — surface the marker so the caller has a non-silent
+        # signal, plus the legal sub-types inline as ``menu_options``
+        # so they can pick a branch on the next try (issue #1186).
         client = AsyncMock()
         client.start_config_flow = AsyncMock(
             return_value={
@@ -263,6 +261,7 @@ class TestFlowHelperErrorContext:
         assert ctx == {
             "helper_type": "template",
             "data_schema_unavailable_reason": "menu_helper_requires_branch",
+            "menu_options": ["sensor", "binary_sensor"],
         }
 
     async def test_non_menu_helper_returns_helper_type_only_on_no_schema(
@@ -280,85 +279,79 @@ class TestFlowHelperErrorContext:
 
 
 # ---------------------------------------------------------------------------
-# 3. ha_get_helper_schema simple-type dispatch
+# 3. fetch_helper_menu_options (issue #1186)
 # ---------------------------------------------------------------------------
 
 
-class TestHaGetHelperSchemaSimpleDispatch:
-    """ha_get_helper_schema for simple types returns the static dict
-    without any HA round-trip; ALL_HELPER_TYPES Literal accepts both
-    flow and simple types."""
+class TestFetchHelperMenuOptions:
+    """``fetch_helper_menu_options`` returns the legal sub-type list for a
+    menu-rooted helper, ``None`` for non-menu flows, and ``None`` on any
+    HA failure — used by ``_flow_helper_error_context`` to populate
+    ``menu_options`` alongside the
+    ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker.
+    """
 
-    def test_all_helper_types_literal_covers_27_types(self) -> None:
-        import typing
-
-        all_types = set(typing.get_args(ALL_HELPER_TYPES))
-        flow_types = set(typing.get_args(SUPPORTED_HELPERS))
-        assert all_types == flow_types | SIMPLE_HELPER_TYPES
-        assert len(all_types) == 27
-
-    async def test_simple_type_returns_static_schema_without_ha_call(self) -> None:
+    async def test_returns_menu_options_for_menu_flow(self) -> None:
         client = AsyncMock()
-        # If anything in the simple branch reaches HA, fail loudly.
         client.start_config_flow = AsyncMock(
-            side_effect=AssertionError("simple types must not call HA"),
+            return_value={
+                "type": "menu",
+                "flow_id": "intro-1",
+                "menu_options": ["sensor", "binary_sensor", "button"],
+            }
         )
+        client.abort_config_flow = AsyncMock(return_value={})
 
-        tool_obj = ConfigEntryFlowTools(client)
-        result = await tool_obj.ha_get_helper_schema(helper_type="input_select")
+        options = await fetch_helper_menu_options(client, "template")
 
-        assert result["success"] is True
-        assert result["helper_type"] == "input_select"
-        assert result["flow_type"] == _FlowType.FORM
-        assert result["step_id"] == "user"
-        assert result["data_schema"] == SIMPLE_HELPER_SCHEMAS["input_select"]
-        assert result["description_placeholders"] == {}
-        client.start_config_flow.assert_not_called()
+        assert options == ["sensor", "binary_sensor", "button"]
+        # The introspection flow was aborted to avoid leaking it in HA.
+        client.abort_config_flow.assert_called_once_with("intro-1")
 
-    @pytest.mark.parametrize(
-        "helper_type",
-        ["counter", "input_select", "schedule", "zone", "person"],
-    )
-    async def test_simple_type_with_menu_option_rejects(
-        self,
-        helper_type: str,
-    ) -> None:
-        client = AsyncMock()
-        tool_obj = ConfigEntryFlowTools(client)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool_obj.ha_get_helper_schema(
-                helper_type=helper_type,
-                menu_option="sensor",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "menu_option" in body["error"]["message"]
-        assert body["helper_type"] == helper_type
-
-    async def test_flow_type_still_drives_introspection_flow(self) -> None:
-        # Existing behaviour for flow types must remain intact.
-        intro_schema = [{"name": "entity_id", "required": True}]
+    async def test_returns_none_for_form_flow(self) -> None:
+        # Non-menu-rooted helpers like ``filter`` start with a form step;
+        # there are no ``menu_options`` to surface.
         client = AsyncMock()
         client.start_config_flow = AsyncMock(
             return_value={
                 "type": "form",
                 "flow_id": "intro-1",
-                "step_id": "user",
-                "data_schema": intro_schema,
+                "data_schema": [{"name": "entity_id", "required": True}],
             }
         )
         client.abort_config_flow = AsyncMock(return_value={})
 
-        tool_obj = ConfigEntryFlowTools(client)
-        result = await tool_obj.ha_get_helper_schema(helper_type="filter")
+        options = await fetch_helper_menu_options(client, "filter")
 
-        assert result["success"] is True
-        assert result["data_schema"] == intro_schema
-        client.start_config_flow.assert_called_once_with("filter")
-        # The introspection flow was aborted to avoid leaking it in HA.
+        assert options is None
+        # Flow still aborted — leakage check is independent of return value.
         client.abort_config_flow.assert_called_once_with("intro-1")
+
+    async def test_returns_none_on_ha_failure(self) -> None:
+        client = AsyncMock()
+        client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
+
+        options = await fetch_helper_menu_options(client, "template")
+
+        assert options is None
+
+    async def test_filters_non_string_options(self) -> None:
+        # Defensive — if HA returns a non-string entry in menu_options
+        # (shouldn't happen, but the API isn't strictly typed), drop it
+        # rather than propagating type confusion to the caller.
+        client = AsyncMock()
+        client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "menu",
+                "flow_id": "intro-1",
+                "menu_options": ["sensor", 42, None, "binary_sensor"],
+            }
+        )
+        client.abort_config_flow = AsyncMock(return_value={})
+
+        options = await fetch_helper_menu_options(client, "template")
+
+        assert options == ["sensor", "binary_sensor"]
 
 
 # ---------------------------------------------------------------------------
@@ -761,8 +754,9 @@ class TestPreFlowGateMenuChoiceThreading:
     async def test_template_without_menu_key_surfaces_marker(self) -> None:
         # ``template`` is menu-rooted but the config has no menu key.
         # The schema can't be fetched without picking a branch; the gate
-        # must surface ``data_schema_unavailable_reason`` so the LLM gets
-        # a non-silent signal to call ``ha_get_helper_schema``.
+        # must surface ``data_schema_unavailable_reason`` plus the legal
+        # sub-types under ``menu_options`` so the caller can pick a branch
+        # on the next try (issue #1186).
         from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
 
         client = AsyncMock()
@@ -794,6 +788,7 @@ class TestPreFlowGateMenuChoiceThreading:
         assert body.get("data_schema_unavailable_reason") == (
             "menu_helper_requires_branch"
         )
+        assert body.get("menu_options") == ["sensor", "binary_sensor"]
 
     async def test_pre_flow_gate_logs_debug_on_fetch_failure(
         self,

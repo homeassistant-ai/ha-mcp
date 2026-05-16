@@ -21,6 +21,7 @@ from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
     fetch_helper_data_schema,
+    fetch_helper_menu_options,
     get_user_step_field_names,
     update_flow_helper,
 )
@@ -141,11 +142,9 @@ class _HelperFieldSpec(_HelperFieldSpecBase, total=False):
 
 # Per-simple-type field schemas — list-of-dicts shape mirroring HA's flow
 # ``data_schema`` so callers can iterate one shape regardless of helper kind.
-# Consumed by:
-#   - ``ha_get_helper_schema`` (returned verbatim for simple types).
-#   - ``ha_config_set_helper`` validation errors (relevant entry attached to
-#     ``context["data_schema"]`` so the LLM sees field shape inline with the
-#     4xx that just blocked it).
+# Consumed by ``ha_config_set_helper`` validation errors (relevant entry
+# attached to ``context["data_schema"]`` so the LLM sees field shape inline
+# with the 4xx that just blocked it).
 #
 # Each field-spec dict carries:
 #   - ``name``        : argument key on ``ha_config_set_helper``.
@@ -571,10 +570,11 @@ def _simple_helper_error_context(
 # FORM — for these, ``fetch_helper_data_schema`` cannot return a ``data_schema``
 # without a menu choice (``next_step_id`` / ``group_type`` / ``menu_option``).
 # The pre-flow gates in ``_handle_flow_helper`` use this set to surface a
-# ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker so
-# the LLM gets a non-silent signal to call
-# ``ha_get_helper_schema(<type>, menu_option=...)``. Hint set — extending it
-# only sharpens the signal, missing entries fall back to silent ``None``.
+# ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
+# alongside the legal sub-types under ``menu_options`` so the LLM can pick
+# a branch on the next try without a separate discovery round-trip. Hint
+# set — extending it only sharpens the signal, missing entries fall back
+# to silent ``None``.
 _MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
@@ -625,9 +625,9 @@ async def _flow_helper_error_context(
     For menu-rooted helpers (``template``, ``group``) without a derivable
     ``menu_choice``, the schema can't be fetched without picking a branch;
     a ``data_schema_unavailable_reason: "menu_helper_requires_branch"``
-    marker is added instead so the LLM gets a non-silent signal to call
-    ``ha_get_helper_schema(<type>, menu_option=...)`` rather than reading
-    the absence of ``data_schema`` as "no schema exists".
+    marker is added instead, along with the legal sub-types under
+    ``menu_options`` (issue #1186), so the caller can pick a branch on
+    the next try without a separate discovery round-trip.
     """
     context: dict[str, Any] = {"helper_type": helper_type}
     try:
@@ -651,6 +651,9 @@ async def _flow_helper_error_context(
         context["data_schema"] = schema
     elif helper_type in _MENU_ROOTED_FLOW_HELPER_TYPES and not menu_choice:
         context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
+        menu_options = await fetch_helper_menu_options(client, helper_type)
+        if menu_options:
+            context["menu_options"] = menu_options
     context.update(extra)
     return context
 
@@ -723,7 +726,7 @@ def _validate_applicable_params(
     inapplicable.sort()
     if helper_type in FLOW_HELPER_TYPES:
         applicable_msg = (
-            "config (use ha_get_helper_schema to see fields), "
+            "config (see data_schema on a validation error for the field set), "
             "name, helper_id, area_id, labels, category, wait"
         )
     else:
@@ -747,8 +750,8 @@ def _validate_applicable_params(
     if helper_type in FLOW_HELPER_TYPES:
         suggestions.append(
             f"For flow-based helpers like {helper_type!r}, type-specific config "
-            "goes inside the `config` dict; the per-type fields are discoverable "
-            f"via ha_get_helper_schema(helper_type='{helper_type}')."
+            "goes inside the `config` dict; submit with the wrong shape once "
+            "and the validation error returns the `data_schema` for that helper."
         )
 
     raise_tool_error(
@@ -2226,7 +2229,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "integration, statistics, trend, random, filter, tod, "
                     "generic_thermostat, switch_as_x, generic_hygrostat). "
                     "Accepts JSON string or dict. Ignored for simple helper types. "
-                    "Use ha_get_helper_schema(helper_type) to discover required fields."
+                    "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
             ),
@@ -2277,13 +2280,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           without it the tool falls back to the implicit `helper_id`-presence
           discriminator.
         - For flow-based helpers, config keys not declared by any step's
-          data_schema are silently ignored by HA; verify field names with
-          `ha_get_helper_schema` before relying on them.
+          data_schema are silently ignored by HA; submit once and the
+          validation error returns the `data_schema` for that helper so
+          subsequent calls use the correct field names.
         - Validation errors raised by this tool carry the helper's
-          `data_schema` in the response context so a follow-up call can
-          self-correct. Calling `ha_get_helper_schema(helper_type)` ahead of
-          time is therefore optional — the schema is delivered alongside the
-          first 4xx if you call without it.
+          `data_schema` in the response context (and `menu_options` for
+          menu-rooted helpers like `template`/`group` when no sub-type is
+          chosen yet) so a follow-up call can self-correct without a
+          separate schema-discovery round-trip.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:
@@ -2299,11 +2303,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ha_config_set_helper(helper_type="tod", name="Quiet Hours",
                 config={"after_time": "22:00:00", "before_time": "07:00:00"})
 
-        For complex schemas and per-type parameter details, use ha_get_helper_schema.
-        For broader helper-design guidance (when to pick which helper type, YAML
-        examples), use ha_get_skill_guide — the skill's
-        `helper-selection.md` reference covers the `input_*` family, `counter`,
-        `timer`, and `schedule` with worked examples and a decision matrix.
+        For helper-design guidance (when to pick which helper type, YAML
+        examples, per-type field tables), use ha_get_skill_guide — the
+        skill's `helper-selection.md` reference covers all 27 helper types
+        with worked examples and a decision matrix.
         """
         try:
             # Determine if this is a create or update — set early so the

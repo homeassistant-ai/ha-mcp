@@ -10,9 +10,8 @@ Covers three layers:
    ``add_transform`` failure path. Uses the ``MagicMock`` stub pattern
    from ``test_categorized_search.TestApplySearchKeywordEnrichment``.
 3. The ``_LITE_DOCSTRINGS`` mapping invariant — every lite description
-   names ``ha_get_skill_guide`` (or
-   ``ha_get_helper_schema`` for the helper entries) so the LLM still
-   has a path to detailed guidance from inside the trimmed text.
+   names ``ha_get_skill_guide`` so the LLM still has a path to
+   detailed guidance from inside the trimmed text.
 """
 
 from __future__ import annotations
@@ -250,20 +249,13 @@ class TestLiteDocstringsMappingInvariants:
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        # ha_get_helper_schema is an acceptable substitute pointer on
-        # the two helper entries since it serves the same role
-        # (deferred per-type schema lookup).
-        acceptable_pointers = (
-            "ha_get_skill_guide",
-            "ha_get_helper_schema",
-        )
         offenders: list[str] = []
         for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
-            if not any(pointer in lite for pointer in acceptable_pointers):
+            if "ha_get_skill_guide" not in lite:
                 offenders.append(name)
 
         assert not offenders, (
-            "Lite descriptions missing a skill-tool pointer "
+            "Lite descriptions missing a ha_get_skill_guide pointer "
             f"(invariant from _LITE_DOCSTRINGS docstring): {offenders}"
         )
 
