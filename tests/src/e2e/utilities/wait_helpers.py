@@ -361,9 +361,12 @@ async def wait_for_entity_registration(
         # Check if 'data' key exists (not 'success' key)
         success = "data" in data and data["data"] is not None
 
-        # Log every attempt with full details
+        # Per-attempt details at debug level so transient misses don't
+        # clutter CI logs; sibling wait_for_entity_state follows the same
+        # convention. See .gemini/styleguide.md ("Exception Handling in
+        # Test Polling Loops").
         elapsed = time.monotonic() - start_time
-        logger.info(
+        logger.debug(
             f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
             f"success={success}, data keys={list(data.keys())}"
         )
@@ -373,7 +376,7 @@ async def wait_for_entity_registration(
             logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
         else:
             error = data.get("error", "No error message")
-            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
+            logger.debug(f"❌ Entity {entity_id} check failed: {error}")
 
         return success
 
