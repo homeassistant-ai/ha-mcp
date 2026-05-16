@@ -61,6 +61,76 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Module-level collection of readiness-gate timings, per process. Workers
+# write to ``_READINESS_TIMINGS``; pytest_sessionfinish hands their lists
+# to the master via xdist's ``workeroutput`` channel, and the master
+# aggregates into ``_ALL_READINESS_TIMINGS`` in pytest_testnodedown. The
+# pytest_terminal_summary hook then renders the aggregate to the
+# master's terminalreporter, which writes outside the pytest-xdist
+# capture buffer (refs #366).
+_READINESS_TIMINGS: list[dict[str, Any]] = []
+_ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
+
+
+def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
+    """Record a fixture-side readiness-gate timing data point.
+
+    The data points are routed to the master process and rendered at
+    session end by ``pytest_terminal_summary``. Direct ``sys.stderr``
+    writes don't survive pytest-xdist's per-worker capture buffer, so
+    going through pytest's own reporting plumbing is the reliable path
+    (follow-up to #1273 which lowered the only previously-measured gate
+    ``INPUT_BOOLEAN_WAIT`` from 30s to 10s based on a 1s observed-resolve;
+    the remaining 30s ``STABILIZATION_TIMEOUT`` /
+    ``ENTITY_STABILIZATION_TIMEOUT`` / ``SUN_WAIT`` budgets need
+    empirical timings to scope a follow-up tightening PR).
+    """
+    _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """xdist worker hook: hand collected timings up to the master.
+
+    ``config.workeroutput`` only exists on workers; on the master (or
+    when running without xdist) the attribute is missing, and the local
+    list is read directly by ``pytest_terminal_summary`` instead.
+    """
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None and _READINESS_TIMINGS:
+        workeroutput["readiness_timings"] = list(_READINESS_TIMINGS)
+
+
+def pytest_testnodedown(node, error):
+    """xdist master hook: collect a finished worker's timings.
+
+    Called once per worker as it shuts down. ``error`` is non-None when
+    the worker crashed — we still try to drain whatever it managed to
+    record.
+    """
+    timings = getattr(node, "workeroutput", {}).get("readiness_timings", [])
+    _ALL_READINESS_TIMINGS.extend(timings)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Master-side hook: render collected timings as a terminal section.
+
+    Falls back to the local list when running without xdist (no
+    ``pytest_testnodedown`` fires in that mode, so ``_ALL_*`` stays empty).
+    """
+    timings = _ALL_READINESS_TIMINGS or _READINESS_TIMINGS
+    if not timings:
+        return
+    terminalreporter.section("Readiness gate timings")
+    for point in timings:
+        parts = []
+        for key, value in point.items():
+            if isinstance(value, float):
+                parts.append(f"{key}={value:.2f}")
+            else:
+                parts.append(f"{key}={value}")
+        terminalreporter.write_line("[READINESS_GATE_TIMING] " + " ".join(parts))
+
+
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
     """Return True only for benign 'schema drift' errors (column/table missing).
 
@@ -1020,10 +1090,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if config_resp.status_code == 200:
                     component_count = len(config_resp.json().get("components", []))
                     if component_count >= MIN_COMPONENTS:
-                        elapsed = int(time.monotonic() - stabilize_start)
+                        elapsed = time.monotonic() - stabilize_start
                         logger.info(
                             f"✅ Home Assistant stabilized with {component_count} components "
-                            f"after {elapsed}s"
+                            f"after {elapsed:.1f}s"
+                        )
+                        _log_readiness_timing(
+                            "components", elapsed, count=component_count
                         )
                         break
                     if component_count != last_count:
@@ -1070,10 +1143,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if states_resp.status_code == 200:
                     entity_count = len(states_resp.json())
                     if entity_count >= MIN_ENTITIES:
-                        elapsed = int(time.monotonic() - entity_start)
+                        elapsed = time.monotonic() - entity_start
                         logger.info(
-                            f"✅ {entity_count} entities registered after {elapsed}s"
+                            f"✅ {entity_count} entities registered after {elapsed:.1f}s"
                         )
+                        _log_readiness_timing("entities", elapsed, count=entity_count)
                         break
                     if entity_count != last_entity_count:
                         logger.info(
@@ -1113,8 +1187,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if svc_resp.status_code == 200:
                     domains = {s.get("domain") for s in svc_resp.json()}
                     if "input_boolean" in domains:
-                        elapsed = int(time.monotonic() - ib_start)
-                        logger.info(f"✅ input_boolean service ready after {elapsed}s")
+                        elapsed = time.monotonic() - ib_start
+                        logger.info(
+                            f"✅ input_boolean service ready after {elapsed:.1f}s"
+                        )
+                        _log_readiness_timing("input_boolean", elapsed)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"Service check failed: {exc}")
@@ -1190,8 +1267,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if sun_resp.status_code == 200:
                     sun_state = sun_resp.json().get("state", "unknown")
                     if sun_state != "unknown":
-                        elapsed = int(time.monotonic() - sun_start)
-                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed}s")
+                        elapsed = time.monotonic() - sun_start
+                        logger.info(f"✅ sun.sun is '{sun_state}' after {elapsed:.1f}s")
+                        _log_readiness_timing("sun", elapsed, state=sun_state)
                         break
             except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
                 logger.debug(f"sun.sun check failed: {exc}")
