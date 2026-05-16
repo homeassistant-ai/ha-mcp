@@ -239,8 +239,8 @@ class TestAreasIdentifierValidation:
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_rejects_whitespace_id_for_area(self, tools, bad):
-        # Pre-#1294: ``id == ""`` was guarded but ``"   "`` slipped through
-        # the truthy ``if id:`` branch and routed silently to update with an
+        # Was guarded for ``id == ""`` but ``"   "`` slipped through the
+        # truthy ``if id:`` branch and routed silently to update with an
         # invalid id. This regression test locks the whitespace upgrade.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_area_or_floor(kind="area", id=bad, name="X")
@@ -256,8 +256,8 @@ class TestAreasIdentifierValidation:
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_create_rejects_whitespace_name_for_area(self, tools, bad):
-        # Pre-#1294: ``if not name`` let ``"   "`` through into the create
-        # branch because ``bool(" ") is True``.
+        # ``if not name`` let ``"   "`` through into the create branch
+        # because ``bool(" ") is True``.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_area_or_floor(kind="area", name=bad)
         _assert_invalid_param(excinfo)
@@ -332,7 +332,6 @@ class TestSetHelperWhitespaceUpgrade:
                 helper_type="input_boolean", action="create", name="   "
             )
         _assert_invalid_param(excinfo)
-        # Validation fires before the WS round-trip.
         mock_ws_client.send_websocket_message.assert_not_called()
 
     async def test_update_rejects_whitespace_helper_id(
@@ -349,19 +348,23 @@ class TestSetHelperWhitespaceUpgrade:
         _assert_invalid_param(excinfo)
         mock_ws_client.send_websocket_message.assert_not_called()
 
+    @pytest.mark.parametrize("helper_type", ["input_boolean", "utility_meter"])
     async def test_implicit_action_with_empty_helper_id_rejects(
-        self, register_tools, mock_ws_client
+        self, register_tools, mock_ws_client, helper_type
     ):
         # Implicit-discriminator path: ``action`` omitted, ``helper_id=""``.
         # Without the up-front guard, ``bool("")`` would be False so the
         # discriminator below silently routes to ``create`` instead of
         # ``update`` — destructive intent-loss class.
+        # Parametrized so both the simple-helper guard (``input_boolean``)
+        # and the flow-helper twin guard inside ``_handle_flow_helper``
+        # (``utility_meter``) are exercised.
         set_helper = register_tools["ha_config_set_helper"]
         for bad in ("", "   "):
             mock_ws_client.send_websocket_message.reset_mock()
             with pytest.raises(ToolError) as excinfo:
                 await set_helper(
-                    helper_type="input_boolean", helper_id=bad, name="X"
+                    helper_type=helper_type, helper_id=bad, name="X"
                 )
             _assert_invalid_param(excinfo)
             mock_ws_client.send_websocket_message.assert_not_called()
@@ -399,7 +402,7 @@ class TestSetHelperWhitespaceUpgrade:
 
 
 class TestCheckNameCollisionWhitespaceSkip:
-    """Direct test for the ``_check_name_collision`` dedupe-skip at L1229.
+    """Direct test for the ``_check_name_collision`` dedupe-skip.
 
     The downstream name-required gate at the simple-helper create branch
     will reject whitespace-only names, but the collision check runs first
@@ -420,3 +423,81 @@ class TestCheckNameCollisionWhitespaceSkip:
         )
         assert result is None
         mock_ws_client.send_websocket_message.assert_not_called()
+
+
+# --- tools_resources.py (Round-2 sibling sweep) --------------------------
+
+
+class TestResourcesIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_resources import ResourceTools
+
+        return ResourceTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_rejects_empty_resource_id(self, tools, bad):
+        # ``_upsert_resource`` previously routed ``resource_id=""`` to the
+        # create branch via the truthy ``if resource_id:`` check, producing
+        # a phantom dashboard resource instead of the intended update.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_set_dashboard_resource(
+                url="/local/test.js", resource_type="module", resource_id=bad
+            )
+        _assert_invalid_param(excinfo)
+        tools._client.send_websocket_message.assert_not_called()
+
+    async def test_set_with_none_resource_id_routes_to_create(self, tools):
+        # Control: None remains the documented "create-new" sentinel.
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"resource_id": "x"},
+        }
+        result = await tools.ha_config_set_dashboard_resource(
+            url="/local/test.js", resource_type="module"
+        )
+        assert result["success"] is True
+        sent = tools._client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "lovelace/resources/create"
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_delete_rejects_empty_resource_id(self, tools, bad):
+        # Empty/whitespace would surface as a misleading HA delete-failure.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_delete_dashboard_resource(resource_id=bad)
+        _assert_invalid_param(excinfo)
+        tools._client.send_websocket_message.assert_not_called()
+
+
+# --- tools_zones.py (Round-2 sibling sweep) ------------------------------
+
+
+class TestZonesIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_zones import ZoneTools
+
+        return ZoneTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_rejects_empty_zone_id(self, tools, bad):
+        # Without the guard, ``zone_id=""`` falls into the create branch and
+        # surfaces "name, latitude, longitude required" — misleading UX
+        # masking the real cause (unusable ``zone_id``).
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_zone(zone_id=bad, name="X")
+        _assert_invalid_param(excinfo)
+        tools._client.send_websocket_message.assert_not_called()
+
+    async def test_set_with_none_zone_id_routes_to_create(self, tools):
+        # Control: None remains the documented "create-new" sentinel.
+        tools._client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"zone_id": "x"},
+        }
+        result = await tools.ha_set_zone(
+            name="Office", latitude=40.7128, longitude=-74.0060, radius=150
+        )
+        assert result["success"] is True
+        sent = tools._client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "zone/create"

@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,20 @@ class ZoneTools:
         """
         operation = "create"
         try:
+            # ``None`` stays the documented "create-new" sentinel; explicit
+            # empty/whitespace ``zone_id`` would silently route to the
+            # create branch below and surface "name, latitude, longitude
+            # required" instead of the actual cause (unusable ``zone_id``).
+            if zone_id is not None:
+                validate_identifier_not_empty(
+                    zone_id,
+                    "zone_id",
+                    suggestions=[
+                        "Omit zone_id entirely to create a new zone",
+                        "Pass a valid zone_id to update an existing zone",
+                    ],
+                    context={"action": "set"},
+                )
             if zone_id:
                 # UPDATE operation
                 operation = "update"

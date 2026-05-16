@@ -22,6 +22,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -592,6 +593,20 @@ class ResourceTools:
         resource_type: str,
     ) -> tuple[dict[str, Any], str]:
         """Create or update a lovelace resource. Returns (result, action)."""
+        # ``None`` stays the documented "create-new" sentinel; explicit
+        # empty/whitespace ``resource_id`` would silently route to the
+        # ``else`` create branch below and lose update intent (destructive
+        # intent-loss class, same as the registry-metadata twins).
+        if resource_id is not None:
+            validate_identifier_not_empty(
+                resource_id,
+                "resource_id",
+                suggestions=[
+                    "Omit resource_id entirely to create a new resource",
+                    "Pass a valid resource_id to update an existing resource",
+                ],
+                context={"action": "set"},
+            )
         if resource_id:
             result = await self._client.send_websocket_message(
                 {
@@ -646,6 +661,15 @@ class ResourceTools:
         before deleting. Ensure no dashboards depend on the resource.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                resource_id,
+                "resource_id",
+                suggestions=[
+                    "Pass a valid resource_id (use ha_config_list_dashboard_resources() to list)",
+                ],
+                context={"action": "delete"},
+            )
             result = await self._client.send_websocket_message(
                 {
                     "type": "lovelace/resources/delete",
