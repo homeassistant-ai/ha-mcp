@@ -238,9 +238,9 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ## 🔍 Tool Discovery for AI Agents
 
-By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus, claude.ai) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus,) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
 
-For models *without* deferred tool support — Claude Haiku, OpenAI-compatible local models, smaller open-weights models — listing 86 tools eats ~46K tokens of idle context. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
+For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT OpenAI-compatible local models, smaller open-weights models — listing 86 tools eats ~46K tokens of idle context. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
 
 ### Enable search-based discovery
 
@@ -263,11 +263,11 @@ The proxy split lets MCP clients apply different permission policies per categor
 
 ### When to enable
 
-- **Claude Haiku, OpenAI-compatible local models, or any model without native deferred tool support** — large idle-context savings.
+- **Claude Haiku, OpenAI-compatible local models, Gemini, ChatGPT or any model without native deferred tool support** — large idle-context savings.
 - **MCP clients that cap total tool count** (some cap at 100) — surfaces ~4 tools instead of 86.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
-Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step.
+Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.
 
 For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
 
