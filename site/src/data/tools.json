@@ -2293,6 +2293,10 @@
         "include_notifications": {
           "type": "Annotated[bool | str | None, Field(default=True, description='Include active persistent notifications (default: True). Set False to skip.')]",
           "default": true
+        },
+        "include_dismissed_repairs": {
+          "type": "Annotated[bool | str | None, Field(default=False, description='Include user-dismissed/ignored repairs (default: False). Matches the HA Repairs UI which hides dismissed items by default.')]",
+          "default": false
         }
       }
     },
@@ -2638,12 +2642,16 @@
   {
     "name": "ha_get_system_health",
     "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - Example: include=\"repairs,zha_network,zwave_network\"",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - Example: include=\"repairs,zha_network,zwave_network\"\n- include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when \"repairs\" is in `include`.",
     "inputSchema": {
       "properties": {
         "include": {
           "type": "str | None",
           "default": null
+        },
+        "include_dismissed_repairs": {
+          "type": "bool | str | None",
+          "default": false
         }
       }
     },
