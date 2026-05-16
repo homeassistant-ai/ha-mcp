@@ -17,46 +17,13 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
-from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
+from ...utilities.wait_helpers import (
+    wait_for_condition,
+    wait_for_entity_registration,
+    wait_for_entity_state,
+)
 
 logger = logging.getLogger(__name__)
-
-
-async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int = 20) -> bool:
-    """
-    Wait for entity to be registered and queryable via API.
-    Does not check for specific state, only that entity exists.
-    """
-    import time
-    start_time = time.monotonic()
-    attempt = 0
-
-    async def entity_exists():
-        nonlocal attempt
-        attempt += 1
-        data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
-        # Check if 'data' key exists (not 'success' key)
-        success = 'data' in data and data['data'] is not None
-
-        # Log every attempt with full details
-        elapsed = time.monotonic() - start_time
-        logger.info(
-            f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
-            f"success={success}, data keys={list(data.keys())}"
-        )
-
-        if success:
-            state = data.get("data", {}).get("state", "N/A")
-            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
-        else:
-            error = data.get("error", "No error message")
-            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
-
-        return success
-
-    return await wait_for_condition(
-        entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
-    )
 
 
 def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
