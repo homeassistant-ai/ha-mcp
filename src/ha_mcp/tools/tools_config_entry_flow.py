@@ -244,24 +244,33 @@ def _parse_flow_api_error(
     }
 
 
-async def _fetch_data_schema_for_error_context(
+async def fetch_helper_flow_info(
     client: Any,
     helper_type: str | None,
-    menu_choice: str | None,
-) -> list[Any] | None:
-    """Best-effort fetch of the helper's data_schema for error context.
+    menu_choice: str | None = None,
+) -> dict[str, Any]:
+    """Best-effort introspection of a helper's config-entry flow.
 
-    Starts a fresh introspection flow (always aborted), and returns the
-    user step's ``data_schema`` so the LLM has something concrete to react
-    to when HA's error body is unstructured. Returns ``None`` on any
-    failure or when the helper is menu-based without a chosen branch.
+    Starts a fresh introspection flow (always aborted) and returns a dict
+    with optional keys ``"schema"`` and ``"menu_options"`` so a single HA
+    round-trip serves both the schema-attach path (used by
+    ``_raise_flow_api_error`` and the pre-flow validation gates in
+    ``_handle_flow_helper``) and the menu-sub-types path (used when a
+    menu-rooted helper has no branch chosen yet — issue #1186).
 
-    Public alias ``fetch_helper_data_schema`` is exported below for the
-    pre-flow validation gates in ``_handle_flow_helper`` (issue #1149) —
-    they need the same best-effort fetch but live in another module.
+    Behaviour:
+
+    - FORM at top: ``{"schema": [...]}``
+    - MENU at top with ``menu_choice``: submits and returns the branch
+      form schema as ``{"schema": [...]}`` (no ``menu_options`` since
+      the caller already picked a branch)
+    - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
+    - any failure or unparseable shape: ``{}`` (callers branch on
+      ``"schema" in info`` / ``"menu_options" in info``)
     """
+    info: dict[str, Any] = {}
     if not helper_type or client is None:
-        return None
+        return info
     intro_flow_id: str | None = None
     try:
         flow_result = await client.start_config_flow(helper_type)
@@ -270,72 +279,38 @@ async def _fetch_data_schema_for_error_context(
 
         if flow_type == _FlowType.FORM:
             schema = flow_result.get("data_schema")
-            return schema if isinstance(schema, list) else None
+            if isinstance(schema, list):
+                info["schema"] = schema
+            return info
 
-        if flow_type == _FlowType.MENU and menu_choice and intro_flow_id:
-            try:
-                step = await asyncio.wait_for(
-                    client.submit_config_flow_step(
-                        intro_flow_id, {"next_step_id": menu_choice}
-                    ),
-                    timeout=10.0,
-                )
-            except Exception:
-                return None
-            if step.get("type") == _FlowType.FORM:
-                schema = step.get("data_schema")
-                return schema if isinstance(schema, list) else None
-        return None
+        if flow_type == _FlowType.MENU:
+            if menu_choice and intro_flow_id:
+                try:
+                    step = await asyncio.wait_for(
+                        client.submit_config_flow_step(
+                            intro_flow_id, {"next_step_id": menu_choice}
+                        ),
+                        timeout=10.0,
+                    )
+                except Exception:
+                    return info
+                if step.get("type") == _FlowType.FORM:
+                    schema = step.get("data_schema")
+                    if isinstance(schema, list):
+                        info["schema"] = schema
+                return info
+
+            # MENU without a choice — surface the legal sub-types instead.
+            options = flow_result.get("menu_options")
+            if isinstance(options, list):
+                filtered = [opt for opt in options if isinstance(opt, str)]
+                if filtered:
+                    info["menu_options"] = filtered
+            return info
+
+        return info
     except Exception:
-        return None
-    finally:
-        if intro_flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(intro_flow_id), timeout=5.0
-                )
-            except Exception as abort_err:
-                logger.debug(
-                    f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
-                )
-
-
-# Public alias for use by pre-flow validation gates in tools_config_helpers
-# (issue #1149). The underscore-prefixed original is kept to preserve the
-# call sites already in this module; the alias avoids importing a private
-# name across modules.
-fetch_helper_data_schema = _fetch_data_schema_for_error_context
-
-
-async def fetch_helper_menu_options(
-    client: Any, helper_type: str
-) -> list[str] | None:
-    """Best-effort fetch of ``menu_options`` for a menu-rooted helper.
-
-    Starts a fresh introspection flow, returns the top-step ``menu_options``
-    list if the flow is menu-rooted, then aborts. Returns ``None`` for
-    non-menu flows or on any failure.
-
-    Used by the pre-flow validation gates in ``_handle_flow_helper`` to
-    surface the available sub-types alongside the
-    ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
-    (issue #1186), so a caller hitting the marker has the legal sub-type
-    list inline without a second discovery round-trip.
-    """
-    if not helper_type or client is None:
-        return None
-    intro_flow_id: str | None = None
-    try:
-        flow_result = await client.start_config_flow(helper_type)
-        intro_flow_id = flow_result.get("flow_id")
-        if flow_result.get("type") != _FlowType.MENU:
-            return None
-        options = flow_result.get("menu_options")
-        if not isinstance(options, list):
-            return None
-        return [opt for opt in options if isinstance(opt, str)]
-    except Exception:
-        return None
+        return info
     finally:
         if intro_flow_id:
             try:
@@ -389,6 +364,10 @@ async def _raise_flow_api_error(
     suggestions: list[str] = []
     message: str
 
+    # Single introspection round-trip — used by both branches below.
+    info = await fetch_helper_flow_info(client, helper_type, menu_choice)
+    schema = info.get("schema")
+
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
         context["field_errors"] = field_errors
@@ -402,9 +381,6 @@ async def _raise_flow_api_error(
         # codes — symmetric with the unstructured-error branch below.
         # `field_errors` tells "what failed", `data_schema` tells "what's
         # accepted"; together they're enough for self-correction.
-        schema = await _fetch_data_schema_for_error_context(
-            client, helper_type, menu_choice
-        )
         if schema is not None:
             context["data_schema"] = schema
     else:
@@ -412,9 +388,6 @@ async def _raise_flow_api_error(
         message = (
             f"Home Assistant rejected the {helper_type or 'flow'} request "
             f"({status_code}): {parsed['message']}"
-        )
-        schema = await _fetch_data_schema_for_error_context(
-            client, helper_type, menu_choice
         )
         if schema is not None:
             context["data_schema"] = schema

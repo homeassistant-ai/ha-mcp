@@ -20,8 +20,7 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
-    fetch_helper_data_schema,
-    fetch_helper_menu_options,
+    fetch_helper_flow_info,
     get_user_step_field_names,
     update_flow_helper,
 )
@@ -540,7 +539,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``_fetch_data_schema_for_error_context`` in ``tools_config_entry_flow``).
+    ``fetch_helper_flow_info`` in ``tools_config_entry_flow``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -567,7 +566,7 @@ def _simple_helper_error_context(
 
 
 # Flow helper types whose top-level config-flow step is a MENU rather than a
-# FORM — for these, ``fetch_helper_data_schema`` cannot return a ``data_schema``
+# FORM — for these, ``fetch_helper_flow_info`` cannot return a ``data_schema``
 # without a menu choice (``next_step_id`` / ``group_type`` / ``menu_option``).
 # The pre-flow gates in ``_handle_flow_helper`` use this set to surface a
 # ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
@@ -631,7 +630,7 @@ async def _flow_helper_error_context(
     """
     context: dict[str, Any] = {"helper_type": helper_type}
     try:
-        schema = await fetch_helper_data_schema(
+        info = await fetch_helper_flow_info(
             client, helper_type, menu_choice=menu_choice
         )
     except Exception as e:
@@ -640,20 +639,19 @@ async def _flow_helper_error_context(
         # disappear silently — this PR raises the call rate by 5 sites
         # and the swallow needs an audit-trail entry.
         logger.debug(
-            "_flow_helper_error_context: schema fetch failed for "
+            "_flow_helper_error_context: flow-info fetch failed for "
             "helper_type=%r menu_choice=%r: %s",
             helper_type,
             menu_choice,
             e,
         )
-        schema = None
-    if schema is not None:
-        context["data_schema"] = schema
+        info = {}
+    if "schema" in info:
+        context["data_schema"] = info["schema"]
     elif helper_type in _MENU_ROOTED_FLOW_HELPER_TYPES and not menu_choice:
         context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
-        menu_options = await fetch_helper_menu_options(client, helper_type)
-        if menu_options:
-            context["menu_options"] = menu_options
+        if "menu_options" in info:
+            context["menu_options"] = info["menu_options"]
     context.update(extra)
     return context
 
