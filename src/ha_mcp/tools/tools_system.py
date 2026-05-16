@@ -491,6 +491,17 @@ class SystemTools:
                     dismissed_count = len(all_issues) - len(visible_issues)
                     if dismissed_count:
                         repairs["dismissed_count"] = dismissed_count
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message")
+                    if isinstance(err, dict)
+                    else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"

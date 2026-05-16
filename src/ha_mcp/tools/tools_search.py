@@ -970,10 +970,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except Exception as e:
                 logger.warning(f"Failed to fetch notifications for overview: {e}")
 
-        # Include active repair issues. By default we filter out user-dismissed
-        # ("ignored") repairs to match the HA Repairs UI — surfacing them as
-        # actionable would send agents chasing problems the user already
-        # resolved. Set `include_dismissed_repairs=True` to get all repairs.
+        # Active repairs only by default — matches the HA Repairs UI so agents
+        # don't chase problems the user already dismissed.
         result["repair_count"] = 0
         try:
             repairs_result = await client.send_websocket_message(
@@ -994,6 +992,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result["repairs"] = [
                         project_repair_fields(r) for r in visible_issues
                     ]
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message")
+                    if isinstance(err, dict)
+                    else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
             logger.warning("Failed to fetch repairs for overview: %s", e)
             result["repairs_error"] = f"Could not fetch repairs: {e}"

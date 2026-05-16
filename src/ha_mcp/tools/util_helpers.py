@@ -315,10 +315,9 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     return sr if isinstance(sr, dict) else result
 
 
-# Fields surfaced from each repair issue. Includes the dismissal-state fields
-# (`ignored`, `dismissed_version`) so callers can distinguish active vs.
-# user-dismissed repairs even when both are returned. `is_fixable` /
-# `breaks_in_ha_version` / `created` / `issue_domain` help agents triage.
+# Fields surfaced from each repair issue. Includes `ignored` / `dismissed_version`
+# so callers can distinguish active vs. user-dismissed repairs when both are
+# returned (e.g., `include_dismissed_repairs=True`).
 _REPAIR_PROJECTION_FIELDS = (
     "issue_id",
     "domain",
@@ -351,9 +350,8 @@ def filter_active_repairs(
 def project_repair_fields(issue: dict[str, Any]) -> dict[str, Any]:
     """Project a repair issue dict to the public-facing field subset.
 
-    Translation placeholders and `learn_more_url` are dropped to keep
-    overview payloads compact; agents can fetch them via the HA Repairs UI
-    or a direct `repairs/list_issues` call if needed.
+    Drops verbose fields (`translation_placeholders`, `learn_more_url`) to
+    keep overview payloads compact.
     """
     return {k: issue[k] for k in _REPAIR_PROJECTION_FIELDS if k in issue}
 

@@ -196,3 +196,76 @@ class TestHaGetOverviewRepairs:
         assert result["repair_count"] == 0
         assert "repairs" not in result
         assert result["dismissed_repair_count"] == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "value,expected_count",
+        [("true", 2), ("True", 2), ("1", 2), ("false", 1), ("0", 1)],
+    )
+    async def test_include_dismissed_accepts_string_inputs(
+        self, mock_mcp, mock_smart_tools, value, expected_count
+    ):
+        """LLM clients send booleans as strings — coercion must apply."""
+        issues = [_active_issue("active"), _ignored_issue("dismissed")]
+        client = self._make_client(issues)
+        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+
+        result = await tool(
+            detail_level="minimal", include_dismissed_repairs=value
+        )
+
+        assert result["repair_count"] == expected_count
+
+    @pytest.mark.asyncio
+    async def test_repairs_ws_failure_does_not_break_overview(
+        self, mock_mcp, mock_smart_tools
+    ):
+        """A websocket exception while fetching repairs leaves the overview
+        functional with a `repairs_error` message and repair_count=0.
+        """
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})
+
+        async def fake_ws(msg):
+            if msg.get("type") == "repairs/list_issues":
+                raise RuntimeError("ws disconnect")
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=fake_ws)
+        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+
+        result = await tool(detail_level="minimal")
+
+        assert result["repair_count"] == 0
+        assert "repairs" not in result
+        assert "repairs_error" in result
+        assert "ws disconnect" in result["repairs_error"]
+
+    @pytest.mark.asyncio
+    async def test_repairs_ws_success_false_surfaces_error(
+        self, mock_mcp, mock_smart_tools
+    ):
+        """When HA responds `success: False`, surface the error message
+        instead of silently returning repair_count=0.
+        """
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})
+
+        async def fake_ws(msg):
+            if msg.get("type") == "repairs/list_issues":
+                return {
+                    "success": False,
+                    "error": {"code": "unknown_error", "message": "boom"},
+                }
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=fake_ws)
+        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+
+        result = await tool(detail_level="minimal")
+
+        assert result["repair_count"] == 0
+        assert "repairs" not in result
+        assert "boom" in result["repairs_error"]
