@@ -61,23 +61,69 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _log_readiness_timing(gate: str, elapsed_s: int, **extras: Any) -> None:
-    """Emit a fixture-side readiness-gate timing line that survives pytest-xdist capture.
+# Module-level collection of readiness-gate timings, per process. Workers
+# write to ``_READINESS_TIMINGS``; pytest_sessionfinish hands their lists
+# to the master via xdist's ``workeroutput`` channel, and the master
+# aggregates into ``_ALL_READINESS_TIMINGS`` in pytest_testnodedown. The
+# pytest_terminal_summary hook then renders the aggregate to the
+# master's terminalreporter, which writes outside the pytest-xdist
+# capture buffer (refs #366).
+_READINESS_TIMINGS: list[dict[str, Any]] = []
+_ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 
-    The default ``logger.info`` path is captured by pytest-xdist on passing
-    runs, hiding fixture-side timing data even with ``log_cli=true``.
-    Writing directly to ``sys.stderr`` with an explicit flush bypasses the
-    per-worker capture buffer so the elapsed times surface in CI job logs,
-    enabling data-driven tightening of the 30s ``STABILIZATION_TIMEOUT`` /
-    ``ENTITY_STABILIZATION_TIMEOUT`` / ``SUN_WAIT`` budgets (refs #366,
-    follow-up to #1273 which lowered the only previously-measured gate
-    ``INPUT_BOOLEAN_WAIT`` from 30s to 10s based on a 1s observed-resolve).
+
+def _log_readiness_timing(gate: str, elapsed_s: int, **extras: Any) -> None:
+    """Record a fixture-side readiness-gate timing data point.
+
+    The data points are routed to the master process and rendered at
+    session end by ``pytest_terminal_summary``. Direct ``sys.stderr``
+    writes don't survive pytest-xdist's per-worker capture buffer, so
+    going through pytest's own reporting plumbing is the reliable path
+    (follow-up to #1273 which lowered the only previously-measured gate
+    ``INPUT_BOOLEAN_WAIT`` from 30s to 10s based on a 1s observed-resolve;
+    the remaining 30s ``STABILIZATION_TIMEOUT`` /
+    ``ENTITY_STABILIZATION_TIMEOUT`` / ``SUN_WAIT`` budgets need
+    empirical timings to scope a follow-up tightening PR).
     """
-    parts = [f"gate={gate}", f"elapsed_s={elapsed_s}"]
-    for key, value in extras.items():
-        parts.append(f"{key}={value}")
-    sys.stderr.write("[READINESS_GATE_TIMING] " + " ".join(parts) + "\n")
-    sys.stderr.flush()
+    _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """xdist worker hook: hand collected timings up to the master.
+
+    ``config.workeroutput`` only exists on workers; on the master (or
+    when running without xdist) the attribute is missing, and the local
+    list is read directly by ``pytest_terminal_summary`` instead.
+    """
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None and _READINESS_TIMINGS:
+        workeroutput["readiness_timings"] = list(_READINESS_TIMINGS)
+
+
+def pytest_testnodedown(node, error):
+    """xdist master hook: collect a finished worker's timings.
+
+    Called once per worker as it shuts down. ``error`` is non-None when
+    the worker crashed — we still try to drain whatever it managed to
+    record.
+    """
+    timings = getattr(node, "workeroutput", {}).get("readiness_timings", [])
+    _ALL_READINESS_TIMINGS.extend(timings)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Master-side hook: render collected timings as a terminal section.
+
+    Falls back to the local list when running without xdist (no
+    ``pytest_testnodedown`` fires in that mode, so ``_ALL_*`` stays empty).
+    """
+    timings = _ALL_READINESS_TIMINGS or _READINESS_TIMINGS
+    if not timings:
+        return
+    terminalreporter.section("Readiness gate timings")
+    for point in timings:
+        rendered = " ".join(f"{key}={value}" for key, value in point.items())
+        terminalreporter.write_line(f"[READINESS_GATE_TIMING] {rendered}")
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
