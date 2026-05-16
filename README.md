@@ -234,6 +234,43 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ---
 
+## 🔍 Tool Discovery for AI Agents
+
+By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus,) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+
+For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT OpenAI-compatible local models, smaller open-weights models — listing 86 tools eats ~46K tokens of idle context. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
+
+### Enable search-based discovery
+
+Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search_entities, ha_get_overview, ha_restart, etc.). All tools remain callable directly by name once discovered:
+
+| Tool | Purpose |
+|------|---------|
+| `ha_search_tools` | BM25 keyword search across all tools. Returns name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one. |
+| `ha_call_read_tool` | Execute a `readOnlyHint` tool by name. Safe — clients can auto-approve. |
+| `ha_call_write_tool` | Execute a write tool that creates or updates data. |
+| `ha_call_delete_tool` | Execute a tool that removes / deletes data. |
+
+The proxy split lets MCP clients apply different permission policies per category (e.g. auto-approve reads, prompt for writes, confirm deletes) without parsing tool docstrings.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (~46K → ~5K idle tokens). |
+| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
+| `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
+
+### When to enable
+
+- **Claude Haiku, OpenAI-compatible local models, Gemini, ChatGPT or any model without native deferred tool support** — large idle-context savings.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
+- **Cost-sensitive deployments** — fewer idle tokens per turn.
+
+Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.
+
+For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
+
+---
+
 ## 🧪 Dev Channel
 
 Want early access to new features and fixes? Dev releases (`.devN`) are published on every push to master.
