@@ -22,7 +22,9 @@ from .util_helpers import (
     build_pagination_metadata,
     coerce_bool_param,
     coerce_int_param,
+    filter_active_repairs,
     parse_string_list_param,
+    project_repair_fields,
     public_fields,
 )
 
@@ -852,6 +854,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include active persistent notifications (default: True). Set False to skip.",
             ),
         ] = True,
+        include_dismissed_repairs: Annotated[
+            bool | str | None,
+            Field(
+                default=False,
+                description=(
+                    "Include user-dismissed/ignored repairs (default: False). "
+                    "Matches the HA Repairs UI which hides dismissed items by default."
+                ),
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
@@ -872,6 +884,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
         include_notifications_bool = coerce_bool_param(
             include_notifications, "include_notifications", default=True
+        )
+        include_dismissed_repairs_bool = bool(
+            coerce_bool_param(
+                include_dismissed_repairs,
+                "include_dismissed_repairs",
+                default=False,
+            )
         )
 
         # Parse domains filter
@@ -951,25 +970,39 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except Exception as e:
                 logger.warning(f"Failed to fetch notifications for overview: {e}")
 
-        # Include active repair issues
+        # Active repairs only by default — matches the HA Repairs UI so agents
+        # don't chase problems the user already dismissed.
         result["repair_count"] = 0
         try:
             repairs_result = await client.send_websocket_message(
                 {"type": "repairs/list_issues"}
             )
             if repairs_result.get("success"):
-                issues = repairs_result.get("result", {}).get("issues", [])
-                result["repair_count"] = len(issues)
-                if issues:
+                all_issues = repairs_result.get("result", {}).get("issues", [])
+                visible_issues = filter_active_repairs(
+                    all_issues,
+                    include_dismissed=include_dismissed_repairs_bool,
+                )
+                result["repair_count"] = len(visible_issues)
+                if not include_dismissed_repairs_bool:
+                    dismissed_count = len(all_issues) - len(visible_issues)
+                    if dismissed_count:
+                        result["dismissed_repair_count"] = dismissed_count
+                if visible_issues:
                     result["repairs"] = [
-                        {
-                            "issue_id": r.get("issue_id"),
-                            "domain": r.get("domain"),
-                            "severity": r.get("severity"),
-                            "translation_key": r.get("translation_key"),
-                        }
-                        for r in issues
+                        project_repair_fields(r) for r in visible_issues
                     ]
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message")
+                    if isinstance(err, dict)
+                    else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
             logger.warning("Failed to fetch repairs for overview: %s", e)
             result["repairs_error"] = f"Could not fetch repairs: {e}"

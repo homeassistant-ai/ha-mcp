@@ -21,7 +21,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param
+from .util_helpers import coerce_bool_param, filter_active_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +339,7 @@ class SystemTools:
     async def ha_get_system_health(
         self,
         include: str | None = None,
+        include_dismissed_repairs: bool | str | None = False,
     ) -> dict[str, Any]:
         """
         Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
@@ -348,13 +349,21 @@ class SystemTools:
 
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.
-          - "repairs": Repair items from Settings > System > Repairs
+          - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
           - Example: include="repairs,zha_network,zwave_network"
+        - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
         """
         includes = self._parse_includes(include)
+        include_dismissed_repairs_bool = bool(
+            coerce_bool_param(
+                include_dismissed_repairs,
+                "include_dismissed_repairs",
+                default=False,
+            )
+        )
 
         ws_client = None
 
@@ -369,7 +378,10 @@ class SystemTools:
 
             # Fetch optional sections
             if "repairs" in includes:
-                result["repairs"] = await self._fetch_repairs(ws_client)
+                result["repairs"] = await self._fetch_repairs(
+                    ws_client,
+                    include_dismissed=include_dismissed_repairs_bool,
+                )
 
             zha_full = "zha_network_full" in includes
             zha_summary = "zha_network" in includes
@@ -454,17 +466,42 @@ class SystemTools:
 
 
     @staticmethod
-    async def _fetch_repairs(ws_client: Any) -> dict[str, Any]:
-        """Fetch repair issues from Home Assistant."""
+    async def _fetch_repairs(
+        ws_client: Any, *, include_dismissed: bool = False
+    ) -> dict[str, Any]:
+        """Fetch repair issues from Home Assistant.
+
+        Filters out user-dismissed ("ignored") repairs by default to match the
+        HA Repairs UI. Pass ``include_dismissed=True`` to return all issues
+        and report the dismissed count alongside the active count.
+        """
         repairs: dict[str, Any] = {"issues": [], "count": 0}
         try:
             repairs_result = await ws_client.send_command("repairs/list_issues")
             if repairs_result.get("success"):
-                repairs_list = repairs_result.get("result", {}).get("issues", [])
+                all_issues = repairs_result.get("result", {}).get("issues", [])
+                visible_issues = filter_active_repairs(
+                    all_issues, include_dismissed=include_dismissed
+                )
                 repairs = {
-                    "issues": repairs_list,
-                    "count": len(repairs_list),
+                    "issues": visible_issues,
+                    "count": len(visible_issues),
                 }
+                if not include_dismissed:
+                    dismissed_count = len(all_issues) - len(visible_issues)
+                    if dismissed_count:
+                        repairs["dismissed_count"] = dismissed_count
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message")
+                    if isinstance(err, dict)
+                    else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"

@@ -7,10 +7,12 @@ import pytest
 from ha_mcp.tools.util_helpers import (
     build_pagination_metadata,
     coerce_int_param,
+    filter_active_repairs,
     get_logger_levels,
     normalize_log_level,
     parse_json_param,
     parse_string_list_param,
+    project_repair_fields,
 )
 
 
@@ -392,3 +394,60 @@ class TestGetLoggerLevels:
             return_value={"success": True, "result": {"unexpected": "shape"}}
         )
         assert await get_logger_levels(client) == {}
+
+
+class TestFilterActiveRepairs:
+    """Default-filters user-dismissed repairs; opt-in returns the full set."""
+
+    def test_filters_ignored_by_default(self):
+        issues = [
+            {"issue_id": "a", "ignored": False},
+            {"issue_id": "b", "ignored": True},
+            {"issue_id": "c"},  # missing key — treated as not-ignored
+        ]
+        assert [r["issue_id"] for r in filter_active_repairs(issues)] == ["a", "c"]
+
+    def test_include_dismissed_returns_all(self):
+        issues = [
+            {"issue_id": "a", "ignored": False},
+            {"issue_id": "b", "ignored": True},
+        ]
+        out = filter_active_repairs(issues, include_dismissed=True)
+        assert [r["issue_id"] for r in out] == ["a", "b"]
+
+    def test_empty_input(self):
+        assert filter_active_repairs([]) == []
+        assert filter_active_repairs([], include_dismissed=True) == []
+
+
+class TestProjectRepairFields:
+    """Projection keeps dismissal-state fields and drops verbose ones."""
+
+    def test_includes_dismissal_state_fields(self):
+        issue = {
+            "issue_id": "x",
+            "domain": "demo",
+            "severity": "warning",
+            "translation_key": "demo_issue",
+            "ignored": True,
+            "dismissed_version": "2026.4.0",
+            "is_fixable": False,
+            "breaks_in_ha_version": None,
+            "created": "2026-04-01T00:00:00+00:00",
+            "issue_domain": "automation",
+            "translation_placeholders": {"x": "y"},
+            "learn_more_url": "https://example",
+        }
+        out = project_repair_fields(issue)
+        assert out["ignored"] is True
+        assert out["dismissed_version"] == "2026.4.0"
+        assert out["is_fixable"] is False
+        assert out["issue_domain"] == "automation"
+        # Verbose fields dropped to keep overview payloads compact
+        assert "translation_placeholders" not in out
+        assert "learn_more_url" not in out
+
+    def test_missing_fields_omitted_not_none(self):
+        """Only project fields that exist on the source dict."""
+        out = project_repair_fields({"issue_id": "x", "domain": "demo"})
+        assert out == {"issue_id": "x", "domain": "demo"}
