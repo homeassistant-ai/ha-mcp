@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
+def websocket_error_message(error: Any) -> str:
+    """Extract a readable message from a Home Assistant websocket error."""
+    if isinstance(error, dict):
+        return str(error.get("message", error))
+    return str(error)
+
+
 def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
     """Remove leading-underscore keys from ``obj`` and any nested dicts
     or lists in place.
