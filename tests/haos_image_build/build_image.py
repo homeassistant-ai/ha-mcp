@@ -598,14 +598,14 @@ def build(work_dir: Path, output: Path) -> None:
         qemu.terminate()
         qemu.wait(timeout=60)
         raise
-    # Use qcow2's internal compression instead of post-xz: qemu-img convert
-    # -c writes a compressed qcow2 that QEMU boots directly with no separate
-    # decompress step. Empirical: ~6-7 GB raw → ~1.5-2 GB compact, taking
-    # 30-60s vs >25 min for xz -9 -T0 on a 2-vCPU runner. actions/cache and
-    # actions/upload-artifact apply additional zstd on top.
-    LOG.info("Compacting qcow2 with internal compression")
+    # Skip post-build compression for now: empirically qemu-img convert -c
+    # only shrinks ~7 GB → ~7 GB (Docker layer contents don't compress well
+    # with zlib) but adds 9 min, and xz -9 -T0 adds >25 min. Just sparse-copy
+    # the raw qcow2. Image-size optimization (zstd? strip unused docker
+    # layers? slim addons?) is tracked separately as a follow-up.
+    LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(["qemu-img", "convert", "-O", "qcow2", "-c", str(qcow2), str(output)])
+    _run(["cp", "--reflink=auto", str(qcow2), str(output)])
     LOG.info("Wrote %s (%.1f MB)", output, output.stat().st_size / 1024 / 1024)
 
 
