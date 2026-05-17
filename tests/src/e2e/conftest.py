@@ -937,23 +937,28 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "backend": "haos",
                 }
             finally:
-                # Pull HA Core's runtime log out via the Supervisor /core/logs
-                # endpoint before QEMU shuts down. HA on HAOS logs to stdout
-                # (no file-based home-assistant.log) so this is the only way
-                # to see what HA itself said during the session. Saved where
-                # the workflow's haos-diagnostics upload step can find it.
-                try:
-                    log_dest = Path("/tmp/haos-diagnostics")
-                    log_dest.mkdir(parents=True, exist_ok=True)
-                    req = urllib.request.Request(
-                        f"{base_url}/api/hassio/core/logs",
-                        headers={"Authorization": f"Bearer {token}"},
-                    )
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        (log_dest / "ha-core-runtime.log").write_bytes(resp.read())
-                    logger.info("Dumped HA core runtime log via supervisor")
-                except Exception as exc:
-                    logger.warning("Failed to dump HA core logs: %s", exc)
+                # Pull HA Core's runtime log + Supervisor's own log via the
+                # Supervisor /core/logs and /supervisor/logs endpoints before
+                # QEMU shuts down. HA on HAOS logs to stdout (no file-based
+                # home-assistant.log) so this is the only way to see what HA
+                # itself said during the session. ?lines=20000 because the
+                # default returns just a tail and we lose the boot phase
+                # where recorder/integration init errors happen.
+                log_dest = Path("/tmp/haos-diagnostics")
+                log_dest.mkdir(parents=True, exist_ok=True)
+                for name, url in (
+                    ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
+                    ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
+                ):
+                    try:
+                        req = urllib.request.Request(
+                            url, headers={"Authorization": f"Bearer {token}"},
+                        )
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            (log_dest / name).write_bytes(resp.read())
+                        logger.info("Dumped %s via supervisor", name)
+                    except Exception as exc:
+                        logger.warning("Failed to dump %s: %s", name, exc)
         return
 
     # --- Testcontainer path ---
