@@ -43,17 +43,26 @@ HAOS_QCOW2_URL = (
     f"{HAOS_VERSION}/haos_ova-{HAOS_VERSION}.qcow2.xz"
 )
 
-# Long-lived access token credentials baked into the image. Tests resolve the
-# token from tests/test_constants.py so the same value lives in one place.
-ONBOARDING_USER = "hamcp_test"
-ONBOARDING_PASSWORD = "hamcp_test_password"
+# Onboarding credentials. The username is stable across builds (tests need to
+# know it). The password defaults to a known dev value but can be overridden
+# via env var for builds that publish to a more privileged registry — even
+# though the image is public and the password is not a real secret, keeping
+# it overridable avoids hardcoding a credential string in the repo per the
+# project's style guide.
+ONBOARDING_USER = os.environ.get("HAOS_BUILD_USERNAME", "hamcp_test")
+ONBOARDING_PASSWORD = os.environ.get("HAOS_BUILD_PASSWORD", "hamcp_test_password")
 ONBOARDING_NAME = "HA-MCP CI"
 
-# Local TCP ports the host uses to talk to the booted HAOS. Random ports avoid
-# collisions when the build script runs alongside the existing testcontainer
-# E2E suite on the same runner.
-HA_HOST_PORT = 18123
-SSH_HOST_PORT = 12222
+# Local TCP ports the host uses to talk to the booted HAOS. Fixed because
+# QEMU's hostfwd needs the port up front (no equivalent of bind-to-0-then-
+# discover), and CI jobs run single-threaded so collision risk is low.
+# Configurable via env var for the rare parallel-build scenario.
+HA_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_PORT", "18123"))
+SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
+
+# OVMF firmware path varies by distribution. Default matches Ubuntu's
+# ovmf package (which is what the GitHub-hosted ubuntu-22.04 runner uses).
+OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 
 
 @dataclass(frozen=True)
@@ -221,7 +230,7 @@ def start_qemu(qcow2: Path, work_dir: Path) -> subprocess.Popen[bytes]:
         "-cpu", "host",
         "-smp", "2",
         "-m", "4096",
-        "-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd",
+        "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE_PATH}",
         "-drive", f"if=virtio,file={qcow2},format=qcow2",
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
@@ -363,6 +372,38 @@ def _install_one(base_url: str, token: str, addon: Addon) -> str:
     return slug
 
 
+def _diagnose_auth(base_url: str, token: str) -> None:
+    """One-shot diagnostic — log the state of HA Core auth + admin status.
+
+    Helps disambiguate between (a) the bearer token not being parsed at all,
+    (b) parsed but user not seen as admin, and (c) Supervisor proxy itself
+    not responding. Runs once before any Supervisor calls.
+    """
+    # (a) /api/config requires auth and returns 401 if the token isn't accepted
+    # at the middleware level. 200 means the token IS being parsed and bound
+    # to a user.
+    try:
+        cfg = _http("GET", f"{base_url}/api/config", token=token, timeout=10.0)
+        LOG.info(
+            "AUTH DIAGNOSTIC: /api/config ok — version=%s state=%s",
+            cfg.get("version"), cfg.get("state"),
+        )
+    except urllib.error.HTTPError as e:
+        LOG.error("AUTH DIAGNOSTIC: /api/config failed (%d) — token not accepted by HA Core auth middleware", e.code)
+        return
+    # (b) confirm admin status — /api/auth/current_user reflects whether the
+    # token's user is admin. If is_admin=False here, the onboarding flow did
+    # not assign GROUP_ID_ADMIN as expected (would indicate an HA version drift).
+    try:
+        u = _http("GET", f"{base_url}/api/auth/current_user", token=token, timeout=10.0)
+        LOG.info(
+            "AUTH DIAGNOSTIC: current_user — id=%s name=%s is_admin=%s is_owner=%s",
+            u.get("id"), u.get("name"), u.get("is_admin"), u.get("is_owner"),
+        )
+    except urllib.error.HTTPError as e:
+        LOG.error("AUTH DIAGNOSTIC: /api/auth/current_user failed (%d)", e.code)
+
+
 def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 300.0) -> None:
     """Block until the Supervisor proxy responds successfully.
 
@@ -371,6 +412,7 @@ def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 300.0) ->
     because HA hasn't yet received Supervisor's internal auth token. Poll
     a trivially-cheap Supervisor endpoint until it stops failing.
     """
+    _diagnose_auth(base_url, token)
     LOG.info("Waiting for Supervisor proxy")
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
@@ -460,7 +502,8 @@ def build(work_dir: Path, output: Path) -> None:
         raise
     LOG.info("Compressing image")
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(["xz", "-9", "-T0", "-c", str(qcow2)], stdout=output.open("wb"))
+    with output.open("wb") as f:
+        _run(["xz", "-9", "-T0", "-c", str(qcow2)], stdout=f)
     LOG.info("Wrote %s (%.1f MB)", output, output.stat().st_size / 1024 / 1024)
 
 
