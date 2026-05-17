@@ -24,6 +24,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .tools_config_entry_flow import FLOW_HELPER_TYPES
 from .tools_config_helpers import (
@@ -624,6 +625,15 @@ class IntegrationTools:
         Use ha_get_integration() to find entry IDs.
         """
         try:
+            # Empty/whitespace entry_id would surface as a misleading HA
+            # "config entry not found" from ``config_entries/disable``.
+            validate_identifier_not_empty(
+                entry_id,
+                "entry_id",
+                suggestions=[
+                    "Use ha_get_integration() to find valid config entry IDs",
+                ],
+            )
             enabled_bool = coerce_bool_param(enabled, "enabled")
 
             message = {
@@ -799,6 +809,25 @@ class IntegrationTools:
                     },
                 )
             )
+
+        # === Empty/whitespace target gate (uniform for all three paths) ===
+        # Empty/whitespace ``target`` would reach the destructive backend call
+        # on every path: Path 1 (simple-helper websocket delete), Path 2
+        # (flow-helper entity-resolution → entry_id delete), Path 3
+        # (_delete_direct_entry → client.delete_config_entry("")). Each path
+        # surfaces a different misleading error from HA. Reject up-front so
+        # the caller learns the identifier was unusable before any backend
+        # call.
+        validate_identifier_not_empty(
+            target,
+            "target",
+            suggestions=[
+                "Use ha_get_integration() to find valid entry_ids",
+                "For simple helpers, use ha_search_entities() to find the helper_id",
+                "For flow helpers, use ha_search_entities() to find an entity_id",
+            ],
+            context={"helper_type": helper_type},
+        )
 
         # default=True guarantees a non-None return; cast for mypy.
         wait_bool = cast(bool, coerce_bool_param(wait, "wait", default=True))

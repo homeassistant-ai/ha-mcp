@@ -356,9 +356,11 @@ class TestSetHelperWhitespaceUpgrade:
         # Without the up-front guard, ``bool("")`` would be False so the
         # discriminator below silently routes to ``create`` instead of
         # ``update`` — destructive intent-loss class.
-        # Parametrized so both the simple-helper guard (``input_boolean``)
-        # and the flow-helper twin guard inside ``_handle_flow_helper``
-        # (``utility_meter``) are exercised.
+        # Parametrized across both helper-type families to lock that the
+        # dispatch-level guard at ``ha_config_set_helper`` fires uniformly
+        # regardless of which helper family the call would have routed to.
+        # The defence-in-depth guard inside ``_handle_flow_helper`` is
+        # exercised separately by ``TestFlowHelperDirectGuard``.
         set_helper = register_tools["ha_config_set_helper"]
         for bad in ("", "   "):
             mock_ws_client.send_websocket_message.reset_mock()
@@ -396,6 +398,26 @@ class TestSetHelperWhitespaceUpgrade:
                 helper_type="utility_meter",
                 action="create",
                 config={"name": "   "},
+            )
+        _assert_invalid_param(excinfo)
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_flow_explicit_update_rejects_empty_helper_id(
+        self, register_tools, mock_ws_client, bad
+    ):
+        # Explicit-action update on a FLOW helper with empty/whitespace
+        # helper_id. The L2378 ``helper_id is None`` guard does not catch
+        # this (value is a non-None empty string), and the simple-path
+        # whitespace twin inside ``elif action == "update":`` fires AFTER
+        # the FLOW dispatch returns. Without the new guard between L2401
+        # and the implicit-action branch, the value would reach
+        # ``update_flow_helper`` and HA returns a misleading "entry not
+        # found".
+        set_helper = register_tools["ha_config_set_helper"]
+        with pytest.raises(ToolError) as excinfo:
+            await set_helper(
+                helper_type="utility_meter", action="update", helper_id=bad
             )
         _assert_invalid_param(excinfo)
         mock_ws_client.send_websocket_message.assert_not_called()
@@ -563,10 +585,31 @@ class TestGroupsIdentifierValidation:
         # Empty/whitespace object_id would propagate to the group.remove
         # service call and surface as a misleading HA service-call failure.
         # The pre-flight runs before the pre-existing "." format check so the
-        # error names the empty/whitespace problem first.
+        # error names the empty/whitespace problem first. The
+        # ``"parameter": "object_id"`` substring discriminates the new
+        # validator's structured error from the ``.`` format check's error
+        # (which uses ``context={"object_id": ...}`` without a ``parameter``
+        # key) — a regression swapping the two guards' order would lose the
+        # ``parameter`` field and break this assertion.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_remove_group(object_id=bad)
         _assert_invalid_param(excinfo)
+        assert '"parameter": "object_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.call_service.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_rejects_empty_object_id(self, tools, bad):
+        # ``_validate_group_params`` only catches ``"." in object_id`` and
+        # mutex/empty-list issues; empty/whitespace ``object_id`` would slip
+        # through to ``call_service("group", "set", ...)`` and surface as a
+        # misleading HA service-call failure. Symmetric with the
+        # ``ha_config_remove_group`` pre-flight added in this PR.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_set_group(
+                object_id=bad, entities=["light.example"]
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "object_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.call_service.assert_not_called()
 
 
@@ -605,20 +648,25 @@ class TestFlowHelperDirectGuard:
         mock_ws_client.send_websocket_message.assert_not_called()
 
     async def test_handle_flow_helper_with_none_helper_id_does_not_raise_guard(
-        self, mock_ws_client
+        self, mock_ws_client, monkeypatch
     ):
         # Control: ``helper_id=None`` is the documented "create-new" sentinel
-        # and must NOT trip the guard. The call may still raise downstream
-        # (no config / no entity_id) but it must not be VALIDATION_INVALID_
-        # PARAMETER from the implicit-action guard naming ``helper_id``.
-        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
+        # and must NOT trip the implicit-action guard. The previous
+        # ``"helper_id" not in msg`` assertion would silently pass on any
+        # guard-message rewording; tighten to positive proof — mock the
+        # validator and assert it was not invoked on the None path, which
+        # is independent of any downstream behaviour.
+        from ha_mcp.tools import tools_config_helpers
 
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "some downstream error"},
-        }
+        validator_mock = MagicMock()
+        monkeypatch.setattr(
+            tools_config_helpers,
+            "validate_identifier_not_empty",
+            validator_mock,
+        )
+
         try:
-            await _handle_flow_helper(
+            await tools_config_helpers._handle_flow_helper(
                 client=mock_ws_client,
                 helper_type="utility_meter",
                 name="My Meter",
@@ -630,12 +678,224 @@ class TestFlowHelperDirectGuard:
                 wait=False,
                 action=None,
             )
-        except ToolError as exc:
-            msg = str(exc)
-            assert "helper_id" not in msg, (
-                "None helper_id must not be rejected by the implicit-action guard"
-            )
         except Exception:
-            # Any non-ToolError downstream failure is fine — we only need to
-            # confirm the implicit-action guard does not trip on None.
+            # Downstream may raise (mocked client returns nothing useful);
+            # the guard-not-invoked assertion below is independent of that.
             pass
+        validator_mock.assert_not_called()
+
+
+# --- tools_integrations.py (Round-4 sibling sweep) -----------------------
+#
+# Two destructive-class siblings the round-3 audit missed:
+#   1. ``ha_delete_helpers_integrations`` — empty/whitespace ``target``
+#      would reach the destructive backend call on every routing path
+#      (simple-helper WS delete, flow-helper entry-resolution, direct
+#      config-entry delete). Single up-front guard closes all three.
+#   2. ``ha_set_integration_enabled`` — empty/whitespace ``entry_id`` would
+#      reach the ``config_entries/disable`` WS message and surface as a
+#      misleading HA "config entry not found".
+
+
+class TestIntegrationsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_integrations import IntegrationTools
+
+        return IntegrationTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    @pytest.mark.parametrize(
+        "helper_type",
+        [None, "input_boolean", "utility_meter"],
+        ids=["direct_entry", "simple_helper", "flow_helper"],
+    )
+    async def test_delete_helpers_integrations_rejects_empty_target(
+        self, tools, bad, helper_type
+    ):
+        # Parametrized across all three routing paths (None→direct entry,
+        # SIMPLE→ws delete, FLOW→entry-resolution) so the single up-front
+        # guard is locked against a regression that moves it inside any
+        # one path.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_delete_helpers_integrations(
+                target=bad, helper_type=helper_type, confirm=True
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "target"' in str(excinfo.value), str(excinfo.value)
+        # No backend call should fire — guard precedes every dispatch arm.
+        tools._client.send_websocket_message.assert_not_called()
+        tools._client.delete_config_entry.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_integration_enabled_rejects_empty_entry_id(
+        self, tools, bad
+    ):
+        # ``entry_id`` is passed straight into ``config_entries/disable``;
+        # without the guard, ``entry_id=""`` would surface as a misleading
+        # HA "config entry not found".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_integration_enabled(entry_id=bad, enabled=False)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "entry_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+
+# --- tools_calendar.py (Round-4 sibling sweep) ---------------------------
+
+
+class TestCalendarIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_calendar import CalendarTools
+
+        return CalendarTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_event_rejects_empty_uid(self, tools, bad):
+        # The entity_id format-check at the top of the body does not cover
+        # ``uid``; without the new guard, ``uid=""`` would flow through to
+        # ``calendar.delete_event`` and surface as a misleading HA
+        # "event not found".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_remove_calendar_event(
+                entity_id="calendar.family", uid=bad
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "uid"' in str(excinfo.value), str(excinfo.value)
+        tools._client.call_service.assert_not_called()
+
+
+# --- tools_todo.py (Round-4 sibling sweep) -------------------------------
+
+
+class TestTodoIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_todo import TodoTools
+
+        return TodoTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_item_rejects_empty_item(self, tools, bad):
+        # ``item`` is passed straight into ``todo.remove_item``; without the
+        # new guard, ``item=""`` would surface as a misleading HA
+        # "item not found".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_todo_item(
+                entity_id="todo.shopping_list", item=bad
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "item"' in str(excinfo.value), str(excinfo.value)
+        tools._client.call_service.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_item_rejects_empty_item_on_implicit_update(
+        self, tools, bad
+    ):
+        # ``item`` is the implicit create/update discriminator: ``None``
+        # routes to create, non-None to update. Without the new guard,
+        # ``item=""`` would route to update (``"" is None`` is False) and
+        # call ``todo.update_item`` with an empty item — destructive
+        # silent-routing class identical to the helper implicit-discriminator
+        # gate this PR closes. ``status="completed"`` is supplied so the
+        # update-mode "at least one update field" gate doesn't fire first.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_todo_item(
+                entity_id="todo.shopping_list",
+                item=bad,
+                status="completed",
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "item"' in str(excinfo.value), str(excinfo.value)
+        tools._client.call_service.assert_not_called()
+
+
+# --- tools_entities.py (Round-4 sibling sweep) ---------------------------
+#
+# ``ha_remove_entity`` is registered via the module-level
+# ``register_entity_tools`` function rather than a Tools class. The
+# ``_register_and_capture`` helper mirrors the pattern in
+# ``test_device_enrichment.py``.
+
+
+def _register_entity_tools_and_capture(mock_client):
+    from ha_mcp.tools.tools_entities import register_entity_tools
+
+    mock_mcp = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def fake_tool(**kwargs):
+        def decorator(fn):
+            captured[fn.__name__] = fn
+            return fn
+
+        return decorator
+
+    mock_mcp.tool = fake_tool
+    register_entity_tools(mock_mcp, mock_client)
+    return captured
+
+
+class TestEntitiesIdentifierValidation:
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_entity_rejects_empty_entity_id(
+        self, mock_ws_client, bad
+    ):
+        # ``entity_id`` is passed straight into the
+        # ``config/entity_registry/remove`` WS message; without the new
+        # guard, ``entity_id=""`` surfaces as a misleading HA
+        # "entity not found".
+        captured = _register_entity_tools_and_capture(mock_ws_client)
+        ha_remove_entity = captured["ha_remove_entity"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_remove_entity(entity_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+
+# --- tools_registry.py (Round-4 sibling sweep) ---------------------------
+
+
+def _register_registry_tools_and_capture(mock_client):
+    from ha_mcp.tools.tools_registry import register_registry_tools
+
+    mock_mcp = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def fake_tool(**kwargs):
+        def decorator(fn):
+            captured[fn.__name__] = fn
+            return fn
+
+        return decorator
+
+    mock_mcp.tool = fake_tool
+    register_registry_tools(mock_mcp, mock_client)
+    return captured
+
+
+class TestRegistryIdentifierValidation:
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_device_rejects_empty_device_id(
+        self, mock_ws_client, bad
+    ):
+        # Empty/whitespace ``device_id`` would slip past the local-filter
+        # check (``next((d for d in devices if d.get("id") == device_id)...)``)
+        # after wasting a ``config/device_registry/list`` round-trip, and
+        # surface as a generic "Device not found: " error. Guard fires
+        # before the list WS call.
+        captured = _register_registry_tools_and_capture(mock_ws_client)
+        ha_remove_device = captured["ha_remove_device"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_remove_device(device_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "device_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()

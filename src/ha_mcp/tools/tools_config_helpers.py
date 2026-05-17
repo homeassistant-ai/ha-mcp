@@ -2399,6 +2399,23 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ],
                         )
                     )
+                # Explicit-action update path: helper_id was confirmed non-None
+                # above; close the whitespace gap before the FLOW dispatch at
+                # ``L2488`` returns. The simple-path twin inside the ``elif
+                # action == "update":`` branch fires too late for flow helpers
+                # because the FLOW dispatch returns first; without this guard,
+                # ``helper_id="   "`` would reach ``update_flow_helper`` and
+                # surface as a misleading "entry not found" from HA.
+                if action == "update" and helper_id is not None:
+                    validate_identifier_not_empty(
+                        helper_id,
+                        "helper_id",
+                        suggestions=[
+                            "Pass a valid helper_id to identify the helper to update",
+                            "Or omit helper_id and pass action='create' to create a new helper",
+                        ],
+                        context={"helper_type": helper_type, "action": action},
+                    )
             else:
                 # Implicit discriminator (back-compat). Pass action='create'
                 # or action='update' explicitly to avoid the inference.
