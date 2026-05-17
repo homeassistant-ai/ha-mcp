@@ -309,11 +309,11 @@ class GroupTools:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
                         result.setdefault("warnings", []).append(
-                            f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
+                            f"Group {'created' if is_create else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
                 except Exception as e:
                     result.setdefault("warnings", []).append(
-                        f"Group created but verification failed: {e}"
+                        f"Group {'created' if is_create else 'updated'} but verification failed: {e}"
                     )
 
             return {
