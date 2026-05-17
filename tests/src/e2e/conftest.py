@@ -939,13 +939,22 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # served by the frontend before all integrations finish loading).
             # Wait for sun.sun to (a) exist, then (b) leave the "unknown" state
             # so template tests don't race.
+            # ``import requests`` happens at function scope further down
+            # (the testcontainer branch), which makes ``requests`` a local
+            # for this entire function — so we cannot read it here without
+            # binding it locally first. Aliased name avoids the
+            # UnboundLocalError that took down all 856 tests in the prior
+            # CI run.
+            import requests as _haos_requests
             haos_headers = {"Authorization": f"Bearer {token}"}
             sun_url = f"{base_url}/api/states/sun.sun"
             SUN_WAIT = 60
             sun_start = time.monotonic()
             while time.monotonic() - sun_start < SUN_WAIT:
                 try:
-                    sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
+                    sun_resp = _haos_requests.get(
+                        sun_url, timeout=5, headers=haos_headers
+                    )
                     if sun_resp.status_code == 200:
                         sun_state = sun_resp.json().get("state", "unknown")
                         if sun_state != "unknown":
@@ -955,7 +964,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                             )
                             break
                 except (
-                    requests.exceptions.RequestException,
+                    _haos_requests.exceptions.RequestException,
                     json.JSONDecodeError,
                 ):
                     pass
