@@ -73,45 +73,44 @@ class Addon:
     repository (Mosquitto, etc.). ``name`` is the addon's display name as it
     appears in the store and is used to discover the actual Supervisor slug
     after the repo is registered, because slug prefixes are SHA-derived from
-    the repo URL and shouldn't be hardcoded. ``options`` is merged via
-    ``POST /addons/<slug>/options`` after install.
+    the repo URL and shouldn't be hardcoded.
+
+    ``start``: whether to attempt starting the addon after install. Defaults
+    to True for addons that boot cleanly with no config. Set False for ones
+    whose schemas require non-trivial configuration (MQTT certs, Z2M serial
+    coordinator, Frigate cameras) — they're still present in the image and
+    can be configured + started by the test runner at use time.
     """
 
     repo: str | None
     name: str
-    options: dict[str, Any]
+    start: bool = True
 
 
-# v1 addon set — see #1281 comment thread for rationale. Options are minimal
-# and chosen so each addon starts cleanly without external hardware:
-#   - Mosquitto: one local user for in-image MQTT traffic
-#   - Node-RED: stock flows from the Home Assistant Community Add-ons repo
-#   - ESPHome: dashboard-only, official addon (from esphome/home-assistant-addon)
-#   - Z2M: serial port stub (no coordinator stick attached)
-#   - Frigate: standard variant, no cameras configured yet
+# v1 addon set — see #1281 comment thread for rationale. Configuring each
+# addon with real options (certs, serial coordinators, camera streams,
+# etc.) is deferred to follow-up commits; v1 just bakes them into the image
+# so tests can install + start with custom configs at runtime.
 #
-# Mock RTSP/MQTT feeders and companion-integration setup come in a follow-up
-# commit; v1 only proves the addon lifecycle path.
+# start=False addons fail to start without config and would block the build:
+#   - Mosquitto: schema requires require_certificate + cert paths
+#   - Z2M: needs a real or mocked serial coordinator
+#   - Frigate: needs at least one camera defined
 ADDONS: tuple[Addon, ...] = (
-    Addon(repo=None, name="Mosquitto broker",
-          options={"logins": [{"username": "hamcp", "password": "hamcp"}]}),
-    Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED",
-          options={}),
-    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome",
-          options={}),
-    Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt", name="Zigbee2MQTT",
-          options={"serial": {"port": "/dev/null"}}),
-    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons", name="Frigate",
-          options={}),
+    Addon(repo=None, name="Mosquitto broker", start=False),
+    Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
+    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome"),
+    Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt",
+          name="Zigbee2MQTT", start=False),
+    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons",
+          name="Frigate", start=False),
 )
 
-# Get HACS addon — its purpose is to bootstrap HACS into /config/custom_components/.
-# Installing + starting this addon is the supported HAOS path; the older
-# `wget | bash` flow only worked with the SSH addon and is no longer recommended.
+# Get HACS addon — bootstraps HACS into /config/custom_components/.
+# Has to start so it can do its one-shot install before we restart HA Core.
 GET_HACS_ADDON = Addon(
     repo="https://github.com/hacs/get",
     name="Get HACS",
-    options={},
 )
 
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
@@ -417,17 +416,21 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
 
 
 def _install_one(ws: HAWebSocket, addon: Addon) -> str:
-    """Install + (optionally configure) + start a single addon. Returns slug.
+    """Install (and optionally start) a single addon. Returns slug.
 
     Verified Supervisor endpoints (from home-assistant/supervisor api/__init__.py):
       - POST /store/repositories                      add a repo
       - POST /store/reload                            refresh
       - GET  /store                                   list store contents
       - POST /store/addons/{slug}/install             install an addon
-      - POST /addons/{slug}/options                   set options
       - POST /addons/{slug}/start                     start it
-    Note the asymmetry: install lives under /store/addons/, but options and
-    start are on the installed-addon path /addons/.
+    Note the asymmetry: install lives under /store/addons/, start is on
+    the installed-addon path /addons/.
+
+    Options are deliberately not set here in v1 (#1281 comment thread). Many
+    addon schemas have required fields (Mosquitto's require_certificate,
+    Z2M's serial config, Frigate's cameras) that need realistic values; the
+    test runner configures them per-test with mock streams/devices.
     """
     if addon.repo:
         _add_repository(ws, addon.repo)
@@ -435,9 +438,8 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
-    if addon.options:
-        ws.supervisor_api(f"/addons/{slug}/options", method="post", data={"options": addon.options}, timeout=60.0)
-    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
+    if addon.start:
+        ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     return slug
 
 
