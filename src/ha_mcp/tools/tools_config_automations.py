@@ -667,6 +667,7 @@ class AutomationConfigTools:
                     "success": True,
                     "action": "python_transform",
                     "identifier": identifier,
+                    "automation_id": entity_id or identifier,
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
@@ -1040,7 +1041,12 @@ class AutomationConfigTools:
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
 
-            return {"success": True, "action": "delete", **result}
+            return {
+                "success": True,
+                "action": "delete",
+                **result,
+                "automation_id": entity_id_for_wait or identifier,
+            }
         except ToolError:
             raise
         except Exception as e:
