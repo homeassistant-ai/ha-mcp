@@ -385,11 +385,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_entry.get("device_id") if not device_rename_result else None
             )
             if not device_id:
-                device_rename_result = {
-                    "warnings": [
-                        "Entity has no associated device — device rename skipped"
-                    ],
-                }
+                # Only fire the "no device" warning when the registry lookup
+                # succeeded — otherwise the L378 "lookup failed" warning
+                # already carries the more accurate signal, and a second
+                # "no associated device" claim would be unverified (we don't
+                # actually know what the registry says when the lookup failed).
+                if device_rename_result is None:
+                    device_rename_result = {
+                        "warnings": [
+                            "Entity has no associated device — device rename skipped"
+                        ],
+                    }
             else:
                 device_msg: dict[str, Any] = {
                     "type": "config/device_registry/update",
