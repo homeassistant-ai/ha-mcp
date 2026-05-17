@@ -2400,12 +2400,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     )
                 # Explicit-action update path: helper_id was confirmed non-None
-                # above; close the whitespace gap before the FLOW dispatch at
-                # ``L2488`` returns. The simple-path twin inside the ``elif
-                # action == "update":`` branch fires too late for flow helpers
-                # because the FLOW dispatch returns first; without this guard,
-                # ``helper_id="   "`` would reach ``update_flow_helper`` and
-                # surface as a misleading "entry not found" from HA.
+                # above; close the whitespace gap before the FLOW dispatch
+                # below (``if helper_type in FLOW_HELPER_TYPES: return await
+                # _handle_flow_helper(...)``). The simple-path whitespace twin
+                # inside the ``elif action == "update":`` branch fires after
+                # the FLOW dispatch returns and so is unreachable for flow
+                # helpers; without this guard, ``helper_id="   "`` would reach
+                # ``update_flow_helper`` and surface as a misleading "entry
+                # not found" from HA.
                 if action == "update" and helper_id is not None:
                     validate_identifier_not_empty(
                         helper_id,

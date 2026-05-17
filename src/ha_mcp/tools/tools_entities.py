@@ -795,6 +795,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+            # Per-element empty/whitespace check — the list-empty check above
+            # rejects ``[]`` but not ``[""]``; without this guard, an empty
+            # entity_id would propagate to the entity-registry update WS call
+            # and surface as a misleading HA "entity not found".
+            for eid in entity_ids:
+                validate_identifier_not_empty(eid, "entity_id")
+
             # Validate: bulk operations only support categories, labels, and expose_to
             single_entity_params = {
                 "area_id": area_id,

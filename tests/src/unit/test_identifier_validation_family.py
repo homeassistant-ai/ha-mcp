@@ -857,6 +857,47 @@ class TestEntitiesIdentifierValidation:
         )
         mock_ws_client.send_websocket_message.assert_not_called()
 
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_entity_rejects_empty_entity_id_str(
+        self, mock_ws_client, bad
+    ):
+        # ``ha_set_entity`` accepts ``entity_id: str | list[str]``. The
+        # existing list-empty check rejects ``[]`` but lets ``[""]``
+        # through; for the string input path, ``""`` was normalised to
+        # ``[""]`` and propagated to the entity-registry update WS call.
+        # The new per-element guard closes both paths.
+        captured = _register_entity_tools_and_capture(mock_ws_client)
+        ha_set_entity = captured["ha_set_entity"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_set_entity(entity_id=bad, name="New Name")
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_entity_rejects_empty_entity_id_in_list(
+        self, mock_ws_client, bad
+    ):
+        # List-input path: ``[""]`` and ``["sensor.real", ""]`` must both
+        # be rejected per-element, not just rejected when the list itself
+        # is empty.
+        captured = _register_entity_tools_and_capture(mock_ws_client)
+        ha_set_entity = captured["ha_set_entity"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_set_entity(
+                entity_id=["sensor.real", bad],
+                categories={"automation": "cat_id"},
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
 
 # --- tools_registry.py (Round-4 sibling sweep) ---------------------------
 
@@ -898,4 +939,65 @@ class TestRegistryIdentifierValidation:
         assert '"parameter": "device_id"' in str(excinfo.value), str(
             excinfo.value
         )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_update_device_rejects_empty_device_id(
+        self, mock_ws_client, bad
+    ):
+        # ``device_id`` is passed straight through ``ha_update_device`` to
+        # ``_update_device_internal`` which builds a
+        # ``config/device_registry/update`` WS message; without the new
+        # guard, ``device_id=""`` would surface as a misleading HA
+        # "device not found". Same destructive-WS-call class as
+        # ``ha_remove_device``.
+        captured = _register_registry_tools_and_capture(mock_ws_client)
+        ha_update_device = captured["ha_update_device"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_update_device(device_id=bad, name="New Name")
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "device_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+
+# --- tools_addons.py (Iter6 — ha_manage_addon slug) ----------------------
+
+
+def _register_addon_tools_and_capture(mock_client):
+    from ha_mcp.tools.tools_addons import register_addon_tools
+
+    mock_mcp = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def fake_tool(**kwargs):
+        def decorator(fn):
+            captured[fn.__name__] = fn
+            return fn
+
+        return decorator
+
+    mock_mcp.tool = fake_tool
+    register_addon_tools(mock_mcp, mock_client)
+    return captured
+
+
+class TestAddonsIdentifierValidation:
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_manage_addon_rejects_empty_slug(self, mock_ws_client, bad):
+        # ``ha_manage_addon`` is multi-modal (proxy / config / websocket);
+        # ``slug`` is required across all modes and propagates to the
+        # Supervisor API on every dispatch arm. Without the guard,
+        # ``slug=""`` would surface as a misleading "addon not found" /
+        # 404 from the Supervisor; the up-front guard names the offending
+        # parameter before any backend call.
+        captured = _register_addon_tools_and_capture(mock_ws_client)
+        ha_manage_addon = captured["ha_manage_addon"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_manage_addon(slug=bad, path="/api/health")
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "slug"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()

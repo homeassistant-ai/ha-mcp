@@ -38,6 +38,7 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .util_helpers import ANSI_ESCAPE_RE
 
@@ -1956,6 +1957,18 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ha_manage_addon(slug="...", path="/api/state",
                             request_headers={"Accept": "text/plain"})
         """
+        # Empty/whitespace slug would propagate to every dispatch arm
+        # (Supervisor API, ingress proxy, websocket bridge) and surface as a
+        # misleading "addon not found" or 404 from the Supervisor. Reject
+        # up-front so the caller learns the slug was unusable before any
+        # backend call.
+        validate_identifier_not_empty(
+            slug,
+            "slug",
+            suggestions=[
+                "Use ha_get_addon() to discover installed add-on slugs",
+            ],
+        )
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
         if options:
