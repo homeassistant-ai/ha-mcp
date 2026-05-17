@@ -567,8 +567,7 @@ class TestAutomationsIdentifierValidation:
         )
         tools._client.send_websocket_message.assert_not_called()
         # Also no REST GET on the automation config.
-        if hasattr(tools._client, "get_automation_config"):
-            tools._client.get_automation_config.assert_not_called()
+        tools._client.get_automation_config.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_rejects_empty_identifier_on_update(self, tools, bad):
@@ -577,6 +576,7 @@ class TestAutomationsIdentifierValidation:
         # ``if not identifier`` python_transform-mode guard for the
         # config-update path. New guard rejects empty/whitespace whenever
         # identifier is non-None, regardless of mode.
+        tools._client.upsert_automation_config = AsyncMock()
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_set_automation(
                 config={"alias": "x", "trigger": [], "action": []},
@@ -587,8 +587,31 @@ class TestAutomationsIdentifierValidation:
             excinfo.value
         )
         # Guard fires before any upsert / WS round-trip.
-        if hasattr(tools._client, "upsert_automation_config"):
-            tools._client.upsert_automation_config.assert_not_called()
+        tools._client.upsert_automation_config.assert_not_called()
+
+    async def test_set_with_none_identifier_routes_to_create(self, tools):
+        # Control: ``identifier=None`` is the documented "create-new" sentinel
+        # and must NOT trip the conditional guard. Mirrors the labels (L158),
+        # categories (L202), and areas (L279) None-routing controls; without
+        # this, a regression tightening ``if identifier is not None:`` to
+        # ``if identifier is None or not identifier.strip():`` would silently
+        # break the documented create-mode and no test in the file would
+        # catch it.
+        tools._client.upsert_automation_config = AsyncMock(
+            return_value={"success": True, "entity_id": "automation.new_one"}
+        )
+        result = await tools.ha_config_set_automation(
+            config={"alias": "x", "trigger": [], "action": []},
+            wait=False,
+        )
+        assert result["success"] is True
+        # Positive proof: upsert was called with identifier=None
+        # (signature: upsert_automation_config(config_dict, identifier)).
+        tools._client.upsert_automation_config.assert_called_once()
+        call_args = tools._client.upsert_automation_config.call_args
+        assert call_args[0][1] is None, (
+            f"identifier should be None for create routing, got {call_args[0][1]!r}"
+        )
 
 
 class TestScriptsIdentifierValidation:
@@ -618,8 +641,7 @@ class TestScriptsIdentifierValidation:
         assert '"parameter": "script_id"' in str(excinfo.value), str(
             excinfo.value
         )
-        if hasattr(tools._client, "get_script_config"):
-            tools._client.get_script_config.assert_not_called()
+        tools._client.get_script_config.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_rejects_empty_script_id(self, tools, bad):
@@ -635,8 +657,7 @@ class TestScriptsIdentifierValidation:
         assert '"parameter": "script_id"' in str(excinfo.value), str(
             excinfo.value
         )
-        if hasattr(tools._client, "upsert_script_config"):
-            tools._client.upsert_script_config.assert_not_called()
+        tools._client.upsert_script_config.assert_not_called()
 
 
 # --- tools_config_dashboards.py (#1313) ---------------------------------
@@ -695,14 +716,51 @@ class TestDashboardsIdentifierValidation:
         captured = _register_dashboard_tools_and_capture(mock_ws_client)
         ha_config_get_dashboard = captured["ha_config_get_dashboard"]
 
+        # Narrow exception tuple: only the unstructured-mock noise
+        # (AttributeError / KeyError / TypeError from list-mode body
+        # touching missing keys on the bare MagicMock response) is
+        # swallowed. A guard-regression ``ToolError`` must propagate so
+        # the assertion below cannot pass by accident.
         try:
             await ha_config_get_dashboard(list_only=True)
-        except Exception:
+        except (AttributeError, KeyError, TypeError):
             pass
         # Positive proof: at least one WS message was attempted (the
         # list-dashboards fetch). Guard would have raised before that.
         assert mock_ws_client.send_websocket_message.call_count > 0, (
             "list_only=True must not trip the url_path guard"
+        )
+
+    async def test_get_dashboard_with_none_url_path_routes_to_default(
+        self, mock_ws_client
+    ):
+        # Control: ``url_path=None`` without ``list_only`` is the
+        # documented "default dashboard" fallback per
+        # ``tools_config_dashboards.py`` L569-571 ("defaulting to the
+        # main dashboard if url_path is omitted"). The
+        # ``if url_path and url_path != "default":`` gate at L734 must
+        # NOT add a ``url_path`` key to the WebSocket payload — HA
+        # returns the default dashboard when the key is absent. Without
+        # this control, a regression flipping the conditional guard at
+        # L617 to unconditional, or normalising ``None`` to ``""``
+        # before the gate, would silently break the documented
+        # default-dashboard path.
+        mock_ws_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"views": []}}
+        )
+        captured = _register_dashboard_tools_and_capture(mock_ws_client)
+        ha_config_get_dashboard = captured["ha_config_get_dashboard"]
+
+        result = await ha_config_get_dashboard()
+        assert result["success"] is True
+        assert result["action"] == "get"
+        # Positive proof: get-mode WS payload omits ``url_path``
+        # (HA treats absence as default-dashboard request).
+        assert mock_ws_client.send_websocket_message.call_count == 1
+        sent = mock_ws_client.send_websocket_message.call_args[0][0]
+        assert sent["type"] == "lovelace/config"
+        assert "url_path" not in sent, (
+            f"url_path must be absent for default routing, got {sent!r}"
         )
 
     @pytest.mark.parametrize("bad", ["", "   "])
