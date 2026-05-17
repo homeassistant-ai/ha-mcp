@@ -845,6 +845,64 @@ class TestCallAddonApiErrors:
         for key in ("options", "ports", "host_network", "ingress_port"):
             assert key in result["addon_config"], result["addon_config"]
 
+    @pytest.mark.asyncio
+    async def test_http_403_with_unmapped_ports_suggests_mapping(
+        self, mock_ingress_session
+    ):
+        """When the target addon has container ports with `None` host
+        mappings, the 403 suggestion must name the specific port and give a
+        concrete map-and-retry recipe — not the generic ``see
+        addon_config`` hint. Matches the reporter case in #1319 where
+        ESPHome's `6052/tcp` was unmapped."""
+        client = _make_mock_client()
+        addon_with_unmapped_port = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "ports": {"6052/tcp": None, "9999/tcp": 9999},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_with_unmapped_port,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["status_code"] == 403
+        suggestion = result["suggestion"]
+        # The unmapped port must be named explicitly and the recipe must
+        # include the exact ha_manage_addon retry call.
+        assert "6052/tcp" in suggestion, suggestion
+        assert "Configuration" in suggestion and "Network" in suggestion, suggestion
+        assert "port=6052" in suggestion, suggestion
+        # The mapped port (9999) shouldn't be flagged as needing remapping.
+        assert "9999/tcp" not in suggestion, suggestion
+        # The generic "Nginx IP restriction" wording should NOT fire when
+        # we've already identified a concrete next step.
+        assert "Nginx IP restriction" not in suggestion, suggestion
+
 
 class TestCreateIngressSession:
     """Tests for _create_ingress_session error and success paths.
