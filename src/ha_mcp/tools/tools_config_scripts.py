@@ -28,6 +28,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
@@ -619,6 +620,15 @@ class ConfigScriptTools:
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='script') to find existing script_ids"
+                ],
+                context={"operation": "remove_script"},
+            )
             result = await self._client.delete_script_config(script_id)
 
             # Wait for script to be removed

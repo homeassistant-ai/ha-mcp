@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     coerce_bool_param,
@@ -360,7 +361,16 @@ class GroupTools:
         - This only removes old-style groups, not platform-specific groups.
         """
         try:
-            # Validate object_id
+            # Empty/whitespace would surface as a misleading service-call failure.
+            validate_identifier_not_empty(
+                object_id,
+                "object_id",
+                suggestions=[
+                    "Use ha_config_list_groups() to find existing group object_ids"
+                ],
+                context={"operation": "remove_group"},
+            )
+            # Validate object_id format
             if "." in object_id:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,

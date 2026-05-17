@@ -330,6 +330,13 @@ class ZoneTools:
         **NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                zone_id,
+                "zone_id",
+                suggestions=["Use ha_get_zone() to find existing zone_ids"],
+                context={"operation": "remove_zone"},
+            )
             message: dict[str, Any] = {
                 "type": "zone/delete",
                 "zone_id": zone_id,

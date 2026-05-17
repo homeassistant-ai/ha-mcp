@@ -33,6 +33,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
@@ -965,6 +966,15 @@ class AutomationConfigTools:
         **WARNING:** Deleting an automation removes it permanently from your Home Assistant configuration.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                identifier,
+                "identifier",
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                ],
+                context={"operation": "remove_automation"},
+            )
             # Resolve entity_id for wait verification (identifier may be a unique_id)
             entity_id_for_wait = await self._resolve_automation_entity_id(identifier)
             if not entity_id_for_wait:

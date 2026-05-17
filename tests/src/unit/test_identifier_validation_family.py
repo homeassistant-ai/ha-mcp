@@ -501,3 +501,141 @@ class TestZonesIdentifierValidation:
         assert result["success"] is True
         sent = tools._client.send_websocket_message.call_args[0][0]
         assert sent["type"] == "zone/create"
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_rejects_empty_zone_id(self, tools, bad):
+        # Symmetric to ha_config_delete_dashboard_resource: empty/whitespace
+        # would propagate to ``zone/delete`` and surface as a misleading HA
+        # delete-failure instead of naming the unusable zone_id.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_remove_zone(zone_id=bad)
+        _assert_invalid_param(excinfo)
+        tools._client.send_websocket_message.assert_not_called()
+
+
+# --- tools_config_automations.py / tools_config_scripts.py / tools_groups.py
+# (Round-3 sibling sweep — remove-symmetry across destructive write tools) --
+
+
+class TestAutomationsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+
+        return AutomationConfigTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_rejects_empty_identifier(self, tools, bad):
+        # Empty/whitespace identifier would propagate to delete_automation_config
+        # and surface as a misleading HA delete-failure.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_remove_automation(identifier=bad)
+        _assert_invalid_param(excinfo)
+        tools._client.delete_automation_config.assert_not_called()
+
+
+class TestScriptsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_rejects_empty_script_id(self, tools, bad):
+        # Empty/whitespace script_id would propagate to delete_script_config
+        # and surface as a misleading HA delete-failure.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_remove_script(script_id=bad)
+        _assert_invalid_param(excinfo)
+        tools._client.delete_script_config.assert_not_called()
+
+
+class TestGroupsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_groups import GroupTools
+
+        return GroupTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_remove_rejects_empty_object_id(self, tools, bad):
+        # Empty/whitespace object_id would propagate to the group.remove
+        # service call and surface as a misleading HA service-call failure.
+        # The pre-flight runs before the pre-existing "." format check so the
+        # error names the empty/whitespace problem first.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_remove_group(object_id=bad)
+        _assert_invalid_param(excinfo)
+        tools._client.call_service.assert_not_called()
+
+
+# --- _handle_flow_helper direct guard test --------------------------------
+#
+# The parametrize on TestSetHelperWhitespaceUpgrade.test_implicit_action_with_
+# empty_helper_id_rejects locks behavioural parity at the public-tool dispatch
+# level (both helper_types hit the dispatch-level guard inside
+# ha_config_set_helper). The direct test below bypasses the dispatch entry and
+# exercises the defence-in-depth guard inside ``_handle_flow_helper`` itself,
+# so a future refactor that drops the dispatch-level guard would still leave
+# this twin as the locked safety net.
+
+
+class TestFlowHelperDirectGuard:
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_handle_flow_helper_implicit_action_rejects_empty_helper_id(
+        self, mock_ws_client, bad
+    ):
+        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
+
+        with pytest.raises(ToolError) as excinfo:
+            await _handle_flow_helper(
+                client=mock_ws_client,
+                helper_type="utility_meter",
+                name="X",
+                helper_id=bad,
+                config=None,
+                area_id=None,
+                labels=None,
+                category=None,
+                wait=False,
+                action=None,  # implicit-discriminator path
+            )
+        _assert_invalid_param(excinfo)
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    async def test_handle_flow_helper_with_none_helper_id_does_not_raise_guard(
+        self, mock_ws_client
+    ):
+        # Control: ``helper_id=None`` is the documented "create-new" sentinel
+        # and must NOT trip the guard. The call may still raise downstream
+        # (no config / no entity_id) but it must not be VALIDATION_INVALID_
+        # PARAMETER from the implicit-action guard naming ``helper_id``.
+        from ha_mcp.tools.tools_config_helpers import _handle_flow_helper
+
+        mock_ws_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "some downstream error"},
+        }
+        try:
+            await _handle_flow_helper(
+                client=mock_ws_client,
+                helper_type="utility_meter",
+                name="My Meter",
+                helper_id=None,
+                config=None,
+                area_id=None,
+                labels=None,
+                category=None,
+                wait=False,
+                action=None,
+            )
+        except ToolError as exc:
+            msg = str(exc)
+            assert "helper_id" not in msg, (
+                "None helper_id must not be rejected by the implicit-action guard"
+            )
+        except Exception:
+            # Any non-ToolError downstream failure is fine — we only need to
+            # confirm the implicit-action guard does not trip on None.
+            pass
