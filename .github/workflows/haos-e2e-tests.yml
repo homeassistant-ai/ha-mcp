@@ -36,6 +36,10 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+  # libguestfs defaults to libvirt which isn't running on GitHub-hosted
+  # runners (per-user libvirtd socket missing for the unprivileged
+  # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
+  LIBGUESTFS_BACKEND: direct
 
 jobs:
   haos-e2e:
