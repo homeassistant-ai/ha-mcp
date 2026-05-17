@@ -268,7 +268,9 @@ async def haos_mcp_client(
 # ---------------------------------------------------------------------------
 
 
-def pytest_collection_modifyitems(config, items):  # noqa: ARG001
+def pytest_collection_modifyitems(config, items):
+    # ``config`` is required by pluggy hook signature even though unused.
+    del config
     # Auto-apply the haos marker to everything in this package so the
     # workflow's `-m haos` filter works without per-file pytestmark.
     haos = pytest.mark.haos
