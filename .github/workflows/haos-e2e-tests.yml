@@ -115,10 +115,15 @@ jobs:
       - name: Confirm image present
         run: ls -lh /tmp/haos-test-image.qcow2
 
-      - name: Run HAOS-tier E2E suite
+      - name: Run full E2E suite against HAOS backend
+        # HAOS_TEST_IMAGE_PATH switches the e2e/conftest.py dispatch from
+        # testcontainer → HAOS-QEMU. Same fixture chain, same test code.
+        # haos_only tests under tests/src/e2e/haos_only/ run here; tests
+        # that need testcontainer-specific behavior (file mounts, etc.)
+        # are marked container_only and skip automatically.
         run: |
           cd tests
-          uv run pytest src/haos_e2e/ -m haos -v --tb=short
+          uv run pytest src/e2e/ -v --tb=short
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2

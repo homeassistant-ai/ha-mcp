@@ -38,8 +38,15 @@ from testcontainers.core.container import DockerContainer
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
 from fastmcp import Client
+from haos_runtime import (
+    HAOS_IMAGE_ENV,
+    boot_haos_qemu,
+    is_haos_backend_selected,
+    login_for_token,
+)
 
 from ha_mcp.client import HomeAssistantClient
 from ha_mcp.config import get_global_settings
@@ -54,7 +61,7 @@ from .utilities.supervisor_mock import (
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import HA_TEST_IMAGE, TEST_TOKEN
+from test_constants import HA_TEST_IMAGE, TEST_PASSWORD, TEST_TOKEN, TEST_USER
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
@@ -86,6 +93,27 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     empirical timings to scope a follow-up tightening PR).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
+
+
+def pytest_collection_modifyitems(config, items):
+    """Enforce haos_only / container_only markers and auto-apply haos_only.
+
+    Tests under ``tests/src/e2e/haos_only/`` get the marker for free so
+    individual files don't have to repeat ``pytestmark = pytest.mark.haos_only``.
+    Tests anywhere with either marker are skipped on the wrong backend.
+    """
+    del config
+    haos = is_haos_backend_selected()
+    skip_haos = pytest.mark.skip(reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)")
+    skip_container = pytest.mark.skip(reason="HAOS backend is active; test is container-only")
+    for item in items:
+        if "haos_only" in str(item.fspath):
+            item.add_marker(pytest.mark.haos_only)
+        keywords = item.keywords
+        if "haos_only" in keywords and not haos:
+            item.add_marker(skip_haos)
+        elif "container_only" in keywords and haos:
+            item.add_marker(skip_container)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -871,8 +899,34 @@ def _blueprint_http_server():
 
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config(_blueprint_http_server):
-    """Create Home Assistant container with fresh config using testcontainers."""
-    # --- Safety guard 1: ensure Docker is available before doing anything else ---
+    """Create Home Assistant test environment with fresh config.
+
+    Default backend: testcontainer (HA Core Docker image). When the
+    ``HAOS_TEST_IMAGE_PATH`` env var points to a pre-baked HAOS qcow2,
+    the fixture instead boots HAOS under QEMU/KVM and returns the same
+    base_url + token contract. Container-specific keys (container,
+    port, config_path) are None on the HAOS path — tests that depend on
+    those should skip when the HAOS backend is selected (see #1281).
+    """
+    # HAOS backend dispatch — short-circuit the testcontainer path entirely.
+    if is_haos_backend_selected():
+        image_path = Path(os.environ[HAOS_IMAGE_ENV])
+        logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
+        with boot_haos_qemu(image_path) as base_url:
+            token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
+            yield {
+                "container": None,
+                "port": None,
+                "base_url": base_url,
+                "config_path": None,
+                "blueprint_server": _blueprint_http_server,
+                "token": token,
+                "backend": "haos",
+            }
+        return
+
+    # --- Testcontainer path ---
+    # Safety guard 1: ensure Docker is available before doing anything else
     try:
         import docker as docker_sdk
 
@@ -1293,6 +1347,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             "base_url": base_url,
             "config_path": str(config_path),
             "blueprint_server": _blueprint_http_server,
+            "token": TEST_TOKEN,
+            "backend": "container",
         }
 
         try:
@@ -1307,11 +1363,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 async def ha_client(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantClient]:
-    """Create Home Assistant client connected to the container."""
+    """Create Home Assistant client connected to the container or HAOS QEMU."""
     container_info = ha_container_with_fresh_config
     base_url = container_info["base_url"]
+    token = container_info.get("token", TEST_TOKEN)
 
-    client = HomeAssistantClient(base_url=base_url, token=TEST_TOKEN)
+    client = HomeAssistantClient(base_url=base_url, token=token)
 
     # Verify connection
     try:
@@ -1335,14 +1392,15 @@ async def ha_client(
 async def mcp_server(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
-    """Create MCP server instance connected to the container."""
+    """Create MCP server instance connected to the container or HAOS QEMU."""
     logger.info("🚀 Creating MCP server instance...")
 
     container_info = ha_container_with_fresh_config
     base_url = container_info["base_url"]
+    token = container_info.get("token", TEST_TOKEN)
 
     # Create client for the server
-    client = HomeAssistantClient(base_url=base_url, token=TEST_TOKEN)
+    client = HomeAssistantClient(base_url=base_url, token=token)
 
     # Create server with the client
     server = HomeAssistantSmartMCPServer(client=client)

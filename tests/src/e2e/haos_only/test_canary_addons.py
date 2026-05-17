@@ -50,9 +50,9 @@ def _parse_tool_result(result: Any) -> dict[str, Any]:
     raise AssertionError(f"Unrecognised tool result shape: {result!r}")
 
 
-async def test_addons_installed_via_mcp(haos_mcp_client: Any) -> None:
+async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
     """`ha_get_addon` (no args) lists every addon the build script installed."""
-    raw = await haos_mcp_client.call_tool("ha_get_addon", {})
+    raw = await mcp_client.call_tool("ha_get_addon", {})
     payload = _parse_tool_result(raw)
     assert payload.get("success"), f"ha_get_addon returned failure: {payload}"
 
@@ -67,14 +67,14 @@ async def test_addons_installed_via_mcp(haos_mcp_client: Any) -> None:
         )
 
 
-async def test_supervisor_info_via_mcp(haos_mcp_client: Any) -> None:
+async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     """`ha_get_addon` with a known core slug returns Supervisor-backed detail.
 
     This exercises the WS supervisor/api path through ha-mcp itself — the
     one the testcontainer can't validate because no Supervisor exists
     behind that mocked endpoint.
     """
-    raw = await haos_mcp_client.call_tool("ha_get_addon", {"slug": "core_mosquitto"})
+    raw = await mcp_client.call_tool("ha_get_addon", {"slug": "core_mosquitto"})
     payload = _parse_tool_result(raw)
     assert payload.get("success"), f"ha_get_addon(core_mosquitto) failed: {payload}"
     detail = payload.get("addon") or payload.get("data") or payload
