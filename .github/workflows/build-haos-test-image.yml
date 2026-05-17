@@ -68,7 +68,7 @@ jobs:
         run: pip install -r tests/haos_image_build/requirements.txt
 
       - name: Build image
-        run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2.xz
+        run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
 
       - name: Upload built image as workflow artifact
         # Always upload — even on PRs that don't push to GHCR — so reviewers
@@ -76,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: haos-test-image-${{ steps.haos_version.outputs.version }}-${{ github.sha }}
-          path: haos-test-image.qcow2.xz
+          path: haos-test-image.qcow2
           retention-days: 14
           if-no-files-found: error
 
@@ -96,7 +96,7 @@ jobs:
           moving="${IMAGE_REPO}:${HAOS_VERSION}-latest"
           oras push "$versioned" \
             --artifact-type application/vnd.homeassistant-ai.haos-test-image.v1 \
-            haos-test-image.qcow2.xz:application/x-xz
+            haos-test-image.qcow2:application/octet-stream
           oras tag "$versioned" "${HAOS_VERSION}-latest"
           echo "Pushed $versioned"
           echo "Pushed $moving"

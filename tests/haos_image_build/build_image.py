@@ -598,10 +598,15 @@ def build(work_dir: Path, output: Path) -> None:
         qemu.terminate()
         qemu.wait(timeout=60)
         raise
-    LOG.info("Compressing image")
+    # Skip xz compression — empirically a 6 GB qcow2 takes >25 min with
+    # xz -9 -T0 on a GitHub-hosted 2-vCPU runner. actions/cache and
+    # actions/upload-artifact both apply their own zstd compression at the
+    # storage layer, so an uncompressed input doesn't bloat the cache or
+    # artifact much. If a follow-up publish workflow needs xz-compressed
+    # output for GHCR, it can run xz after this script returns.
+    LOG.info("Copying image to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("wb") as f:
-        _run(["xz", "-9", "-T0", "-c", str(qcow2)], stdout=f)
+    _run(["cp", "--reflink=auto", str(qcow2), str(output)])
     LOG.info("Wrote %s (%.1f MB)", output, output.stat().st_size / 1024 / 1024)
 
 

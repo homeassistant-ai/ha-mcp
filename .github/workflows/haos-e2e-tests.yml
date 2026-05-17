@@ -54,7 +54,7 @@ jobs:
         id: restore-cache
         uses: actions/cache/restore@v5
         with:
-          path: /tmp/haos-test-image.qcow2.xz
+          path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Try pulling from GHCR
@@ -70,7 +70,7 @@ jobs:
             | tar -xz -C /tmp oras
           mkdir -p /tmp/haos-pull && cd /tmp/haos-pull
           /tmp/oras pull "$tag"
-          mv haos-test-image.qcow2.xz /tmp/haos-test-image.qcow2.xz
+          mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
 
       - name: Install build dependencies (cache miss + GHCR miss)
         if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
@@ -95,20 +95,20 @@ jobs:
         if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
-            --output /tmp/haos-test-image.qcow2.xz
+            --output /tmp/haos-test-image.qcow2
 
       - name: Save image to cache (cache miss only)
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: /tmp/haos-test-image.qcow2.xz
+          path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Upload image as artifact for downstream test job
         uses: actions/upload-artifact@v5
         with:
           name: haos-test-image
-          path: /tmp/haos-test-image.qcow2.xz
+          path: /tmp/haos-test-image.qcow2
           retention-days: 1
           if-no-files-found: error
 
@@ -151,10 +151,8 @@ jobs:
           name: haos-test-image
           path: /tmp/
 
-      - name: Decompress image
-        run: |
-          xz -dk --force /tmp/haos-test-image.qcow2.xz
-          ls -lh /tmp/haos-test-image.qcow2
+      - name: Confirm image present
+        run: ls -lh /tmp/haos-test-image.qcow2
 
       - name: Run HAOS-tier E2E suite
         run: |
