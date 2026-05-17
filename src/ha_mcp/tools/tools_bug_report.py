@@ -20,6 +20,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
+from .._version import is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
@@ -71,7 +72,7 @@ def _detect_installation_method() -> str:
         return "pyinstaller"
 
     # 2. Home Assistant Add-on (has supervisor token)
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    if is_running_in_addon():
         return "addon"
 
     # 3. Docker container (non-addon)
@@ -242,6 +243,12 @@ def _detect_mcp_transport() -> str:
     and well-known env hints. The result is informational — the bug template
     surfaces it as an auto-detect that the agent or user can override.
     """
+    # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
+    # Checked before the stdin-isatty fallback because Supervisor-launched
+    # containers have no TTY on stdin and would otherwise be mislabeled stdio.
+    if is_running_in_addon():
+        return "http"
+
     # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP, ``ha-mcp-sse``
     # for SSE; pyproject.toml's [project.scripts] is the source of truth).
     argv0 = (sys.argv[0] if sys.argv else "").lower()
@@ -349,7 +356,7 @@ async def _fetch_addon_logs() -> str:
     """
     # Redundant with the caller's `install_method == "addon"` gate, but kept
     # as a defensive guard for any direct callers added later.
-    if not os.environ.get("SUPERVISOR_TOKEN"):
+    if not is_running_in_addon():
         return ""
 
     try:
