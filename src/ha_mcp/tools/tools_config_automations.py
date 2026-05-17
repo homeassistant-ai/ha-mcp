@@ -289,6 +289,21 @@ class AutomationConfigTools:
         For comprehensive automation documentation, use ha_get_skill_guide.
         """
         try:
+            # Empty/whitespace identifier would propagate to the internal
+            # config lookup and surface as a misleading
+            # ``RESOURCE_NOT_FOUND``. Structured ``VALIDATION_INVALID_PARAMETER``
+            # naming the parameter is cleaner — extension of the #1312
+            # validate_identifier_not_empty pattern to the automations
+            # family per #1313.
+            validate_identifier_not_empty(
+                identifier,
+                "identifier",
+                suggestions=[
+                    "Pass an automation entity_id (e.g. 'automation.morning_routine')",
+                    "Or pass the unique_id of an existing automation",
+                    "Use ha_search_entities(domain_filter='automation') to list automations",
+                ],
+            )
             normalized_config, config_hash = await self._get_automation_config_internal(identifier)
 
             # Resolve entity_id and fetch category from entity registry
@@ -542,6 +557,23 @@ class AutomationConfigTools:
         """
         bp_warnings: list[str] = []
         try:
+            # ``identifier`` is optional (omit → create new with generated
+            # unique_id; pass → update existing). When provided, reject
+            # empty/whitespace up-front so the caller gets a structured
+            # parameter error instead of a misleading ``RESOURCE_NOT_FOUND``
+            # from the downstream lookup. The ``not identifier`` check
+            # further down the python_transform branch still handles the
+            # explicit ``identifier is None`` case for that mode.
+            if identifier is not None:
+                validate_identifier_not_empty(
+                    identifier,
+                    "identifier",
+                    suggestions=[
+                        "Omit identifier to create a new automation",
+                        "Or pass a valid automation entity_id / unique_id to update",
+                    ],
+                    context={"action": "set"},
+                )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(

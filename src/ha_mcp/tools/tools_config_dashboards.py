@@ -26,6 +26,7 @@ from .helpers import (
     extract_tool_error_message,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .util_helpers import parse_json_param
 
@@ -605,6 +606,25 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "count": len(dashboards),
                 }
 
+            # ``url_path`` is optional in this tool (omitted with
+            # ``list_only=True`` lists all dashboards — handled above; omitted
+            # without ``list_only`` falls back to the default dashboard via
+            # the resolver below). When provided, reject empty/whitespace
+            # up-front so the caller gets a structured parameter error
+            # instead of a misleading ``RESOURCE_NOT_FOUND``. Extension of
+            # the #1312 validate_identifier_not_empty pattern to the
+            # dashboards family per #1313.
+            if url_path is not None:
+                validate_identifier_not_empty(
+                    url_path,
+                    "url_path",
+                    suggestions=[
+                        "Pass a dashboard URL path (e.g. 'lovelace-home')",
+                        "Omit url_path and pass list_only=True to list dashboards",
+                        "Use 'default' to target the default dashboard",
+                    ],
+                )
+
             # Search mode — find cards, badges, or header cards
             if search_mode:
                 get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
@@ -996,6 +1016,22 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         are also updated if explicitly provided alongside (or instead of) a config change.
         """
         try:
+            # ``url_path`` is required (always non-None). Reject empty/
+            # whitespace up-front so the caller gets a structured parameter
+            # error instead of a misleading downstream failure (the
+            # subsequent "default" alias, pre-resolver, and hyphen check
+            # all assume a usable string). Extension of the #1312
+            # validate_identifier_not_empty pattern to the dashboards
+            # family per #1313.
+            validate_identifier_not_empty(
+                url_path,
+                "url_path",
+                suggestions=[
+                    "Pass a dashboard URL path (e.g. 'my-dashboard')",
+                    "Use 'default' or 'lovelace' for the default dashboard",
+                ],
+                context={"action": "set"},
+            )
             # Handle "default" as alias for the default dashboard
             # (matches ha_config_get_dashboard behavior)
             if url_path == "default":
@@ -1490,6 +1526,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
+            # ``url_path`` is required. Reject empty/whitespace up-front so
+            # the caller gets a structured parameter error instead of a
+            # misleading "no dashboard found" from the resolver below.
+            # Extension of the #1312 validate_identifier_not_empty pattern
+            # to the dashboards family per #1313.
+            validate_identifier_not_empty(
+                url_path,
+                "url_path",
+                suggestions=[
+                    "Pass a dashboard URL path or internal ID (e.g. 'my-dashboard')",
+                    "Use ha_config_get_dashboard(list_only=True) to list dashboards",
+                ],
+                context={"action": "delete"},
+            )
             resolved, _ = await _resolve_dashboard(client, url_path)
             if resolved is None:
                 raise_tool_error(
