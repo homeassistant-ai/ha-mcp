@@ -99,9 +99,14 @@ class Addon:
 ADDONS: tuple[Addon, ...] = (
     Addon(repo=None, name="Mosquitto broker", start=False),
     Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
-    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome"),
+    # Official ESPHome repo addon is named "ESPHome Device Builder"; match by
+    # the unique part of the name so dev/beta variants don't shadow stable.
+    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome Device Builder"),
     Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt",
           name="Zigbee2MQTT", start=False),
+    # Frigate repo ships "Frigate", "Frigate (Full Access)", "Frigate Beta",
+    # "Frigate (Full Access) Beta" — the plain "Frigate" variant is enough
+    # for the canary; full-access only needed for testing camera mounts.
     Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons",
           name="Frigate", start=False),
 )
