@@ -103,6 +103,19 @@ class ConfigScriptTools:
         For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
+            # Empty/whitespace script_id would propagate to
+            # ``get_script_config`` and surface as a misleading
+            # ``RESOURCE_NOT_FOUND``. Extension of the #1312
+            # validate_identifier_not_empty pattern to the scripts
+            # family per #1313.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Pass a script identifier (e.g. 'morning_routine')",
+                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                ],
+            )
             config_result = await self._client.get_script_config(script_id)
             # Extract actual script config body and compute hash before category injection
             actual_config = config_result.get("config", config_result)
@@ -412,6 +425,21 @@ class ConfigScriptTools:
         """
         bp_warnings: list[str] = []
         try:
+            # ``script_id`` is required (always non-None). Reject empty/
+            # whitespace up-front so the caller gets a structured parameter
+            # error instead of a misleading ``RESOURCE_NOT_FOUND`` from
+            # the downstream upsert/fetch. Extension of the #1312
+            # validate_identifier_not_empty pattern to the scripts family
+            # per #1313.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Pass a script identifier (e.g. 'morning_routine')",
+                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                ],
+                context={"action": "set"},
+            )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(

@@ -554,6 +554,42 @@ class TestAutomationsIdentifierValidation:
         _assert_invalid_param(excinfo)
         tools._client.delete_automation_config.assert_not_called()
 
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_get_rejects_empty_identifier(self, tools, bad):
+        # Empty/whitespace identifier would propagate to
+        # ``_get_automation_config_internal`` and surface as misleading
+        # ``RESOURCE_NOT_FOUND``. #1313 extension.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_get_automation(identifier=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "identifier"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        tools._client.send_websocket_message.assert_not_called()
+        # Also no REST GET on the automation config.
+        if hasattr(tools._client, "get_automation_config"):
+            tools._client.get_automation_config.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_rejects_empty_identifier_on_update(self, tools, bad):
+        # ``identifier`` is optional on set_automation: None → create,
+        # non-None → update. Empty/whitespace would slip past the
+        # ``if not identifier`` python_transform-mode guard for the
+        # config-update path. New guard rejects empty/whitespace whenever
+        # identifier is non-None, regardless of mode.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_set_automation(
+                config={"alias": "x", "trigger": [], "action": []},
+                identifier=bad,
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "identifier"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        # Guard fires before any upsert / WS round-trip.
+        if hasattr(tools._client, "upsert_automation_config"):
+            tools._client.upsert_automation_config.assert_not_called()
+
 
 class TestScriptsIdentifierValidation:
     @pytest.fixture
@@ -570,6 +606,143 @@ class TestScriptsIdentifierValidation:
             await tools.ha_config_remove_script(script_id=bad)
         _assert_invalid_param(excinfo)
         tools._client.delete_script_config.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_get_rejects_empty_script_id(self, tools, bad):
+        # Empty/whitespace script_id would propagate to
+        # ``get_script_config`` and surface as misleading
+        # ``RESOURCE_NOT_FOUND``. #1313 extension.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_get_script(script_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "script_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        if hasattr(tools._client, "get_script_config"):
+            tools._client.get_script_config.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_rejects_empty_script_id(self, tools, bad):
+        # ``script_id`` is required for set_script. Empty/whitespace would
+        # propagate to ``upsert_script_config`` and surface as a
+        # misleading HA write-failure. #1313 extension.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_set_script(
+                script_id=bad,
+                config={"sequence": [{"delay": {"seconds": 1}}]},
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "script_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        if hasattr(tools._client, "upsert_script_config"):
+            tools._client.upsert_script_config.assert_not_called()
+
+
+# --- tools_config_dashboards.py (#1313) ---------------------------------
+#
+# ``ha_config_get_dashboard`` / ``ha_config_set_dashboard`` /
+# ``ha_config_delete_dashboard`` are module-level (closure-pattern), not
+# class-based — so the tests use the register-and-capture pattern.
+
+
+def _register_dashboard_tools_and_capture(mock_client):
+    from ha_mcp.tools.tools_config_dashboards import (
+        register_config_dashboard_tools,
+    )
+
+    mock_mcp = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def fake_tool(**kwargs):
+        def decorator(fn):
+            captured[fn.__name__] = fn
+            return fn
+
+        return decorator
+
+    mock_mcp.tool = fake_tool
+    register_config_dashboard_tools(mock_mcp, mock_client)
+    return captured
+
+
+class TestDashboardsIdentifierValidation:
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_get_dashboard_rejects_empty_url_path(
+        self, mock_ws_client, bad
+    ):
+        # ``url_path`` is optional (omit + ``list_only=True`` lists all).
+        # When provided, empty/whitespace would slip past the list_only
+        # check and reach the search-mode / get-mode WS dispatch. Guard
+        # rejects with ``VALIDATION_INVALID_PARAMETER`` instead.
+        captured = _register_dashboard_tools_and_capture(mock_ws_client)
+        ha_config_get_dashboard = captured["ha_config_get_dashboard"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_config_get_dashboard(url_path=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "url_path"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    async def test_get_dashboard_list_only_skips_guard(self, mock_ws_client):
+        # Control: when ``list_only=True`` and ``url_path`` is omitted,
+        # the guard must not fire — the tool legitimately ignores
+        # ``url_path`` in list mode. Any downstream failure (mocked
+        # client returning unstructured data) is independent of the
+        # guard-not-tripping assertion.
+        captured = _register_dashboard_tools_and_capture(mock_ws_client)
+        ha_config_get_dashboard = captured["ha_config_get_dashboard"]
+
+        try:
+            await ha_config_get_dashboard(list_only=True)
+        except Exception:
+            pass
+        # Positive proof: at least one WS message was attempted (the
+        # list-dashboards fetch). Guard would have raised before that.
+        assert mock_ws_client.send_websocket_message.call_count > 0, (
+            "list_only=True must not trip the url_path guard"
+        )
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_dashboard_rejects_empty_url_path(
+        self, mock_ws_client, bad
+    ):
+        # ``url_path`` is required for set_dashboard. Empty/whitespace
+        # would pass the ``"default"`` alias (False), reach the
+        # pre-resolver / hyphen-check, and surface as a misleading
+        # downstream failure. Guard rejects with
+        # ``VALIDATION_INVALID_PARAMETER`` instead.
+        captured = _register_dashboard_tools_and_capture(mock_ws_client)
+        ha_config_set_dashboard = captured["ha_config_set_dashboard"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_config_set_dashboard(url_path=bad, config={"views": []})
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "url_path"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_delete_dashboard_rejects_empty_url_path(
+        self, mock_ws_client, bad
+    ):
+        # ``url_path`` is required for delete_dashboard. Empty/whitespace
+        # would reach ``_resolve_dashboard`` and surface as a misleading
+        # "no dashboard found" — the guard names the actual problem
+        # (empty parameter) instead.
+        captured = _register_dashboard_tools_and_capture(mock_ws_client)
+        ha_config_delete_dashboard = captured["ha_config_delete_dashboard"]
+
+        with pytest.raises(ToolError) as excinfo:
+            await ha_config_delete_dashboard(url_path=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "url_path"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        mock_ws_client.send_websocket_message.assert_not_called()
 
 
 class TestGroupsIdentifierValidation:
