@@ -243,12 +243,6 @@ def _detect_mcp_transport() -> str:
     and well-known env hints. The result is informational — the bug template
     surfaces it as an auto-detect that the agent or user can override.
     """
-    # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
-    # Checked before the stdin-isatty fallback because Supervisor-launched
-    # containers have no TTY on stdin and would otherwise be mislabeled stdio.
-    if is_running_in_addon():
-        return "http"
-
     # Entry-point script name (e.g. ``ha-mcp-web`` for HTTP, ``ha-mcp-sse``
     # for SSE; pyproject.toml's [project.scripts] is the source of truth).
     argv0 = (sys.argv[0] if sys.argv else "").lower()
@@ -267,6 +261,14 @@ def _detect_mcp_transport() -> str:
     if transport_env == "streamable-http":
         return "http"
     if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
+        return "http"
+
+    # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
+    # Placed after the explicit hints (argv0 / env) so an operator override
+    # still wins, but before the stdin-isatty fallback because Supervisor-
+    # launched containers have no TTY on stdin and would otherwise be
+    # mislabeled stdio.
+    if is_running_in_addon():
         return "http"
 
     # If stdin is piped (not a TTY), ha-mcp was launched by an MCP host on
