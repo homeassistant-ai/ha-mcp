@@ -145,11 +145,38 @@ jobs:
         #
         # --maxfail=0 overrides pytest.ini's --maxfail=3 so we see the full
         # failure surface for triage — early-terminating loses signal.
-        # `|| true` keeps the step's exit non-zero so we capture failures
-        # without dropping out before the slowest-durations / summary lines.
         run: |
           cd tests
           uv run pytest src/e2e/ -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+
+      - name: Extract HA logs from booted qcow2 (always)
+        # Pulls /supervisor/homeassistant/home-assistant.log from the
+        # test-time qcow2 so we can see what HA itself logged during the
+        # failed run (errors, warnings, integration setup issues). Plus
+        # the supervisor log for addon/host context. always() so this fires
+        # whether tests passed or failed.
+        if: always()
+        run: |
+          sudo chmod +r /boot/vmlinuz-* || true
+          mkdir -p /tmp/haos-diagnostics
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : -download /supervisor/homeassistant/home-assistant.log /tmp/haos-diagnostics/home-assistant.log \
+            : -download /supervisor/homeassistant/home-assistant.log.1 /tmp/haos-diagnostics/home-assistant.log.1 \
+            : -download /supervisor/homeassistant/.storage/core.config_entries /tmp/haos-diagnostics/core.config_entries.json \
+            || echo "guestfish extraction partial — some files may be absent"
+          ls -la /tmp/haos-diagnostics/ || true
+
+      - name: Upload HAOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: haos-diagnostics
+          path: |
+            /tmp/haos-diagnostics/
+            /tmp/haos-e2e-serial.log
+          if-no-files-found: warn
+          retention-days: 7
