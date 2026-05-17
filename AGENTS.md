@@ -106,6 +106,9 @@ When implementing features or debugging, consult these resources:
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
+
+**Triage-state labels** (applied by `gemini-triage.yml` or manual triage):
+
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
@@ -115,6 +118,27 @@ When implementing features or debugging, consult these resources:
 | `triaged` | Automated Gemini triage complete |
 | `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
+
+**Scope labels** (manually applied during triage; orthogonal to bug-class — an issue can carry both `runtime-bug` AND a scope marker):
+
+| Label | Meaning |
+|-------|---------|
+| `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `docker` | Issue is specific to the Docker / containerised deployment (`Dockerfile`, container env) |
+| `javascript` | Issue concerns the project website / Astro app under `site/` |
+
+**Lifecycle labels** (manually applied; do not double as close-reasons):
+
+| Label | Meaning |
+|-------|---------|
+| `wontfix` | Issue is valid but a deliberate decision was made not to address it (typically paired with close). Use when the maintainer wants to record the rejection rationale rather than silently close |
+| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, an awaiting-design decision). Recorded so a sweeper search can find what's waiting |
+
+**Tracking / automation labels** (applied by tooling):
+
+| Label | Meaning | Source |
+|-------|---------|--------|
+| `python-upgrade` | Renovate-managed PR that bumps the project's Python version | `renovate.json` global `labels` array (auto-applied to all Renovate PRs alongside `dependencies`) |
 
 ### Issue Analysis Workflow
 
