@@ -558,15 +558,29 @@ def bake_test_state(qcow2: Path) -> None:
         seed_tar = workdir / "seed.tar"
         _run(["tar", "-C", str(initial_state_path), "-cf", str(seed_tar), "."])
 
-        # guestfish --inspector auto-mounts the qcow2's partitions; HAOS's
-        # data partition exposes /supervisor/homeassistant which HA Core
-        # sees as /config. tar-in expands our seed tar there. We also
-        # chmod the tree so HA's homeassistant user can read everything.
+        # HAOS qcow2 has multiple partitions. The hassos-data partition
+        # (usually /dev/sda8) holds /supervisor/homeassistant which HA Core
+        # sees as /config. The -i inspector mounts the WRONG partition (the
+        # system overlay) for our purpose, so manually find the data
+        # partition by its filesystem label.
+        # First probe: list filesystems + labels so we can debug if needed.
+        probe = subprocess.run(
+            ["guestfish", "--ro", "-a", str(qcow2), "run", ":", "list-filesystems"],
+            capture_output=True, text=True, timeout=120,
+        )
+        LOG.info("guestfish filesystems on qcow2:\n%s", probe.stdout)
+        if probe.returncode != 0:
+            LOG.error("guestfish list-filesystems failed: %s", probe.stderr)
+        # Now do the actual write. Mount data partition by label "hassos-data"
+        # which HAOS sets at OS install time (stable across HAOS versions).
         _run([
             "guestfish",
             "--rw",
             "-a", str(qcow2),
-            "-i",
+            "run",
+            ":",
+            "mount", "/dev/sda8", "/",
+            ":",
             "tar-in", str(seed_tar), "/supervisor/homeassistant",
             ":",
             "chmod-r", "0755", "/supervisor/homeassistant",
