@@ -139,14 +139,14 @@ When implementing features or debugging, consult these resources:
 
 | Label | Meaning |
 |-------|---------|
-| `wontfix` | Issue is valid but a deliberate decision was made not to address it (typically paired with close). Use when the maintainer wants to record the rejection rationale rather than silently close |
+| `wontfix` | Issue is valid but will not be addressed. Typically used when closing an issue to record the rejection rationale. |
 | `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, a pending design decision). Recorded so a sweeper search can find what's waiting |
 
 **Tracking / automation labels** (applied by tooling):
 
 | Label | Meaning |
 |-------|---------|
-| `python-upgrade` | Auto-attached to every Renovate-managed PR — not only Python version bumps, but any dependency update. Configured via `renovate.json` global `labels` array alongside `dependencies`. The label name predates the wider Renovate config rollout; rename or scope-restriction is a candidate for a separate decision. |
+| `python-upgrade` | Auto-attached to every Renovate-managed PR (including non-Python dependency updates) via `renovate.json` global `labels` array. |
 
 ### Issue Analysis Workflow
 
