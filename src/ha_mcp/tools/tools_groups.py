@@ -308,9 +308,13 @@ class GroupTools:
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
-                        result["warning"] = f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
+                        result.setdefault("warnings", []).append(
+                            f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
+                        )
                 except Exception as e:
-                    result["warning"] = f"Group created but verification failed: {e}"
+                    result.setdefault("warnings", []).append(
+                        f"Group created but verification failed: {e}"
+                    )
 
             return {
                 "success": True,
@@ -409,9 +413,13 @@ class GroupTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
-                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                        result.setdefault("warnings", []).append(
+                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                        )
                 except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                    result.setdefault("warnings", []).append(
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
             return {
                 "success": True,
