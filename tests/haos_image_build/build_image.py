@@ -354,6 +354,22 @@ class HAWebSocket:
             except Exception:
                 pass
 
+    def reconnect(self) -> None:
+        """Tear down the current WS and re-establish + re-auth.
+
+        Used after /core/restart: HA Core kicks every WS connection on
+        restart, so any subsequent supervisor_api call needs a fresh
+        connection (the access_token survives the restart).
+        """
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        self._next_id = 0
+        self.__enter__()
+
     def supervisor_api(
         self,
         endpoint: str,
@@ -540,13 +556,19 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
     """
     LOG.info("Installing HACS via Get HACS addon")
     _install_one(ws, GET_HACS_ADDON)
-    # Restart HA core so the freshly-written custom_components/hacs is loaded.
-    # /core/restart is on the Supervisor side; the WS supervisor/api call
-    # will return success when Supervisor accepts the restart request, then
-    # HA Core itself goes down briefly and comes back. Wait for the frontend.
+    # /core/restart kicks every WebSocket connection as part of the restart,
+    # so our recv() raises ConnectionClosedOK before any response arrives.
+    # That's the success signal — the restart got initiated.
     LOG.info("Restarting HA Core so HACS custom component loads")
-    ws.supervisor_api("/core/restart", method="post", timeout=300.0)
+    from websockets.exceptions import ConnectionClosed
+
+    try:
+        ws.supervisor_api("/core/restart", method="post", timeout=300.0)
+    except ConnectionClosed:
+        LOG.info("WS closed during core restart (expected)")
     _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
+    # Reconnect for any subsequent supervisor_api calls (e.g. stop_qemu).
+    ws.reconnect()
 
 
 # ---------------------------------------------------------------------------
