@@ -376,7 +376,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         _extract_ws_error(get_result),
                     )
                     device_rename_result = {
-                        "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
+                        "warnings": [
+                            "Entity registry lookup failed — could not determine device. Retry may succeed."
+                        ],
                     }
 
             device_id = (
@@ -384,7 +386,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
             if not device_id:
                 device_rename_result = {
-                    "warning": "Entity has no associated device — device rename skipped",
+                    "warnings": [
+                        "Entity has no associated device — device rename skipped"
+                    ],
                 }
             else:
                 device_msg: dict[str, Any] = {
@@ -397,7 +401,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_rename_result = {"success": True, "device_id": device_id}
                 else:
                     device_rename_result = {
-                        "warning": f"Entity updated but device rename failed: {_extract_ws_error(device_result)}",
+                        "warnings": [
+                            f"Entity updated but device rename failed: {_extract_ws_error(device_result)}"
+                        ],
                         "device_id": device_id,
                     }
 
@@ -511,7 +517,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Include old_entity_id and rename warning when a rename was performed
         if new_entity_id is not None:
             response_data["old_entity_id"] = original_entity_id
-            response_data["warning"] = (
+            response_data.setdefault("warnings", []).append(
                 "Remember to update any automations, scripts, or dashboards "
                 "that reference the old entity_id"
             )
@@ -523,7 +529,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             response_data["device_rename"] = device_rename_result
             # Only mark partial when device rename was attempted and failed
             # (not when entity simply has no device)
-            if "warning" in device_rename_result and device_rename_result.get(
+            if device_rename_result.get("warnings") and device_rename_result.get(
                 "device_id"
             ):
                 response_data["partial"] = True
