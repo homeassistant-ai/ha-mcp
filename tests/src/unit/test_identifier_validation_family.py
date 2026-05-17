@@ -1003,6 +1003,45 @@ class TestAddonsIdentifierValidation:
         mock_ws_client.send_websocket_message.assert_not_called()
 
 
+# --- tools_energy.py (Iter8 — ha_manage_energy_prefs stat_consumption) ---
+
+
+class TestEnergyPrefsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_energy import EnergyTools
+
+        # add an AsyncMock for save_prefs (used by _mutate_atomic) so the
+        # downstream path is reachable in principle — the guard must fire
+        # before we get there.
+        mock_ws_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"prefs": {}},
+        }
+        return EnergyTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    @pytest.mark.parametrize(
+        "mode", ["add_device", "remove_device"], ids=["add", "remove"]
+    )
+    async def test_manage_energy_prefs_rejects_empty_stat_consumption(
+        self, tools, bad, mode
+    ):
+        # Both ``add_device`` and ``remove_device`` modes require
+        # ``stat_consumption`` and pass it to the prefs storage. Without
+        # the guard, ``add_device`` would write a ``{"stat_consumption": ""}``
+        # phantom entry, and ``remove_device`` would search for an empty
+        # match (always missing) and surface as a misleading
+        # "Device with stat_consumption='' not found".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_energy_prefs(mode=mode, stat_consumption=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "stat_consumption"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        tools._client.send_websocket_message.assert_not_called()
+
+
 # --- tools_hacs.py (Iter7 — ha_hacs_download repository_id) --------------
 
 
