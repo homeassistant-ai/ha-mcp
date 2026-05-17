@@ -38,6 +38,7 @@ from .helpers import (
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .util_helpers import ANSI_ESCAPE_RE
 
@@ -1208,14 +1209,16 @@ def _apply_array_ops(
                     )
                 )
             new_id = new_item[id_field]
-            if new_id is None or new_id == "":
+            if new_id is None or (isinstance(new_id, str) and not new_id.strip()):
                 # Items missing the id field have `dict.get(id_field) == None`
-                # by default, so allowing None/"" ids would let later patch /
-                # delete ops match unrelated items.
+                # by default, so allowing None/""/whitespace-only ids would
+                # let later patch / delete ops match unrelated items.
+                # Non-string ids (e.g. integers) stay valid by design — see
+                # ``test_add_with_integer_zero_id_is_accepted``.
                 raise_tool_error(
                     create_validation_error(
                         f"array_patch add op #{index} item {id_field!r} cannot be "
-                        "None or an empty string",
+                        "None, empty, or whitespace-only",
                         parameter=f"array_patch.operations[{index}].item.{id_field}",
                     )
                 )
@@ -1954,6 +1957,18 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ha_manage_addon(slug="...", path="/api/state",
                             request_headers={"Accept": "text/plain"})
         """
+        # Empty/whitespace slug would propagate to every dispatch arm
+        # (Supervisor API, ingress proxy, websocket bridge) and surface as a
+        # misleading "addon not found" or 404 from the Supervisor. Reject
+        # up-front so the caller learns the slug was unusable before any
+        # backend call.
+        validate_identifier_not_empty(
+            slug,
+            "slug",
+            suggestions=[
+                "Use ha_get_addon() to discover installed add-on slugs",
+            ],
+        )
         # Build config payload from provided config parameters
         config_data: dict[str, Any] = {}
         if options:

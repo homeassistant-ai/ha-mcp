@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,20 @@ class ZoneTools:
         """
         operation = "create"
         try:
+            # ``None`` stays the documented "create-new" sentinel; explicit
+            # empty/whitespace ``zone_id`` would silently route to the
+            # create branch below and surface "name, latitude, longitude
+            # required" instead of the actual cause (unusable ``zone_id``).
+            if zone_id is not None:
+                validate_identifier_not_empty(
+                    zone_id,
+                    "zone_id",
+                    suggestions=[
+                        "Omit zone_id entirely to create a new zone",
+                        "Pass a valid zone_id to update an existing zone",
+                    ],
+                    context={"action": "set"},
+                )
             if zone_id:
                 # UPDATE operation
                 operation = "update"
@@ -315,6 +330,13 @@ class ZoneTools:
         **NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                zone_id,
+                "zone_id",
+                suggestions=["Use ha_get_zone() to find existing zone_ids"],
+                context={"operation": "remove_zone"},
+            )
             message: dict[str, Any] = {
                 "type": "zone/delete",
                 "zone_id": zone_id,

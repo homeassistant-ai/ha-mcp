@@ -18,6 +18,7 @@ from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     build_pagination_metadata,
@@ -659,6 +660,18 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+        # Empty/whitespace device_id would reach the
+        # ``config/device_registry/update`` WS message inside
+        # ``_update_device_internal`` and surface as a misleading HA
+        # "device not found" — same destructive-WS-call class as the
+        # ``ha_remove_device`` guard added in this PR.
+        validate_identifier_not_empty(
+            device_id,
+            "device_id",
+            suggestions=[
+                "Use ha_get_device() to find valid device IDs",
+            ],
+        )
         # Delegate to internal implementation
         return await _update_device_internal(
             device_id=device_id,
@@ -701,6 +714,17 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ha_update_device(device_id="abc123", disabled_by="user")
         """
         try:
+            # Empty/whitespace device_id would slip past the local-filter
+            # ``next((d for d in devices if d.get("id") == device_id), None)``
+            # check below and surface as a generic "Device not found: " error
+            # after a wasted registry-list round-trip.
+            validate_identifier_not_empty(
+                device_id,
+                "device_id",
+                suggestions=[
+                    "Use ha_get_device() to find valid device IDs",
+                ],
+            )
             # First, get device details to find config entries
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
             list_result = await client.send_websocket_message(list_message)

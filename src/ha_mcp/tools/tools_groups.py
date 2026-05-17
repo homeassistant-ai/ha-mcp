@@ -18,6 +18,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     coerce_bool_param,
@@ -271,6 +272,20 @@ class GroupTools:
         **NOTE:** entities, add_entities, and remove_entities are mutually exclusive.
         """
         try:
+            # ``_validate_group_params`` only catches dots in object_id and
+            # entity-list issues; empty/whitespace object_id would slip
+            # through to ``call_service("group", "set", {"object_id": "", ...})``
+            # and surface as a misleading HA service-call failure. Symmetric
+            # with the ``ha_config_remove_group`` pre-flight added in this PR.
+            validate_identifier_not_empty(
+                object_id,
+                "object_id",
+                suggestions=[
+                    "Use ha_config_list_groups() to find existing group object_ids",
+                    "Or provide a fresh object_id (without 'group.' prefix) to create a new group",
+                ],
+                context={"operation": "set_group"},
+            )
             self._validate_group_params(object_id, entities, add_entities, remove_entities)
 
             service_data = self._build_group_service_data(
@@ -360,7 +375,19 @@ class GroupTools:
         - This only removes old-style groups, not platform-specific groups.
         """
         try:
-            # Validate object_id
+            # Empty/whitespace would surface as a misleading service-call failure.
+            # Runs before the "." format check below so the empty/whitespace
+            # case is named first; the order is locked by the test in
+            # TestGroupsIdentifierValidation.
+            validate_identifier_not_empty(
+                object_id,
+                "object_id",
+                suggestions=[
+                    "Use ha_config_list_groups() to find existing group object_ids"
+                ],
+                context={"operation": "remove_group"},
+            )
+            # Validate object_id format
             if "." in object_id:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,

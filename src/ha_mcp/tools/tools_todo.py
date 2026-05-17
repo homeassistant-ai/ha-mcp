@@ -21,6 +21,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,6 +303,24 @@ class TodoTools:
                 )
             )
 
+        # ``item`` is the implicit create/update discriminator: ``None`` routes
+        # to create, anything else routes to update. Empty/whitespace ``item``
+        # is the destructive-routing class — it is non-None so passes the
+        # ``is None`` check below and reaches ``_update_item``, which calls
+        # ``todo.update_item`` with an empty ``item`` and surfaces as a
+        # misleading "item not found" from HA. Same shape as the helper
+        # implicit-discriminator gate this PR closes for ``ha_config_set_helper``.
+        if item is not None:
+            validate_identifier_not_empty(
+                item,
+                "item",
+                suggestions=[
+                    "Use ha_get_todo() to list items and obtain a valid UID or summary",
+                    "Omit the item parameter entirely to create a new todo item",
+                ],
+                context={"entity_id": entity_id, "action": "update"},
+            )
+
         # Route: create mode (no item) vs update mode (item provided)
         if item is None:
             return await self._create_item(
@@ -546,6 +565,18 @@ class TodoTools:
                     ],
                 )
             )
+
+        # entity_id format-check above does not cover the ``item`` parameter.
+        # Empty/whitespace item would flow through to ``todo.remove_item`` and
+        # HA returns a misleading "item not found".
+        validate_identifier_not_empty(
+            item,
+            "item",
+            suggestions=[
+                "Use ha_get_todo() to list items and obtain a valid UID or summary",
+            ],
+            context={"entity_id": entity_id},
+        )
 
         try:
             # Build service data

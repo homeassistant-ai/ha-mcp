@@ -18,6 +18,7 @@ from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
@@ -794,6 +795,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+            # Per-element empty/whitespace check — the list-empty check above
+            # rejects ``[]`` but not ``[""]``; without this guard, an empty
+            # entity_id would propagate to the entity-registry update WS call
+            # and surface as a misleading HA "entity not found".
+            for eid in entity_ids:
+                validate_identifier_not_empty(eid, "entity_id")
+
             # Validate: bulk operations only support categories, labels, and expose_to
             single_entity_params = {
                 "area_id": area_id,
@@ -1334,6 +1342,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_get_entity: Check entity details before removal
         """
         try:
+            # Empty/whitespace entity_id would reach the registry-remove WS
+            # command and surface as a misleading HA "entity not found".
+            validate_identifier_not_empty(
+                entity_id,
+                "entity_id",
+                suggestions=[
+                    "Use ha_search_entities() to find valid entity IDs",
+                ],
+            )
             result = await client.send_websocket_message(
                 {"type": "config/entity_registry/remove", "entity_id": entity_id}
             )

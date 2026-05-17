@@ -294,14 +294,28 @@ class TestApplyArrayOpsValidation:
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
     def test_add_with_integer_zero_id_is_accepted(self):
-        """The check uses `is None or == ""` (not `not new_id`) so falsy
-        but valid ids like 0 / 0.0 / False are accepted. Pin this down so
+        """The check rejects `None` and whitespace-only strings only — non-string
+        falsy ids like 0 / 0.0 / False stay valid by design. Pin this down so
         a future refactor to `if not new_id:` doesn't silently regress."""
         new, summary = _apply_array_ops(
             [], [{"op": "add", "item": {"id": 0, "type": "x"}}], id_field="id"
         )
         assert summary["added"] == [{"id": 0}]
         assert new == [{"id": 0, "type": "x"}]
+
+    @pytest.mark.parametrize("bad_id", [" ", "   ", "\t", "\n", " \t\n "])
+    def test_add_with_whitespace_only_id_raises(self, bad_id):
+        """Whitespace-only string ids would let later patch/delete ops match
+        unrelated items (the same cross-contamination risk as the
+        empty-string class). The guard catches the whole class via
+        ``str.strip()``."""
+        with pytest.raises(ToolError) as exc:
+            _apply_array_ops(
+                [],
+                [{"op": "add", "item": {"id": bad_id, "type": "x"}}],
+                id_field="id",
+            )
+        assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
     def test_patch_with_empty_patches_raises(self):
         """Empty `patches` is a silent no-op — reject up-front so the caller

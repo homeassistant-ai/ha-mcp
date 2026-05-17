@@ -78,6 +78,90 @@ def extract_tool_error_message(te: ToolError) -> str:
         return str(te)
 
 
+def validate_identifier_not_empty(
+    value: str | None,
+    param_name: str,
+    *,
+    message: str | None = None,
+    suggestions: list[str] | None = None,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Reject ``None``, empty, or whitespace-only identifier values.
+
+    Surfaces a structured ``VALIDATION_INVALID_PARAMETER`` response so
+    CRUD-style tools fail loudly on missing identifiers instead of silently
+    routing on Python falsy semantics or relying on Home Assistant to
+    translate a missing identifier into a generic ``RESOURCE_NOT_FOUND``.
+
+    The destructive class this protects against:
+    ``action = "update" if label_id else "create"`` — passing ``""`` as
+    ``label_id`` silently routes to ``create`` when the caller intended
+    ``update``. The whitespace class this protects against: ``" "`` is truthy
+    in Python so ``if not value:`` lets it through, but Home Assistant has
+    no entry with id ``" "``.
+
+    The value is checked but not normalised: ``" abc "`` (a real id wrapped
+    in spaces) is accepted as-is and returned untouched. Only purely empty or
+    purely whitespace strings are rejected.
+
+    ``None`` is also rejected by this helper. Callers for whom ``None`` is a
+    documented sentinel (e.g. ``label_id=None`` meaning "list all" or
+    "create new") must gate the call themselves with
+    ``if value is not None: validate_identifier_not_empty(value, ...)``.
+
+    Returning ``str`` (rather than ``None``) lets call sites use the helper
+    in narrowing position — ``name = validate_identifier_not_empty(name, …)``
+    re-binds ``name`` from ``str | None`` to ``str`` so mypy can prove later
+    uses are safe without a duplicate inline check.
+
+    Args:
+        value: Identifier string supplied by the caller. ``None`` is
+            rejected — see the ``None``-sentinel note above for the caller
+            pattern that permits the sentinel.
+        param_name: Name of the parameter, used in the structured error
+            response's ``context`` and the human-readable message.
+        message: Optional override for the human-readable error message.
+            Defaults to ``"{param_name} must be a non-empty, non-whitespace
+            string"`` when omitted.
+        suggestions: Optional list of guidance strings for the response's
+            ``suggestions`` field. Defaults to a generic
+            "provide a non-empty value" hint.
+        context: Optional additional context fields merged into the error
+            response (e.g. ``{"action": "update"}``). The keys ``parameter``
+            and ``value`` are always set and take precedence.
+
+    Returns:
+        The validated ``value`` unchanged (typed as ``str``).
+
+    Raises:
+        ToolError: When ``value`` is ``None``, empty, or whitespace-only —
+            carrying a structured ``VALIDATION_INVALID_PARAMETER`` response
+            with the parameter name, the offending value (for diagnostics),
+            and the suggestions.
+
+    Example:
+        >>> validate_identifier_not_empty(label_id, "label_id",
+        ...     suggestions=["Omit label_id to create a new label"])
+    """
+    if value is not None and value.strip():
+        return value
+
+    final_context: dict[str, Any] = {}
+    if context:
+        final_context.update(context)
+    final_context["parameter"] = param_name
+    final_context["value"] = value
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            message or f"{param_name} must be a non-empty, non-whitespace string",
+            suggestions=suggestions
+            or [f"Provide a valid non-empty value for {param_name}"],
+            context=final_context,
+        )
+    )
+
+
 async def get_connected_ws_client(
     base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:
