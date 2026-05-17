@@ -24,6 +24,18 @@
       ],
       "depNameTemplate": "{{{depName}}}",
       "datasourceTemplate": "{{{datasource}}}"
+    },
+    {
+      "description": "Python-assignment version pins (e.g. HAOS_VERSION = \"17.3\" in build_image.py)",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/tests/.*\\.py$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+\\s*=\\s*[\"'](?<currentValue>[\\d.]+)[\"']"
+      ],
+      "depNameTemplate": "{{{depName}}}",
+      "datasourceTemplate": "{{{datasource}}}"
     }
   ],
   "packageRules": [

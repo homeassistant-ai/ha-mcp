@@ -146,8 +146,19 @@ def _http(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode()
+    except urllib.error.HTTPError as e:
+        # Surface the response body — HA's error responses are JSON with
+        # useful messages and the bare HTTPError doesn't include them.
+        err_body: str = ""
+        try:
+            err_body = e.read().decode()
+        except Exception:
+            pass
+        LOG.error("%s %s -> HTTP %d: %s", method, url, e.code, err_body[:500])
+        raise
     return json.loads(raw) if raw else {}
 
 
@@ -352,12 +363,43 @@ def _install_one(base_url: str, token: str, addon: Addon) -> str:
     return slug
 
 
+def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 300.0) -> None:
+    """Block until the Supervisor proxy responds successfully.
+
+    HA Core's frontend can be up and accepting auth before Supervisor itself
+    finishes initialising; calls to /api/hassio/* return 401 in that window
+    because HA hasn't yet received Supervisor's internal auth token. Poll
+    a trivially-cheap Supervisor endpoint until it stops failing.
+    """
+    LOG.info("Waiting for Supervisor proxy")
+    deadline = time.monotonic() + timeout
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            _http(
+                "GET",
+                f"{base_url}/api/hassio/supervisor/info",
+                token=token,
+                timeout=10.0,
+            )
+            LOG.info("Supervisor ready")
+            return
+        except urllib.error.HTTPError as e:
+            last_err = e
+            time.sleep(5.0)
+        except Exception as e:
+            last_err = e
+            time.sleep(5.0)
+    raise TimeoutError(f"Supervisor proxy did not respond within {timeout}s: {last_err}")
+
+
 def install_addons(base_url: str, token: str) -> dict[str, str]:
     """Register the ha-mcp addon repo and install + configure each addon.
 
     Returns a mapping of addon display name → installed slug for downstream
     steps (e.g. canary tests that need to address a specific addon).
     """
+    _wait_supervisor_ready(base_url, token)
     _add_repository(base_url, token, HA_MCP_ADDON_REPO)
     _reload_store(base_url, token)
     installed: dict[str, str] = {}
