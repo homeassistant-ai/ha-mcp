@@ -412,18 +412,31 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
 
     The prefix portion of every slug is a SHA hash of the repository URL,
     so it can't be hardcoded portably. After the repo is registered we list
-    the store and match by display name + repo URL.
+    the store and match by display name. If multiple addons across repos
+    share a name (rare for the v1 set), prefer the one whose ``repository``
+    matches the expected source (``core`` vs not).
     """
     resp = ws.supervisor_api("/store", method="get")
-    addons = resp.get("addons", [])
-    for entry in addons:
-        if entry.get("name") != addon.name:
-            continue
-        if addon.repo and entry.get("url", "").startswith(addon.repo):
-            return entry["slug"]
-        if addon.repo is None and entry.get("repository") == "core":
-            return entry["slug"]
-    raise RuntimeError(f"Addon {addon.name!r} not found in store after repo refresh")
+    store_addons = resp.get("addons", [])
+    candidates = [e for e in store_addons if e.get("name") == addon.name]
+    if not candidates:
+        # Log a sample so we can see what names the store is actually returning.
+        sample = [{"name": e.get("name"), "slug": e.get("slug"), "repo": e.get("repository")}
+                  for e in store_addons[:25]]
+        LOG.error(
+            "No store entry matched %r. First 25 entries (of %d total): %s",
+            addon.name, len(store_addons), sample,
+        )
+        raise RuntimeError(f"Addon {addon.name!r} not found in store after repo refresh")
+    if len(candidates) == 1:
+        return candidates[0]["slug"]
+    # Disambiguate by repository: addon.repo=None → core, otherwise non-core.
+    for c in candidates:
+        if addon.repo is None and c.get("repository") == "core":
+            return c["slug"]
+        if addon.repo is not None and c.get("repository") != "core":
+            return c["slug"]
+    return candidates[0]["slug"]
 
 
 def _install_one(ws: HAWebSocket, addon: Addon) -> str:
