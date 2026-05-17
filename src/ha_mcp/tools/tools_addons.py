@@ -1555,34 +1555,26 @@ async def _call_addon_api(
             )
         elif response.status_code == 403:
             ports_dict = addon.get("network") or addon.get("ports") or {}
-            # Unmapped container ports (host-side value is None) are the most
-            # common cause of a 403 here: ingress nginx in the target addon
-            # often rejects peer-container traffic, so the user's escape hatch
-            # is the direct-container-port path — which only works if they've
-            # mapped the port to host in the addon's Network config. Surface
-            # that gap explicitly instead of asking the LLM to infer it from
-            # an opaque "see addon_config" hint. (#1319)
-            unmapped = [k for k, v in ports_dict.items() if v is None]
+            # Ingress nginx in peer add-ons typically rejects cross-container
+            # traffic; the direct-port fallback only works if the user mapped
+            # a host port. Detect and call out the unmapped case explicitly.
+            unmapped = sorted(k for k, v in ports_dict.items() if v is None)
             result["addon_config"] = {
                 "options": addon.get("options"),
                 "ports": ports_dict or None,
                 "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
-            if unmapped:
-                addon_label = addon.get("name") or addon.get("slug") or "the add-on"
-                example_proto = unmapped[0]
-                example_port = example_proto.split("/", 1)[0]
+            slug = addon.get("slug") or "<slug>"
+            example_proto = unmapped[0] if unmapped else ""
+            example_port = example_proto.split("/", 1)[0] if example_proto else ""
+            if unmapped and example_port.isdigit():
+                addon_label = addon.get("name") or slug
                 result["suggestion"] = (
-                    f"Add-on '{addon_label}' has unmapped container port(s) "
-                    f"({', '.join(unmapped)}) — the ingress proxy is blocking the "
-                    f"request and no host-mapped port is available as a fallback. "
-                    f"In the HA UI: open '{addon_label}' → Configuration → Network, "
-                    f"map '{example_proto}' to a host port (e.g. {example_port}), "
-                    f"save, then restart the add-on. Then retry: "
-                    f"ha_manage_addon(slug='{addon.get('slug')}', path='...', "
-                    f"port={example_port}). This bypasses the ingress proxy via "
-                    f"the direct container port."
+                    f"Map {example_proto} to a host port in the HA UI "
+                    f"('{addon_label}' → Configuration → Network), restart the "
+                    f"add-on, then retry with ha_manage_addon(slug='{slug}', "
+                    f"path='...', port={example_port})."
                 )
             else:
                 result["suggestion"] = (
