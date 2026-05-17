@@ -280,6 +280,8 @@ class AutomationConfigTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when the registry lookup succeeds, falling back to the input `identifier` otherwise. Use `automation_id` for sibling parity with `ha_config_get_script` (`script_id`), `ha_config_get_scene` (`scene_id`), and `ha_config_get_dashboard` (`url_path`); `identifier` continues to echo the raw input.
+
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
@@ -301,6 +303,7 @@ class AutomationConfigTools:
                 "success": True,
                 "action": "get",
                 "identifier": identifier,
+                "automation_id": entity_id or identifier,
                 "config": normalized_config,
                 "config_hash": config_hash,
             }
