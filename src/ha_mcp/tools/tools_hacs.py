@@ -21,6 +21,7 @@ from .helpers import (
     register_tool_methods,
     safe_info,
     safe_progress,
+    validate_identifier_not_empty,
 )
 from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
 
@@ -568,6 +569,21 @@ class HacsTools:
             Success status and installation details.
         """
         try:
+            # Empty/whitespace repository_id would either be passed straight
+            # into ``_resolve_hacs_repo_id`` (which has no empty-check and
+            # would fall through to a HACS lookup miss) or — for a numeric
+            # candidate — reach ``hacs/repository/download`` with an empty
+            # repository field. Same destructive-WS-call class as
+            # ``ha_manage_addon``: guard up-front so the caller learns the
+            # identifier was unusable before any backend call.
+            validate_identifier_not_empty(
+                repository_id,
+                "repository_id",
+                suggestions=[
+                    "Use ha_hacs_search() to find valid repository IDs",
+                    "Or pass a GitHub path like 'owner/repo' to install by name",
+                ],
+            )
             # Check if HACS is available
             await _assert_hacs_available()
 

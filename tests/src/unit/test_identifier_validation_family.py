@@ -1001,3 +1001,32 @@ class TestAddonsIdentifierValidation:
         _assert_invalid_param(excinfo)
         assert '"parameter": "slug"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
+
+
+# --- tools_hacs.py (Iter7 — ha_hacs_download repository_id) --------------
+
+
+class TestHacsIdentifierValidation:
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_hacs import HacsTools
+
+        return HacsTools(mock_ws_client)
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_hacs_download_rejects_empty_repository_id(self, tools, bad):
+        # Empty/whitespace ``repository_id`` would either fall through
+        # ``_resolve_hacs_repo_id`` (no empty-check) into a HACS lookup
+        # miss, or — for a numeric-looking candidate — reach
+        # ``hacs/repository/download`` with an empty repository field.
+        # Same destructive-WS-call class as ``ha_manage_addon``; the
+        # guard fires before any backend call (including the HACS
+        # availability check) so neither the supervisor nor HACS sees
+        # the empty id.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_hacs_download(repository_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(
+            excinfo.value
+        )
+        tools._client.send_websocket_message.assert_not_called()
