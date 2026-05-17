@@ -9,9 +9,8 @@ Two layers of coverage live here:
    ``VALIDATION_INVALID_PARAMETER`` with the parameter name in
    ``context``; every accept case (``"abc"``, ``" abc "``) is a no-op.
 
-2. **Call-site-level** — one rejection test per affected entry point in
-   ``tools_labels.py``, ``tools_categories.py``, ``tools_areas.py``, and
-   ``tools_config_helpers.py``, asserting:
+2. **Call-site-level** — one rejection test across the affected
+   destructive-class entry points, asserting:
 
    - empty / whitespace identifier surfaces ``VALIDATION_INVALID_PARAMETER``
      (no WS message sent), and
@@ -407,13 +406,13 @@ class TestSetHelperWhitespaceUpgrade:
         self, register_tools, mock_ws_client, bad
     ):
         # Explicit-action update on a FLOW helper with empty/whitespace
-        # helper_id. The L2378 ``helper_id is None`` guard does not catch
-        # this (value is a non-None empty string), and the simple-path
-        # whitespace twin inside ``elif action == "update":`` fires AFTER
-        # the FLOW dispatch returns. Without the new guard between L2401
-        # and the implicit-action branch, the value would reach
-        # ``update_flow_helper`` and HA returns a misleading "entry not
-        # found".
+        # helper_id. The explicit-action ``helper_id is None`` guard does
+        # not catch this (value is a non-None empty string), and the
+        # simple-path whitespace twin inside ``elif action == "update":``
+        # fires AFTER the FLOW dispatch returns. Without the new guard
+        # between the explicit-action raise and the implicit-action
+        # ``else:`` branch, the value would reach ``update_flow_helper``
+        # and HA returns a misleading "entry not found".
         set_helper = register_tools["ha_config_set_helper"]
         with pytest.raises(ToolError) as excinfo:
             await set_helper(
