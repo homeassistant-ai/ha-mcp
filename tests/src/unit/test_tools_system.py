@@ -4,13 +4,32 @@ Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
 ha_restart reports failure when a reverse proxy returns 504 during restart.
 """
 
-from unittest.mock import AsyncMock
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_system import SystemTools
+
+
+@contextmanager
+def _patch_health_info_baseline():
+    """Patch ``_fetch_health_info`` to return a fixed (ws_client, baseline) pair.
+
+    The ws_client is a MagicMock so the section helpers (when not separately
+    mocked) won't accidentally hit a real connection; ``disconnect`` is async.
+    """
+    ws_client = MagicMock()
+    ws_client.disconnect = AsyncMock()
+    baseline = {"success": True, "health_info": {}}
+    with patch.object(
+        SystemTools,
+        "_fetch_health_info",
+        new=AsyncMock(return_value=(ws_client, baseline)),
+    ) as p:
+        yield p, ws_client
 
 
 def _make_client_that_fails_on_restart(exception):
@@ -160,3 +179,145 @@ class TestFetchRepairs:
 
         assert result["count"] == 0
         assert "ws disconnect" in result["error"]
+
+
+class TestGetSystemHealthGather:
+    """``ha_get_system_health`` runs optional sections concurrently via ``asyncio.gather``.
+
+    Issue #1331 — replaces the prior sequential ``await self._fetch_repairs(...)``
+    chain to halve wall-clock when multiple slow sections are requested.
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_three_sections_populated_when_all_requested(self):
+        """``include="repairs,zha_network,zwave_network"`` populates all three from concurrent gather."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock(return_value={"issues": [], "count": 0})
+        mock_zha = AsyncMock(return_value={"devices": [{"name": "A"}]})
+        mock_zwave = AsyncMock(return_value={"nodes": []})
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), patch.object(
+            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        ):
+            result = await tools.ha_get_system_health(
+                include="repairs,zha_network,zwave_network"
+            )
+
+        assert result["repairs"] == {"issues": [], "count": 0}
+        assert result["zha_network"] == {"devices": [{"name": "A"}]}
+        assert result["zwave_network"] == {"nodes": []}
+        # Each helper fired exactly once — guards against a regression that
+        # silently double-runs or skips a section under gather.
+        mock_repairs.assert_awaited_once()
+        mock_zha.assert_awaited_once()
+        mock_zwave.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unrequested_sections_not_called(self):
+        """Only requested sections fire; the other helpers stay un-awaited."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock(return_value={"issues": [], "count": 0})
+        mock_zha = AsyncMock()
+        mock_zwave = AsyncMock()
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), patch.object(
+            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        ):
+            result = await tools.ha_get_system_health(include="repairs")
+
+        assert "repairs" in result
+        assert "zha_network" not in result
+        assert "zwave_network" not in result
+        mock_repairs.assert_awaited_once()
+        mock_zha.assert_not_awaited()
+        mock_zwave.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_one_section_raising_does_not_block_siblings(self):
+        """A raising helper attributes its failure to its section; others still populate.
+
+        The helpers themselves are written never to raise (each wraps its WS
+        call in try/except). This test exercises the defensive
+        ``return_exceptions=True`` path on ``gather`` against an
+        unexpected-exception regression in any one helper.
+        """
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock(side_effect=RuntimeError("repairs blew up"))
+        mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
+        mock_zwave = AsyncMock(return_value={"nodes": [{"id": 1}]})
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), patch.object(
+            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        ):
+            result = await tools.ha_get_system_health(
+                include="repairs,zha_network,zwave_network"
+            )
+
+        # Raising section attributed by name
+        assert "error" in result["repairs"]
+        assert "RuntimeError" in result["repairs"]["error"]
+        assert "repairs blew up" in result["repairs"]["error"]
+        # Sibling sections unaffected
+        assert result["zha_network"] == {"devices": [{"name": "B"}]}
+        assert result["zwave_network"] == {"nodes": [{"id": 1}]}
+        # All three were attempted — proves the gather didn't short-circuit
+        mock_repairs.assert_awaited_once()
+        mock_zha.assert_awaited_once()
+        mock_zwave.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_zha_full_routes_to_full_flag(self):
+        """``include="zha_network_full"`` calls ``_fetch_zha_network`` with full=True."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_zha = AsyncMock(return_value={"devices": []})
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ):
+            await tools.ha_get_system_health(include="zha_network_full")
+
+        mock_zha.assert_awaited_once()
+        # Helper called with ws_client + full=True
+        assert mock_zha.await_args.kwargs == {"full": True}
+
+    @pytest.mark.asyncio
+    async def test_no_sections_when_include_omitted(self):
+        """No ``include`` → no gather call, only baseline health_info returned."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock()
+        mock_zha = AsyncMock()
+        mock_zwave = AsyncMock()
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), patch.object(
+            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        ):
+            result = await tools.ha_get_system_health()
+
+        assert result["success"] is True
+        assert "repairs" not in result
+        assert "zha_network" not in result
+        assert "zwave_network" not in result
+        mock_repairs.assert_not_awaited()
+        mock_zha.assert_not_awaited()
+        mock_zwave.assert_not_awaited()
