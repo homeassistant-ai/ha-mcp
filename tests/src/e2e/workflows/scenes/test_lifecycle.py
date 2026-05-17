@@ -350,9 +350,10 @@ class TestSceneLifecycle:
         assert create_data.get("success") is True, f"Scene create failed: {create_data}"
         # No 'not yet queryable' warning means the resolver picked up the
         # real entity_id correctly — the regression KP13 surfaced via BAT.
-        assert "not yet queryable" not in str(create_data.get("warning", "")).lower(), (
-            f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
-        )
+        assert not any(
+            "not yet queryable" in w.lower()
+            for w in create_data.get("warnings", [])
+        ), f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
 
         # 2. Get via the storage scene_id — this drives the resolver to
         # find the actual entity_id under the hood for category fetch.
@@ -381,8 +382,9 @@ class TestSceneLifecycle:
         assert transform_data.get("success") is True, (
             f"Transform failed: {transform_data}"
         )
-        assert (
-            "not yet queryable" not in str(transform_data.get("warning", "")).lower()
+        assert not any(
+            "not yet queryable" in w.lower()
+            for w in transform_data.get("warnings", [])
         ), f"Resolver fell back on transform path; transform_data={transform_data}"
 
         # Cleanup via remove uses the same resolver under the hood.
