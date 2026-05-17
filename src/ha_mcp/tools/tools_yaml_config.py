@@ -20,6 +20,7 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
@@ -45,25 +46,11 @@ async def _check_storage_mode_dashboard_collision(
         return
     url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
     try:
-        result = await client.send_websocket_message(
-            {"type": "lovelace/dashboards/list"}
-        )
+        dashboards = await fetch_dashboards_list(client)
     except Exception as exc:
         logger.warning(
             "lovelace/dashboards/list WS query failed (%s); skipping collision check",
             exc,
-        )
-        return
-
-    if isinstance(result, dict) and "result" in result:
-        dashboards = result["result"]
-    elif isinstance(result, list):
-        dashboards = result
-    else:
-        logger.warning(
-            "lovelace/dashboards/list returned unexpected shape (%s); "
-            "skipping collision check",
-            type(result).__name__,
         )
         return
 

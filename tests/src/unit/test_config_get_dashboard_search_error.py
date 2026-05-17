@@ -116,7 +116,7 @@ class TestConfigGetDashboardSearchErrorHandling:
 class TestGetDashboardListOnlyUnexpectedShape:
     """list_only=True emits a warning (not a failure) on unexpected HA response shape.
 
-    _fetch_dashboards_list logs at WARNING and returns None; the ``or []``
+    fetch_dashboards_list logs at WARNING and returns None; the ``or []``
     fallback means the tool still returns a valid success response with an
     empty dashboards list. This test pins the behavior introduced when the
     inline fetch was extracted to the shared helper so that a silent ``[]``
