@@ -20,6 +20,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
+from .._version import is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
@@ -71,7 +72,7 @@ def _detect_installation_method() -> str:
         return "pyinstaller"
 
     # 2. Home Assistant Add-on (has supervisor token)
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    if is_running_in_addon():
         return "addon"
 
     # 3. Docker container (non-addon)
@@ -262,6 +263,14 @@ def _detect_mcp_transport() -> str:
     if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
         return "http"
 
+    # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
+    # Placed after the explicit hints (argv0 / env) so an operator override
+    # still wins, but before the stdin-isatty fallback because Supervisor-
+    # launched containers have no TTY on stdin and would otherwise be
+    # mislabeled stdio.
+    if is_running_in_addon():
+        return "http"
+
     # If stdin is piped (not a TTY), ha-mcp was launched by an MCP host on
     # stdio. If it IS a TTY, this is a manual / interactive run with no
     # other transport hints — fall through to ``unknown``.
@@ -349,7 +358,7 @@ async def _fetch_addon_logs() -> str:
     """
     # Redundant with the caller's `install_method == "addon"` gate, but kept
     # as a defensive guard for any direct callers added later.
-    if not os.environ.get("SUPERVISOR_TOKEN"):
+    if not is_running_in_addon():
         return ""
 
     try:
