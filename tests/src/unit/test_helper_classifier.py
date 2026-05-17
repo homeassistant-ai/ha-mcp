@@ -25,7 +25,7 @@ class TestUnknownConfigSpecifiedClassification:
     def test_dashboard_404_via_ws_bridge_classified_as_resource_not_found(self):
         """HA Core's standard wording (mixed case) must classify as 404,
         not SERVICE_CALL_FAILED. The classifier lowercases input via
-        ``exception_to_structured_error``'s ``str(error).lower()`` at L394,
+        ``exception_to_structured_error``'s ``str(error).lower()`` at L403,
         so the substring check matches regardless of upstream casing."""
         err = HomeAssistantCommandError(
             "Command failed: Unknown config specified: my-dash"
