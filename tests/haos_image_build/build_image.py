@@ -18,9 +18,11 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -533,6 +535,100 @@ def _wait_supervisor_ready(ws: HAWebSocket) -> None:
     LOG.info("Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch"))
 
 
+def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
+    """Install the SSH addon and scp tests/initial_test_state into /config/.
+
+    Bakes the testcontainer's seed state into the qcow2 so the existing
+    e2e suite runs against HAOS with the same data: custom components
+    (ha_mcp_tools, mcp_proxy), seeded automations/scripts, .storage
+    registries (devices, areas, integrations), and the pre-baked
+    recorder DB. Equivalent of the testcontainer fixture's
+    `shutil.copytree(initial_test_state, /config)` + `_install_custom_component()`
+    steps — but routed through SSH into a live HAOS instead of a Docker
+    volume mount.
+
+    Restarts HA Core after extraction so the new config + custom
+    components are picked up.
+    """
+    initial_state_path = Path(__file__).resolve().parent.parent / "initial_test_state"
+    if not initial_state_path.exists():
+        raise RuntimeError(f"initial_test_state not found at {initial_state_path}")
+
+    LOG.info("Baking seed state into HAOS image from %s", initial_state_path)
+    keydir = Path(tempfile.mkdtemp(prefix="haos-bake-ssh-"))
+    privkey = keydir / "id_ed25519"
+    try:
+        _run([
+            "ssh-keygen", "-t", "ed25519", "-f", str(privkey),
+            "-N", "", "-q", "-C", "haos-build-bake",
+        ])
+        pubkey_str = privkey.with_suffix(".pub").read_text().strip()
+
+        # Install the official Terminal & SSH addon (core repo, slug core_ssh).
+        # Configured with our build-time key only; no password auth.
+        ssh_addon = Addon(repo=None, name="Terminal & SSH", start=False)
+        _install_one(ws, ssh_addon)
+        ws.supervisor_api(
+            "/addons/core_ssh/options",
+            method="post",
+            data={
+                "options": {
+                    "authorized_keys": [pubkey_str],
+                    "password": "",
+                    "ssh": {
+                        "allow_agent_forwarding": False,
+                        "allow_remote_port_forwarding": False,
+                        "allow_tcp_forwarding": False,
+                    },
+                },
+            },
+            timeout=60.0,
+        )
+        ws.supervisor_api("/addons/core_ssh/start", method="post", timeout=120.0)
+        _wait_port(SSH_HOST_PORT, timeout=60)
+        # Give sshd a moment to bind after the port is open
+        time.sleep(3.0)
+
+        ssh_base = [
+            "ssh",
+            "-i", str(privkey),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-p", str(SSH_HOST_PORT),
+            "root@127.0.0.1",
+        ]
+
+        LOG.info("Streaming initial_test_state via tar | ssh into /config/")
+        tar_proc = subprocess.Popen(
+            ["tar", "-C", str(initial_state_path), "-cf", "-", "."],
+            stdout=subprocess.PIPE,
+        )
+        ssh_proc = subprocess.Popen(
+            [*ssh_base, "tar -C /config -xf - && chmod -R go+rX /config"],
+            stdin=tar_proc.stdout,
+        )
+        if tar_proc.stdout is not None:
+            tar_proc.stdout.close()  # let tar see SIGPIPE if ssh dies
+        rc = ssh_proc.wait(timeout=300)
+        tar_proc.wait(timeout=30)
+        if rc != 0:
+            raise RuntimeError(f"ssh-tar extract failed with exit {rc}")
+
+        # Restart HA core so the new /config (custom_components especially)
+        # is loaded. Same WS-close-during-restart handling as install_hacs.
+        from websockets.exceptions import ConnectionClosed
+        LOG.info("Restarting HA Core to apply baked seed state")
+        try:
+            ws.supervisor_api("/core/restart", method="post", timeout=300.0)
+        except ConnectionClosed:
+            LOG.info("WS closed during core restart (expected)")
+        _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
+        ws.reconnect()
+    finally:
+        shutil.rmtree(keydir, ignore_errors=True)
+
+
 def install_addons(ws: HAWebSocket) -> dict[str, str]:
     """Register the ha-mcp addon repo and install + configure each addon.
 
@@ -595,6 +691,7 @@ def build(work_dir: Path, output: Path) -> None:
         with HAWebSocket(base_url, token) as ws:
             install_addons(ws)
             install_hacs(ws, base_url)
+            bake_test_state(ws, base_url)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
             # feeders. The canary test only needs addon lifecycle for now.

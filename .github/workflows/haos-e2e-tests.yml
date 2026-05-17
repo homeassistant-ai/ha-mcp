@@ -39,6 +39,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Required for tests/src/e2e/tools/test_skills_resources.py — the
+          # skills bundle lives at src/ha_mcp/resources/skills-vendor.
+          submodules: true
 
       - name: Compute image cache key
         id: key
