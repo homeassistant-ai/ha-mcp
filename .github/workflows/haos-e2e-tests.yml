@@ -1,0 +1,100 @@
+name: HAOS E2E Tests
+
+# Runs the HAOS-tier E2E suite for #1281: pulls the pre-baked qcow2 from GHCR,
+# boots it under QEMU/KVM, installs the PR's ha-mcp addon build via Supervisor,
+# then runs the @pytest.mark.haos suite against the live MCP endpoint.
+#
+# Complementary to e2e-tests.yml (testcontainer tier). Same tests should run
+# in both environments where possible; tests opt into the HAOS tier via the
+# ``haos`` marker when they require real addons/Supervisor/store paths.
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'homeassistant-addon/**'
+      - '.github/workflows/haos-e2e-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+
+jobs:
+  haos-e2e:
+    name: HAOS E2E Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install QEMU + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xz-utils
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Resolve pinned HAOS image tag
+        id: image_tag
+        run: |
+          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
+          echo "tag=${IMAGE_REPO}:${version}-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Cache HAOS qcow2
+        id: cache-image
+        uses: actions/cache@v5
+        with:
+          path: /tmp/haos-test-image.qcow2.xz
+          key: haos-image-${{ steps.image_tag.outputs.tag }}
+
+      - name: Set up oras
+        if: steps.cache-image.outputs.cache-hit != 'true'
+        uses: oras-project/setup-oras@v1
+
+      - name: Pull HAOS qcow2 from GHCR
+        if: steps.cache-image.outputs.cache-hit != 'true'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+          mkdir -p /tmp/haos-pull
+          cd /tmp/haos-pull
+          oras pull "${{ steps.image_tag.outputs.tag }}"
+          mv haos-test-image.qcow2.xz /tmp/haos-test-image.qcow2.xz
+
+      - name: Decompress image
+        run: |
+          xz -dk --force /tmp/haos-test-image.qcow2.xz
+          ls -lh /tmp/haos-test-image.qcow2
+
+      - name: Run HAOS-tier E2E suite
+        run: |
+          cd tests
+          uv run pytest src/e2e/haos/ -m haos -v --tb=short
+        env:
+          HAMCP_ENV_FILE: "tests/.env.test"
+          HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
