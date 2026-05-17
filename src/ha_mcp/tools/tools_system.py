@@ -186,10 +186,10 @@ class SystemTools:
                     "Home Assistant restart initiated. "
                     "The system will be unavailable for 1-5 minutes."
                 ),
-                "warning": (
+                "warnings": [
                     "Connection will be lost during restart. "
                     "Wait for Home Assistant to become available again."
-                ),
+                ],
             }
 
         except ToolError:
@@ -208,7 +208,7 @@ class SystemTools:
                         "Home Assistant restart initiated. "
                         "Connection was closed as expected during restart."
                     ),
-                    "warning": "Wait 1-5 minutes for Home Assistant to restart.",
+                    "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
                 }
 
             exception_to_structured_error(e)

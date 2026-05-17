@@ -145,14 +145,14 @@ class ServiceTools:
                 f"did not respond within the timeout period. The operation is likely "
                 f"still running in the background."
             ),
-            "warning": (
+            "warnings": [
                 "Response timed out. This is normal for long-running services "
                 f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
                 "to check the current status."
                 if entity_id
                 else "Response timed out. This is normal for long-running services. "
                 "The service was dispatched and may still be executing."
-            ),
+            ],
         }
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
@@ -186,11 +186,11 @@ class ServiceTools:
             if new_state:
                 response["verified_state"] = new_state.get("state")
             else:
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     "Service executed but state change could not be verified within timeout."
                 )
         except Exception as e:
-            response["warning"] = (
+            response.setdefault("warnings", []).append(
                 f"Service executed but state verification failed: {e}"
             )
 
@@ -512,10 +512,10 @@ class ServiceTools:
                         f"Event {event_type} was dispatched but Home Assistant "
                         "did not respond within the timeout period."
                     ),
-                    "warning": (
+                    "warnings": [
                         "Response timed out. The event was dispatched and may still "
                         "have been delivered to subscribers."
-                    ),
+                    ],
                 }
             exception_to_structured_error(
                 error,
