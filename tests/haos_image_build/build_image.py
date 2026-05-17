@@ -386,9 +386,20 @@ class HAWebSocket:
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
-    """Register an addon repository with the Supervisor store."""
+    """Register an addon repository with the Supervisor store.
+
+    Idempotent: HAOS ships the Home Assistant Community Add-ons repo
+    pre-installed, and the Supervisor returns ``"Can't add ..., already in
+    the store"`` for any duplicate add. Treat that as success.
+    """
     LOG.info("Adding addon repository %s", repo_url)
-    ws.supervisor_api("/store/repositories", method="post", data={"repository": repo_url}, timeout=120.0)
+    try:
+        ws.supervisor_api("/store/repositories", method="post", data={"repository": repo_url}, timeout=120.0)
+    except RuntimeError as e:
+        if "already in the store" in str(e):
+            LOG.info("Repository %s already registered, continuing", repo_url)
+            return
+        raise
 
 
 def _reload_store(ws: HAWebSocket) -> None:
