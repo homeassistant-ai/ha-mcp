@@ -33,7 +33,6 @@ EXPECTED_ADDONS = (
     "Node-RED",
     "ESPHome Device Builder",
     "Zigbee2MQTT",
-    "Frigate",
     "Get HACS",
 )
 

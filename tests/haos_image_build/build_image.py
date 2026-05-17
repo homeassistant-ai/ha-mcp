@@ -92,10 +92,14 @@ class Addon:
 # etc.) is deferred to follow-up commits; v1 just bakes them into the image
 # so tests can install + start with custom configs at runtime.
 #
+# Frigate is intentionally excluded: ~2 GB of TF/OpenCV/ffmpeg that
+# bloated the qcow2 to ~7 GB and added a flake-prone Docker registry
+# dependency for ~80s of build time. Can be added back once a real
+# Frigate-using test motivates the cost.
+#
 # start=False addons fail to start without config and would block the build:
 #   - Mosquitto: schema requires require_certificate + cert paths
 #   - Z2M: needs a real or mocked serial coordinator
-#   - Frigate: needs at least one camera defined
 ADDONS: tuple[Addon, ...] = (
     Addon(repo=None, name="Mosquitto broker", start=False),
     Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
@@ -104,11 +108,6 @@ ADDONS: tuple[Addon, ...] = (
     Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome Device Builder"),
     Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt",
           name="Zigbee2MQTT", start=False),
-    # Frigate repo ships "Frigate", "Frigate (Full Access)", "Frigate Beta",
-    # "Frigate (Full Access) Beta" — the plain "Frigate" variant is enough
-    # for the canary; full-access only needed for testing camera mounts.
-    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons",
-          name="Frigate", start=False),
 )
 
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
