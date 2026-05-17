@@ -1554,19 +1554,36 @@ async def _call_addon_api(
                 "token has admin rights and try again."
             )
         elif response.status_code == 403:
+            ports_dict = addon.get("network") or addon.get("ports") or {}
+            # Ingress nginx in peer add-ons typically rejects cross-container
+            # traffic; the direct-port fallback only works if the user mapped
+            # a host port. Detect and call out the unmapped case explicitly.
+            unmapped = sorted(k for k, v in ports_dict.items() if v is None)
             result["addon_config"] = {
                 "options": addon.get("options"),
-                "ports": addon.get("network") or addon.get("ports"),
+                "ports": ports_dict or None,
                 "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
-            result["suggestion"] = (
-                "This add-on is blocking direct connections (likely Nginx IP restriction). "
-                "Try using the 'port' parameter to connect to the add-on's direct access port "
-                "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
-                "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
-                "The user may need to change add-on settings in the HA UI and restart the add-on."
-            )
+            slug = addon.get("slug") or "<slug>"
+            example_proto = unmapped[0] if unmapped else ""
+            example_port = example_proto.split("/", 1)[0] if example_proto else ""
+            if unmapped and example_port.isdigit():
+                addon_label = addon.get("name") or slug
+                result["suggestion"] = (
+                    f"Map {example_proto} to a host port in the HA UI "
+                    f"('{addon_label}' → Configuration → Network), restart the "
+                    f"add-on, then retry with ha_manage_addon(slug='{slug}', "
+                    f"path='...', port={example_port})."
+                )
+            else:
+                result["suggestion"] = (
+                    "This add-on is blocking direct connections (likely Nginx IP restriction). "
+                    "Try using the 'port' parameter to connect to the add-on's direct access port "
+                    "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
+                    "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
+                    "The user may need to change add-on settings in the HA UI and restart the add-on."
+                )
 
     return result
 

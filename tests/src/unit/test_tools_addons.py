@@ -845,6 +845,197 @@ class TestCallAddonApiErrors:
         for key in ("options", "ports", "host_network", "ingress_port"):
             assert key in result["addon_config"], result["addon_config"]
 
+    @pytest.mark.asyncio
+    async def test_http_403_with_unmapped_ports_suggests_mapping(
+        self, mock_ingress_session
+    ):
+        """403 with an unmapped container port → suggestion names the port
+        and emits the exact map-and-retry recipe."""
+        client = _make_mock_client()
+        addon_with_unmapped_port = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "ports": {"6052/tcp": None, "9999/tcp": 9999},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_with_unmapped_port,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        assert result["status_code"] == 403
+        suggestion = result["suggestion"]
+        assert "6052/tcp" in suggestion, suggestion
+        assert "Configuration" in suggestion and "Network" in suggestion, suggestion
+        assert "port=6052" in suggestion, suggestion
+        assert "slug='test_addon'" in suggestion, suggestion
+        assert "9999/tcp" not in suggestion, suggestion
+        assert "Nginx IP restriction" not in suggestion, suggestion
+
+    @pytest.mark.asyncio
+    async def test_http_403_with_multiple_unmapped_ports_picks_lowest(
+        self, mock_ingress_session
+    ):
+        """With multiple unmapped ports, the suggestion must be
+        deterministic (lowest-sorted port wins, not iteration order)."""
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "ports": {"9000/tcp": None, "1880/tcp": None, "5000/tcp": None},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        suggestion = result["suggestion"]
+        # Sorted ascending: "1880/tcp" wins over "5000/tcp" and "9000/tcp".
+        assert "1880/tcp" in suggestion, suggestion
+        assert "port=1880" in suggestion, suggestion
+
+    @pytest.mark.asyncio
+    async def test_http_403_reads_network_field_when_ports_absent(
+        self, mock_ingress_session
+    ):
+        """Supervisor responses sometimes carry the port map under
+        `network` instead of `ports`. The 403 suggestion must read both."""
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "network": {"8080/tcp": None},
+                # No "ports" key at all.
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        suggestion = result["suggestion"]
+        assert "8080/tcp" in suggestion, suggestion
+        assert "port=8080" in suggestion, suggestion
+
+    @pytest.mark.asyncio
+    async def test_http_403_with_malformed_port_key_falls_back_to_generic(
+        self, mock_ingress_session
+    ):
+        """If a port-dict key isn't the canonical `<port>/<proto>` shape,
+        the unmapped-port suggestion would render `port=` with a non-numeric
+        value — fall back to the generic Nginx-restriction message instead."""
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "ports": {"not-a-port": None},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/api/test")
+
+        suggestion = result["suggestion"].lower()
+        assert "nginx" in suggestion or "ip restriction" in suggestion, suggestion
+
 
 class TestCreateIngressSession:
     """Tests for _create_ingress_session error and success paths.
