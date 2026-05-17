@@ -41,6 +41,132 @@ def is_haos_backend_selected() -> bool:
     return bool(raw and Path(raw).exists())
 
 
+def refresh_recorder_in_qcow2(
+    image_path: Path, *, target_age_seconds: float = 300.0
+) -> None:
+    """Shift recorder timestamps inside the baked qcow2 to look ``recent``.
+
+    The image cache key is content-hashed, so a cache hit re-uses an image
+    whose ``home-assistant_v2.db`` timestamps are frozen at bake time —
+    once that exceeds the ~24h window history queries use, every history
+    pagination test silently regresses. This helper extracts the DB from
+    the qcow2, runs the same uniform timestamp shift the testcontainer
+    path does (``conftest._refresh_recorder_timestamps``), and copies the
+    file back in place. Done once per pytest session before QEMU boots.
+
+    Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
+    stdlib for the shift itself. ~30s wall-clock overhead per session.
+    """
+    import sqlite3
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-ts-refresh-"))
+    db_local = workdir / "home-assistant_v2.db"
+    try:
+        # copy-out the recorder DB from the qcow2's hassos-data partition.
+        subprocess.run(
+            [
+                "guestfish",
+                "--ro",
+                "-a", str(image_path),
+                "run",
+                ":",
+                "mount", "/dev/sda8", "/",
+                ":",
+                "copy-out",
+                "/supervisor/homeassistant/home-assistant_v2.db",
+                str(workdir),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        # Same logic as conftest._refresh_recorder_timestamps. Kept inline
+        # rather than importing because conftest pulls in heavy dev deps
+        # (docker, testcontainers) that the HAOS-only paths don't need.
+        TIMESTAMP_COLUMNS = {
+            "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
+            "events": ("time_fired_ts",),
+            "statistics": ("start_ts", "created_ts"),
+            "statistics_short_term": ("start_ts", "created_ts"),
+        }
+        conn = sqlite3.connect(str(db_local))
+        try:
+            newest = 0.0
+            for table, cols in TIMESTAMP_COLUMNS.items():
+                for col in cols:
+                    try:
+                        row = conn.execute(
+                            f"SELECT MAX({col}) FROM {table}"
+                        ).fetchone()
+                    except sqlite3.OperationalError as exc:
+                        msg = str(exc).lower()
+                        if "no such table" in msg or "no such column" in msg:
+                            continue
+                        raise
+                    if row and row[0] is not None and isinstance(row[0], (int, float)):
+                        newest = max(newest, float(row[0]))
+
+            if newest <= 0:
+                LOG.warning("Recorder DB has no numeric timestamps; skipping shift")
+                return
+
+            target = time.time() - target_age_seconds
+            offset = target - newest
+            if offset <= 0:
+                LOG.info(
+                    "Recorder timestamps already recent (newest=%.0f, "
+                    "target=%.0f); no shift needed", newest, target,
+                )
+                return
+
+            for table, cols in TIMESTAMP_COLUMNS.items():
+                for col in cols:
+                    try:
+                        conn.execute(
+                            f"UPDATE {table} SET {col} = {col} + ? "
+                            f"WHERE {col} IS NOT NULL",
+                            (offset,),
+                        )
+                    except sqlite3.OperationalError as exc:
+                        msg = str(exc).lower()
+                        if "no such table" in msg or "no such column" in msg:
+                            continue
+                        raise
+            conn.commit()
+            LOG.info("Shifted recorder timestamps by %+.0fs", offset)
+        finally:
+            conn.close()
+
+        # copy-in the shifted DB. --rw so guestfish opens the qcow2 for
+        # write; the file's owner/perms inside the qcow2 are preserved by
+        # libguestfs when overwriting an existing path.
+        subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a", str(image_path),
+                "run",
+                ":",
+                "mount", "/dev/sda8", "/",
+                ":",
+                "copy-in",
+                str(db_local),
+                "/supervisor/homeassistant/",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        LOG.info("Refreshed recorder DB in %s", image_path)
+    finally:
+        import shutil
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def _http(
     method: str,
     url: str,

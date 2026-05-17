@@ -47,6 +47,7 @@ from haos_runtime import (
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
+    refresh_recorder_in_qcow2,
     login_for_token,
 )
 
@@ -914,6 +915,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     if is_haos_backend_selected():
         image_path = Path(os.environ[HAOS_IMAGE_ENV])
         logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
+        # Shift the baked recorder timestamps forward so seeded rows fall
+        # inside history's 24h window (same intent as the testcontainer
+        # path's _refresh_recorder_timestamps). Must run before boot
+        # because HA Core takes an exclusive lock on the DB.
+        refresh_recorder_in_qcow2(image_path)
         with boot_haos_qemu(image_path) as base_url:
             token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
             # Mirror the env-var setup the testcontainer path does below at
@@ -926,6 +932,39 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             _reset_ha_in_process_caches()
+            # Same sun.sun + entity wait the testcontainer dispatch does ~L1359:
+            # the first tests reach for sun.sun's state immediately, but HA Core
+            # may still be propagating registry → state-machine when
+            # boot_haos_qemu's /manifest.json gate releases (manifest.json is
+            # served by the frontend before all integrations finish loading).
+            # Wait for sun.sun to (a) exist, then (b) leave the "unknown" state
+            # so template tests don't race.
+            haos_headers = {"Authorization": f"Bearer {token}"}
+            sun_url = f"{base_url}/api/states/sun.sun"
+            SUN_WAIT = 60
+            sun_start = time.monotonic()
+            while time.monotonic() - sun_start < SUN_WAIT:
+                try:
+                    sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
+                    if sun_resp.status_code == 200:
+                        sun_state = sun_resp.json().get("state", "unknown")
+                        if sun_state != "unknown":
+                            elapsed = time.monotonic() - sun_start
+                            logger.info(
+                                f"✅ HAOS sun.sun is '{sun_state}' after {elapsed:.1f}s"
+                            )
+                            break
+                except (
+                    requests.exceptions.RequestException,
+                    json.JSONDecodeError,
+                ):
+                    pass
+                time.sleep(1)
+            else:
+                logger.warning(
+                    f"⚠️ HAOS sun.sun still not ready after {SUN_WAIT}s — "
+                    f"template / connection tests may race"
+                )
             # The session-scope _blueprint_http_server fixture computes its
             # base_url using host.docker.internal — meaningless from inside
             # the HAOS QEMU guest. Slirp user networking always reaches the
