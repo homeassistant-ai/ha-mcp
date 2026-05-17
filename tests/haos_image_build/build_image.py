@@ -400,18 +400,18 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
-def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 60.0) -> None:
-    """Block until the Supervisor proxy responds successfully.
+def _wait_supervisor_ready(base_url: str, token: str) -> None:
+    """Confirm the Supervisor proxy accepts our token. Single brief retry.
 
-    Run *after* _check_core_auth has confirmed the token is admin-bound.
-    Once auth is known-good, any 401 from /api/hassio/* means Supervisor
-    hasn't received its internal token yet — usually clears in under 30s,
-    so a 60s ceiling fails fast on real breakage.
+    Run *after* _check_core_auth has confirmed the token works at HA Core.
+    HassIOView returns 401 specifically when ``request[KEY_HASS_USER].is_admin``
+    is False — and auth being already verified means the only way to get
+    here is an admin-status problem. Retry once after 5s in case there's
+    some genuine Supervisor handshake latency, then bail with a clear error.
     """
-    LOG.info("Waiting for Supervisor proxy (up to %.0fs)", timeout)
-    deadline = time.monotonic() + timeout
+    LOG.info("Checking Supervisor proxy (1 retry, ~5s)")
     last_err: Exception | None = None
-    while time.monotonic() < deadline:
+    for attempt in range(2):
         try:
             _http(
                 "GET",
@@ -423,11 +423,15 @@ def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 60.0) -> 
             return
         except urllib.error.HTTPError as e:
             last_err = e
-            time.sleep(3.0)
-        except Exception as e:
-            last_err = e
-            time.sleep(3.0)
-    raise TimeoutError(f"Supervisor proxy did not respond within {timeout}s: {last_err}")
+            if attempt == 0:
+                time.sleep(5.0)
+    raise RuntimeError(
+        f"Supervisor proxy returned {last_err} after retry. HA Core auth is "
+        "confirmed working (/api/config + /api/states both succeeded), so this "
+        "is almost certainly the HassIOView admin check (is_admin=False on the "
+        "onboarded user). Next iteration needs a WebSocket auth/current_user "
+        "call to confirm — REST has no equivalent endpoint."
+    )
 
 
 def install_addons(base_url: str, token: str) -> dict[str, str]:
