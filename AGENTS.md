@@ -132,21 +132,21 @@ When implementing features or debugging, consult these resources:
 | Label | Meaning |
 |-------|---------|
 | `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
-| `docker` | Issue is specific to the Docker / containerised deployment (`Dockerfile`, container env) |
-| `javascript` | Issue concerns the project website / Astro app under `site/` |
+| `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
+| `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
 
 **Lifecycle labels** (manually applied; do not double as close-reasons):
 
 | Label | Meaning |
 |-------|---------|
 | `wontfix` | Issue is valid but a deliberate decision was made not to address it (typically paired with close). Use when the maintainer wants to record the rejection rationale rather than silently close |
-| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, an awaiting-design decision). Recorded so a sweeper search can find what's waiting |
+| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, a pending design decision). Recorded so a sweeper search can find what's waiting |
 
 **Tracking / automation labels** (applied by tooling):
 
 | Label | Meaning |
 |-------|---------|
-| `python-upgrade` | Renovate-managed PR that bumps the project's Python version. Applied via `renovate.json` global `labels` array (auto-applied to all Renovate PRs alongside `dependencies`). |
+| `python-upgrade` | Auto-attached to every Renovate-managed PR — not only Python version bumps, but any dependency update. Configured via `renovate.json` global `labels` array alongside `dependencies`. The label name predates the wider Renovate config rollout; rename or scope-restriction is a candidate for a separate decision. |
 
 ### Issue Analysis Workflow
 
