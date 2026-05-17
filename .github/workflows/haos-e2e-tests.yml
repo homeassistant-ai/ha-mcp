@@ -121,9 +121,14 @@ jobs:
         # haos_only tests under tests/src/e2e/haos_only/ run here; tests
         # that need testcontainer-specific behavior (file mounts, etc.)
         # are marked container_only and skip automatically.
+        #
+        # --maxfail=0 overrides pytest.ini's --maxfail=3 so we see the full
+        # failure surface for triage — early-terminating loses signal.
+        # `|| true` keeps the step's exit non-zero so we capture failures
+        # without dropping out before the slowest-durations / summary lines.
         run: |
           cd tests
-          uv run pytest src/e2e/ -v --tb=short
+          uv run pytest src/e2e/ -v --tb=short --maxfail=0
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
