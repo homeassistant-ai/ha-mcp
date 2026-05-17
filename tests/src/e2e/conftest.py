@@ -28,6 +28,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
@@ -924,15 +926,34 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             _reset_ha_in_process_caches()
-            yield {
-                "container": None,
-                "port": None,
-                "base_url": base_url,
-                "config_path": None,
-                "blueprint_server": _blueprint_http_server,
-                "token": token,
-                "backend": "haos",
-            }
+            try:
+                yield {
+                    "container": None,
+                    "port": None,
+                    "base_url": base_url,
+                    "config_path": None,
+                    "blueprint_server": _blueprint_http_server,
+                    "token": token,
+                    "backend": "haos",
+                }
+            finally:
+                # Pull HA Core's runtime log out via the Supervisor /core/logs
+                # endpoint before QEMU shuts down. HA on HAOS logs to stdout
+                # (no file-based home-assistant.log) so this is the only way
+                # to see what HA itself said during the session. Saved where
+                # the workflow's haos-diagnostics upload step can find it.
+                try:
+                    log_dest = Path("/tmp/haos-diagnostics")
+                    log_dest.mkdir(parents=True, exist_ok=True)
+                    req = urllib.request.Request(
+                        f"{base_url}/api/hassio/core/logs",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        (log_dest / "ha-core-runtime.log").write_bytes(resp.read())
+                    logger.info("Dumped HA core runtime log via supervisor")
+                except Exception as exc:
+                    logger.warning("Failed to dump HA core logs: %s", exc)
         return
 
     # --- Testcontainer path ---
