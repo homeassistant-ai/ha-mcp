@@ -572,12 +572,14 @@ def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
             "/addons/core_ssh/options",
             method="post",
             data={
-                # core_ssh's required keys per its schema: authorized_keys,
-                # password, server. Empty password disables password auth
-                # entirely (key-only). server is required even when default.
+                # Full set of core_ssh required options (verified against the
+                # addon's schema): authorized_keys, password, apks, server.
+                # Empty password = key-only auth; empty apks = no extra Alpine
+                # packages.
                 "options": {
                     "authorized_keys": [pubkey_str],
                     "password": "",
+                    "apks": [],
                     "server": {"tcp_forwarding": False},
                 },
             },

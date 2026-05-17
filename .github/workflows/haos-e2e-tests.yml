@@ -21,6 +21,12 @@ on:
       - 'homeassistant-addon/**'
       - '.github/workflows/haos-e2e-tests.yml'
   workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: 'Extra pytest args (e.g. "-k test_simple_connection") for targeted iteration'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -132,7 +138,7 @@ jobs:
         # without dropping out before the slowest-durations / summary lines.
         run: |
           cd tests
-          uv run pytest src/e2e/ -v --tb=short --maxfail=0
+          uv run pytest src/e2e/ -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
