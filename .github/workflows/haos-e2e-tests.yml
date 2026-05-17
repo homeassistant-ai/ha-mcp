@@ -1,12 +1,15 @@
 name: HAOS E2E Tests
 
-# Runs the HAOS-tier E2E suite for #1281: pulls the pre-baked qcow2 from GHCR,
-# boots it under QEMU/KVM, installs the PR's ha-mcp addon build via Supervisor,
-# then runs the @pytest.mark.haos suite against the live MCP endpoint.
+# Runs the HAOS-tier E2E suite for #1281 in parallel with the existing
+# testcontainer e2e-tests.yml.
 #
-# Complementary to e2e-tests.yml (testcontainer tier). Same tests should run
-# in both environments where possible; tests opt into the HAOS tier via the
-# ``haos`` marker when they require real addons/Supervisor/store paths.
+# Image resolution strategy (per run):
+#   1. Try GitHub Actions cache (keyed on HAOS version + build inputs)
+#   2. Fall back to GHCR (published by build-haos-test-image.yml on master)
+#   3. Fall back to local build (build_image.py)
+#
+# This means the first PR introducing this workflow does a fresh local
+# build; subsequent PRs that don't touch the build inputs hit cache.
 
 on:
   pull_request:
@@ -28,8 +31,86 @@ env:
   IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
 
 jobs:
+  resolve-image:
+    name: Resolve HAOS qcow2
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    outputs:
+      cache-key: ${{ steps.key.outputs.cache-key }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute image cache key
+        id: key
+        # Cache invalidates when the build script, addon list, or HAOS pin
+        # changes. The hash captures all build inputs in a single value.
+        run: |
+          key="haos-image-$(sha256sum tests/haos_image_build/build_image.py \
+            | cut -d' ' -f1 | head -c16)"
+          echo "cache-key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore image from cache
+        id: restore-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/haos-test-image.qcow2.xz
+          key: ${{ steps.key.outputs.cache-key }}
+
+      - name: Try pulling from GHCR
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        id: ghcr-pull
+        continue-on-error: true
+        run: |
+          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
+          tag="${IMAGE_REPO}:${version}-latest"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u ${{ github.actor }} --password-stdin
+          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+            | tar -xz -C /tmp oras
+          mkdir -p /tmp/haos-pull && cd /tmp/haos-pull
+          /tmp/oras pull "$tag"
+          mv haos-test-image.qcow2.xz /tmp/haos-test-image.qcow2.xz
+
+      - name: Install build dependencies (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xz-utils curl
+
+      - name: Enable KVM group perms (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build image locally (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+        run: |
+          python3 tests/haos_image_build/build_image.py --verbose \
+            --output /tmp/haos-test-image.qcow2.xz
+
+      - name: Save image to cache (cache miss only)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /tmp/haos-test-image.qcow2.xz
+          key: ${{ steps.key.outputs.cache-key }}
+
+      - name: Upload image as artifact for downstream test job
+        uses: actions/upload-artifact@v5
+        with:
+          name: haos-test-image
+          path: /tmp/haos-test-image.qcow2.xz
+          retention-days: 1
+          if-no-files-found: error
+
   haos-e2e:
     name: HAOS E2E Tests
+    needs: resolve-image
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
@@ -60,31 +141,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Resolve pinned HAOS image tag
-        id: image_tag
-        run: |
-          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
-          echo "tag=${IMAGE_REPO}:${version}-latest" >> "$GITHUB_OUTPUT"
-
-      - name: Cache HAOS qcow2
-        id: cache-image
-        uses: actions/cache@v5
+      - name: Download HAOS qcow2
+        uses: actions/download-artifact@v6
         with:
-          path: /tmp/haos-test-image.qcow2.xz
-          key: haos-image-${{ steps.image_tag.outputs.tag }}
-
-      - name: Set up oras
-        if: steps.cache-image.outputs.cache-hit != 'true'
-        uses: oras-project/setup-oras@v1
-
-      - name: Pull HAOS qcow2 from GHCR
-        if: steps.cache-image.outputs.cache-hit != 'true'
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
-          mkdir -p /tmp/haos-pull
-          cd /tmp/haos-pull
-          oras pull "${{ steps.image_tag.outputs.tag }}"
-          mv haos-test-image.qcow2.xz /tmp/haos-test-image.qcow2.xz
+          name: haos-test-image
+          path: /tmp/
 
       - name: Decompress image
         run: |

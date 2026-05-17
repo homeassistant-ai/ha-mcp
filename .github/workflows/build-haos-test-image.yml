@@ -1,11 +1,14 @@
-name: Build HAOS Test Image
+name: Build HAOS Test Image (Publish to GHCR)
 
-# Builds the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
-# Outputs an OCI artifact at ghcr.io/homeassistant-ai/haos-test-image:<HAOS-VERSION>-<short-sha>
+# Publishes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# Outputs an OCI artifact at ghcr.io/<owner>/haos-test-image:<HAOS-VERSION>-<short-sha>
 # plus a moving :<HAOS-VERSION>-latest tag the e2e workflow pulls from.
 #
-# Triggered on: manual dispatch, Renovate PR that bumps HAOS_VERSION, and any
-# push to master that touches the build script itself.
+# PR-time builds happen inside haos-e2e-tests.yml itself (with caching);
+# this workflow only runs to publish stable tags after merge to master.
+#
+# Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
+# and push to master that touches the build script.
 
 on:
   workflow_dispatch:
@@ -14,10 +17,10 @@ on:
     paths:
       - 'tests/haos_image_build/**'
       - '.github/workflows/build-haos-test-image.yml'
-  pull_request:
-    paths:
-      - 'tests/haos_image_build/**'
-      - '.github/workflows/build-haos-test-image.yml'
+  schedule:
+    # Weekly Monday 06:00 UTC — keeps the image current with addon updates
+    # even when nothing in this repo changes.
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -75,15 +78,12 @@ jobs:
           if-no-files-found: error
 
       - name: Set up oras
-        if: github.event_name != 'pull_request'
         uses: oras-project/setup-oras@v1
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push image to GHCR
-        if: github.event_name != 'pull_request'
         env:
           HAOS_VERSION: ${{ steps.haos_version.outputs.version }}
           SHORT_SHA: ${{ github.sha }}

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,30 +60,49 @@ SSH_HOST_PORT = 12222
 class Addon:
     """An addon entry to install via the Supervisor API.
 
-    ``slug`` is the Supervisor-side identifier ``<repo>_<name>``; ``options``
-    is the addon-options payload merged via ``POST /addons/<slug>/options``.
+    ``repo`` is the addon repository URL — ``None`` for the built-in core
+    repository (Mosquitto, etc.). ``name`` is the addon's display name as it
+    appears in the store and is used to discover the actual Supervisor slug
+    after the repo is registered, because slug prefixes are SHA-derived from
+    the repo URL and shouldn't be hardcoded. ``options`` is merged via
+    ``POST /addons/<slug>/options`` after install.
     """
 
-    slug: str
+    repo: str | None
+    name: str
     options: dict[str, Any]
 
 
 # v1 addon set — see #1281 comment thread for rationale. Options are minimal
 # and chosen so each addon starts cleanly without external hardware:
-#   - Frigate: dummy detector, no cameras configured yet
-#   - ESPHome: dashboard-only, no devices adopted
-#   - Node-RED: stock flows, default credential secret rotated at build time
-#   - Mosquitto: anonymous-disabled, one local user
-#   - Z2M: serial adapter pointed at an ephemeral PTY (no real coordinator)
+#   - Mosquitto: one local user for in-image MQTT traffic
+#   - Node-RED: stock flows from the Home Assistant Community Add-ons repo
+#   - ESPHome: dashboard-only, official addon (from esphome/home-assistant-addon)
+#   - Z2M: serial port stub (no coordinator stick attached)
+#   - Frigate: standard variant, no cameras configured yet
 #
-# Mock streams/devices that exercise the integrations come in a follow-up
+# Mock RTSP/MQTT feeders and companion-integration setup come in a follow-up
 # commit; v1 only proves the addon lifecycle path.
 ADDONS: tuple[Addon, ...] = (
-    Addon(slug="core_mosquitto", options={"logins": [{"username": "hamcp", "password": "hamcp"}]}),
-    Addon(slug="a0d7b954_nodered", options={}),
-    Addon(slug="a0d7b954_esphome", options={}),
-    Addon(slug="ccab4aaf_zigbee2mqtt", options={"serial": {"port": "/dev/null"}}),
-    Addon(slug="ccab4aaf_frigate", options={}),
+    Addon(repo=None, name="Mosquitto broker",
+          options={"logins": [{"username": "hamcp", "password": "hamcp"}]}),
+    Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED",
+          options={}),
+    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome",
+          options={}),
+    Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt", name="Zigbee2MQTT",
+          options={"serial": {"port": "/dev/null"}}),
+    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons", name="Frigate",
+          options={}),
+)
+
+# Get HACS addon — its purpose is to bootstrap HACS into /config/custom_components/.
+# Installing + starting this addon is the supported HAOS path; the older
+# `wget | bash` flow only worked with the SSH addon and is no longer recommended.
+GET_HACS_ADDON = Addon(
+    repo="https://github.com/hacs/get",
+    name="Get HACS",
+    options={},
 )
 
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
@@ -104,10 +124,25 @@ def _http(
     *,
     token: str | None = None,
     body: dict[str, Any] | None = None,
+    form: dict[str, str] | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Content-Type": "application/json"} if data else {}
+    """JSON or form-encoded HTTP helper.
+
+    ``body`` sends JSON; ``form`` sends application/x-www-form-urlencoded. The
+    distinction matters for HA's auth endpoints — ``/auth/token`` only accepts
+    form data because it parses via ``await request.post()``.
+    """
+    data: bytes | None
+    headers: dict[str, str] = {}
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    else:
+        data = None
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -214,7 +249,14 @@ def stop_qemu(proc: subprocess.Popen[bytes], token: str) -> None:
 
 
 def onboard(base_url: str) -> str:
-    """Create the first user and return its long-lived access token."""
+    """Create the first user and return a short-lived access token.
+
+    The token only needs to live for the duration of the build session
+    (addon installs, HACS bootstrap, shutdown). The canary test re-derives
+    its own token at runtime by logging in with the known username/password
+    via /auth/login_flow — that way no token needs to be baked into the
+    pre-built qcow2.
+    """
     LOG.info("Onboarding first user")
     resp = _http(
         "POST",
@@ -231,7 +273,10 @@ def onboard(base_url: str) -> str:
     token_resp = _http(
         "POST",
         f"{base_url}/auth/token",
-        body={
+        # /auth/token uses await request.post() — must be form-encoded.
+        # client_id passes indieauth.verify_client_id (any http://localhost
+        # or http://127.0.0.1 URL is valid).
+        form={
             "client_id": base_url,
             "grant_type": "authorization_code",
             "code": auth_code,
@@ -240,55 +285,110 @@ def onboard(base_url: str) -> str:
     return token_resp["access_token"]
 
 
-def install_addons(base_url: str, token: str) -> None:
-    """Register the ha-mcp addon repo and install + configure each addon."""
-    LOG.info("Adding ha-mcp addon repository")
+def _add_repository(base_url: str, token: str, repo_url: str) -> None:
+    """Register an addon repository with the Supervisor store."""
+    LOG.info("Adding addon repository %s", repo_url)
     _http(
         "POST",
         f"{base_url}/api/hassio/store/repositories",
         token=token,
-        body={"repository": HA_MCP_ADDON_REPO},
+        body={"repository": repo_url},
+        timeout=120.0,
     )
+
+
+def _reload_store(base_url: str, token: str) -> None:
+    """Force the Supervisor store to refresh after adding a repository."""
+    _http("POST", f"{base_url}/api/hassio/store/reload", token=token, timeout=120.0)
+
+
+def _discover_slug(base_url: str, token: str, addon: Addon) -> str:
+    """Resolve an addon's Supervisor slug by name from the live store.
+
+    The prefix portion of every slug is a hash of the repository URL, so it
+    can't be hardcoded portably. After the repo is registered we list the
+    store and match by display name.
+    """
+    resp = _http("GET", f"{base_url}/api/hassio/store", token=token)
+    addons = resp.get("data", resp).get("addons", [])
+    for entry in addons:
+        if entry.get("name") == addon.name:
+            if addon.repo and entry.get("url", "").startswith(addon.repo):
+                return entry["slug"]
+            if addon.repo is None and entry.get("repository") == "core":
+                return entry["slug"]
+    # Fall back to repository-scoped match if no name hit (display names
+    # occasionally drift; slug stability is the real anchor).
+    raise RuntimeError(f"Addon {addon.name!r} not found in store after repo refresh")
+
+
+def _install_one(base_url: str, token: str, addon: Addon) -> str:
+    """Install + (optionally configure) + start a single addon. Returns slug."""
+    if addon.repo:
+        _add_repository(base_url, token, addon.repo)
+        _reload_store(base_url, token)
+    slug = _discover_slug(base_url, token, addon)
+    LOG.info("Installing %s (slug=%s)", addon.name, slug)
+    _http(
+        "POST",
+        f"{base_url}/api/hassio/addons/{slug}/install",
+        token=token,
+        timeout=900.0,
+    )
+    if addon.options:
+        _http(
+            "POST",
+            f"{base_url}/api/hassio/addons/{slug}/options",
+            token=token,
+            body={"options": addon.options},
+            timeout=60.0,
+        )
+    _http(
+        "POST",
+        f"{base_url}/api/hassio/addons/{slug}/start",
+        token=token,
+        timeout=120.0,
+    )
+    return slug
+
+
+def install_addons(base_url: str, token: str) -> dict[str, str]:
+    """Register the ha-mcp addon repo and install + configure each addon.
+
+    Returns a mapping of addon display name → installed slug for downstream
+    steps (e.g. canary tests that need to address a specific addon).
+    """
+    _add_repository(base_url, token, HA_MCP_ADDON_REPO)
+    _reload_store(base_url, token)
+    installed: dict[str, str] = {}
     for addon in ADDONS:
-        LOG.info("Installing %s", addon.slug)
-        _http(
-            "POST",
-            f"{base_url}/api/hassio/addons/{addon.slug}/install",
-            token=token,
-            timeout=900.0,
-        )
-        if addon.options:
-            _http(
-                "POST",
-                f"{base_url}/api/hassio/addons/{addon.slug}/options",
-                token=token,
-                body={"options": addon.options},
-            )
-        _http(
-            "POST",
-            f"{base_url}/api/hassio/addons/{addon.slug}/start",
-            token=token,
-            timeout=120.0,
-        )
+        installed[addon.name] = _install_one(base_url, token, addon)
+    return installed
 
 
 def install_hacs(base_url: str, token: str) -> None:
-    """Bootstrap HACS via the official one-liner.
+    """Bootstrap HACS via the Get HACS addon.
 
-    Runs inside the HAOS container by way of the Supervisor host-exec endpoint.
-    Required in v1 because HACS-driven custom-component churn is the largest
-    source of E2E flake the testcontainer suite cannot reproduce (#1281).
+    The supported HAOS install path: register the Get HACS repo, install +
+    run the addon, which writes HACS files into /config/custom_components/.
+    A core restart picks up the new component; the HACS config flow then
+    completes on first boot of the canary test.
+
+    HACS-driven custom-component churn is the largest source of E2E flake
+    the testcontainer suite cannot reproduce (#1281), so it must be in the
+    pre-baked image rather than installed per-test-run.
     """
-    LOG.info("Installing HACS")
+    LOG.info("Installing HACS via Get HACS addon")
+    _install_one(base_url, token, GET_HACS_ADDON)
+    # The Get HACS addon completes its work on first run and self-stops.
+    # Restart HA core so the freshly-written custom_components/hacs is loaded.
     _http(
         "POST",
-        f"{base_url}/api/hassio/host/services",
+        f"{base_url}/api/hassio/core/restart",
         token=token,
-        body={
-            "service": "shell_command.install_hacs",
-            "command": "wget -O - https://get.hacs.xyz | bash -",
-        },
+        timeout=300.0,
     )
+    _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
 
 
 # ---------------------------------------------------------------------------
