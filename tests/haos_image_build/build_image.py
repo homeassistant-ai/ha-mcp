@@ -633,7 +633,7 @@ def bake_test_state(qcow2: Path) -> None:
         # consistent DB with the same data — no WAL dependency.
         db_src = staging / "home-assistant_v2.db"
         if db_src.exists():
-            import sqlite3  # noqa: PLC0415
+            import sqlite3
 
             vacuumed = workdir / "home-assistant_v2.db"
             con = sqlite3.connect(str(db_src))
