@@ -535,28 +535,92 @@ def _wait_supervisor_ready(ws: HAWebSocket) -> None:
     LOG.info("Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch"))
 
 
+_CUSTOM_COMPONENT_ENTRY_TEMPLATE: dict[str, Any] = {
+    "created_at": "2025-09-07T23:56:28.040744+00:00",
+    "data": {},
+    "discovery_keys": {},
+    "minor_version": 1,
+    "modified_at": "2025-09-07T23:56:28.040744+00:00",
+    "options": {},
+    "pref_disable_new_entities": False,
+    "pref_disable_polling": False,
+    "source": "user",
+    "subentries": [],
+    "unique_id": None,
+    "version": 1,
+}
+
+
 def bake_test_state(qcow2: Path) -> None:
-    """Inject tests/initial_test_state into the qcow2 via libguestfs.
+    """Inject tests/initial_test_state + repo custom components into the qcow2.
 
-    Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
-    guestfish in --inspector mode to mount the data partition (where
-    /config lives on HAOS), untars initial_test_state into
-    /supervisor/homeassistant/, then exits cleanly.
+    Runs *after* HAOS has been shut down so the qcow2 isn't in use. Stages
+    a temp dir mirroring what the testcontainer fixture builds at runtime —
+    initial_test_state contents plus the two custom components the
+    fixture's _install_custom_component() injects (mcp_proxy and
+    ha_mcp_tools) — then uses guestfish to tar-in that staging dir into
+    /supervisor/homeassistant/ on the HAOS data partition.
 
-    This is the HAOS-native bake: no SSH addon, no port forwarding, no
-    network races — just direct filesystem write to the offline image.
-    Equivalent of the testcontainer fixture's
-    ``shutil.copytree(initial_test_state, /config)`` step.
+    HAOS-native bake: no SSH addon, no port forwarding — direct
+    filesystem write to the offline image.
     """
-    initial_state_path = Path(__file__).resolve().parent.parent / "initial_test_state"
+    tests_dir = Path(__file__).resolve().parent.parent
+    repo_root = tests_dir.parent
+    initial_state_path = tests_dir / "initial_test_state"
     if not initial_state_path.exists():
         raise RuntimeError(f"initial_test_state not found at {initial_state_path}")
 
     LOG.info("Baking seed state into qcow2 via libguestfs from %s", initial_state_path)
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
+        # Stage: copy initial_test_state then overlay the custom components.
+        staging = workdir / "config"
+        shutil.copytree(initial_state_path, staging)
+
+        # Custom components the testcontainer fixture injects at runtime via
+        # _install_custom_component. Mirroring that here so HAOS gets the same.
+        component_srcs: list[tuple[str, Path]] = [
+            ("ha_mcp_tools", repo_root / "custom_components" / "ha_mcp_tools"),
+            ("mcp_proxy", repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy"),
+        ]
+        installed_domains: list[str] = []
+        for domain, src in component_srcs:
+            if not src.exists():
+                LOG.warning("Custom component source missing: %s — skipping", src)
+                continue
+            dest = staging / "custom_components" / domain
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+            installed_domains.append(domain)
+            LOG.info("Staged custom_components/%s from %s", domain, src)
+
+        # mcp_proxy needs a config file pointing at HA's own API for the
+        # webhook proxy tests. Matches what the testcontainer fixture writes.
+        if "mcp_proxy" in installed_domains:
+            (staging / ".mcp_proxy_config.json").write_text(json.dumps({
+                "target_url": "http://localhost:8123/api/",
+                "webhook_id": "mcp_e2e_test_webhook_proxy",
+            }))
+
+        # Inject config entries so HA loads each custom component on startup.
+        ce_path = staging / ".storage" / "core.config_entries"
+        if ce_path.exists() and installed_domains:
+            ce_data = json.loads(ce_path.read_text())
+            entries = ce_data.setdefault("data", {}).setdefault("entries", [])
+            existing_domains = {e.get("domain") for e in entries}
+            for domain in installed_domains:
+                if domain in existing_domains:
+                    continue
+                entry = dict(_CUSTOM_COMPONENT_ENTRY_TEMPLATE)
+                entry["domain"] = domain
+                entry["entry_id"] = f"haos_bake_{domain}"
+                entry["title"] = domain
+                entries.append(entry)
+                LOG.info("Injected %s config entry into core.config_entries", domain)
+            ce_path.write_text(json.dumps(ce_data, indent=2))
+
         seed_tar = workdir / "seed.tar"
-        _run(["tar", "-C", str(initial_state_path), "-cf", str(seed_tar), "."])
+        _run(["tar", "-C", str(staging), "-cf", str(seed_tar), "."])
 
         # HAOS qcow2 has multiple partitions. The hassos-data partition
         # (usually /dev/sda8) holds /supervisor/homeassistant which HA Core

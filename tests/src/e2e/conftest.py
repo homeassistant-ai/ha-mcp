@@ -914,6 +914,16 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
         with boot_haos_qemu(image_path) as base_url:
             token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
+            # Mirror the env-var setup the testcontainer path does below at
+            # ~line 1077 — feature flags for the in-process MCP server, plus
+            # HA URL/token for any code reading from env. The cache reset
+            # ensures the WebSocket pool and settings pick up the HAOS URL.
+            os.environ["HOMEASSISTANT_URL"] = base_url
+            os.environ["HOMEASSISTANT_TOKEN"] = token
+            os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+            os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+            os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
+            _reset_ha_in_process_caches()
             yield {
                 "container": None,
                 "port": None,
