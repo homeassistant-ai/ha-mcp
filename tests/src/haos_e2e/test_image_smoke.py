@@ -1,24 +1,22 @@
-"""Smoke test for the HAOS test image artifact.
+"""Cheap pre-boot smoke test for the HAOS test image artifact.
 
-Validates the build → publish → consume pipeline end-to-end without yet
-booting the image: the artifact is present at the expected path, is a
-non-trivial size, and is recognised by ``qemu-img info`` as a valid qcow2.
+Validates the build → publish → consume pipeline before the conftest
+fixtures attempt to boot the qcow2. If this fails, the canary tests
+will also fail but with much noisier output; this gives a one-line
+"image staging is broken" signal.
 
-Real lifecycle tests (boot HAOS, install ha-mcp PR build via Supervisor,
-exercise addon-aware tools) land in follow-up commits on this branch
-once the conftest fixture refactor is in.
+(Previously also called ``qemu-img info`` to validate qcow2 magic, but
+that's impossible to do once the session conftest has booted QEMU
+against the file — QEMU holds an exclusive lock. The successful boot
+in conftest is a stronger validity check anyway.)
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
-
-pytestmark = pytest.mark.haos
 
 
 def _image_path() -> Path:
@@ -35,18 +33,3 @@ def test_image_artifact_present() -> None:
     # almost certainly means the download/extract failed silently.
     size_mb = path.stat().st_size / 1024 / 1024
     assert size_mb > 100, f"qcow2 implausibly small ({size_mb:.1f} MB) — likely corrupt"
-
-
-def test_image_is_valid_qcow2() -> None:
-    path = _image_path()
-    if not shutil.which("qemu-img"):
-        pytest.skip("qemu-img not installed on this runner")
-    result = subprocess.run(
-        ["qemu-img", "info", "--output=json", str(path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert '"format": "qcow2"' in result.stdout, (
-        f"qemu-img did not recognise {path} as qcow2:\n{result.stdout}"
-    )
