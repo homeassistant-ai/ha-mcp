@@ -118,7 +118,7 @@ jobs:
       - name: Run HAOS-tier E2E suite
         run: |
           cd tests
-          uv run pytest src/e2e/haos/ -m haos -v --tb=short
+          uv run pytest src/haos_e2e/ -m haos -v --tb=short
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2

@@ -49,8 +49,8 @@ HAOS_QCOW2_URL = (
 # though the image is public and the password is not a real secret, keeping
 # it overridable avoids hardcoding a credential string in the repo per the
 # project's style guide.
-ONBOARDING_USER = os.environ.get("HAOS_BUILD_USERNAME", "hamcp_test")
-ONBOARDING_PASSWORD = os.environ.get("HAOS_BUILD_PASSWORD", "hamcp_test_password")
+ONBOARDING_USER = os.environ.get("HAOS_BUILD_USERNAME", "mcp")
+ONBOARDING_PASSWORD = os.environ.get("HAOS_BUILD_PASSWORD", "mcp")
 ONBOARDING_NAME = "HA-MCP CI"
 
 # Local TCP ports the host uses to talk to the booted HAOS. Fixed because
