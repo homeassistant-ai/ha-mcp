@@ -926,13 +926,22 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             _reset_ha_in_process_caches()
+            # The session-scope _blueprint_http_server fixture computes its
+            # base_url using host.docker.internal — meaningless from inside
+            # the HAOS QEMU guest. Slirp user networking always reaches the
+            # host at 10.0.2.2, so rewrite the URL here for tests that fetch
+            # blueprints through HA's import_blueprint flow.
+            blueprint_for_haos = {
+                **_blueprint_http_server,
+                "base_url": f"http://10.0.2.2:{_blueprint_http_server['port']}",
+            }
             try:
                 yield {
                     "container": None,
                     "port": None,
                     "base_url": base_url,
                     "config_path": None,
-                    "blueprint_server": _blueprint_http_server,
+                    "blueprint_server": blueprint_for_haos,
                     "token": token,
                     "backend": "haos",
                 }
