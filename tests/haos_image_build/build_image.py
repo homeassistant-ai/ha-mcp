@@ -560,6 +560,32 @@ def bake_test_state(qcow2: Path) -> None:
     LOG.info("Baking seed state into qcow2 via libguestfs from %s", initial_state_path)
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
+        # Stage the seed under a temp dir so we can normalise the recorder
+        # DB before tarring (see below).
+        staging = workdir / "config"
+        shutil.copytree(initial_state_path, staging)
+
+        # Recorder DB normalisation. initial_test_state ships
+        # home-assistant_v2.db in WAL journal mode but WITHOUT the
+        # companion .wal/.shm files — when HAOS opens it, SQLite finds
+        # the main DB inconsistent (last shutdown didn't checkpoint) and
+        # reports "database disk image is malformed", which crashes the
+        # recorder executor (verified in CI: HA log line 56). VACUUM into
+        # a new file produces a single-file, journal-mode, fully
+        # consistent DB with the same data — no WAL dependency.
+        db_src = staging / "home-assistant_v2.db"
+        if db_src.exists():
+            import sqlite3  # noqa: PLC0415
+
+            vacuumed = workdir / "home-assistant_v2.db"
+            con = sqlite3.connect(str(db_src))
+            try:
+                con.execute(f"VACUUM INTO '{vacuumed}'")
+            finally:
+                con.close()
+            shutil.move(str(vacuumed), str(db_src))
+            LOG.info("Vacuumed recorder DB → %s (size %d B)", db_src, db_src.stat().st_size)
+
         seed_tar = workdir / "seed.tar"
         # --owner=0 --group=0 + --numeric-owner forces the archived files
         # to root:root regardless of the source UID on the build runner
@@ -568,7 +594,7 @@ def bake_test_state(qcow2: Path) -> None:
         # so its homeassistant user can read them via the volume mount.
         _run([
             "tar", "--numeric-owner", "--owner=0", "--group=0",
-            "-C", str(initial_state_path), "-cf", str(seed_tar), ".",
+            "-C", str(staging), "-cf", str(seed_tar), ".",
         ])
 
         # HAOS qcow2 has multiple partitions. The hassos-data partition
