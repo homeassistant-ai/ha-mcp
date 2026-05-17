@@ -587,8 +587,6 @@ def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
         )
         ws.supervisor_api("/addons/core_ssh/start", method="post", timeout=120.0)
         _wait_port(SSH_HOST_PORT, timeout=60)
-        # Give sshd a moment to bind after the port is open
-        time.sleep(3.0)
 
         ssh_base = [
             "ssh",
@@ -596,9 +594,26 @@ def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
+            "-o", "ConnectTimeout=10",
             "-p", str(SSH_HOST_PORT),
             "root@127.0.0.1",
         ]
+
+        # Even after the TCP port opens, sshd may still be initialising (got
+        # "kex_exchange_identification: read: Connection reset by peer" in
+        # first run). Poll a noop SSH command until it succeeds.
+        LOG.info("Waiting for sshd to accept connections")
+        ssh_deadline = time.monotonic() + 60.0
+        while True:
+            probe = subprocess.run([*ssh_base, "true"], capture_output=True, timeout=15)
+            if probe.returncode == 0:
+                break
+            if time.monotonic() >= ssh_deadline:
+                raise RuntimeError(
+                    f"sshd never accepted a connection within 60s "
+                    f"(last stderr: {probe.stderr.decode()[:200]})"
+                )
+            time.sleep(3.0)
 
         LOG.info("Streaming initial_test_state via tar | ssh into /config/")
         tar_proc = subprocess.Popen(
