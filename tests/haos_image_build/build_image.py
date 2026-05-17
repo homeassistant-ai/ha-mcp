@@ -535,114 +535,45 @@ def _wait_supervisor_ready(ws: HAWebSocket) -> None:
     LOG.info("Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch"))
 
 
-def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
-    """Install the SSH addon and scp tests/initial_test_state into /config/.
+def bake_test_state(qcow2: Path) -> None:
+    """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
-    Bakes the testcontainer's seed state into the qcow2 so the existing
-    e2e suite runs against HAOS with the same data: custom components
-    (ha_mcp_tools, mcp_proxy), seeded automations/scripts, .storage
-    registries (devices, areas, integrations), and the pre-baked
-    recorder DB. Equivalent of the testcontainer fixture's
-    `shutil.copytree(initial_test_state, /config)` + `_install_custom_component()`
-    steps — but routed through SSH into a live HAOS instead of a Docker
-    volume mount.
+    Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
+    guestfish in --inspector mode to mount the data partition (where
+    /config lives on HAOS), untars initial_test_state into
+    /supervisor/homeassistant/, then exits cleanly.
 
-    Restarts HA Core after extraction so the new config + custom
-    components are picked up.
+    This is the HAOS-native bake: no SSH addon, no port forwarding, no
+    network races — just direct filesystem write to the offline image.
+    Equivalent of the testcontainer fixture's
+    ``shutil.copytree(initial_test_state, /config)`` step.
     """
     initial_state_path = Path(__file__).resolve().parent.parent / "initial_test_state"
     if not initial_state_path.exists():
         raise RuntimeError(f"initial_test_state not found at {initial_state_path}")
 
-    LOG.info("Baking seed state into HAOS image from %s", initial_state_path)
-    keydir = Path(tempfile.mkdtemp(prefix="haos-bake-ssh-"))
-    privkey = keydir / "id_ed25519"
+    LOG.info("Baking seed state into qcow2 via libguestfs from %s", initial_state_path)
+    workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
+        seed_tar = workdir / "seed.tar"
+        _run(["tar", "-C", str(initial_state_path), "-cf", str(seed_tar), "."])
+
+        # guestfish --inspector auto-mounts the qcow2's partitions; HAOS's
+        # data partition exposes /supervisor/homeassistant which HA Core
+        # sees as /config. tar-in expands our seed tar there. We also
+        # chmod the tree so HA's homeassistant user can read everything.
         _run([
-            "ssh-keygen", "-t", "ed25519", "-f", str(privkey),
-            "-N", "", "-q", "-C", "haos-build-bake",
+            "guestfish",
+            "--rw",
+            "-a", str(qcow2),
+            "-i",
+            "tar-in", str(seed_tar), "/supervisor/homeassistant",
+            ":",
+            "chmod-r", "0755", "/supervisor/homeassistant",
         ])
-        pubkey_str = privkey.with_suffix(".pub").read_text().strip()
-
-        # Install the official Terminal & SSH addon (core repo, slug core_ssh).
-        # Configured with our build-time key only; no password auth.
-        ssh_addon = Addon(repo=None, name="Terminal & SSH", start=False)
-        _install_one(ws, ssh_addon)
-        ws.supervisor_api(
-            "/addons/core_ssh/options",
-            method="post",
-            data={
-                # Full set of core_ssh required options (verified against the
-                # addon's schema): authorized_keys, password, apks, server.
-                # Empty password = key-only auth; empty apks = no extra Alpine
-                # packages.
-                "options": {
-                    "authorized_keys": [pubkey_str],
-                    "password": "",
-                    "apks": [],
-                    "server": {"tcp_forwarding": False},
-                },
-            },
-            timeout=60.0,
-        )
-        ws.supervisor_api("/addons/core_ssh/start", method="post", timeout=120.0)
-        _wait_port(SSH_HOST_PORT, timeout=60)
-
-        ssh_base = [
-            "ssh",
-            "-i", str(privkey),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "ConnectTimeout=10",
-            "-p", str(SSH_HOST_PORT),
-            "root@127.0.0.1",
-        ]
-
-        # Even after the TCP port opens, sshd may still be initialising (got
-        # "kex_exchange_identification: read: Connection reset by peer" in
-        # first run). Poll a noop SSH command until it succeeds.
-        LOG.info("Waiting for sshd to accept connections")
-        ssh_deadline = time.monotonic() + 60.0
-        while True:
-            probe = subprocess.run([*ssh_base, "true"], capture_output=True, timeout=15)
-            if probe.returncode == 0:
-                break
-            if time.monotonic() >= ssh_deadline:
-                raise RuntimeError(
-                    f"sshd never accepted a connection within 60s "
-                    f"(last stderr: {probe.stderr.decode()[:200]})"
-                )
-            time.sleep(3.0)
-
-        LOG.info("Streaming initial_test_state via tar | ssh into /config/")
-        tar_proc = subprocess.Popen(
-            ["tar", "-C", str(initial_state_path), "-cf", "-", "."],
-            stdout=subprocess.PIPE,
-        )
-        ssh_proc = subprocess.Popen(
-            [*ssh_base, "tar -C /config -xf - && chmod -R go+rX /config"],
-            stdin=tar_proc.stdout,
-        )
-        if tar_proc.stdout is not None:
-            tar_proc.stdout.close()  # let tar see SIGPIPE if ssh dies
-        rc = ssh_proc.wait(timeout=300)
-        tar_proc.wait(timeout=30)
-        if rc != 0:
-            raise RuntimeError(f"ssh-tar extract failed with exit {rc}")
-
-        # Restart HA core so the new /config (custom_components especially)
-        # is loaded. Same WS-close-during-restart handling as install_hacs.
-        from websockets.exceptions import ConnectionClosed
-        LOG.info("Restarting HA Core to apply baked seed state")
-        try:
-            ws.supervisor_api("/core/restart", method="post", timeout=300.0)
-        except ConnectionClosed:
-            LOG.info("WS closed during core restart (expected)")
-        _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
-        ws.reconnect()
+        LOG.info("Bake complete")
     finally:
-        shutil.rmtree(keydir, ignore_errors=True)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def install_addons(ws: HAWebSocket) -> dict[str, str]:
@@ -707,7 +638,6 @@ def build(work_dir: Path, output: Path) -> None:
         with HAWebSocket(base_url, token) as ws:
             install_addons(ws)
             install_hacs(ws, base_url)
-            bake_test_state(ws, base_url)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
             # feeders. The canary test only needs addon lifecycle for now.
@@ -717,6 +647,10 @@ def build(work_dir: Path, output: Path) -> None:
         qemu.terminate()
         qemu.wait(timeout=60)
         raise
+
+    # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
+    # the testcontainer's seed state into /config/ for the e2e suite.
+    bake_test_state(qcow2)
     # Skip post-build compression for now: empirically qemu-img convert -c
     # only shrinks ~7 GB → ~7 GB (Docker layer contents don't compress well
     # with zlib) but adds 9 min, and xz -9 -T0 adds >25 min. Just sparse-copy

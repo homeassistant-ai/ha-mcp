@@ -66,11 +66,11 @@ jobs:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
-      - name: Install QEMU + OVMF
+      - name: Install QEMU + OVMF + libguestfs
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils ovmf xz-utils curl
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
 
       - name: Enable KVM group perms
         run: |
