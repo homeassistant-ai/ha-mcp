@@ -284,7 +284,16 @@ def _classify_by_message(
         # heterogeneous vol.Invalid vocabulary without relying on an
         # error code (always unknown_error from the bridge).
         result = create_validation_error(error_msg, context=context)
-    elif "not found" in error_str or "404" in error_str:
+    elif (
+        "not found" in error_str
+        or "404" in error_str
+        or "unknown config specified" in error_str
+    ):
+        # ``unknown config specified`` is HA Core's WS-bridge phrasing for
+        # missing-dashboard 404s (lovelace/config with an unknown url_path).
+        # The string contains neither ``not found`` nor ``404``, so it would
+        # otherwise fall through to the ``command failed:`` SERVICE_CALL_FAILED
+        # fallback below and the agent would lose the not-found signal.
         entity_id = context.get("entity_id") if context else None
         if entity_id:
             result = create_entity_not_found_error(entity_id, details=error_msg)
