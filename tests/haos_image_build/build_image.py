@@ -573,6 +573,10 @@ def bake_test_state(qcow2: Path) -> None:
             LOG.error("guestfish list-filesystems failed: %s", probe.stderr)
         # Now do the actual write. Mount data partition by label "hassos-data"
         # which HAOS sets at OS install time (stable across HAOS versions).
+        # tar-in preserves the source files' permissions (644/755 as
+        # checked out from git), so no separate chmod step is needed —
+        # which is good because guestfish has no recursive chmod builtin
+        # (`chmod-r` is not a valid command; only single-target `chmod`).
         _run([
             "guestfish",
             "--rw",
@@ -582,8 +586,6 @@ def bake_test_state(qcow2: Path) -> None:
             "mount", "/dev/sda8", "/",
             ":",
             "tar-in", str(seed_tar), "/supervisor/homeassistant",
-            ":",
-            "chmod-r", "0755", "/supervisor/homeassistant",
         ])
         LOG.info("Bake complete")
     finally:
