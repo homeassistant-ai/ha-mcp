@@ -268,7 +268,7 @@ async def haos_mcp_client(
 # ---------------------------------------------------------------------------
 
 
-def pytest_collection_modifyitems(_config, items):
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     # Auto-apply the haos marker to everything in this package so the
     # workflow's `-m haos` filter works without per-file pytestmark.
     haos = pytest.mark.haos
