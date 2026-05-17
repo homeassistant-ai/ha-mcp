@@ -1,9 +1,9 @@
 """
-Config Entry Flow API tools for Home Assistant MCP server.
+Config Entry Flow API machinery for Home Assistant MCP server.
 
 This module provides the shared machinery for creating and updating
 config-entry-based helpers (template, group, utility_meter, etc.) via the
-Config Entry Flow API, plus the ha_get_helper_schema tool.
+Config Entry Flow API.
 
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
@@ -13,20 +13,11 @@ for the 15 helper types listed in FLOW_HELPER_TYPES.
 import asyncio
 import logging
 from enum import StrEnum
-from typing import Annotated, Any, Literal
-
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
-from pydantic import Field
+from typing import Any, Literal
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from .helpers import (
-    exception_to_structured_error,
-    log_tool_usage,
-    raise_tool_error,
-    register_tool_methods,
-)
+from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -69,41 +60,6 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset({
     "generic_hygrostat",
 })
 
-# Issue #1149: full set accepted by ha_get_helper_schema (15 flow + 12
-# simple). Simple types route to a static dict in tools_config_helpers
-# rather than starting an HA flow.
-ALL_HELPER_TYPES = Literal[
-    # Flow helpers (mirrors SUPPORTED_HELPERS above)
-    "template",
-    "group",
-    "utility_meter",
-    "derivative",
-    "min_max",
-    "threshold",
-    "integration",
-    "statistics",
-    "trend",
-    "random",
-    "filter",
-    "tod",
-    "generic_thermostat",
-    "switch_as_x",
-    "generic_hygrostat",
-    # Simple helpers (mirrors SIMPLE_HELPER_TYPES in tools_config_helpers)
-    "input_button",
-    "input_boolean",
-    "input_select",
-    "input_number",
-    "input_text",
-    "input_datetime",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-]
-
 # Keys used to specify a menu selection — stripped before submitting form data.
 _MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
 
@@ -120,9 +76,8 @@ class _FlowType(StrEnum):
 # Module-level flow machinery
 #
 # These functions are shared by the unified ha_config_set_helper tool in
-# tools_config_helpers.py and by ha_get_helper_schema below. They take a
-# client instance as an explicit parameter so they can be called from either
-# a closure-registered tool or a class method.
+# tools_config_helpers.py. They take a client instance as an explicit
+# parameter so the same logic can be used from any caller.
 # ---------------------------------------------------------------------------
 
 
@@ -289,24 +244,33 @@ def _parse_flow_api_error(
     }
 
 
-async def _fetch_data_schema_for_error_context(
+async def fetch_helper_flow_info(
     client: Any,
     helper_type: str | None,
-    menu_choice: str | None,
-) -> list[Any] | None:
-    """Best-effort fetch of the helper's data_schema for error context.
+    menu_choice: str | None = None,
+) -> dict[str, Any]:
+    """Best-effort introspection of a helper's config-entry flow.
 
-    Starts a fresh introspection flow (always aborted), and returns the
-    user step's ``data_schema`` so the LLM has something concrete to react
-    to when HA's error body is unstructured. Returns ``None`` on any
-    failure or when the helper is menu-based without a chosen branch.
+    Starts a fresh introspection flow (always aborted) and returns a dict
+    with optional keys ``"schema"`` and ``"menu_options"`` so a single HA
+    round-trip serves both the schema-attach path (used by
+    ``_raise_flow_api_error`` and the pre-flow validation gates in
+    ``_handle_flow_helper``) and the menu-sub-types path (used when a
+    menu-rooted helper has no branch chosen yet — issue #1186).
 
-    Public alias ``fetch_helper_data_schema`` is exported below for the
-    pre-flow validation gates in ``_handle_flow_helper`` (issue #1149) —
-    they need the same best-effort fetch but live in another module.
+    Behaviour:
+
+    - FORM at top: ``{"schema": [...]}``
+    - MENU at top with ``menu_choice``: submits and returns the branch
+      form schema as ``{"schema": [...]}`` (no ``menu_options`` since
+      the caller already picked a branch)
+    - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
+    - any failure or unparseable shape: ``{}`` (callers branch on
+      ``"schema" in info`` / ``"menu_options" in info``)
     """
+    info: dict[str, Any] = {}
     if not helper_type or client is None:
-        return None
+        return info
     intro_flow_id: str | None = None
     try:
         flow_result = await client.start_config_flow(helper_type)
@@ -315,24 +279,38 @@ async def _fetch_data_schema_for_error_context(
 
         if flow_type == _FlowType.FORM:
             schema = flow_result.get("data_schema")
-            return schema if isinstance(schema, list) else None
+            if isinstance(schema, list):
+                info["schema"] = schema
+            return info
 
-        if flow_type == _FlowType.MENU and menu_choice and intro_flow_id:
-            try:
-                step = await asyncio.wait_for(
-                    client.submit_config_flow_step(
-                        intro_flow_id, {"next_step_id": menu_choice}
-                    ),
-                    timeout=10.0,
-                )
-            except Exception:
-                return None
-            if step.get("type") == _FlowType.FORM:
-                schema = step.get("data_schema")
-                return schema if isinstance(schema, list) else None
-        return None
+        if flow_type == _FlowType.MENU:
+            if menu_choice and intro_flow_id:
+                try:
+                    step = await asyncio.wait_for(
+                        client.submit_config_flow_step(
+                            intro_flow_id, {"next_step_id": menu_choice}
+                        ),
+                        timeout=10.0,
+                    )
+                except Exception:
+                    return info
+                if step.get("type") == _FlowType.FORM:
+                    schema = step.get("data_schema")
+                    if isinstance(schema, list):
+                        info["schema"] = schema
+                return info
+
+            # MENU without a choice — surface the legal sub-types instead.
+            options = flow_result.get("menu_options")
+            if isinstance(options, list):
+                filtered = [opt for opt in options if isinstance(opt, str)]
+                if filtered:
+                    info["menu_options"] = filtered
+            return info
+
+        return info
     except Exception:
-        return None
+        return info
     finally:
         if intro_flow_id:
             try:
@@ -343,13 +321,6 @@ async def _fetch_data_schema_for_error_context(
                 logger.debug(
                     f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
                 )
-
-
-# Public alias for use by pre-flow validation gates in tools_config_helpers
-# (issue #1149). The underscore-prefixed original is kept to preserve the
-# call sites already in this module; the alias avoids importing a private
-# name across modules.
-fetch_helper_data_schema = _fetch_data_schema_for_error_context
 
 
 async def _raise_flow_api_error(
@@ -393,6 +364,10 @@ async def _raise_flow_api_error(
     suggestions: list[str] = []
     message: str
 
+    # Single introspection round-trip — used by both branches below.
+    info = await fetch_helper_flow_info(client, helper_type, menu_choice)
+    schema = info.get("schema")
+
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
         context["field_errors"] = field_errors
@@ -406,9 +381,6 @@ async def _raise_flow_api_error(
         # codes — symmetric with the unstructured-error branch below.
         # `field_errors` tells "what failed", `data_schema` tells "what's
         # accepted"; together they're enough for self-correction.
-        schema = await _fetch_data_schema_for_error_context(
-            client, helper_type, menu_choice
-        )
         if schema is not None:
             context["data_schema"] = schema
     else:
@@ -417,20 +389,12 @@ async def _raise_flow_api_error(
             f"Home Assistant rejected the {helper_type or 'flow'} request "
             f"({status_code}): {parsed['message']}"
         )
-        schema = await _fetch_data_schema_for_error_context(
-            client, helper_type, menu_choice
-        )
         if schema is not None:
             context["data_schema"] = schema
             suggestions.append(
                 "Inspect 'data_schema' in this error to see the fields HA expects, "
                 "then retry with a corrected config."
             )
-        suggestions.append(
-            f"Call ha_get_helper_schema(helper_type='{helper_type}') for the "
-            f"full field list and selectors." if helper_type else
-            "Call ha_get_helper_schema for this helper to see required fields."
-        )
 
     raise_tool_error(create_error_response(
         ErrorCode.SERVICE_CALL_FAILED,
@@ -703,253 +667,3 @@ async def create_flow_helper(
         "message": f"{helper_type} helper created successfully",
     }
 
-
-# ---------------------------------------------------------------------------
-# Schema introspection tool (ha_get_helper_schema)
-# ---------------------------------------------------------------------------
-
-
-class ConfigEntryFlowTools:
-    """Schema introspection tool for Config Entry Flow helpers."""
-
-    def __init__(self, client: Any) -> None:
-        self._client = client
-
-    @tool(
-        name="ha_get_helper_schema",
-        tags={"Helper Entities"},
-        annotations={
-            "readOnlyHint": True,
-            "title": "Get Helper Schema"
-        }
-    )
-    @log_tool_usage
-    async def ha_get_helper_schema(
-        self,
-        helper_type: Annotated[ALL_HELPER_TYPES, Field(description="Helper type")],
-        menu_option: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "For menu-based flow helpers (template, group): the sub-type to "
-                    "inspect (e.g. 'sensor' or 'binary_sensor' for template). Omit to "
-                    "see available menu options first. Ignored for simple helpers."
-                ),
-                default=None,
-            ),
-        ] = None,
-    ) -> dict[str, Any]:
-        """Get configuration schema for a helper type.
-
-        Returns the field list and types needed to create this helper. Use
-        before ha_config_set_helper when unsure of the required `config`
-        (flow helpers) or required typed parameters (simple helpers). The
-        same schema is also auto-attached to validation-error responses
-        from ha_config_set_helper, so an explicit pre-call is optional.
-
-        Three branches:
-
-        1. Simple helpers (input_*, counter, timer, schedule, zone, person,
-           tag): static schema returned from a built-in dict.
-              ha_get_helper_schema("input_select")
-              → {flow_type: "form", data_schema: [{name: "name", required: True, ...}, ...]}
-
-        2. Form-based flow helpers (min_max, utility_meter, statistics, ...):
-           starts a fresh HA flow, reads the schema, and aborts the flow.
-              ha_get_helper_schema("min_max")
-              → {flow_type: "form", data_schema: [...]}
-
-        3. Menu-based flow helpers (template, group): two-call workflow.
-              # Step 1 — discover sub-types:
-              ha_get_helper_schema("template")
-              → {flow_type: "menu", menu_options: ["sensor", "binary_sensor", ...]}
-
-              # Step 2 — inspect form fields for a sub-type:
-              ha_get_helper_schema("template", menu_option="sensor")
-              → {flow_type: "form", menu_option: "sensor", data_schema: [...]}
-        """
-        # Issue #1149: simple-helper dispatch — return a static schema
-        # without round-tripping HA. Lazy import keeps the existing
-        # tools_config_helpers ↔ tools_config_entry_flow boundary intact.
-        from .tools_config_helpers import (
-            SIMPLE_HELPER_TYPES,
-            get_simple_helper_schema,
-        )
-
-        if helper_type in SIMPLE_HELPER_TYPES:
-            schema = get_simple_helper_schema(helper_type)
-            # Invariant in tools_config_helpers asserts every simple type
-            # has a schema entry — None here would indicate a developer
-            # error that should fail loudly rather than mask as empty.
-            if schema is None:
-                raise_tool_error(create_error_response(
-                    ErrorCode.INTERNAL_UNEXPECTED,
-                    f"No simple-helper schema registered for '{helper_type}'",
-                    context={"helper_type": helper_type},
-                ))
-            if menu_option is not None:
-                # Simple helpers have no menu — flag the misuse rather than
-                # silently ignore the parameter.
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"menu_option is not applicable to simple helper "
-                    f"'{helper_type}' (only flow helpers like 'template' "
-                    f"and 'group' use menus).",
-                    suggestions=["Omit menu_option for simple helpers."],
-                    context={"helper_type": helper_type},
-                ))
-            return {
-                "success": True,
-                "helper_type": helper_type,
-                "flow_type": _FlowType.FORM,
-                "step_id": "user",
-                "data_schema": schema,
-                "description_placeholders": {},
-            }
-
-        flow_id = None  # Track flow_id for error context
-        try:
-            flow_result = await self._client.start_config_flow(helper_type)
-            flow_id = flow_result.get("flow_id")
-            flow_type = flow_result.get("type")
-
-            if flow_type == _FlowType.ABORT:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Could not get schema, flow aborted: {flow_result.get('reason')}",
-                    context={"helper_type": helper_type, "details": flow_result},
-                ))
-
-            if not flow_id:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to start config flow — no flow_id returned",
-                    context={"helper_type": helper_type, "details": flow_result},
-                ))
-
-            if menu_option is not None:
-                return await self._get_schema_with_menu_option(
-                    helper_type, menu_option, flow_id, flow_result, flow_type,
-                )
-
-            return self._build_top_level_schema(helper_type, flow_result, flow_type)
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Error getting helper schema: {e}")
-            exception_to_structured_error(e, context={"helper_type": helper_type})
-        finally:
-            # Always abort the introspection flow to avoid leaking it in HA memory.
-            if flow_id:
-                try:
-                    await self._client.abort_config_flow(flow_id)
-                except Exception as abort_err:
-                    logger.warning(f"Failed to abort introspection flow {flow_id}: {abort_err}")
-
-    async def _get_schema_with_menu_option(
-        self,
-        helper_type: str,
-        menu_option: str,
-        flow_id: str,
-        flow_result: dict[str, Any],
-        flow_type: str | None,
-    ) -> dict[str, Any]:
-        """Submit a menu selection and return the resulting form schema.
-
-        Validates that the flow is a menu type, submits the menu option,
-        and returns the form schema for the selected sub-type.
-        """
-        if flow_type != _FlowType.MENU:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"menu_option is not applicable to '{helper_type}' "
-                f"(flow type is '{flow_type}', not 'menu')",
-                suggestions=["Omit menu_option for form-based helpers"],
-                context={"helper_type": helper_type, "flow_type": flow_type},
-            ))
-
-        step_result = await self._client.submit_config_flow_step(
-            flow_id, {"next_step_id": menu_option}
-        )
-        sub_flow_type = step_result.get("type")
-
-        if sub_flow_type == _FlowType.ABORT:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"menu_option '{menu_option}' is not valid for '{helper_type}': "
-                f"{step_result.get('reason')}",
-                suggestions=[f"Valid options: {flow_result.get('menu_options', [])}"],
-                context={
-                    "helper_type": helper_type,
-                    "menu_option": menu_option,
-                    "details": step_result,
-                },
-            ))
-
-        if sub_flow_type != _FlowType.FORM:
-            raise_tool_error(create_error_response(
-                ErrorCode.INTERNAL_UNEXPECTED,
-                f"Unexpected sub-flow type '{sub_flow_type}' after menu selection",
-                context={
-                    "helper_type": helper_type,
-                    "menu_option": menu_option,
-                    "details": step_result,
-                },
-            ))
-
-        return {
-            "success": True,
-            "helper_type": helper_type,
-            "flow_type": _FlowType.FORM,
-            "menu_option": menu_option,
-            "step_id": step_result.get("step_id"),
-            "data_schema": step_result.get("data_schema", []),
-            "description_placeholders": step_result.get("description_placeholders", {}),
-        }
-
-    @staticmethod
-    def _build_top_level_schema(
-        helper_type: str,
-        flow_result: dict[str, Any],
-        flow_type: str | None,
-    ) -> dict[str, Any]:
-        """Build the top-level schema response for a form or menu flow."""
-        if flow_type == _FlowType.FORM:
-            return {
-                "success": True,
-                "helper_type": helper_type,
-                "flow_type": _FlowType.FORM,
-                "step_id": flow_result.get("step_id"),
-                "data_schema": flow_result.get("data_schema", []),
-                "description_placeholders": flow_result.get(
-                    "description_placeholders", {}
-                ),
-            }
-        if flow_type == _FlowType.MENU:
-            return {
-                "success": True,
-                "helper_type": helper_type,
-                "flow_type": _FlowType.MENU,
-                "step_id": flow_result.get("step_id"),
-                "menu_options": flow_result.get("menu_options", []),
-                "description_placeholders": flow_result.get(
-                    "description_placeholders", {}
-                ),
-                "note": (
-                    "This helper requires selecting from a menu first. "
-                    "Include 'group_type' (or 'next_step_id') in your config "
-                    "when calling ha_config_set_helper. "
-                    "Call ha_get_helper_schema with menu_option=<sub-type> to inspect form fields."
-                ),
-            }
-        raise_tool_error(create_error_response(
-            ErrorCode.INTERNAL_UNEXPECTED,
-            f"Unexpected flow type: {flow_type}",
-            context={"helper_type": helper_type, "details": flow_result},
-        ))
-
-
-def register_config_entry_flow_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register Config Entry Flow API tools with the MCP server."""
-    register_tool_methods(mcp, ConfigEntryFlowTools(client))

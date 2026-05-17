@@ -548,7 +548,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "utility_meter, derivative, statistics, trend, threshold, "
             "filter, switch_as_x, etc.) cannot be listed through this "
             "tool — use ha_search_entities or ha_deep_search.\n\n"
-            "For per-type schemas, see ha_get_helper_schema and "
+            "For per-type schemas and decision guidance, see "
             "ha_get_skill_guide."
         ),
         "ha_config_set_helper": (
@@ -558,10 +558,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "flow-based types (template, group, utility_meter, "
             "derivative, statistics, trend, threshold, filter, "
             "switch_as_x, and others).\n\n"
-            "For per-type config schemas, call "
-            "ha_get_helper_schema(helper_type) first. For decision "
-            "matrix and worked examples (which helper type for which "
-            "use case), see ha_get_skill_guide."
+            "Field set is delivered as `data_schema` on the first "
+            "validation error — submit once and self-correct. For "
+            "decision matrix and worked examples (which helper type "
+            "for which use case), see ha_get_skill_guide."
         ),
         "ha_config_get_dashboard": (
             "Get Home Assistant dashboard info (list mode, search "
