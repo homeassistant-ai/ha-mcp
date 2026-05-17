@@ -114,7 +114,7 @@ ADDONS: tuple[Addon, ...] = (
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
 # Has to start so it can do its one-shot install before we restart HA Core.
 GET_HACS_ADDON = Addon(
-    repo="https://github.com/hacs/get",
+    repo="https://github.com/hacs/addons",
     name="Get HACS",
 )
 
