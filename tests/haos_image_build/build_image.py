@@ -542,17 +542,14 @@ def bake_test_state(qcow2: Path) -> None:
     guestfish to mount the HAOS data partition (/dev/sda8) and tar-in
     initial_test_state into /supervisor/homeassistant/.
 
-    Custom components (mcp_proxy, ha_mcp_tools) that the testcontainer
-    fixture injects via _install_custom_component are NOT included here:
-    when added with synthetic config entries, HA Core crashed on boot
-    ("connection reset" on every manifest.json fetch). Probably the
-    injected config entry shape was wrong, or HA's custom-component
-    requirements install hangs the boot. Treated as a follow-up — for
-    now those two components are unavailable on HAOS, which means
-    webhook_proxy + ha_mcp_tools-dependent tests will fail and need
-    container_only markers, OR a proper HAOS-side install path.
+    Also stages the in-repo ha_mcp_tools + mcp_proxy custom components and
+    their config entries — the testcontainer dispatch installs them
+    dynamically via _install_custom_component, but on HAOS we bake them
+    directly into the image at this step so HA Core finds them on first
+    boot.
     """
-    tests_dir = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    tests_dir = repo_root / "tests"
     initial_state_path = tests_dir / "initial_test_state"
     if not initial_state_path.exists():
         raise RuntimeError(f"initial_test_state not found at {initial_state_path}")
@@ -561,9 +558,70 @@ def bake_test_state(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
         # Stage the seed under a temp dir so we can normalise the recorder
-        # DB before tarring (see below).
+        # DB and inject custom components before tarring (see below).
         staging = workdir / "config"
         shutil.copytree(initial_state_path, staging)
+
+        # Inject custom components matched to what the testcontainer fixture
+        # installs via _install_custom_component in tests/src/e2e/conftest.py.
+        # Both are config_flow-only integrations, so HA won't pick them up
+        # from YAML — a synthetic entry in .storage/core.config_entries is
+        # how HA Core learns to set them up on boot.
+        cc_dir = staging / "custom_components"
+        cc_dir.mkdir(exist_ok=True)
+        for src_rel, domain, title in (
+            ("custom_components/ha_mcp_tools", "ha_mcp_tools", "HA MCP Tools"),
+            (
+                "homeassistant-addon-webhook-proxy/mcp_proxy",
+                "mcp_proxy",
+                "MCP Webhook Proxy",
+            ),
+        ):
+            src = repo_root / src_rel
+            if not src.exists():
+                LOG.warning("Custom component source missing: %s — skipping", src)
+                continue
+            dest = cc_dir / domain
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest)
+            LOG.info("Staged custom component %s ← %s", domain, src_rel)
+
+            # Inject a config entry so HA loads the integration on boot.
+            # Shape matches the testcontainer path in conftest.py:
+            # _install_custom_component (entry_id, source=import, version=1).
+            ce_path = staging / ".storage" / "core.config_entries"
+            ce_data = json.loads(ce_path.read_text())
+            entries = ce_data.setdefault("data", {}).setdefault("entries", [])
+            if not any(e.get("domain") == domain for e in entries):
+                entries.append({
+                    "created_at": "2025-09-07T23:56:28.040744+00:00",
+                    "data": {},
+                    "disabled_by": None,
+                    "discovery_keys": {},
+                    "domain": domain,
+                    "entry_id": f"e2e_test_{domain}_entry",
+                    "minor_version": 1,
+                    "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                    "options": {},
+                    "pref_disable_new_entities": False,
+                    "pref_disable_polling": False,
+                    "source": "import",
+                    "subentries": [],
+                    "title": title,
+                    "unique_id": domain,
+                    "version": 1,
+                })
+                ce_path.write_text(json.dumps(ce_data, indent=2))
+                LOG.info("Injected config entry for %s", domain)
+
+        # mcp_proxy reads target_url + webhook_id from this file on setup —
+        # the testcontainer dispatch writes the same JSON before container
+        # start. Tests assert the webhook_id matches.
+        (staging / ".mcp_proxy_config.json").write_text(json.dumps({
+            "target_url": "http://localhost:8123/api/",
+            "webhook_id": "mcp_e2e_test_webhook_proxy",
+        }))
 
         # Recorder DB normalisation. initial_test_state ships
         # home-assistant_v2.db in WAL journal mode but WITHOUT the
