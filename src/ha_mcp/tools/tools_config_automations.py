@@ -404,6 +404,8 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when registration succeeds, falling back to the input `identifier` on the python_transform branch — parity with `ha_config_get_automation`.
+
         Before reaching for ``ha_config_set_automation``, consider whether a
         dedicated tool fits the use case better:
 
@@ -665,6 +667,7 @@ class AutomationConfigTools:
                     "success": True,
                     "action": "python_transform",
                     "identifier": identifier,
+                    "automation_id": entity_id or identifier,
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
@@ -994,6 +997,8 @@ class AutomationConfigTools:
         """
         Delete a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when the registry lookup succeeded before the delete, falling back to the input `identifier` otherwise — parity with `ha_config_get_automation`.
+
         EXAMPLES:
         - Delete automation: ha_config_remove_automation("automation.old_automation")
         - Delete by unique_id: ha_config_remove_automation("my_unique_id")
@@ -1029,7 +1034,12 @@ class AutomationConfigTools:
                 except Exception as e:
                     result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
 
-            return {"success": True, "action": "delete", **result}
+            return {
+                "success": True,
+                "action": "delete",
+                **result,
+                "automation_id": entity_id_for_wait or identifier,
+            }
         except ToolError:
             raise
         except Exception as e:
