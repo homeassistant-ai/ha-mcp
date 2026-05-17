@@ -64,6 +64,9 @@ jobs:
           version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Install build-script Python deps
+        run: pip install -r tests/haos_image_build/requirements.txt
+
       - name: Build image
         run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2.xz
 

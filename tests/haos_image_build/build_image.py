@@ -243,17 +243,15 @@ def start_qemu(qcow2: Path, work_dir: Path) -> subprocess.Popen[bytes]:
     return subprocess.Popen(cmd)
 
 
-def stop_qemu(proc: subprocess.Popen[bytes], token: str) -> None:
-    """Graceful shutdown via Supervisor; fall back to SIGTERM if it hangs."""
-    try:
-        _http(
-            "POST",
-            f"http://127.0.0.1:{HA_HOST_PORT}/api/hassio/host/shutdown",
-            token=token,
-            timeout=10.0,
-        )
-    except Exception as e:
-        LOG.warning("Supervisor shutdown call failed: %s — sending SIGTERM", e)
+def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
+    """Graceful shutdown via Supervisor's WS API; fall back to SIGTERM."""
+    if ws is not None:
+        try:
+            ws.supervisor_api("/host/shutdown", method="post", timeout=10.0)
+        except Exception as e:
+            LOG.warning("Supervisor shutdown call failed: %s — sending SIGTERM", e)
+            proc.terminate()
+    else:
         proc.terminate()
     try:
         proc.wait(timeout=120)
@@ -305,70 +303,141 @@ def onboard(base_url: str) -> str:
     return token_resp["access_token"]
 
 
-def _add_repository(base_url: str, token: str, repo_url: str) -> None:
+class HAWebSocket:
+    """Minimal HA WebSocket client for Supervisor API calls.
+
+    HA's REST /api/hassio/* proxy only allows a narrow set of paths
+    (PATHS_ADMIN in homeassistant/components/hassio/http.py — backups, logs,
+    addon changelog/docs). Everything else — store repositories, addon
+    install/options/start, supervisor info, core restart, host shutdown —
+    is reachable only via the WebSocket ``supervisor/api`` command (see
+    homeassistant/components/hassio/websocket_api.py:websocket_supervisor_api).
+    The frontend uses the same path; this class is the build script's
+    equivalent.
+
+    Synchronous wrapper around ``websockets.sync.client`` so the existing
+    procedural build flow doesn't need an asyncio rewrite.
+    """
+
+    def __init__(self, base_url: str, token: str) -> None:
+        self._ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+        self._token = token
+        self._ws = None  # type: ignore[var-annotated]
+        self._next_id = 0
+
+    def __enter__(self) -> HAWebSocket:
+        # Imported lazily so the module still imports on systems without the
+        # websockets package (e.g. local lint without the build venv).
+        from websockets.sync.client import connect
+
+        self._ws = connect(self._ws_url, open_timeout=30, close_timeout=10)
+        # HA WS handshake: server sends auth_required → client sends auth →
+        # server replies auth_ok or auth_invalid.
+        auth_req = json.loads(self._ws.recv())
+        if auth_req.get("type") != "auth_required":
+            raise RuntimeError(f"Unexpected WS handshake message: {auth_req}")
+        self._ws.send(json.dumps({"type": "auth", "access_token": self._token}))
+        auth_resp = json.loads(self._ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+        LOG.info("WS connected to %s (ha_version=%s)", self._ws_url, auth_resp.get("ha_version"))
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+
+    def supervisor_api(
+        self,
+        endpoint: str,
+        method: str = "get",
+        data: dict[str, Any] | None = None,
+        timeout: float = 60.0,
+    ) -> dict[str, Any]:
+        """Issue a supervisor/api command and return the result payload.
+
+        Raises RuntimeError on a non-success response (HA's WS contract uses
+        ``{"id": N, "type": "result", "success": false, "error": {...}}``).
+        """
+        assert self._ws is not None
+        self._next_id += 1
+        msg_id = self._next_id
+        msg: dict[str, Any] = {
+            "id": msg_id,
+            "type": "supervisor/api",
+            "endpoint": endpoint,
+            "method": method,
+            "timeout": timeout,
+        }
+        if data is not None:
+            msg["data"] = data
+        self._ws.send(json.dumps(msg))
+        # Skip any out-of-band messages (events on subscriptions etc.) and
+        # match by id.
+        while True:
+            resp = json.loads(self._ws.recv())
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", True):
+                raise RuntimeError(f"supervisor/api {method} {endpoint} failed: {resp.get('error')}")
+            return resp.get("result", {}) or {}
+
+
+def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
     """Register an addon repository with the Supervisor store."""
     LOG.info("Adding addon repository %s", repo_url)
-    _http(
-        "POST",
-        f"{base_url}/api/hassio/store/repositories",
-        token=token,
-        body={"repository": repo_url},
-        timeout=120.0,
-    )
+    ws.supervisor_api("/store/repositories", method="post", data={"repository": repo_url}, timeout=120.0)
 
 
-def _reload_store(base_url: str, token: str) -> None:
+def _reload_store(ws: HAWebSocket) -> None:
     """Force the Supervisor store to refresh after adding a repository."""
-    _http("POST", f"{base_url}/api/hassio/store/reload", token=token, timeout=120.0)
+    ws.supervisor_api("/store/reload", method="post", timeout=120.0)
 
 
-def _discover_slug(base_url: str, token: str, addon: Addon) -> str:
+def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     """Resolve an addon's Supervisor slug by name from the live store.
 
-    The prefix portion of every slug is a hash of the repository URL, so it
-    can't be hardcoded portably. After the repo is registered we list the
-    store and match by display name.
+    The prefix portion of every slug is a SHA hash of the repository URL,
+    so it can't be hardcoded portably. After the repo is registered we list
+    the store and match by display name + repo URL.
     """
-    resp = _http("GET", f"{base_url}/api/hassio/store", token=token)
-    addons = resp.get("data", resp).get("addons", [])
+    resp = ws.supervisor_api("/store", method="get")
+    addons = resp.get("addons", [])
     for entry in addons:
-        if entry.get("name") == addon.name:
-            if addon.repo and entry.get("url", "").startswith(addon.repo):
-                return entry["slug"]
-            if addon.repo is None and entry.get("repository") == "core":
-                return entry["slug"]
-    # Fall back to repository-scoped match if no name hit (display names
-    # occasionally drift; slug stability is the real anchor).
+        if entry.get("name") != addon.name:
+            continue
+        if addon.repo and entry.get("url", "").startswith(addon.repo):
+            return entry["slug"]
+        if addon.repo is None and entry.get("repository") == "core":
+            return entry["slug"]
     raise RuntimeError(f"Addon {addon.name!r} not found in store after repo refresh")
 
 
-def _install_one(base_url: str, token: str, addon: Addon) -> str:
-    """Install + (optionally configure) + start a single addon. Returns slug."""
+def _install_one(ws: HAWebSocket, addon: Addon) -> str:
+    """Install + (optionally configure) + start a single addon. Returns slug.
+
+    Verified Supervisor endpoints (from home-assistant/supervisor api/__init__.py):
+      - POST /store/repositories                      add a repo
+      - POST /store/reload                            refresh
+      - GET  /store                                   list store contents
+      - POST /store/addons/{slug}/install             install an addon
+      - POST /addons/{slug}/options                   set options
+      - POST /addons/{slug}/start                     start it
+    Note the asymmetry: install lives under /store/addons/, but options and
+    start are on the installed-addon path /addons/.
+    """
     if addon.repo:
-        _add_repository(base_url, token, addon.repo)
-        _reload_store(base_url, token)
-    slug = _discover_slug(base_url, token, addon)
+        _add_repository(ws, addon.repo)
+        _reload_store(ws)
+    slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
-    _http(
-        "POST",
-        f"{base_url}/api/hassio/addons/{slug}/install",
-        token=token,
-        timeout=900.0,
-    )
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
     if addon.options:
-        _http(
-            "POST",
-            f"{base_url}/api/hassio/addons/{slug}/options",
-            token=token,
-            body={"options": addon.options},
-            timeout=60.0,
-        )
-    _http(
-        "POST",
-        f"{base_url}/api/hassio/addons/{slug}/start",
-        token=token,
-        timeout=120.0,
-    )
+        ws.supervisor_api(f"/addons/{slug}/options", method="post", data={"options": addon.options}, timeout=60.0)
+    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     return slug
 
 
@@ -400,57 +469,33 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
-def _wait_supervisor_ready(base_url: str, token: str) -> None:
-    """Confirm the Supervisor proxy accepts our token. Single brief retry.
+def _wait_supervisor_ready(ws: HAWebSocket) -> None:
+    """Confirm the Supervisor responds via the WebSocket supervisor/api path.
 
-    Run *after* _check_core_auth has confirmed the token works at HA Core.
-    HassIOView returns 401 specifically when ``request[KEY_HASS_USER].is_admin``
-    is False — and auth being already verified means the only way to get
-    here is an admin-status problem. Retry once after 5s in case there's
-    some genuine Supervisor handshake latency, then bail with a clear error.
+    A single ping is enough — by the time HA Core has accepted the WS
+    handshake and our auth_ok arrived, the hassio integration has loaded
+    and supervisor/api commands route correctly.
     """
-    LOG.info("Checking Supervisor proxy (1 retry, ~5s)")
-    last_err: Exception | None = None
-    for attempt in range(2):
-        try:
-            _http(
-                "GET",
-                f"{base_url}/api/hassio/supervisor/info",
-                token=token,
-                timeout=10.0,
-            )
-            LOG.info("Supervisor ready")
-            return
-        except urllib.error.HTTPError as e:
-            last_err = e
-            if attempt == 0:
-                time.sleep(5.0)
-    raise RuntimeError(
-        f"Supervisor proxy returned {last_err} after retry. HA Core auth is "
-        "confirmed working (/api/config + /api/states both succeeded), so this "
-        "is almost certainly the HassIOView admin check (is_admin=False on the "
-        "onboarded user). Next iteration needs a WebSocket auth/current_user "
-        "call to confirm — REST has no equivalent endpoint."
-    )
+    info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+    LOG.info("Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch"))
 
 
-def install_addons(base_url: str, token: str) -> dict[str, str]:
+def install_addons(ws: HAWebSocket) -> dict[str, str]:
     """Register the ha-mcp addon repo and install + configure each addon.
 
     Returns a mapping of addon display name → installed slug for downstream
     steps (e.g. canary tests that need to address a specific addon).
     """
-    _check_core_auth(base_url, token)
-    _wait_supervisor_ready(base_url, token)
-    _add_repository(base_url, token, HA_MCP_ADDON_REPO)
-    _reload_store(base_url, token)
+    _wait_supervisor_ready(ws)
+    _add_repository(ws, HA_MCP_ADDON_REPO)
+    _reload_store(ws)
     installed: dict[str, str] = {}
     for addon in ADDONS:
-        installed[addon.name] = _install_one(base_url, token, addon)
+        installed[addon.name] = _install_one(ws, addon)
     return installed
 
 
-def install_hacs(base_url: str, token: str) -> None:
+def install_hacs(ws: HAWebSocket, base_url: str) -> None:
     """Bootstrap HACS via the Get HACS addon.
 
     The supported HAOS install path: register the Get HACS repo, install +
@@ -463,15 +508,13 @@ def install_hacs(base_url: str, token: str) -> None:
     pre-baked image rather than installed per-test-run.
     """
     LOG.info("Installing HACS via Get HACS addon")
-    _install_one(base_url, token, GET_HACS_ADDON)
-    # The Get HACS addon completes its work on first run and self-stops.
+    _install_one(ws, GET_HACS_ADDON)
     # Restart HA core so the freshly-written custom_components/hacs is loaded.
-    _http(
-        "POST",
-        f"{base_url}/api/hassio/core/restart",
-        token=token,
-        timeout=300.0,
-    )
+    # /core/restart is on the Supervisor side; the WS supervisor/api call
+    # will return success when Supervisor accepts the restart request, then
+    # HA Core itself goes down briefly and comes back. Wait for the frontend.
+    LOG.info("Restarting HA Core so HACS custom component loads")
+    ws.supervisor_api("/core/restart", method="post", timeout=300.0)
     _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
 
 
@@ -489,12 +532,14 @@ def build(work_dir: Path, output: Path) -> None:
         _wait_port(HA_HOST_PORT, timeout=180)
         _wait_http_ok(f"{base_url}/manifest.json", timeout=600)
         token = onboard(base_url)
-        install_addons(base_url, token)
-        install_hacs(base_url, token)
-        # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
-        # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
-        # feeders. The canary test only needs addon lifecycle for now.
-        stop_qemu(qemu, token)
+        _check_core_auth(base_url, token)
+        with HAWebSocket(base_url, token) as ws:
+            install_addons(ws)
+            install_hacs(ws, base_url)
+            # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
+            # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
+            # feeders. The canary test only needs addon lifecycle for now.
+            stop_qemu(qemu, ws)
     except Exception:
         LOG.exception("Image build failed — leaving qcow2 in %s for inspection", qcow2)
         qemu.terminate()

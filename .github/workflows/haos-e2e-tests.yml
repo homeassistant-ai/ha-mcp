@@ -87,6 +87,10 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Install build-script Python deps (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+        run: pip install -r tests/haos_image_build/requirements.txt
+
       - name: Build image locally (cache miss + GHCR miss)
         if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
         run: |

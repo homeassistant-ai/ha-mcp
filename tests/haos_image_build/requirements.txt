@@ -1,0 +1,9 @@
+# Build-script dependencies. Installed in CI by the haos-e2e-tests and
+# build-haos-test-image workflows before invoking build_image.py.
+#
+# HA's REST API does not expose most Supervisor endpoints (PATHS_ADMIN in
+# homeassistant/components/hassio/http.py only allows backups + logs +
+# addon changelog/docs). All addon install / store / supervisor info calls
+# go through the WebSocket "supervisor/api" command, which needs a real
+# WebSocket client — Python stdlib has none.
+websockets>=14.0
