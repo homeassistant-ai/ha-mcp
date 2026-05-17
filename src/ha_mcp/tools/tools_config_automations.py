@@ -389,6 +389,8 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when registration succeeds, falling back to the input `identifier` on the python_transform branch — parity with `ha_config_get_automation`.
+
         Before reaching for ``ha_config_set_automation``, consider whether a
         dedicated tool fits the use case better:
 
@@ -962,6 +964,8 @@ class AutomationConfigTools:
     ) -> dict[str, Any]:
         """
         Delete a Home Assistant automation.
+
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when the registry lookup succeeded before the delete, falling back to the input `identifier` otherwise — parity with `ha_config_get_automation`.
 
         EXAMPLES:
         - Delete automation: ha_config_remove_automation("automation.old_automation")
