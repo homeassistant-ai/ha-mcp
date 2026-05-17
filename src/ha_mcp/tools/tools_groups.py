@@ -12,6 +12,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -311,7 +315,11 @@ class GroupTools:
                         result.setdefault("warnings", []).append(
                             f"Group {'created' if is_create else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
-                except Exception as e:
+                except (
+                    TimeoutError,
+                    HomeAssistantAPIError,
+                    HomeAssistantConnectionError,
+                ) as e:
                     result.setdefault("warnings", []).append(
                         f"Group {'created' if is_create else 'updated'} but verification failed: {e}"
                     )
@@ -416,7 +424,11 @@ class GroupTools:
                         result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except Exception as e:
+                except (
+                    TimeoutError,
+                    HomeAssistantAPIError,
+                    HomeAssistantConnectionError,
+                ) as e:
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
