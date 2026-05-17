@@ -572,14 +572,13 @@ def bake_test_state(ws: HAWebSocket, base_url: str) -> None:
             "/addons/core_ssh/options",
             method="post",
             data={
+                # core_ssh's required keys per its schema: authorized_keys,
+                # password, server. Empty password disables password auth
+                # entirely (key-only). server is required even when default.
                 "options": {
                     "authorized_keys": [pubkey_str],
                     "password": "",
-                    "ssh": {
-                        "allow_agent_forwarding": False,
-                        "allow_remote_port_forwarding": False,
-                        "allow_tcp_forwarding": False,
-                    },
+                    "server": {"tcp_forwarding": False},
                 },
             },
             timeout=60.0,
