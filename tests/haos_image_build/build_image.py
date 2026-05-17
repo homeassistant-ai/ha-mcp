@@ -372,48 +372,43 @@ def _install_one(base_url: str, token: str, addon: Addon) -> str:
     return slug
 
 
-def _diagnose_auth(base_url: str, token: str) -> None:
-    """One-shot diagnostic — log the state of HA Core auth + admin status.
+def _check_core_auth(base_url: str, token: str) -> None:
+    """Verify the access token authenticates against HA Core.
 
-    Helps disambiguate between (a) the bearer token not being parsed at all,
-    (b) parsed but user not seen as admin, and (c) Supervisor proxy itself
-    not responding. Runs once before any Supervisor calls.
+    HA's REST API has no current-user endpoint — admin status can only be
+    introspected via the WebSocket ``auth/current_user`` message, which is
+    overkill here. We confirm the token is parsed at the middleware level
+    (/api/config returns 200) and that a generic authenticated read works
+    (/api/states). If both succeed but Supervisor still 401s afterwards,
+    that's the admin-or-proxy-readiness problem to debug — but at least
+    we know auth itself is sound and can fail fast on it.
     """
-    # (a) /api/config requires auth and returns 401 if the token isn't accepted
-    # at the middleware level. 200 means the token IS being parsed and bound
-    # to a user.
     try:
         cfg = _http("GET", f"{base_url}/api/config", token=token, timeout=10.0)
-        LOG.info(
-            "AUTH DIAGNOSTIC: /api/config ok — version=%s state=%s",
-            cfg.get("version"), cfg.get("state"),
-        )
+        LOG.info("AUTH OK: /api/config version=%s state=%s", cfg.get("version"), cfg.get("state"))
     except urllib.error.HTTPError as e:
-        LOG.error("AUTH DIAGNOSTIC: /api/config failed (%d) — token not accepted by HA Core auth middleware", e.code)
-        return
-    # (b) confirm admin status — /api/auth/current_user reflects whether the
-    # token's user is admin. If is_admin=False here, the onboarding flow did
-    # not assign GROUP_ID_ADMIN as expected (would indicate an HA version drift).
+        raise RuntimeError(
+            f"HA Core rejected the access token at /api/config ({e.code}). "
+            "Auth middleware did not parse the bearer token — token exchange is broken."
+        ) from e
     try:
-        u = _http("GET", f"{base_url}/api/auth/current_user", token=token, timeout=10.0)
-        LOG.info(
-            "AUTH DIAGNOSTIC: current_user — id=%s name=%s is_admin=%s is_owner=%s",
-            u.get("id"), u.get("name"), u.get("is_admin"), u.get("is_owner"),
-        )
+        states = _http("GET", f"{base_url}/api/states", token=token, timeout=10.0)
+        LOG.info("AUTH OK: /api/states returned %d entities", len(states) if isinstance(states, list) else 0)
     except urllib.error.HTTPError as e:
-        LOG.error("AUTH DIAGNOSTIC: /api/auth/current_user failed (%d)", e.code)
+        raise RuntimeError(
+            f"HA Core rejected the access token at /api/states ({e.code})."
+        ) from e
 
 
-def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 300.0) -> None:
+def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 60.0) -> None:
     """Block until the Supervisor proxy responds successfully.
 
-    HA Core's frontend can be up and accepting auth before Supervisor itself
-    finishes initialising; calls to /api/hassio/* return 401 in that window
-    because HA hasn't yet received Supervisor's internal auth token. Poll
-    a trivially-cheap Supervisor endpoint until it stops failing.
+    Run *after* _check_core_auth has confirmed the token is admin-bound.
+    Once auth is known-good, any 401 from /api/hassio/* means Supervisor
+    hasn't received its internal token yet — usually clears in under 30s,
+    so a 60s ceiling fails fast on real breakage.
     """
-    _diagnose_auth(base_url, token)
-    LOG.info("Waiting for Supervisor proxy")
+    LOG.info("Waiting for Supervisor proxy (up to %.0fs)", timeout)
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
     while time.monotonic() < deadline:
@@ -428,10 +423,10 @@ def _wait_supervisor_ready(base_url: str, token: str, timeout: float = 300.0) ->
             return
         except urllib.error.HTTPError as e:
             last_err = e
-            time.sleep(5.0)
+            time.sleep(3.0)
         except Exception as e:
             last_err = e
-            time.sleep(5.0)
+            time.sleep(3.0)
     raise TimeoutError(f"Supervisor proxy did not respond within {timeout}s: {last_err}")
 
 
@@ -441,6 +436,7 @@ def install_addons(base_url: str, token: str) -> dict[str, str]:
     Returns a mapping of addon display name → installed slug for downstream
     steps (e.g. canary tests that need to address a specific addon).
     """
+    _check_core_auth(base_url, token)
     _wait_supervisor_ready(base_url, token)
     _add_repository(base_url, token, HA_MCP_ADDON_REPO)
     _reload_store(base_url, token)
