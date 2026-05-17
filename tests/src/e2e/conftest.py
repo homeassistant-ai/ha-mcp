@@ -47,8 +47,8 @@ from haos_runtime import (
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
-    refresh_recorder_in_qcow2,
     login_for_token,
+    refresh_recorder_in_qcow2,
 )
 
 from ha_mcp.client import HomeAssistantClient
