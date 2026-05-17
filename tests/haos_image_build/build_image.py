@@ -561,7 +561,15 @@ def bake_test_state(qcow2: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
         seed_tar = workdir / "seed.tar"
-        _run(["tar", "-C", str(initial_state_path), "-cf", str(seed_tar), "."])
+        # --owner=0 --group=0 + --numeric-owner forces the archived files
+        # to root:root regardless of the source UID on the build runner
+        # (would otherwise be `runner:docker` on GitHub-hosted boxes).
+        # HAOS's HA Core container expects /config files to be root-owned
+        # so its homeassistant user can read them via the volume mount.
+        _run([
+            "tar", "--numeric-owner", "--owner=0", "--group=0",
+            "-C", str(initial_state_path), "-cf", str(seed_tar), ".",
+        ])
 
         # HAOS qcow2 has multiple partitions. The hassos-data partition
         # (usually /dev/sda8) holds /supervisor/homeassistant which HA Core
