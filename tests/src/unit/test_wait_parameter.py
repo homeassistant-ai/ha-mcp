@@ -116,7 +116,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("not yet queryable" in w for w in result["warnings"])
 
     async def test_remove_automation_wait_default_true(
         self, register_tools, mock_client
@@ -200,7 +201,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("verification failed" in w for w in result["warnings"])
 
 
 class TestScriptWaitParameter:
