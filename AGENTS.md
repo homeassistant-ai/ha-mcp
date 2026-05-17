@@ -119,6 +119,14 @@ When implementing features or debugging, consult these resources:
 | `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
 
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+
+| Label | Meaning |
+|-------|---------|
+| `runtime-bug` | Bug occurring during normal operation (post-startup) |
+| `startup-bug` | Bug during startup, install, or connect |
+| `agent-behavior` | AI agent behavior or workflow feedback (tool selection, prompt drift, etc.) |
+
 **Scope labels** (manually applied during triage; orthogonal to bug-class — an issue can carry both `runtime-bug` AND a scope marker):
 
 | Label | Meaning |
@@ -136,9 +144,9 @@ When implementing features or debugging, consult these resources:
 
 **Tracking / automation labels** (applied by tooling):
 
-| Label | Meaning | Source |
-|-------|---------|--------|
-| `python-upgrade` | Renovate-managed PR that bumps the project's Python version | `renovate.json` global `labels` array (auto-applied to all Renovate PRs alongside `dependencies`) |
+| Label | Meaning |
+|-------|---------|
+| `python-upgrade` | Renovate-managed PR that bumps the project's Python version. Applied via `renovate.json` global `labels` array (auto-applied to all Renovate PRs alongside `dependencies`). |
 
 ### Issue Analysis Workflow
 
