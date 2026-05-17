@@ -152,23 +152,37 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
 
-      - name: Extract HA logs from booted qcow2 (always)
-        # Pulls /supervisor/homeassistant/home-assistant.log from the
-        # test-time qcow2 so we can see what HA itself logged during the
-        # failed run (errors, warnings, integration setup issues). Plus
-        # the supervisor log for addon/host context. always() so this fires
-        # whether tests passed or failed.
+      - name: Extract HA diagnostics from booted qcow2 (always)
+        # First lists what's actually present in /supervisor/homeassistant
+        # (so missing files in artifact uploads are diagnosable), then
+        # tar-out the whole .storage + log files to a local tarball.
+        # Reads-only mount so the qcow2 isn't mutated.
         if: always()
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-diagnostics
+          # Probe: full directory listing of HA's config dir. Captures
+          # whatever HA actually writes (log filenames vary by config).
           guestfish --ro -a /tmp/haos-test-image.qcow2 run \
             : mount /dev/sda8 / \
-            : -download /supervisor/homeassistant/home-assistant.log /tmp/haos-diagnostics/home-assistant.log \
-            : -download /supervisor/homeassistant/home-assistant.log.1 /tmp/haos-diagnostics/home-assistant.log.1 \
-            : -download /supervisor/homeassistant/.storage/core.config_entries /tmp/haos-diagnostics/core.config_entries.json \
-            || echo "guestfish extraction partial — some files may be absent"
+            : ll /supervisor/homeassistant \
+            > /tmp/haos-diagnostics/config-dir-listing.txt 2>&1 \
+            || echo "directory listing failed"
+          # Pull everything log-shaped + the .storage tree out as a tar.
+          # tar-out includes the full subtree so anything-named-log gets
+          # captured; .storage gives us config_entries + other state.
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : tar-out /supervisor/homeassistant/.storage /tmp/haos-diagnostics/storage.tar \
+            || echo ".storage tar-out failed"
+          # Same for any log files in the config root.
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-diagnostics/ \
+            || echo "log glob copy failed"
           ls -la /tmp/haos-diagnostics/ || true
+          echo '--- config dir listing ---'
+          cat /tmp/haos-diagnostics/config-dir-listing.txt || true
 
       - name: Upload HAOS diagnostics
         if: always()
