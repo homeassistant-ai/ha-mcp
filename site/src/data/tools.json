@@ -2098,7 +2098,7 @@
   {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
-    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
+    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "script_id": {
