@@ -12,6 +12,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.util_helpers import (
     DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS,
     _resolve_data_path,
+    apply_entity_category,
     build_pagination_metadata,
     coerce_int_param,
     fetch_integration_diagnostics,
@@ -1261,3 +1262,104 @@ class TestParseDiagnosticsFields:
     def test_non_string_non_list_raises(self):
         with pytest.raises(ValueError, match="must be list, string, or None"):
             parse_diagnostics_fields(42)  # type: ignore[arg-type]
+
+
+class TestApplyEntityCategoryWriter:
+    """Direct writer-shape contract for ``apply_entity_category``.
+
+    Consumer-shim tests in ``test_helper_response_shape.py`` use a
+    hand-rolled ``fake_apply``; this class drives the REAL function to
+    pin the post-#1355 shape: success populates top-level ``warnings``
+    list, never the legacy singular ``category_warning`` key. A revert
+    of the writer to ``result_dict["category_warning"] = ...`` must
+    fail one of the assertions here.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failure_response_appends_to_warnings_list(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": {"message": "boom"}}
+        )
+        result: dict[str, object] = {}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        assert isinstance(result.get("warnings"), list)
+        assert any("failed to set category" in w for w in result["warnings"])
+        assert any("boom" in w for w in result["warnings"])
+        assert "category_warning" not in result
+        assert "category" not in result
+
+    @pytest.mark.asyncio
+    async def test_websocket_exception_appends_to_warnings_list(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws disconnected")
+        )
+        result: dict[str, object] = {}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        assert isinstance(result.get("warnings"), list)
+        assert any("failed to set category" in w for w in result["warnings"])
+        assert any("ws disconnected" in w for w in result["warnings"])
+        assert "category_warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_success_does_not_create_warnings_key(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True}
+        )
+        result: dict[str, object] = {}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        assert result.get("category") == "cat_test"
+        assert "warnings" not in result
+        assert "category_warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_failure_preserves_existing_warnings_entries(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": {"message": "boom"}}
+        )
+        result: dict[str, object] = {"warnings": ["earlier note"]}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        warnings = result["warnings"]
+        assert isinstance(warnings, list)
+        assert "earlier note" in warnings
+        assert any("failed to set category" in w for w in warnings)
+        assert "category_warning" not in result

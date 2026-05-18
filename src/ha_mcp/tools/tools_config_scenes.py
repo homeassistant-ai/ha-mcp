@@ -17,6 +17,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -728,16 +729,12 @@ class ConfigSceneTools:
                             self._client, entity_id
                         )
                         if not registered:
-                            result["warning"] = (
+                            result.setdefault("warnings", []).append(
                                 f"Scene updated but {entity_id} not yet queryable. "
                                 "It may take a moment to become available."
                             )
-                    except (
-                        TimeoutError,
-                        HomeAssistantAPIError,
-                        HomeAssistantConnectionError,
-                    ) as e:
-                        result["warning"] = (
+                    except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                        result.setdefault("warnings", []).append(
                             f"Scene updated but verification failed: {e}"
                         )
                 if category and entity_id:
@@ -849,16 +846,14 @@ class ConfigSceneTools:
                         self._client, entity_id
                     )
                     if not registered:
-                        result["warning"] = (
-                            f"Scene created but {entity_id} not yet queryable. "
+                        result.setdefault("warnings", []).append(
+                            f"Scene saved but {entity_id} not yet queryable. "
                             "It may take a moment to become available."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
-                    result["warning"] = f"Scene created but verification failed: {e}"
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Scene saved but verification failed: {e}"
+                    )
 
             # Apply category to entity registry if provided.
             if effective_category and entity_id:
@@ -977,15 +972,11 @@ class ConfigSceneTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
-                        result["warning"] = (
+                        result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
-                    result["warning"] = (
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
 

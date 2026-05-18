@@ -666,8 +666,10 @@ async def apply_entity_category(
 ) -> None:
     """Apply a category to an entity via the entity registry.
 
-    Updates result_dict in-place with 'category' on success or
-    'category_warning' on failure.
+    Updates result_dict in-place: sets ``'category'`` on success, or appends
+    to the top-level ``'warnings'`` list on failure. The list shape mirrors
+    the canonical response contract documented in ``AGENTS.md`` →
+    *Writing MCP Tools → Return Values*.
 
     Args:
         client: HomeAssistantClient instance
@@ -695,12 +697,12 @@ async def apply_entity_category(
                 else str(error_detail)
             )
             logger.warning(f"Failed to set category for {entity_id}: {error_msg}")
-            result_dict["category_warning"] = (
+            result_dict.setdefault("warnings", []).append(
                 f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"
             )
     except Exception as e:
         logger.warning(f"Failed to set category for {entity_id}: {e}")
-        result_dict["category_warning"] = (
+        result_dict.setdefault("warnings", []).append(
             f"{entity_type.capitalize()} saved but failed to set category: {e}"
         )
 
