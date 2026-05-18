@@ -10,7 +10,7 @@ Supervisor API helper (#1349 item 7). The Supervisor's ``addons/{slug}/update``
 endpoint isn't in HA Core's REST PATHS_ADMIN allowlist, so triggering
 an addon update from outside the addon container requires the HA Core
 WebSocket API's ``supervisor/api`` command. ``websockets`` is already
-a project test dep (used by ``build_image.py`` for the same reason).
+a project test dep.
 """
 
 from __future__ import annotations
@@ -147,8 +147,27 @@ def refresh_recorder_in_qcow2(
             # straight to .db with no journal artefacts. End state on disk:
             # one self-contained .db file. HA Core will switch it back to
             # WAL on first boot — its preferred mode.
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("PRAGMA journal_mode=DELETE")
+            #
+            # Both PRAGMAs return rows we MUST inspect: a busy WAL
+            # checkpoint or a refused mode switch silently leaves the
+            # same corruption the comment above describes.
+            ckpt_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            # Result shape: (busy, log_pages, checkpointed_pages). busy=0
+            # means all frames were merged into the main DB.
+            if ckpt_row is not None and ckpt_row[0] not in (0, None):
+                raise RuntimeError(
+                    f"wal_checkpoint(TRUNCATE) reported busy={ckpt_row[0]} on "
+                    f"{db_local}; another connection is holding WAL frames. "
+                    f"Aborting refresh — copy-in would still produce a "
+                    f"WAL/SHM-mismatched DB inside the qcow2."
+                )
+            mode_row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+            if mode_row is None or mode_row[0] != "delete":
+                raise RuntimeError(
+                    f"Failed to switch {db_local} to DELETE journal mode "
+                    f"(got {mode_row!r}); subsequent UPDATEs would write WAL "
+                    f"frames that the qcow2 copy-in won't include."
+                )
             newest = 0.0
             matched_columns = 0
             for table, cols in TIMESTAMP_COLUMNS.items():
@@ -215,14 +234,18 @@ def refresh_recorder_in_qcow2(
             conn.close()
 
         # copy-in the shifted DB, and PURGE any stale ``-wal`` / ``-shm``
-        # sidecars in the qcow2. The bake (build_image.py) boots HA Core
-        # to bootstrap state — Core writes the recorder DB in WAL mode and
-        # leaves ``home-assistant_v2.db``, ``home-assistant_v2.db-wal``,
-        # and ``home-assistant_v2.db-shm`` in the supervisor data dir.
-        # Our copy-out only fetches the ``.db``, so when we copy the
-        # edited ``.db`` back, the old ``-wal`` / ``-shm`` from bake are
-        # still there — referencing page numbers from the pre-edit ``.db``
-        # that no longer exist. On boot HA Core opens ``.db`` + ``-wal``
+        # sidecars in the qcow2. Two-part fix: the PRAGMA block above
+        # handles the workdir DB (no WAL frames leaving our process); this
+        # block handles the qcow2 side.
+        #
+        # The bake (build_image.py) boots HA Core to bootstrap state — Core
+        # writes the recorder DB in WAL mode and leaves
+        # ``home-assistant_v2.db``, ``home-assistant_v2.db-wal``, and
+        # ``home-assistant_v2.db-shm`` in the supervisor data dir. Our
+        # copy-out only fetches the ``.db``, so when we copy the edited
+        # ``.db`` back, the old ``-wal`` / ``-shm`` from bake are still
+        # there — referencing page numbers from the pre-edit ``.db`` that
+        # no longer exist. On boot HA Core opens ``.db`` + ``-wal``
         # together, sqlite finds the page-tree inconsistent, and raises
         # ``sqlite3.DatabaseError: database disk image is malformed``
         # (PR #1361 diagnostics: ha-core-runtime.log captured this exact
@@ -233,9 +256,7 @@ def refresh_recorder_in_qcow2(
         #
         # --rw so guestfish opens the qcow2 for write; the file's
         # owner/perms inside the qcow2 are preserved by libguestfs when
-        # overwriting an existing path. ``rm-f`` is a no-op if the file
-        # is absent (no error), so the sidecar deletion is safe whether
-        # or not the bake leaves them.
+        # overwriting an existing path.
         try:
             subprocess.run(
                 [
@@ -297,8 +318,8 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
        distinct PR commit produces a distinct version (Supervisor caches
        by exact version string).
-    3. libguestfs replaces /supervisor/addons/local/ha_mcp_dev/ contents on the
-       offline qcow2.
+    3. libguestfs replaces the /supervisor/addons/local/ha_mcp_dev/
+       directory (rm-rf + tar-in of parent) on the offline qcow2.
 
     Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
     the new files and rebuilds the addon's Docker image. Because the
@@ -355,11 +376,10 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             )
         )
 
-        # Bump version so Supervisor detects an update.
         # Tag with GITHUB_SHA when in CI so each PR commit gets its own
-        # version string — important because Supervisor caches install
-        # state by exact version, so two consecutive CI runs with the
-        # same version would no-op the update.
+        # version string — Supervisor caches install state by exact
+        # version, so two consecutive CI runs with the same version
+        # would no-op the update.
         sha = (os.environ.get("GITHUB_SHA", "") or "local")[:7] or "local"
         config_path = staging / "config.yaml"
         config_text = config_path.read_text()
@@ -395,6 +415,9 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
                 "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
             ],
             check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         subprocess.run(
             [
@@ -463,8 +486,15 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
         # Stage 2: HTTP-level probe. OPTIONS is the safest verb for an
         # unknown server — RFC-required to be implemented and Uvicorn's
         # default handler responds 405-method-not-allowed even when the
-        # mounted app rejects all methods. Either response (200, 404,
-        # 405, etc.) is "HTTP layer ready".
+        # mounted app rejects all methods.
+        #
+        # Accept codes that mean "Uvicorn answered with knowledge of this
+        # route": 200/204/3xx/401/403/405. Treat 5xx as transient (server
+        # is binding/crashing/restarting — keep retrying within the outer
+        # timeout). Treat 404 as fatal: it means the secret_path under
+        # which the MCP app is mounted doesn't match
+        # ``HA_MCP_TEST_SECRET_PATH`` here — a config-drift bug worth
+        # surfacing now instead of as a confusing MCP failure later.
         req = urllib.request.Request(base_url, method="OPTIONS")
         try:
             with urllib.request.urlopen(req, timeout=5.0) as resp:
@@ -476,7 +506,21 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
                 return base_url
         except urllib.error.HTTPError as e:
             last_status = e.code
-            # 4xx is a real HTTP response — server is up.
+            if e.code == 404:
+                raise RuntimeError(
+                    f"Inaddon MCP probe got 404 at {base_url} — the addon "
+                    f"booted but the secret_path mount doesn't match "
+                    f"HA_MCP_TEST_SECRET_PATH={HA_MCP_TEST_SECRET_PATH!r}. "
+                    f"Check that bake-time options install set the same "
+                    f"value (build_image.install_ha_mcp_dev_addon)."
+                ) from e
+            if 500 <= e.code < 600:
+                # Server up but in a bad state — keep retrying within the
+                # outer deadline.
+                last_err = e
+                time.sleep(3.0)
+                continue
+            # 2xx/3xx/401/403/405 — route exists, listener is HTTP-ready.
             LOG.info(
                 "Inaddon MCP HTTP ready at %s (OPTIONS → %d, expected)",
                 base_url, e.code,
@@ -667,74 +711,74 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
 
     ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
     LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
+
+    def _await_supervisor_result(msg_id: int, op_endpoint: str, op_deadline: float) -> None:
+        """Read WS frames until the response for ``msg_id`` arrives or deadline hits.
+
+        Supervisor stays silent during slow Docker rebuilds (worst case
+        ~14-18 min on cache miss). The per-recv timeout exists only to
+        let the outer ``op_deadline`` govern; on each per-recv timeout
+        we re-poll. Bare propagation would skip our descriptive error.
+        """
+        while time.monotonic() < op_deadline:
+            remaining = max(op_deadline - time.monotonic(), 1.0)
+            try:
+                raw = ws.recv(timeout=remaining)
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"supervisor/api {op_endpoint} failed: {resp.get('error')}"
+                )
+            return
+        raise TimeoutError(
+            f"supervisor/api {op_endpoint} did not complete within deadline "
+            f"({op_deadline - (op_deadline - timeout):.0f}s after start)"
+        )
+
     with websockets.sync.client.connect(ws_url, max_size=None) as ws:
-        # Auth handshake: HA sends auth_required, client sends auth, HA replies auth_ok.
-        ws.recv()  # auth_required
+        first_frame = json.loads(ws.recv())
+        if first_frame.get("type") != "auth_required":
+            raise RuntimeError(
+                f"WS handshake: expected auth_required as first frame, got "
+                f"{first_frame!r}"
+            )
         ws.send(json.dumps({"type": "auth", "access_token": token}))
         auth_resp = json.loads(ws.recv())
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
-        msg_id = 1
         # Trigger the update. ``backup=false`` skips Supervisor's pre-update
         # snapshot (saves ~30s, irrelevant for CI).
+        msg_id = 1
+        update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
         ws.send(json.dumps({
             "id": msg_id,
             "type": "supervisor/api",
-            "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update",
+            "endpoint": update_endpoint,
             "method": "post",
             "timeout": timeout,
             "data": {"backup": False},
         }))
-        # Supervisor's update call blocks until Docker rebuild finishes.
-        # ``timeout`` here is the WS-side budget; the HA Core relay may
-        # need its own larger budget under heavy layer-rebuild load.
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
-            if not isinstance(raw, str):
-                raw = raw.decode()
-            resp = json.loads(raw)
-            if resp.get("id") != msg_id:
-                continue
-            if not resp.get("success", False):
-                raise RuntimeError(
-                    f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/update failed: "
-                    f"{resp.get('error')}"
-                )
-            LOG.info("Dev addon update completed via Supervisor WS; starting addon")
-            break
-        else:
-            raise TimeoutError(
-                f"Supervisor addon update did not complete within {timeout}s"
-            )
+        _await_supervisor_result(msg_id, update_endpoint, time.monotonic() + timeout)
+        LOG.info("Dev addon update completed via Supervisor WS; starting addon")
 
         # Explicit start after update — Supervisor leaves the addon in
         # boot_fail state otherwise, with the new image built but no
         # running container. See docstring for the CI log evidence.
         msg_id = 2
+        start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
         ws.send(json.dumps({
             "id": msg_id,
             "type": "supervisor/api",
-            "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start",
+            "endpoint": start_endpoint,
             "method": "post",
             "timeout": 120,
         }))
-        start_deadline = time.monotonic() + 120
-        while time.monotonic() < start_deadline:
-            raw = ws.recv(timeout=max(start_deadline - time.monotonic(), 1.0))
-            if not isinstance(raw, str):
-                raw = raw.decode()
-            resp = json.loads(raw)
-            if resp.get("id") != msg_id:
-                continue
-            if not resp.get("success", False):
-                raise RuntimeError(
-                    f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/start failed: "
-                    f"{resp.get('error')}"
-                )
-            LOG.info("Dev addon started via Supervisor WS")
-            return
-        raise TimeoutError(
-            "Supervisor addon start did not complete within 120s"
-        )
+        _await_supervisor_result(msg_id, start_endpoint, time.monotonic() + 120)
+        LOG.info("Dev addon started via Supervisor WS")

@@ -617,9 +617,16 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             "COPY start.py /",
         )
         if patched == original:
-            LOG.warning(
-                "Dockerfile didn't contain the expected 'COPY homeassistant-addon/start.py /' "
-                "line — the addon may fail to build. Verify against current dev addon Dockerfile."
+            # Fail fast — silently writing the unpatched Dockerfile would
+            # cause an opaque addon-build failure 5+ min later during
+            # ``addons/{slug}/install``. Better to point at the patch line
+            # directly.
+            raise RuntimeError(
+                f"Dockerfile patch failed: expected line "
+                f"'COPY homeassistant-addon/start.py /' not found in "
+                f"{dockerfile}. The dev addon's Dockerfile may have been "
+                f"restructured; update the patch in stage_dev_addon_source "
+                f"to match the new shape."
             )
         dockerfile.write_text(patched)
 
@@ -636,6 +643,17 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             if not ln.startswith("image:")
         ]
         config_yaml.write_text("".join(config_lines))
+        # Verify the strip: a future restructure that indents the field
+        # under a parent key would make the line-prefix filter a no-op,
+        # silently re-introducing GHCR-pull behavior.
+        post_strip = config_yaml.read_text()
+        if "\nimage:" in post_strip or post_strip.startswith("image:"):
+            raise RuntimeError(
+                f"config.yaml ``image:`` strip did not remove the field "
+                f"from {config_yaml}; Supervisor will pull from GHCR and "
+                f"the per-PR version bump will 404. The field may now be "
+                f"indented under a parent — update the filter accordingly."
+            )
 
         # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.

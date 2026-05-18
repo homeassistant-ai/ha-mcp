@@ -79,7 +79,22 @@ async def mcp_client_with_filesystem(
     instead of building a new in-memory one.
     """
     if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        # Fail fast at fixture setup if the addon's install-time options
+        # ever drift and the filesystem tools aren't registered — without
+        # this, every per-test ``_check_filesystem_tools_available`` would
+        # ``pytest.skip`` and the run would look passing-but-empty.
+        tools = await mcp_client.list_tools()
+        tool_names = {t.name for t in tools}
+        required = {"ha_list_files", "ha_read_file", "ha_write_file", "ha_delete_file"}
+        missing = required - tool_names
+        assert not missing, (
+            f"Inaddon addon is missing filesystem tools {missing}; the addon's "
+            f"install-time options (build_image.install_ha_mcp_dev_addon) must "
+            f"include enable_filesystem_tools=true."
+        )
         logger.debug("FastMCP client (inaddon, HTTP) reused for filesystem tests")
+        # Session-scope mcp_client owns __aexit__; the per-test fixture
+        # deliberately doesn't wrap in `async with`.
         yield mcp_client
         return
 

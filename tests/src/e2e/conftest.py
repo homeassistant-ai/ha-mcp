@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_run
 
 from fastmcp import Client
 from haos_runtime import (
+    HA_MCP_DEV_ADDON_SLUG,
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
@@ -1068,6 +1069,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     trigger_dev_addon_update(base_url, token, timeout=600.0)
                     addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
                     logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
+                    assert addon_mcp_url is not None, (
+                        "Inaddon setup completed without producing an "
+                        "addon_mcp_url — wait_for_addon_mcp_ready contract "
+                        "violation. Downstream mcp_client fixture would fail "
+                        "with an obscure TypeError on transport construction."
+                    )
                 yield {
                     "container": None,
                     "port": None,
@@ -1112,8 +1119,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 if inaddon:
                     log_endpoints.append(
                         ("ha-mcp-dev-addon.log",
-                         f"{base_url}/api/hassio/addons/local_ha_mcp_dev/logs?lines=20000"),
+                         f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000"),
                     )
+                # Narrow except: any non-network error (NameError, KeyError
+                # from a future refactor) should propagate instead of being
+                # misreported as "Failed to dump". Per-endpoint network
+                # failures are still per-mortem and shouldn't kill teardown.
                 for name, url in log_endpoints:
                     try:
                         req = urllib.request.Request(
@@ -1122,7 +1133,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             (log_dest / name).write_bytes(resp.read())
                         logger.info("Dumped %s via supervisor", name)
-                    except Exception as exc:
+                    except (OSError, urllib.error.URLError,
+                            urllib.error.HTTPError, TimeoutError) as exc:
                         logger.warning("Failed to dump %s: %s", name, exc)
         return
 
@@ -1669,7 +1681,14 @@ async def mcp_client(
     if container_info.get("backend") == "haos_inaddon":
         from fastmcp.client.transports import StreamableHttpTransport
 
-        addon_url = container_info["addon_mcp_url"]
+        addon_url = container_info.get("addon_mcp_url")
+        if not addon_url:
+            raise RuntimeError(
+                "Inaddon backend signaled but container_info has no "
+                "addon_mcp_url — wait_for_addon_mcp_ready must run + "
+                "populate this key before mcp_client is requested. "
+                "Check ha_container_with_fresh_config's inaddon branch."
+            )
         logger.info(f"🔗 FastMCP client connecting (HTTP) to {addon_url}")
         transport = StreamableHttpTransport(url=addon_url)
         client = Client(transport)

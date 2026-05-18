@@ -64,7 +64,18 @@ async def mcp_client_with_yaml_config(
     at install time. Yield that client directly.
     """
     if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        # Fail fast at fixture setup if the addon's install-time options
+        # drifted and the YAML config tool isn't registered.
+        tools = await mcp_client.list_tools()
+        tool_names = {t.name for t in tools}
+        assert TOOL_NAME in tool_names, (
+            f"Inaddon addon is missing {TOOL_NAME}; the addon's install-time "
+            f"options (build_image.install_ha_mcp_dev_addon) must include "
+            f"enable_yaml_config_editing=true."
+        )
         logger.debug("FastMCP client (inaddon, HTTP) reused for YAML tests")
+        # Session-scope mcp_client owns __aexit__; the per-test fixture
+        # deliberately doesn't wrap in `async with`.
         yield mcp_client
         return
 
