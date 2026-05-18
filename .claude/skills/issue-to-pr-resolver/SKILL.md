@@ -48,9 +48,6 @@ PR_NUMBER=$(gh pr create --draft \
 
 ## What does this PR do?
 [description]
-
-## Future improvements
-<!-- Out-of-scope improvements noticed during implementation -->
 " | grep -oE '[0-9]+$')
 ```
 
@@ -113,4 +110,4 @@ Report to user: PR number, status, key choices.
 - **Never commit to master** — always work in the worktree
 - **Always create PRs as draft** — never mark ready without user request
 - Maximum 5 resolution iterations before reporting blockers
-- **Discovered improvements**: fix small things inline; surface mid-sized ones to user before pushing; document large/unrelated ones in the PR description's **Future improvements** section — never open a separate improvement PR without explicit user approval
+- **Discovered improvements**: fix-in-place by default. See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the full rubric. Never open a follow-up PR or issue without explicit user approval; never populate `## Future improvements` without the user explicitly confirming the work is out of scope.
