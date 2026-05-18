@@ -13,7 +13,6 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -744,11 +743,7 @@ class AutomationConfigTools:
                         result.setdefault("warnings", []).append(
                             f"Automation {'created' if identifier is None else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
-                except (
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                    HomeAssistantAuthError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
                         f"Automation verification failed for {entity_id} "
                         f"({type(e).__name__}): {e}"
@@ -1042,11 +1037,7 @@ class AutomationConfigTools:
                         result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
                         )
-                except (
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                    HomeAssistantAuthError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
                         f"Automation removal verification failed for "
                         f"{entity_id_for_wait} ({type(e).__name__}): {e}"
