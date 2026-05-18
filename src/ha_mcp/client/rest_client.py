@@ -136,6 +136,13 @@ class HomeAssistantClient:
             verify=self.verify_ssl,
         )
 
+        # Lazy-populated by ``_is_supervised_install``. ``None`` means
+        # "not probed yet"; ``True`` is cached for the session lifetime
+        # (HAOS-ness can't change at runtime). ``False`` is NOT cached so a
+        # transient probe failure on the first call doesn't permanently
+        # disable the supervised branch — subsequent calls re-probe.
+        self._supervised_detected: bool | None = None
+
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
     async def __aenter__(self) -> "HomeAssistantClient":
@@ -455,17 +462,30 @@ class HomeAssistantClient:
     async def get_error_log(self) -> str:
         """Get Home Assistant error log.
 
-        Branch on ``is_running_in_addon()``: inside the add-on container,
-        HA Core's ``bootstrap.py`` sets ``err_log_path = None`` when the
-        ``SUPERVISOR`` env var is present, so ``hass.data[DATA_LOGGING]``
-        is never populated and the ``APIErrorLog`` view is not registered
-        — ``/api/error_log`` returns 404 by-design on HA OS / Supervised.
-        Route to ``_supervisor_logs_get("core")`` on this branch: same
-        content (HA Core's container log) via a different transport
-        (Supervisor REST). On non-addon installs keep the
-        ``/api/error_log`` proxy path.
+        Three-way branch depending on how this client reaches HA:
 
-        Same root cause and fix shape as ``get_addon_logs`` — see #1116.
+        - **Addon context** (``is_running_in_addon()`` True — i.e.
+          ``SUPERVISOR_TOKEN`` is set, meaning this process is the
+          ha-mcp add-on container talking to the Supervisor sibling):
+          go direct to Supervisor REST at
+          ``http://supervisor/core/logs``.
+        - **External client → HAOS/Supervised** (``is_running_in_addon()``
+          False AND ``hassio`` is listed in HA's loaded components): use
+          the HA Core hassio proxy at ``/api/hassio/core/logs`` with the
+          user LLA. ``/api/error_log`` is unregistered by design on
+          Supervised installs — HA Core's ``bootstrap.py:646-671`` sets
+          ``err_log_path = None`` when ``SUPERVISOR`` is in the env, so
+          ``hass.data[DATA_LOGGING]`` is never populated and the
+          ``APIErrorLog`` view (``api/__init__.py:89-90``) never registers.
+          The hassio proxy reaches the same underlying log stream.
+        - **External client → Container/pip HA** (neither of the above):
+          keep the historical ``/api/error_log`` proxy path.
+
+        The middle branch was discovered by the HAOS E2E tier (#1326): the
+        test harness runs ha-mcp externally against a booted HAOS, hits
+        the unregistered endpoint, and the old binary branch surfaced as
+        a confusing 404. Verified end-to-end with the user's real HAOS
+        and against HA Core source.
 
         Raises:
             HomeAssistantAuthError: 401, or empty ``SUPERVISOR_TOKEN`` on
@@ -479,9 +499,72 @@ class HomeAssistantClient:
             logger.debug("Fetching error log via Supervisor direct (core service)")
             return await self._supervisor_logs_get("core")
 
-        logger.debug("Fetching error log via HA Core proxy")
-        response = await self._request("GET", "/error_log")
-        return response if isinstance(response, str) else str(response)
+        if await self._is_supervised_install():
+            logger.debug(
+                "Fetching error log via HA Core /hassio/core/logs proxy (supervised)"
+            )
+            raw_response = await self._raw_request(
+                "GET",
+                "/hassio/core/logs?lines=20000",
+                headers={"Accept": "text/plain"},
+            )
+            return raw_response.text
+
+        logger.debug("Fetching error log via HA Core proxy (Container/pip)")
+        raw_response = await self._raw_request(
+            "GET", "/error_log", headers={"Accept": "text/plain"}
+        )
+        return raw_response.text
+
+    async def _is_supervised_install(self) -> bool:
+        """Detect whether the target HA is a Supervised / HAOS install.
+
+        Probes ``/api/config`` once per client instance and returns
+        ``"hassio" in components``. Cached for the session lifetime on
+        BOTH definite outcomes (True or False), since a successful
+        ``/api/config`` response with or without ``hassio`` is a
+        definitive signal — HA's loaded-components set doesn't change
+        between Supervised and Container at runtime.
+
+        Cache is NOT poisoned on probe failure: a transient network
+        glitch or HTTP error returns False without setting the cache,
+        so the next call re-probes. This is the only path that
+        intentionally fails open — caller proceeds on the historical
+        Container branch (which on HAOS will also fail, but with a
+        clearer 404 than a probe-side exception would surface).
+
+        Auth / connection / HTTP errors are caught explicitly; runtime
+        bugs (TypeError, AttributeError) and BaseException derivatives
+        (KeyboardInterrupt, CancelledError) deliberately propagate so
+        they're not silenced as "not supervised".
+        """
+        if self._supervised_detected is not None:
+            return self._supervised_detected
+        try:
+            config = await self._request("GET", "/config")
+        except (
+            HomeAssistantAuthError,
+            HomeAssistantAPIError,
+            HomeAssistantConnectionError,
+            httpx.HTTPError,
+            TimeoutError,
+        ) as exc:
+            # Fail-open on transport / HTTP-layer failures only. Note:
+            # a 401 here likely means the LLA is bad and the /error_log
+            # fallback will also 401 — the user gets a clearer auth error
+            # from that path than a swallowed probe error would surface.
+            # Logged at WARNING so it's visible at default log levels
+            # without spamming on every call (probe runs at most once
+            # per session per outcome).
+            logger.warning(
+                "Supervised-install probe failed (fail-open to non-supervised): %r",
+                exc,
+            )
+            return False
+        components = config.get("components", []) if isinstance(config, dict) else []
+        is_supervised = isinstance(components, list) and "hassio" in components
+        self._supervised_detected = is_supervised
+        return is_supervised
 
     async def get_addon_logs(self, slug: str) -> str:
         """Fetch an add-on's container logs.

@@ -39,7 +39,14 @@ from ha_mcp.tools.tools_utility import register_utility_tools
 
 @pytest.fixture
 def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network."""
+    """HomeAssistantClient with stubbed internals — no real network.
+
+    Mirror every instance attribute the real ``__init__`` sets, so a
+    `getattr` fallback in production code isn't needed to paper over a
+    test-fixture omission (and so future `__init__` attribute additions
+    that this fixture forgets to mirror fail loudly here instead of
+    silently no-op-ing).
+    """
     with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
         client = HomeAssistantClient()
         client.base_url = "http://test.local:8123"
@@ -47,6 +54,7 @@ def mock_client():
         client.timeout = 30
         client.verify_ssl = True
         client.httpx_client = MagicMock()
+        client._supervised_detected = None
         return client
 
 
@@ -506,24 +514,78 @@ class TestGetAddonLogsBranchSelection:
 
 
 class TestGetErrorLogBranchSelection:
-    """`get_error_log()` mirrors `get_addon_logs()`'s `is_running_in_addon()`
-    branch. On addon installs, HA Core's ``bootstrap.py`` sets
-    ``err_log_path = None`` when the ``SUPERVISOR`` env var is present, so
-    ``hass.data[DATA_LOGGING]`` is never populated and the ``APIErrorLog``
-    view is not registered — ``/api/error_log`` returns 404 by-design.
-    Same root cause and fix shape as #1116 add-on logs.
+    """`get_error_log()` has a three-way branch on
+    `is_running_in_addon()` + `_is_supervised_install()`:
+
+    - Addon → Supervisor REST direct (#1116-era fix).
+    - External + Supervised/HAOS → HA Core ``/api/hassio/core/logs``
+      proxy with user LLA (#1349 item 4 fix). ``/api/error_log`` is
+      unregistered on Supervised installs because HA Core's
+      ``bootstrap.py`` sets ``err_log_path = None`` when ``SUPERVISOR``
+      env is present (no ``hass.data[DATA_LOGGING]`` → no
+      ``APIErrorLog`` view registration).
+    - External + Container/pip → historical ``/api/error_log`` path.
     """
 
     @pytest.mark.asyncio
-    async def test_non_addon_install_uses_ha_core_proxy(self, mock_client):
-        """`is_running_in_addon()` False → ``/error_log`` proxy path."""
-        mock_client._request = AsyncMock(return_value="error log via proxy\n")
+    async def test_non_addon_non_supervised_uses_ha_core_error_log_proxy(
+        self, mock_client
+    ):
+        """External Container-HA client → probe /config, fall through to /error_log.
+
+        The probe of /api/config is the supervised-detection hop added
+        with the #1349 item 4 fix; on Container HA it returns a config
+        without ``hassio`` in components, so we fall through to the
+        historical /error_log branch. That branch uses ``_raw_request``
+        (text/plain), not ``_request`` (JSON) — earlier code lost log
+        content to a silent JSONDecodeError.
+        """
+        mock_response = MagicMock()
+        mock_response.text = "error log via proxy\n"
+        mock_client._request = AsyncMock(
+            return_value={"components": ["sun", "demo"]}
+        )
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
             result = await mock_client.get_error_log()
 
         assert "error log via proxy" in result
-        mock_client._request.assert_called_once_with("GET", "/error_log")
+        # Probe via _request, fetch via _raw_request.
+        mock_client._request.assert_awaited_once_with("GET", "/config")
+        mock_client._raw_request.assert_awaited_once_with(
+            "GET", "/error_log", headers={"Accept": "text/plain"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_addon_supervised_uses_hassio_core_logs_proxy(
+        self, mock_client
+    ):
+        """External HAOS/Supervised client → /api/hassio/core/logs proxy.
+
+        ``/api/error_log`` returns 404 by-design on HAOS, so the supervised
+        branch routes through HA Core's hassio proxy with the user LLA.
+        Verified end-to-end against a real HAOS during PR #1349 (item 4).
+        """
+        mock_response = MagicMock()
+        mock_response.text = "hassio-proxied log content\n"
+        mock_client._request = AsyncMock(
+            return_value={"components": ["sun", "hassio", "demo"]}
+        )
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
+
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            result = await mock_client.get_error_log()
+
+        assert "hassio-proxied log content" in result
+        # Probe call.
+        mock_client._request.assert_awaited_once_with("GET", "/config")
+        # Fetch via _raw_request (text/plain payload, not JSON).
+        mock_client._raw_request.assert_awaited_once_with(
+            "GET",
+            "/hassio/core/logs?lines=20000",
+            headers={"Accept": "text/plain"},
+        )
 
     @pytest.mark.asyncio
     async def test_addon_install_routes_to_supervisor_core(self, mock_client):
