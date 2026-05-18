@@ -7,7 +7,9 @@ This module provides tools for Home Assistant system administration including:
 - System health monitoring
 """
 
+import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -376,22 +378,89 @@ class SystemTools:
             if unknown:
                 result["warning"] = f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
 
-            # Fetch optional sections
-            if "repairs" in includes:
-                result["repairs"] = await self._fetch_repairs(
-                    ws_client,
-                    include_dismissed=include_dismissed_repairs_bool,
-                )
-
+            # Fetch optional sections concurrently. The ws_client serialises
+            # outgoing writes via its internal `_send_lock`, but per-message
+            # futures keyed by message_id let response waits overlap — so this
+            # gives request pipelining instead of head-of-line blocking.
+            #
+            # Each ``_fetch_*`` helper already returns an embeddable sub-dict
+            # with an ``error`` field on backend failure (it never raises);
+            # ``return_exceptions=True`` is belt-and-suspenders against a future
+            # helper edit that lets an exception escape.
             zha_full = "zha_network_full" in includes
             zha_summary = "zha_network" in includes
-            if zha_full or zha_summary:
-                result["zha_network"] = await self._fetch_zha_network(
-                    ws_client, full=zha_full
+            want_repairs = "repairs" in includes
+            want_zha = zha_full or zha_summary
+            want_zwave = "zwave_network" in includes
+
+            sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
+            if want_repairs:
+                sections.append(
+                    (
+                        "repairs",
+                        self._fetch_repairs(
+                            ws_client,
+                            include_dismissed=include_dismissed_repairs_bool,
+                        ),
+                    )
+                )
+            if want_zha:
+                sections.append(
+                    ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
+                )
+            if want_zwave:
+                sections.append(
+                    ("zwave_network", self._fetch_zwave_network(ws_client))
                 )
 
-            if "zwave_network" in includes:
-                result["zwave_network"] = await self._fetch_zwave_network(ws_client)
+            if sections:
+                gathered = await asyncio.gather(
+                    *[coro for _, coro in sections], return_exceptions=True
+                )
+                # Pre-pass: re-raise anything that must unwind the request
+                # rather than land as an embedded section error. ``gather``
+                # with ``return_exceptions=True`` returns ``CancelledError``
+                # (and any other ``BaseException``) as a result element
+                # instead of propagating, and a ``ToolError`` raised from
+                # inside a helper would otherwise be silently demoted to
+                # ``{"error": "ToolError: …"}`` and break the MCP
+                # ``isError=true`` contract for the whole tool.
+                for section_result in gathered:
+                    if isinstance(section_result, asyncio.CancelledError):
+                        raise section_result
+                    if isinstance(section_result, ToolError):
+                        raise section_result
+                    if isinstance(section_result, BaseException) and not isinstance(
+                        section_result, Exception
+                    ):
+                        # ``KeyboardInterrupt`` / ``SystemExit`` — never demote
+                        # these to a section-level error string.
+                        raise section_result
+                for (section_name, _), section_result in zip(
+                    sections, gathered, strict=True
+                ):
+                    if isinstance(section_result, Exception):
+                        # Last-resort fallback: emit a minimal ``{error: ...}``
+                        # dict so an unexpected exception attributes to its
+                        # section instead of bubbling out and dropping siblings.
+                        # The helpers themselves return richer
+                        # ``{<key>: <baseline>, ..., error: ...}`` shapes on
+                        # their own (caught) failures; this branch is the
+                        # belt-and-suspenders path that fires only on a
+                        # helper-edit regression that lets an exception escape.
+                        logger.warning(
+                            "Concurrent fetch for section %r raised: %s: %s",
+                            section_name,
+                            type(section_result).__name__,
+                            section_result,
+                        )
+                        result[section_name] = {
+                            "error": (
+                                f"{type(section_result).__name__}: {section_result}"
+                            )
+                        }
+                    else:
+                        result[section_name] = section_result
 
             return result
 
