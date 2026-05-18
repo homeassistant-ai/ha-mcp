@@ -317,7 +317,6 @@ class AutomationConfigTools:
             return {
                 "success": True,
                 "action": "get",
-                "identifier": identifier,
                 "automation_id": entity_id or identifier,
                 "config": normalized_config,
                 "config_hash": config_hash,
