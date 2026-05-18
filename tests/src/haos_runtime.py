@@ -5,8 +5,12 @@ session fixtures) and ``tests/src/haos_e2e/conftest.py`` (for the
 HAOS-only canary suite). Keeping the QEMU lifecycle + HA login-flow
 code in one place avoids drift between the two backends.
 
-Stdlib-only on purpose so this module imports cleanly without
-requiring the build-script's websockets dep.
+Mostly stdlib — ``websockets`` is required for the inaddon-tier
+Supervisor API helper (#1349 item 7). The Supervisor's ``addons/{slug}/update``
+endpoint isn't in HA Core's REST PATHS_ADMIN allowlist, so triggering
+an addon update from outside the addon container requires the HA Core
+WebSocket API's ``supervisor/api`` command. ``websockets`` is already
+a project test dep (used by ``build_image.py`` for the same reason).
 """
 
 from __future__ import annotations
@@ -33,8 +37,36 @@ LOG = logging.getLogger(__name__)
 # rejects with "invalid_request".
 HA_HOST_PORT = int(os.environ.get("HAOS_TEST_HA_PORT", "18123"))
 SSH_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_PORT", "12222"))
+# Inaddon MCP-tier port forward — addon's HTTP MCP endpoint runs at 9583
+# inside HAOS (host_network: true → host port = addon port). Hostfwd to a
+# unique outer port so external-tier 18123 and inaddon-tier 19583 can
+# coexist if both run on the same runner.
+HA_MCP_ADDON_HOST_PORT = int(os.environ.get("HAOS_TEST_ADDON_PORT", "19583"))
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
+
+# Deterministic secret_path the bake pre-sets on the ha-mcp dev addon's
+# options (see tests/haos_image_build/build_image.py:HA_MCP_TEST_SECRET_PATH).
+# Kept in sync between the two modules manually — both are small constants
+# and a cross-package import here would pull qemu/websockets build deps
+# into the test runtime path.
+HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+# Slug Supervisor assigns to a local addon staged under
+# /supervisor/addons/local/<dir>/. Derived from config.yaml's slug ``ha_mcp_dev``
+# with the ``local_`` prefix that Supervisor applies to local-store
+# addons.
+HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+
+
+def is_haos_inaddon_mode() -> bool:
+    """True iff this run targets the inaddon HAOS tier (#1349 item 7).
+
+    The inaddon mode points ``mcp_client`` at the ha-mcp dev addon's HTTP
+    MCP endpoint inside the booted HAOS instead of starting an in-process
+    FastMCP server. Exercises ``is_running_in_addon()=True`` code paths
+    that the external-runner tier can't reach.
+    """
+    return os.environ.get("HAOS_TEST_MODE", "external") == "inaddon"
 
 
 def is_haos_backend_selected() -> bool:
@@ -204,6 +236,174 @@ def refresh_recorder_in_qcow2(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
+    """Overwrite the staged ha-mcp dev addon source with the PR's current source.
+
+    The cached qcow2 ships with the addon installed + Docker image built
+    from whatever HEAD source the bake captured. To exercise the
+    PR-under-review code, this helper:
+
+    1. Walks the working tree for the addon-build-context files
+       (homeassistant-addon-dev/* + start.py from homeassistant-addon/ +
+       pyproject.toml + uv.lock + src/ha_mcp/).
+    2. Bumps the addon's config.yaml ``version:`` so Supervisor's
+       local-store scanner reports an update-available on next boot.
+       Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
+       distinct PR commit produces a distinct version (Supervisor caches
+       by exact version string).
+    3. libguestfs replaces /supervisor/addons/local/ha_mcp_dev/ contents on the
+       offline qcow2.
+
+    Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
+    the new files and rebuilds the addon's Docker image. Because the
+    cached qcow2 already has the base Docker layers cached, the rebuild
+    only re-executes the bottom layers (COPY src/, uv sync project) —
+    typically ~20-30s end-to-end.
+    """
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    dev_addon_src = repo_root / "homeassistant-addon-dev"
+    if not dev_addon_src.exists():
+        raise RuntimeError(
+            f"homeassistant-addon-dev not found at {dev_addon_src} — "
+            f"checkout is incomplete; inaddon tier cannot refresh source."
+        )
+
+    workdir = Path(_tempfile.mkdtemp(prefix="haos-inaddon-refresh-"))
+    try:
+        staging = workdir / "ha_mcp_dev"
+        _shutil.copytree(dev_addon_src, staging)
+
+        # Same file-shaping as build_image.stage_dev_addon_source so the
+        # build context matches what the cached Docker layers expect.
+        _shutil.copy(
+            repo_root / "homeassistant-addon" / "start.py",
+            staging / "start.py",
+        )
+        _shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
+        _shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        addon_src_dir = staging / "src"
+        if addon_src_dir.exists():
+            _shutil.rmtree(addon_src_dir)
+        addon_src_dir.mkdir()
+        _shutil.copytree(repo_root / "src" / "ha_mcp", addon_src_dir / "ha_mcp")
+
+        # Dockerfile shape fixup (same as bake).
+        dockerfile = staging / "Dockerfile"
+        dockerfile.write_text(dockerfile.read_text().replace(
+            "COPY homeassistant-addon/start.py /",
+            "COPY start.py /",
+        ))
+
+        # Strip image: from config.yaml — Supervisor pulls from GHCR when
+        # image: is set, but the per-PR version we bump to below doesn't
+        # exist there. Force local Dockerfile build by removing the field.
+        # Same fix the bake's stage_dev_addon_source applies.
+        config_path_pre = staging / "config.yaml"
+        config_path_pre.write_text(
+            "".join(
+                ln for ln in config_path_pre.read_text().splitlines(keepends=True)
+                if not ln.startswith("image:")
+            )
+        )
+
+        # Bump version so Supervisor detects an update.
+        # Tag with GITHUB_SHA when in CI so each PR commit gets its own
+        # version string — important because Supervisor caches install
+        # state by exact version, so two consecutive CI runs with the
+        # same version would no-op the update.
+        sha = (os.environ.get("GITHUB_SHA", "") or "local")[:7] or "local"
+        config_path = staging / "config.yaml"
+        config_text = config_path.read_text()
+        # config.yaml is human-edited; preserve line shape rather than
+        # round-tripping through a YAML parser (which would lose comments).
+        new_lines: list[str] = []
+        bumped = False
+        for line in config_text.splitlines(keepends=True):
+            if line.startswith("version:") and not bumped:
+                # ``version: "devNNN"`` → ``version: "devNNN-pr-<sha>"``
+                prefix, _, rest = line.partition(":")
+                base = rest.strip().strip('"').strip("'")
+                new_lines.append(f'{prefix}: "{base}-pr-{sha}"\n')
+                bumped = True
+            else:
+                new_lines.append(line)
+        if not bumped:
+            raise RuntimeError(
+                "No version: line in homeassistant-addon-dev/config.yaml — "
+                "cannot trigger Supervisor update without a version bump."
+            )
+        config_path.write_text("".join(new_lines))
+        LOG.info("Bumped addon version to pr-%s for update-detection", sha)
+
+        # Build the tar, then replace /supervisor/addons/local/ha_mcp_dev/ in the qcow2.
+        # rm-rf + tar-in (rather than tar-in alone) so removed files in the
+        # PR source actually disappear from the addon dir — leftover files
+        # would be picked up by the next Docker build.
+        seed_tar = workdir / "ha_mcp_dev.tar"
+        subprocess.run(
+            [
+                "tar", "--numeric-owner", "--owner=0", "--group=0",
+                "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a", str(image_path),
+                "run",
+                ":",
+                "mount", "/dev/sda8", "/",
+                ":",
+                "rm-rf", "/supervisor/addons/local/ha_mcp_dev",
+                ":",
+                "tar-in", str(seed_tar), "/supervisor/addons/local",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        LOG.info("Refreshed ha-mcp dev addon source in %s", image_path)
+    finally:
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
+    """Poll the inaddon MCP HTTP port until TCP-accept succeeds.
+
+    Returns the full base URL on success.
+
+    Uses TCP-level connect probe rather than HTTP because the addon's
+    FastMCP streamable-HTTP transport RSTs plain GET requests (it
+    expects MCP-shaped POSTs only). A successful TCP handshake proves
+    the addon container is up and the listener is bound; the actual MCP
+    handshake happens at fixture-driven Client connect time.
+    """
+    base_url = f"http://127.0.0.1:{HA_MCP_ADDON_HOST_PORT}{HA_MCP_TEST_SECRET_PATH}"
+    deadline = time.monotonic() + timeout
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", HA_MCP_ADDON_HOST_PORT), timeout=5.0
+            ):
+                LOG.info("Inaddon MCP port %d open (addon container up)",
+                         HA_MCP_ADDON_HOST_PORT)
+                return base_url
+        except OSError as e:
+            last_err = e
+        time.sleep(3.0)
+    raise TimeoutError(
+        f"Inaddon MCP endpoint {base_url} did not become reachable within "
+        f"{timeout}s (last_exc={last_err!r})"
+    )
+
+
 def _http(
     method: str,
     url: str,
@@ -328,7 +528,8 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
         "-drive", f"if=virtio,file={image_path},format=qcow2",
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
-        f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22",
+        f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22,"
+        f"hostfwd=tcp:127.0.0.1:{HA_MCP_ADDON_HOST_PORT}-:9583",
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
         "-serial", f"file:{serial}",
@@ -351,3 +552,66 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             )
             proc.kill()
             proc.wait()
+
+
+def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.0) -> None:
+    """Trigger Supervisor's ``addons/{slug}/update`` for the dev addon.
+
+    The cached qcow2 ships with the addon installed at the bake-time
+    source version; ``refresh_dev_addon_source_in_qcow2`` has just
+    overwritten ``/supervisor/addons/local/ha_mcp_dev/`` with the PR's source and
+    bumped the addon's ``config.yaml`` version. Asking Supervisor to
+    update detects the new version, rebuilds the addon's Docker image
+    (Docker layer cache → only COPY src/ + uv-sync-project layers
+    re-execute), and restarts the container — no HA Core reboot.
+
+    Uses the HA Core WebSocket API's ``supervisor/api`` command because
+    ``addons/{slug}/update`` is NOT in HA Core's REST PATHS_ADMIN
+    allowlist (HAOS source verified: ``hassio/http.py:PATHS_ADMIN`` only
+    covers logs/changelog/documentation/backups). Same mechanism as
+    ``build_image.py``'s ``HAWebSocket.supervisor_api``.
+    """
+    import websockets.sync.client
+
+    ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+    LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
+    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+        # Auth handshake: HA sends auth_required, client sends auth, HA replies auth_ok.
+        ws.recv()  # auth_required
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        # Trigger the update. ``backup=false`` skips Supervisor's pre-update
+        # snapshot (saves ~30s, irrelevant for CI).
+        ws.send(json.dumps({
+            "id": msg_id,
+            "type": "supervisor/api",
+            "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update",
+            "method": "post",
+            "timeout": timeout,
+            "data": {"backup": False},
+        }))
+        # Supervisor's update call blocks until Docker rebuild finishes.
+        # ``timeout`` here is the WS-side budget; the HA Core relay may
+        # need its own larger budget under heavy layer-rebuild load.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/update failed: "
+                    f"{resp.get('error')}"
+                )
+            LOG.info("Dev addon update completed via Supervisor WS")
+            return
+        raise TimeoutError(
+            f"Supervisor addon update did not complete within {timeout}s"
+        )

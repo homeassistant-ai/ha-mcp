@@ -134,6 +134,19 @@ GET_HACS_ADDON = Addon(
 
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 
+# Dev-channel ha-mcp addon baked into the qcow2 from local source for the
+# inaddon HAOS E2E tier (#1349 item 7). The dev addon's config.yaml lives at
+# ``homeassistant-addon-dev/`` in the repo; we stage it under
+# ``/supervisor/addons/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
+# a local addon (slug: ``local_<config-slug>`` → ``local_ha_mcp_dev``).
+#
+# The secret_path option must be set deterministically so the test harness
+# can construct the addon's MCP URL without round-tripping Supervisor. Must
+# start with ``/`` and contain only URL-safe chars (see _is_valid_secret_path
+# in homeassistant-addon/start.py).
+HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+
 
 # ---------------------------------------------------------------------------
 # Subprocess + HTTP helpers
@@ -536,6 +549,163 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
+def stage_dev_addon_source(qcow2: Path) -> None:
+    """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
+
+    Runs BEFORE first start_qemu so HAOS boots with the local addon visible
+    to Supervisor in the store. The bake then installs + builds the addon
+    while HAOS is running, which means the cached qcow2 ships with the addon
+    Docker image already built — every subsequent CI run only pays the cost
+    of an ``addons/{slug}/update`` (Docker layer cache hit, ~20-30s) instead
+    of a full first-install (~5 min).
+
+    The dev addon's Dockerfile expects ``start.py``, ``pyproject.toml``,
+    ``uv.lock``, and ``src/`` at the build-context root — same shape as the
+    addon-repo-branch flow used for manual fork testing (see
+    ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
+    in-HAOS build succeeds without any additional setup at install time.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    dev_addon_src = repo_root / "homeassistant-addon-dev"
+    if not dev_addon_src.exists():
+        raise RuntimeError(
+            f"homeassistant-addon-dev not found at {dev_addon_src} — "
+            f"checkout is incomplete; the image cannot be built."
+        )
+
+    LOG.info("Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/")
+    workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
+    try:
+        staging = workdir / "ha_mcp_dev"
+        shutil.copytree(dev_addon_src, staging)
+
+        # Files outside the addon dir that the Dockerfile COPYs from.
+        # Mirrors the addon-repo-branch manual steps.
+        shutil.copy(repo_root / "homeassistant-addon" / "start.py", staging / "start.py")
+        shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
+        shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
+        # a prior local run) doesn't shadow the current version.
+        addon_src_dir = staging / "src"
+        if addon_src_dir.exists():
+            shutil.rmtree(addon_src_dir)
+        addon_src_dir.mkdir()
+        shutil.copytree(repo_root / "src" / "ha_mcp", addon_src_dir / "ha_mcp")
+
+        # Dockerfile in homeassistant-addon-dev/ uses
+        # ``COPY homeassistant-addon/start.py /`` because it's authored to
+        # be built from the repo root context. Inside /supervisor/addons/local/ the
+        # build context is the addon dir itself, so the path needs to be
+        # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
+        dockerfile = staging / "Dockerfile"
+        original = dockerfile.read_text()
+        patched = original.replace(
+            "COPY homeassistant-addon/start.py /",
+            "COPY start.py /",
+        )
+        if patched == original:
+            LOG.warning(
+                "Dockerfile didn't contain the expected 'COPY homeassistant-addon/start.py /' "
+                "line — the addon may fail to build. Verify against current dev addon Dockerfile."
+            )
+        dockerfile.write_text(patched)
+
+        # Strip the ``image:`` field from config.yaml. Production dev-addon
+        # ships built images at ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch};
+        # when Supervisor sees ``image:``, it tries to PULL from GHCR rather
+        # than build from the local Dockerfile. Per-PR version bumps produce
+        # tags that don't exist in GHCR → 404 → addon update fails.
+        # Removing the field forces Supervisor to build locally from the
+        # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
+        config_yaml = staging / "config.yaml"
+        config_lines = [
+            ln for ln in config_yaml.read_text().splitlines(keepends=True)
+            if not ln.startswith("image:")
+        ]
+        config_yaml.write_text("".join(config_lines))
+
+        # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
+        # hassos-data partition. Same approach as bake_test_state's seed-tar.
+        seed_tar = workdir / "ha_mcp_dev.tar"
+        _run([
+            "tar", "--numeric-owner", "--owner=0", "--group=0",
+            "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
+        ])
+        _run([
+            "guestfish",
+            "--rw",
+            "-a", str(qcow2),
+            "run",
+            ":",
+            "mount", "/dev/sda8", "/",
+            ":",
+            "mkdir-p", "/supervisor/addons/local",
+            ":",
+            "tar-in", str(seed_tar), "/supervisor/addons/local",
+        ])
+        LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
+    """Install the local ha-mcp dev addon during the bake's running phase.
+
+    Assumes ``stage_dev_addon_source`` ran before start_qemu so the source
+    is already at /supervisor/addons/local/ha_mcp_dev/. Supervisor's local store
+    scanner picks up the addon automatically on boot; we reload to be
+    explicit, install (which builds the Docker image — slow, ~5 min, but
+    only paid once per cache lifetime), set options including a
+    deterministic secret_path so test harness can construct the MCP URL,
+    and start the addon container.
+
+    Returns the installed slug (``local_ha_mcp_dev``).
+    """
+    _reload_store(ws)
+    slug = HA_MCP_DEV_ADDON_SLUG
+    LOG.info("Installing ha-mcp dev addon (slug=%s) — building Docker image...", slug)
+    # 900s install timeout matches the existing install_addons flow and
+    # covers the worst-case from-scratch uv sync + image build.
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    # Pre-set every dev-channel flag the test suite relies on so the addon
+    # exposes the full tool surface (mirrors the env-var setup in conftest's
+    # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
+    # lists every flag we toggle here.
+    LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
+    # Supervisor's options POST replaces the full options dict, so we must
+    # include every field with a non-optional schema entry in the dev addon's
+    # homeassistant-addon-dev/config.yaml. Verified live: omitting
+    # ``backup_hint`` returns "Missing option 'backup_hint' in root".
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            "options": {
+                "backup_hint": "normal",
+                "secret_path": HA_MCP_TEST_SECRET_PATH,
+                "enable_tool_search": False,
+                "enable_yaml_config_editing": True,
+                "enable_code_mode": True,
+                "enable_lite_docstrings": False,
+                "enable_filesystem_tools": True,
+                "enable_custom_component_integration": True,
+                "tool_search_max_results": 5,
+                "disabled_tools": "",
+                "pinned_tools": "",
+                "verify_ssl": True,
+                "advanced_debug_logging": True,
+            },
+            "boot": "auto",
+        },
+        timeout=60.0,
+    )
+    LOG.info("Starting ha-mcp dev addon")
+    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
+    LOG.info("ha-mcp dev addon installed + started; slug=%s", slug)
+    return slug
+
+
 def _wait_supervisor_ready(ws: HAWebSocket) -> None:
     """Confirm the Supervisor responds via the WebSocket supervisor/api path.
 
@@ -781,6 +951,12 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     qcow2 = fetch_haos_qcow2(work_dir)
+    # Stage the ha-mcp dev addon source into /supervisor/addons/local/ BEFORE first
+    # boot so Supervisor's local-store scanner picks it up during the
+    # running phase below. install_ha_mcp_dev_addon then builds the addon's
+    # Docker image while HAOS is up — that built image stays in the cached
+    # qcow2 so subsequent CI runs only need a quick ``addons/{slug}/update``.
+    stage_dev_addon_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -791,6 +967,7 @@ def build(work_dir: Path, output: Path) -> None:
         with HAWebSocket(base_url, token) as ws:
             install_addons(ws)
             install_hacs(ws, base_url)
+            install_ha_mcp_dev_addon(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
             # feeders. The canary test only needs addon lifecycle for now.
