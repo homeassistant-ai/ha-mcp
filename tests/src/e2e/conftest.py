@@ -89,12 +89,12 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     The data points are routed to the master process and rendered at
     session end by ``pytest_terminal_summary``. Direct ``sys.stderr``
     writes don't survive pytest-xdist's per-worker capture buffer, so
-    going through pytest's own reporting plumbing is the reliable path
-    (follow-up to #1273 which lowered the only previously-measured gate
-    ``INPUT_BOOLEAN_WAIT`` from 30s to 10s based on a 1s observed-resolve;
-    the remaining 30s ``STABILIZATION_TIMEOUT`` /
-    ``ENTITY_STABILIZATION_TIMEOUT`` / ``SUN_WAIT`` budgets need
-    empirical timings to scope a follow-up tightening PR).
+    going through pytest's own reporting plumbing is the reliable path.
+    History: this gate-instrumentation was added in #1310; the
+    ``HA_MCP_TOOLS_WAIT`` gate was added in #1346. The 5 gate budgets
+    were tightened to observed-max x 3-5 in their respective tightening
+    PR after 69 [READINESS_GATE_TIMING] samples accumulated across 23
+    master runs (49h cross-day span).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
@@ -1255,7 +1255,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # components; 50 is the minimum needed for tests (covers automation,
         # script, input_*, group, scene, and other commonly-tested domains).
         MIN_COMPONENTS = 50
-        STABILIZATION_TIMEOUT = 30
+        # Tightened from 30s to 10s based on [READINESS_GATE_TIMING] samples
+        # (#1310 instrumentation + 69-sample aggregate across 23 master runs):
+        # observed max 3.04s, p95 2.07s. New budget gives 3.3× / 4.8× headroom
+        # while surfacing real degradations (>5s) as fast-fail signals.
+        # Precedent: #1273 tightened INPUT_BOOLEAN_WAIT the same way.
+        STABILIZATION_TIMEOUT = 10
 
         logger.info("⏳ Waiting for Home Assistant components to stabilize...")
         last_count = 0
@@ -1308,7 +1313,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # their entities and WebSocket handlers. The demo integration alone
         # creates 60+ entities (lights, sensors, switches, etc.).
         MIN_ENTITIES = 50
-        ENTITY_STABILIZATION_TIMEOUT = 30
+        # Tightened from 30s to 10s based on the same 69-sample aggregate:
+        # observed max 4.29s, p95 4.14s. New budget gives 2.3× / 2.4× headroom
+        # — the tightest landing in this PR, but the cross-day distribution
+        # held steady across the 49h sampling window.
+        ENTITY_STABILIZATION_TIMEOUT = 10
         logger.info("⏳ Waiting for entities to register...")
         last_entity_count = 0
         # Wall-clock-bound polling — same rationale as the component-
@@ -1356,7 +1365,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # (sun is intentionally not polled here — it registers sun.sun as an
         # entity but never a service domain, so it would always time out.
         # sun.sun readiness is gated by the state check below.)
-        INPUT_BOOLEAN_WAIT = 10
+        # Tightened from 10s to 3s based on the same 69-sample aggregate:
+        # observed max 0.83s, p95 0.59s. New budget gives 3.6× / 5.1× headroom
+        # while continuing the precedent set by #1273 (30s → 10s).
+        INPUT_BOOLEAN_WAIT = 3
         logger.info("⏳ Waiting for input_boolean service domain to register...")
         # Wall-clock-bound polling — same rationale as the loops above.
         ib_start = time.monotonic()
@@ -1417,7 +1429,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         #               the test environment doesn't provide
         # Reintroduce a bounded retry only if a future dump surfaces one
         # of those in the wild.
-        HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
+        # Tightened from 180s to 5s based on 24 [READINESS_GATE_TIMING]
+        # samples since #1346 instrumented this gate (observed max 0.08s,
+        # p95 0.07s). The original 180s was a defensive guess pre-data;
+        # actual emission consistently completes under 100ms across all
+        # observed master runs. 5s gives ~63× headroom over max — still
+        # well within CI runner variance tolerance.
+        HA_MCP_TOOLS_WAIT = 5
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
             logger.info("⏳ Waiting for ha_mcp_tools services to register...")
@@ -1457,7 +1475,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # sun integration reports 'unknown' until it computes the first position.
         # Template tests that assert above/below_horizon will fail if we proceed
         # before the sun integration finishes its first calculation.
-        SUN_WAIT = 30
+        # Tightened from 30s to 5s based on the same 69-sample aggregate:
+        # observed max 0.21s, p95 0.07s. Already the loosest gate by a wide
+        # margin pre-tightening (142×); 5s still leaves 24× / 71× headroom.
+        # (The L967 HAOS-boot SUN_WAIT = 60 is a different scope — HAOS-qemu
+        # readiness, no [READINESS_GATE_TIMING] emit — and is intentionally
+        # left untouched here.)
+        SUN_WAIT = 5
         logger.info("⏳ Waiting for sun.sun to reach a known state...")
         # Wall-clock-bound polling — same rationale as the loops above.
         sun_start = time.monotonic()
