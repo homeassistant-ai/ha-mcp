@@ -319,7 +319,6 @@ def _build_edit_yaml_config_handler(hass):
 
     async def handle_edit_yaml_config(call: ServiceCall) -> dict[str, Any]:
         """Handle the edit_yaml_config service call."""
-        ry = make_yaml()
         rel_path = call.data["file"]
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
@@ -361,7 +360,9 @@ def _build_edit_yaml_config_handler(hass):
                     "error": f"'content' is required for action '{action}'.",
                 }
             try:
-                parsed_content = ry.load(StringIO(content))
+                parsed_content = await hass.async_add_executor_job(
+                    lambda: make_yaml().load(StringIO(content))
+                )
             except YAMLError as err:
                 return {
                     "success": False,
@@ -382,7 +383,9 @@ def _build_edit_yaml_config_handler(hass):
             if target_exists:
                 raw_content = await hass.async_add_executor_job(target_file.read_text)
                 try:
-                    data = ry.load(StringIO(raw_content)) or {}
+                    data = await hass.async_add_executor_job(
+                        lambda: make_yaml().load(StringIO(raw_content)) or {}
+                    )
                 except YAMLError as err:
                     return {
                         "success": False,
@@ -518,7 +521,9 @@ def _build_edit_yaml_config_handler(hass):
 
             # Serialize back to YAML
             try:
-                new_content = yaml_dumps(ry, data)
+                new_content = await hass.async_add_executor_job(
+                    lambda: yaml_dumps(make_yaml(), data)
+                )
             except YAMLError as err:
                 return {
                     "success": False,
@@ -527,7 +532,9 @@ def _build_edit_yaml_config_handler(hass):
 
             # Validate the result parses cleanly
             try:
-                ry.load(StringIO(new_content))
+                await hass.async_add_executor_job(
+                    lambda: make_yaml().load(StringIO(new_content))
+                )
             except YAMLError as err:
                 return {
                     "success": False,
