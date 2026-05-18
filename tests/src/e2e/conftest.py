@@ -1094,10 +1094,22 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # supervisor would stall session teardown forever.
                 log_dest = Path("/tmp/haos-diagnostics")
                 log_dest.mkdir(parents=True, exist_ok=True)
-                for name, url in (
+                log_endpoints = [
                     ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
                     ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
-                ):
+                ]
+                # Inaddon mode: also grab the dev addon container's logs —
+                # often the real "Check Supervisor logs for details" detail
+                # lives in the addon's own container output rather than
+                # Supervisor's. /api/hassio/addons/{slug}/logs IS in
+                # HA Core's REST PATHS_ADMIN allowlist (verified at
+                # hassio/http.py).
+                if inaddon:
+                    log_endpoints.append(
+                        ("ha-mcp-dev-addon.log",
+                         f"{base_url}/api/hassio/addons/local_ha_mcp_dev/logs?lines=20000"),
+                    )
+                for name, url in log_endpoints:
                     try:
                         req = urllib.request.Request(
                             url, headers={"Authorization": f"Bearer {token}"},

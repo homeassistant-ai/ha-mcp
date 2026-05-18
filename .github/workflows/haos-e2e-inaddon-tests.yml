@@ -204,6 +204,10 @@ jobs:
           name: haos-inaddon-diagnostics
           path: |
             /tmp/haos-inaddon-diagnostics/
+            # conftest's finally-block dumps HA Core + Supervisor logs into
+            # /tmp/haos-diagnostics; surface those too so we can see why
+            # ``addons/{slug}/update`` failed with "unknown error".
+            /tmp/haos-diagnostics/
             /tmp/haos-e2e-serial.log
           if-no-files-found: warn
           retention-days: 7
