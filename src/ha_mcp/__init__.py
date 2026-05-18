@@ -4,8 +4,6 @@ Home Assistant MCP Server
 A Model Context Protocol server that provides complete control over Home Assistant
 through REST API and WebSocket integration with 20+ enhanced tools.
 """
-# inaddon-source-refresh verification marker (PR #1361). Will be reverted
-# after CI confirms the inaddon addon picks up this src/ change end-to-end.
 
 from ._version import get_version
 
