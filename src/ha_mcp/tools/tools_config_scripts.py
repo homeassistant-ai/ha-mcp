@@ -131,7 +131,13 @@ class ConfigScriptTools:
             return {
                 "success": True,
                 "action": "get",
-                "script_id": script_id,
+                # Issue #1334: return the canonical storage key from the
+                # rest_client envelope so callers can thread the result into
+                # subsequent ha_config_*_script calls without re-resolving.
+                # Falls back to the input on edge cases where the envelope
+                # lacks the key. Aligns scripts with scenes / dashboards /
+                # automations (see ha_config_get_automation's automation_id).
+                "script_id": config_result.get("script_id", script_id),
                 "config": config_result,
                 "config_hash": config_hash_value,
             }

@@ -170,6 +170,73 @@ class TestScriptToolsValidation:
         assert "Invalid" in error_data["error"]["message"]
 
 
+class TestGetScriptCanonicalId:
+    """Issue #1334: ha_config_get_script returns the canonical storage key.
+
+    Previously the tool echoed the caller-supplied ``script_id`` unchanged,
+    forcing clients to do their own resolution before chaining into
+    ``ha_config_set_script`` / ``ha_config_remove_script``. The rest_client
+    envelope already carries the resolved storage key; this test pins the
+    tool to surface that value (with fallback to the input when absent),
+    matching scenes / dashboards / automations.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        # send_websocket_message is invoked by fetch_entity_category; return
+        # a no-category response so the get path doesn't error.
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False}
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    async def test_returns_canonical_script_id_from_envelope(
+        self, tools, mock_client
+    ):
+        """When the rest_client resolves an alias to a storage key, the
+        tool's returned ``script_id`` reflects the canonical key."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "script_id": "1234567890",
+                "config": {
+                    "alias": "Morning Routine",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            }
+        )
+
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        assert result["success"] is True
+        assert result["script_id"] == "1234567890"
+
+    async def test_falls_back_to_input_when_envelope_missing_key(
+        self, tools, mock_client
+    ):
+        """If the rest_client envelope omits ``script_id`` (defensive
+        fallback), the tool surfaces the caller-supplied identifier."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "config": {
+                    "alias": "Test",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            }
+        )
+
+        result = await tools.ha_config_get_script(script_id="caller_input")
+
+        assert result["success"] is True
+        assert result["script_id"] == "caller_input"
+
+
 class TestStripEmptyScriptFields:
     """Test the _strip_empty_script_fields helper function."""
 
