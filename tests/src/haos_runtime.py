@@ -42,6 +42,10 @@ SSH_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_PORT", "12222"))
 # unique outer port so external-tier 18123 and inaddon-tier 19583 can
 # coexist if both run on the same runner.
 HA_MCP_ADDON_HOST_PORT = int(os.environ.get("HAOS_TEST_ADDON_PORT", "19583"))
+# Advanced SSH addon (bake-installed for inaddon CI tier debugging — see
+# build_image.install_advanced_ssh). Listens inside HAOS on 22222. The
+# user/password ("root"/"haosdebug") are CI-test-only.
+SSH_DEBUG_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_DEBUG_PORT", "22222"))
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 
@@ -529,7 +533,8 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
         f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22,"
-        f"hostfwd=tcp:127.0.0.1:{HA_MCP_ADDON_HOST_PORT}-:9583",
+        f"hostfwd=tcp:127.0.0.1:{HA_MCP_ADDON_HOST_PORT}-:9583,"
+        f"hostfwd=tcp:127.0.0.1:{SSH_DEBUG_HOST_PORT}-:22222",
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
         "-serial", f"file:{serial}",

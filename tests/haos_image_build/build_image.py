@@ -132,6 +132,19 @@ GET_HACS_ADDON = Addon(
     start=True,
 )
 
+# Advanced SSH & Web Terminal — used by the inaddon CI tier for network
+# diagnostics (#1349 item 7 debugging). The official ``core_ssh`` addon
+# wants port 22 which conflicts with HAOS's host SSHD; the community
+# ``Advanced SSH & Web Terminal`` addon defaults to its OWN port (22222)
+# and accepts password auth, so we can SSH from the CI runner into HAOS
+# to dump nftables rules, curl localhost:9583 from inside, etc. when
+# the addon's MCP port isn't reachable from outside HAOS.
+ADVANCED_SSH_ADDON = Addon(
+    repo="https://github.com/hassio-addons/repository",
+    name="Advanced SSH & Web Terminal",
+    start=False,  # configured + started by ``install_advanced_ssh`` below
+)
+
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 
 # Dev-channel ha-mcp addon baked into the qcow2 from local source for the
@@ -648,6 +661,49 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def install_advanced_ssh(ws: HAWebSocket) -> str:
+    """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
+
+    Sets a known root password ("haosdebug") so the CI workflow can
+    SSH in unattended. Configures listen port 22222 (avoids HAOS host
+    SSHD on 22) — the QEMU hostfwd in haos_runtime.py exposes this on
+    127.0.0.1:22222 on the runner.
+    """
+    slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
+    LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=600.0)
+    # Schema: ssh.username, ssh.password, ssh.authorized_keys (list),
+    # ssh.sftp (bool), ssh.compatibility_mode (bool); top-level:
+    # apks (list), packages (list), init_commands (list)
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            "options": {
+                "ssh": {
+                    "username": "root",
+                    "password": "haosdebug",
+                    "authorized_keys": [],
+                    "sftp": False,
+                    "compatibility_mode": False,
+                    "allow_agent_forwarding": False,
+                    "allow_remote_port_forwarding": False,
+                    "allow_tcp_forwarding": False,
+                },
+                "zsh": True,
+                "share_sessions": False,
+                "packages": [],
+                "init_commands": [],
+            },
+            "boot": "auto",
+        },
+        timeout=60.0,
+    )
+    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
+    LOG.info("Advanced SSH installed + started on port 22222 (user=root)")
+    return slug
+
+
 def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     """Install the local ha-mcp dev addon during the bake's running phase.
 
@@ -968,6 +1024,7 @@ def build(work_dir: Path, output: Path) -> None:
             install_addons(ws)
             install_hacs(ws, base_url)
             install_ha_mcp_dev_addon(ws)
+            install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
             # feeders. The canary test only needs addon lifecycle for now.

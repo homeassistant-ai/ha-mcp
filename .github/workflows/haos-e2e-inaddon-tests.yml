@@ -158,6 +158,57 @@ jobs:
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: inaddon
 
+      - name: SSH into HAOS for inaddon network diagnostics (always)
+        # Bake includes the Advanced SSH & Web Terminal addon on port
+        # 22222 with password=haosdebug (CI-only). Hostfwd maps 22222 →
+        # runner:22222. SSH in, dump network state from inside HAOS so
+        # we can see whether localhost:9583 is reachable internally,
+        # what HAOS's nftables policy is for port 9583, etc.
+        if: always()
+        run: |
+          sudo apt-get install -y --no-install-recommends sshpass openssh-client
+          mkdir -p /tmp/haos-inaddon-diagnostics
+          # ssh-keyscan first so we don't need StrictHostKeyChecking=no
+          # but also do StrictHostKeyChecking=no to handle the case
+          # where the HAOS instance was rebuilt with new host keys.
+          # Don't fail the step if any individual command fails — we
+          # want all the output we can get.
+          ssh_cmd() {
+            sshpass -p haosdebug ssh \
+              -p 22222 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o LogLevel=ERROR \
+              -o ConnectTimeout=10 \
+              root@127.0.0.1 "$@" 2>&1 || true
+          }
+          {
+            echo "=== whoami / uname ==="
+            ssh_cmd "whoami; uname -a"
+            echo
+            echo "=== Listening sockets (ss -tlnp) ==="
+            ssh_cmd "ss -tlnp 2>&1 | head -50"
+            echo
+            echo "=== nftables rules (nft list ruleset) ==="
+            ssh_cmd "nft list ruleset 2>&1 | head -200"
+            echo
+            echo "=== iptables -L (legacy fallback) ==="
+            ssh_cmd "iptables -L -n -v 2>&1 | head -100"
+            echo
+            echo "=== curl localhost:9583/mcp_e2e_test_path (from inside HAOS) ==="
+            ssh_cmd "curl -v -m 5 http://localhost:9583/mcp_e2e_test_path 2>&1 | head -30"
+            echo
+            echo "=== curl 10.0.2.15:9583/mcp_e2e_test_path (eth0 IP from inside) ==="
+            ssh_cmd "curl -v -m 5 http://10.0.2.15:9583/mcp_e2e_test_path 2>&1 | head -30"
+            echo
+            echo "=== docker ps ==="
+            ssh_cmd "docker ps 2>&1 | head -20"
+            echo
+            echo "=== ip a (interfaces) ==="
+            ssh_cmd "ip a 2>&1 | head -50"
+          } > /tmp/haos-inaddon-diagnostics/ssh-diag.txt
+          cat /tmp/haos-inaddon-diagnostics/ssh-diag.txt
+
       - name: Extract HAOS + addon diagnostics from booted qcow2 (always)
         if: always()
         run: |
