@@ -659,11 +659,16 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
     # lists every flag we toggle here.
     LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
+    # Supervisor's options POST replaces the full options dict, so we must
+    # include every field with a non-optional schema entry in the dev addon's
+    # homeassistant-addon-dev/config.yaml. Verified live: omitting
+    # ``backup_hint`` returns "Missing option 'backup_hint' in root".
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
         data={
             "options": {
+                "backup_hint": "normal",
                 "secret_path": HA_MCP_TEST_SECRET_PATH,
                 "enable_tool_search": False,
                 "enable_yaml_config_editing": True,
@@ -671,6 +676,9 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "enable_lite_docstrings": False,
                 "enable_filesystem_tools": True,
                 "enable_custom_component_integration": True,
+                "tool_search_max_results": 5,
+                "disabled_tools": "",
+                "pinned_tools": "",
                 "verify_ssl": True,
                 "advanced_debug_logging": True,
             },
