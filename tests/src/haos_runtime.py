@@ -27,8 +27,10 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
-# Ports the host uses to reach the booted HAOS. Stay in sync with the build
-# script's onboarding-time client_id so /auth/token doesn't reject us.
+# Ports the host uses to reach the booted HAOS. The base URL we build from
+# these (http://127.0.0.1:<HA_HOST_PORT>) must equal the URL registered as
+# /auth/token's client_id at onboarding time — otherwise the token exchange
+# rejects with "invalid_request".
 HA_HOST_PORT = int(os.environ.get("HAOS_TEST_HA_PORT", "18123"))
 SSH_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_PORT", "12222"))
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
@@ -95,6 +97,7 @@ def refresh_recorder_in_qcow2(
         conn = sqlite3.connect(str(db_local))
         try:
             newest = 0.0
+            matched_columns = 0
             for table, cols in TIMESTAMP_COLUMNS.items():
                 for col in cols:
                     try:
@@ -106,12 +109,30 @@ def refresh_recorder_in_qcow2(
                         if "no such table" in msg or "no such column" in msg:
                             continue
                         raise
+                    matched_columns += 1
                     if row and row[0] is not None and isinstance(row[0], (int, float)):
                         newest = max(newest, float(row[0]))
 
+            # Schema drift guard: if HAOS bumps the recorder schema and renames
+            # every column in TIMESTAMP_COLUMNS, the loop above silently
+            # `continue`s through all of them and newest stays 0. Without this
+            # check, history pagination tests would mysteriously fail with "no
+            # data" instead of pointing at the schema bump. Mirrors the
+            # testcontainer _refresh_recorder_timestamps "raise vs no-op"
+            # discipline.
+            if matched_columns == 0:
+                raise RuntimeError(
+                    f"Recorder DB at {db_local} matched zero TIMESTAMP_COLUMNS "
+                    f"entries — recorder schema may have drifted; update "
+                    f"TIMESTAMP_COLUMNS to match the new column names."
+                )
             if newest <= 0:
-                LOG.warning("Recorder DB has no numeric timestamps; skipping shift")
-                return
+                raise RuntimeError(
+                    f"Recorder DB at {db_local} has no numeric timestamps in "
+                    f"any of the {matched_columns} matched columns — the bake "
+                    f"may have produced an empty DB; re-run "
+                    f"`uv run python scripts/bake_pagination_seed.py`."
+                )
 
             target = time.time() - target_age_seconds
             offset = target - newest
@@ -143,24 +164,40 @@ def refresh_recorder_in_qcow2(
         # copy-in the shifted DB. --rw so guestfish opens the qcow2 for
         # write; the file's owner/perms inside the qcow2 are preserved by
         # libguestfs when overwriting an existing path.
-        subprocess.run(
-            [
-                "guestfish",
-                "--rw",
-                "-a", str(image_path),
-                "run",
-                ":",
-                "mount", "/dev/sda8", "/",
-                ":",
-                "copy-in",
-                str(db_local),
-                "/supervisor/homeassistant/",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a", str(image_path),
+                    "run",
+                    ":",
+                    "mount", "/dev/sda8", "/",
+                    ":",
+                    "copy-in",
+                    str(db_local),
+                    "/supervisor/homeassistant/",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            # Partial-write recovery hint: the previous copy-out + sqlite
+            # mutate succeeded but the write-back is gone, so the qcow2's
+            # recorder DB is whatever the bake left there. Subsequent runs
+            # against this cached image will repeat the same shift on the
+            # original timestamps — safe but slow. If the recorder DB
+            # appears corrupt downstream, delete the image and let the
+            # next CI run rebuild.
+            LOG.error(
+                "guestfish copy-in failed for %s; cached qcow2 may need "
+                "a manual rebuild (delete /tmp/haos-test-image.qcow2 + "
+                "the matching cache key, then re-run)",
+                image_path,
+            )
+            raise
         LOG.info("Refreshed recorder DB in %s", image_path)
     finally:
         import shutil
@@ -186,8 +223,19 @@ def _http(
     else:
         data = None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode()
+    except urllib.error.HTTPError as e:
+        # Surface the body so login_for_token failures don't show as a bare
+        # "HTTPError: 400 Bad Request" — the response body almost always
+        # names the specific validation that failed.
+        try:
+            err_body = e.read().decode()
+        except (OSError, UnicodeDecodeError):
+            err_body = ""
+        LOG.error("%s %s → HTTP %s: %s", method, url, e.code, err_body)
+        raise
     return json.loads(raw) if raw else {}
 
 
@@ -298,5 +346,8 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
         try:
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
+            LOG.warning(
+                "QEMU did not exit within 60s of SIGTERM; escalating to SIGKILL"
+            )
             proc.kill()
             proc.wait()

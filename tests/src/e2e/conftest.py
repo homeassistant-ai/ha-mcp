@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 from testcontainers.core.container import DockerContainer
 
 # Add src to path for imports
@@ -932,29 +933,26 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             _reset_ha_in_process_caches()
-            # Same sun.sun + entity wait the testcontainer dispatch does ~L1359:
-            # the first tests reach for sun.sun's state immediately, but HA Core
-            # may still be propagating registry → state-machine when
-            # boot_haos_qemu's /manifest.json gate releases (manifest.json is
-            # served by the frontend before all integrations finish loading).
-            # Wait for sun.sun to (a) exist, then (b) leave the "unknown" state
-            # so template tests don't race.
-            # ``import requests`` happens at function scope further down
-            # (the testcontainer branch), which makes ``requests`` a local
-            # for this entire function — so we cannot read it here without
-            # binding it locally first. Aliased name avoids the
-            # UnboundLocalError that took down all 856 tests in the prior
-            # CI run.
-            import requests as _haos_requests
+            # Mirrors the sun.sun + entity wait loop in the testcontainer
+            # branch of ha_container_with_fresh_config: the first tests reach
+            # for sun.sun's state immediately, but HA Core may still be
+            # propagating registry → state-machine when boot_haos_qemu's
+            # /manifest.json gate releases (manifest.json is served by the
+            # frontend before all integrations finish loading). Wait for
+            # sun.sun to (a) exist, then (b) leave the "unknown" state so
+            # template tests don't race.
             haos_headers = {"Authorization": f"Bearer {token}"}
             sun_url = f"{base_url}/api/states/sun.sun"
             SUN_WAIT = 60
             sun_start = time.monotonic()
+            last_sun_err: Exception | None = None
+            last_sun_status: int | None = None
             while time.monotonic() - sun_start < SUN_WAIT:
                 try:
-                    sun_resp = _haos_requests.get(
+                    sun_resp = requests.get(
                         sun_url, timeout=5, headers=haos_headers
                     )
+                    last_sun_status = sun_resp.status_code
                     if sun_resp.status_code == 200:
                         sun_state = sun_resp.json().get("state", "unknown")
                         if sun_state != "unknown":
@@ -964,15 +962,21 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                             )
                             break
                 except (
-                    _haos_requests.exceptions.RequestException,
+                    requests.exceptions.RequestException,
                     json.JSONDecodeError,
-                ):
-                    pass
+                ) as exc:
+                    last_sun_err = exc
                 time.sleep(1)
             else:
+                # Surface what we saw on the LAST attempt so a future
+                # operator can tell "HA returned 401 for 60s" from
+                # "connection refused for 60s" from "endpoint returned
+                # 200 but state was 'unknown'".
                 logger.warning(
-                    f"⚠️ HAOS sun.sun still not ready after {SUN_WAIT}s — "
-                    f"template / connection tests may race"
+                    "⚠️ HAOS sun.sun still not ready after %ds "
+                    "(last_status=%s, last_exc=%r) — template / connection "
+                    "tests may race",
+                    SUN_WAIT, last_sun_status, last_sun_err,
                 )
             # The session-scope _blueprint_http_server fixture computes its
             # base_url using host.docker.internal — meaningless from inside
@@ -1202,7 +1206,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # ``_wait_for_ha_api_ready`` helper. The helper extraction is
         # preserved as a single-contract surface in case a future bounded
         # retry path is reintroduced.
-        import requests
+        # NOTE: ``requests`` is imported at module top; do NOT re-import it
+        # locally here — Python's scoping rules would then make ``requests``
+        # a function-local for the entire ha_container_with_fresh_config,
+        # which previously caused UnboundLocalError in the HAOS branch.
 
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}

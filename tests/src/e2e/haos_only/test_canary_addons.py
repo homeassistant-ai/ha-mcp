@@ -6,29 +6,36 @@ This is the test the testcontainer suite *can't* run cleanly because
 it would have to mock the entire Supervisor API surface (the partial
 mock added in #1192 only covers a few direct REST endpoints).
 
-Concretely: the test asserts that ``ha_get_addon`` (default listing
-mode) returns each of the six addons the build script installs,
-mapped by display name. If this stays green over time, additional
-addon-using tests (start/stop/options/log fetch) can migrate from
-the testcontainer mocked path to here.
+Three concrete assertions:
+1. ``ha_get_addon`` (default listing) returns every addon the build
+   script installs, by display name.
+2. ``ha_get_addon(slug=core_mosquitto)`` returns Supervisor-backed
+   detail for a known core slug.
+3. HACS bootstrap actually completed — the "Get HACS" addon installs
+   HACS into ``/config/custom_components/hacs/``, and HACS registers
+   the ``hacs`` integration on first HA Core start; if either step
+   silently failed, the addon would still be present but HACS wouldn't
+   be loaded.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 import pytest
 
+from ..utilities.assertions import parse_mcp_result
+
 LOG = logging.getLogger(__name__)
 
 
-# Display names match what build_image.py installs. If that list changes,
-# update both in tandem — there's no shared constant yet because
-# build_image.py is intentionally stdlib-only and importing it here would
-# pull qemu/websockets deps into a runtime-only test module.
-EXPECTED_ADDONS = (
+# Mirrors build_image.py's ADDONS list — keep both in sync when the
+# v1 addon set changes. Not a shared constant because the build script
+# lives outside the pytest rootdir's import paths; the duplication is
+# small (6 strings) and the failure mode of drift is loud (this test
+# fails fast on the missing-name list).
+INSTALLED_ADDON_NAMES = (
     "Mosquitto broker",
     "Node-RED",
     "ESPHome Device Builder",
@@ -38,28 +45,18 @@ EXPECTED_ADDONS = (
 )
 
 
-def _parse_tool_result(result: Any) -> dict[str, Any]:
-    """FastMCP returns Content blocks; flatten to the JSON payload."""
-    if hasattr(result, "content"):
-        for block in result.content:
-            text = getattr(block, "text", None)
-            if text:
-                return json.loads(text)
-    if isinstance(result, dict):
-        return result
-    raise AssertionError(f"Unrecognised tool result shape: {result!r}")
-
-
 async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
     """`ha_get_addon` (no args) lists every addon the build script installed."""
     raw = await mcp_client.call_tool("ha_get_addon", {})
-    payload = _parse_tool_result(raw)
+    payload = parse_mcp_result(raw)
     assert payload.get("success"), f"ha_get_addon returned failure: {payload}"
 
     installed_names = {a.get("name") for a in payload.get("addons", [])}
     LOG.info("Installed addons on booted HAOS: %s", sorted(installed_names))
 
-    missing = [name for name in EXPECTED_ADDONS if name not in installed_names]
+    missing = [
+        name for name in INSTALLED_ADDON_NAMES if name not in installed_names
+    ]
     if missing:
         pytest.fail(
             f"Expected addons missing from HAOS install: {missing}. "
@@ -75,9 +72,33 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     behind that mocked endpoint.
     """
     raw = await mcp_client.call_tool("ha_get_addon", {"slug": "core_mosquitto"})
-    payload = _parse_tool_result(raw)
+    payload = parse_mcp_result(raw)
     assert payload.get("success"), f"ha_get_addon(core_mosquitto) failed: {payload}"
     detail = payload.get("addon") or payload.get("data") or payload
     # Mosquitto is install=true, start=False in the build — so it should
     # be installed but not started. Either field name HA returns is fine.
     assert detail.get("name") == "Mosquitto broker", f"Unexpected addon detail: {detail}"
+
+
+async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
+    """HACS bootstrap reached its product, not just installed the addon.
+
+    The "Get HACS" addon's purpose is to drop HACS into
+    /config/custom_components/hacs/ on first run; HA then loads the
+    integration. If the addon installs but the bootstrap step silently
+    fails mid-build (network glitch, addon image change), the previous
+    test still passes but HACS itself is missing. Probe a HACS-specific
+    tool to confirm the integration is reachable.
+    """
+    raw = await mcp_client.call_tool(
+        "ha_hacs_search", {"query": "hacs", "category": "integration", "limit": 1}
+    )
+    payload = parse_mcp_result(raw)
+    # ha_hacs_search returns success=True with results when HACS is loaded.
+    # If HACS isn't loaded, the tool surfaces a structured error containing
+    # an HACS-specific message (e.g. "HACS is not installed").
+    assert payload.get("success"), (
+        f"HACS integration not reachable via ha_hacs_search — "
+        f"bootstrap from 'Get HACS' addon may have silently failed. "
+        f"Response: {payload}"
+    )

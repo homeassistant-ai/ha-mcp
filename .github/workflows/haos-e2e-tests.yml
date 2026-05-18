@@ -59,9 +59,9 @@ jobs:
         # Cache invalidates when ANY input that gets baked into the qcow2
         # changes — build script (addon list / HAOS pin), initial_test_state
         # (seed config + recorder DB + .storage), and the custom components
-        # the bake stages into /config (once those are wired back in).
-        # git ls-tree uses object IDs so the hash is reproducible across
-        # runs (no mtime noise like `find` would have).
+        # the bake stages into /config. git ls-tree uses object IDs so the
+        # hash is reproducible across runs (no mtime noise like `find`
+        # would have).
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -105,9 +105,11 @@ jobs:
             -u ${{ github.actor }} --password-stdin
           curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
             | tar -xz -C /tmp oras
-          mkdir -p /tmp/haos-pull && cd /tmp/haos-pull
-          /tmp/oras pull "$tag"
-          mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
+          mkdir -p /tmp/haos-pull
+          (cd /tmp/haos-pull && /tmp/oras pull "$tag")
+          # Explicit source path so a future oras layout change that drops
+          # files into a subdirectory of pwd doesn't silently no-op the mv.
+          mv /tmp/haos-pull/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
 
       - name: Install build-script Python deps (cache miss + GHCR miss)
         if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
@@ -120,6 +122,10 @@ jobs:
             --output /tmp/haos-test-image.qcow2
 
       - name: Save image to cache (cache miss only)
+        # Save whenever the runtime cache missed — covers both the
+        # local-build path AND a successful GHCR pull. Without saving on
+        # the GHCR-served branch, the actions/cache entry stays empty
+        # forever and every future run pays the GHCR pull cost again.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:

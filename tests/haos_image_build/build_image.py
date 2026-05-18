@@ -176,7 +176,9 @@ def _http(
         err_body: str = ""
         try:
             err_body = e.read().decode()
-        except Exception:
+        except (OSError, UnicodeDecodeError):
+            # Closed socket or non-utf8 body — best-effort only; never hide
+            # the original HTTPError, which is re-raised below.
             pass
         LOG.error("%s %s -> HTTP %d: %s", method, url, e.code, err_body[:500])
         raise
@@ -261,7 +263,11 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
         try:
             ws.supervisor_api("/host/shutdown", method="post", timeout=10.0)
         except Exception as e:
-            LOG.warning("Supervisor shutdown call failed: %s — sending SIGTERM", e)
+            # %r so the exception type is visible — bare %s loses it for
+            # most exception subclasses and a future maintainer reading
+            # this in CI logs needs to know whether it was a timeout, a
+            # WS protocol error, or a Supervisor 5xx.
+            LOG.warning("Supervisor shutdown call failed: %r — sending SIGTERM", e)
             proc.terminate()
     else:
         proc.terminate()
@@ -359,8 +365,8 @@ class HAWebSocket:
         if self._ws is not None:
             try:
                 self._ws.close()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as e:
+                LOG.debug("WS close error (already-closed or transport): %r", e)
 
     def reconnect(self) -> None:
         """Tear down the current WS and re-establish + re-auth.
@@ -372,8 +378,8 @@ class HAWebSocket:
         if self._ws is not None:
             try:
                 self._ws.close()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as e:
+                LOG.debug("WS close error during reconnect: %r", e)
             self._ws = None
         self._next_id = 0
         self.__enter__()
@@ -579,8 +585,15 @@ def bake_test_state(qcow2: Path) -> None:
         ):
             src = repo_root / src_rel
             if not src.exists():
-                LOG.warning("Custom component source missing: %s — skipping", src)
-                continue
+                # Fail closed: a missing source tree means the build is
+                # fundamentally wrong, not a transient skip. Without this
+                # the image ships without the component baked in and the
+                # downstream "COMPONENT_NOT_INSTALLED" test failures point
+                # back to this step opaquely.
+                raise RuntimeError(
+                    f"Custom component source missing: {src} — checkout is "
+                    f"incomplete; the image cannot be built."
+                )
             dest = cc_dir / domain
             if dest.exists():
                 shutil.rmtree(dest)
@@ -627,10 +640,10 @@ def bake_test_state(qcow2: Path) -> None:
         # home-assistant_v2.db in WAL journal mode but WITHOUT the
         # companion .wal/.shm files — when HAOS opens it, SQLite finds
         # the main DB inconsistent (last shutdown didn't checkpoint) and
-        # reports "database disk image is malformed", which crashes the
-        # recorder executor (verified in CI: HA log line 56). VACUUM into
-        # a new file produces a single-file, journal-mode, fully
-        # consistent DB with the same data — no WAL dependency.
+        # logs "database disk image is malformed", which crashes the
+        # recorder executor. VACUUM INTO a new file produces a single-
+        # file, journal-mode, fully consistent DB with the same data —
+        # no WAL dependency.
         db_src = staging / "home-assistant_v2.db"
         if db_src.exists():
             import sqlite3
@@ -667,7 +680,13 @@ def bake_test_state(qcow2: Path) -> None:
         )
         LOG.info("guestfish filesystems on qcow2:\n%s", probe.stdout)
         if probe.returncode != 0:
-            LOG.error("guestfish list-filesystems failed: %s", probe.stderr)
+            # Fail closed: continuing to the write step on the same qcow2 when
+            # libguestfs itself is broken would fail opaquely (mount errors
+            # without context). Surface the probe stderr now.
+            raise RuntimeError(
+                f"guestfish list-filesystems failed (rc={probe.returncode}): "
+                f"{probe.stderr}"
+            )
         # Now do the actual write. Mount data partition by label "hassos-data"
         # which HAOS sets at OS install time (stable across HAOS versions).
         # tar-in preserves the source files' permissions (644/755 as
