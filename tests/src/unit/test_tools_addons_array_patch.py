@@ -128,8 +128,8 @@ class TestApplyArrayOps:
         assert new == items
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert "warning" in entry
-        assert "zzz_misspelled" in entry["warning"]
+        assert entry.get("warnings"), f"Expected warnings list, got: {entry}"
+        assert any("zzz_misspelled" in w for w in entry["warnings"])
 
     def test_delete_where_field_present_but_no_match_no_warning(self):
         """count=0 when the field exists on items but no value matched is
@@ -143,7 +143,7 @@ class TestApplyArrayOps:
         assert new == items
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert "warning" not in entry
+        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
 
     def test_delete_where_against_empty_array_no_warning(self):
         """Empty input array is not a typo signal — there are no items to
@@ -157,7 +157,7 @@ class TestApplyArrayOps:
         assert new == []
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert "warning" not in entry
+        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
 
     def test_delete_where_against_non_dict_items_no_warning(self):
         """Arrays of scalars (or other non-dict items) are not a typo signal
@@ -171,7 +171,7 @@ class TestApplyArrayOps:
         assert new == [1, 2, "x"]
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert "warning" not in entry
+        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
 
     def test_delete_where_zero_matches_is_not_an_error(self):
         items = self._flows_fixture()

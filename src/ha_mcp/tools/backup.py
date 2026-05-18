@@ -450,7 +450,9 @@ async def restore_backup(
                 "status": "Restore initiated - Home Assistant will restart",
                 "safety_backup_id": safety_backup_id,
                 "restore_database": restore_database,
-                "warning": "Home Assistant is restarting. Connection will be temporarily lost.",
+                "warnings": [
+                    "Home Assistant is restarting. Connection will be temporarily lost."
+                ],
                 "note": "A safety backup was created before restore. You can restore from it if needed.",
             }
         else:

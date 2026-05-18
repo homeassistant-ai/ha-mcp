@@ -2970,7 +2970,7 @@ class TestManageAddon:
         assert result["status"] == "pending_restart"
         assert "ignored_fields" in result
         assert "zombie_field" in result["ignored_fields"]
-        assert "warning" in result
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
 
     @pytest.mark.asyncio
     async def test_config_mode_boot(self, manage_addon_tool):
