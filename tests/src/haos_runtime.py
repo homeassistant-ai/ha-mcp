@@ -378,33 +378,75 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
 
 def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
-    """Poll the inaddon MCP HTTP port until TCP-accept succeeds.
+    """Poll the inaddon MCP HTTP port until TCP-accept succeeds + HTTP-ready.
 
     Returns the full base URL on success.
 
-    Uses TCP-level connect probe rather than HTTP because the addon's
-    FastMCP streamable-HTTP transport RSTs plain GET requests (it
-    expects MCP-shaped POSTs only). A successful TCP handshake proves
-    the addon container is up and the listener is bound; the actual MCP
-    handshake happens at fixture-driven Client connect time.
+    Two-stage probe because the addon's FastMCP streamable-HTTP
+    transport RSTs plain GET requests (it expects MCP-shaped POSTs
+    only):
+
+    1. TCP-level connect — proves the addon container has bound the
+       listener socket. But slirp's NAT may complete the SYN/ACK
+       handshake at the slirp boundary even when the guest-side
+       listener isn't fully up yet, so this alone isn't sufficient.
+    2. After TCP succeeds, send an HTTP OPTIONS to the secret_path and
+       accept any 2xx/3xx/405 response — Uvicorn answers OPTIONS even
+       when MCP's handler RSTs GET. 405-not-allowed is a perfectly
+       good "listener is HTTP-ready" signal.
     """
     base_url = f"http://127.0.0.1:{HA_MCP_ADDON_HOST_PORT}{HA_MCP_TEST_SECRET_PATH}"
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
+    last_status: int | None = None
+    tcp_ready_at: float | None = None
     while time.monotonic() < deadline:
+        # Stage 1: TCP probe.
+        if tcp_ready_at is None:
+            try:
+                with socket.create_connection(
+                    ("127.0.0.1", HA_MCP_ADDON_HOST_PORT), timeout=5.0
+                ):
+                    tcp_ready_at = time.monotonic()
+                    LOG.info(
+                        "Inaddon MCP TCP port %d open at %.1fs into wait",
+                        HA_MCP_ADDON_HOST_PORT,
+                        tcp_ready_at - (deadline - timeout),
+                    )
+            except OSError as e:
+                last_err = e
+                time.sleep(3.0)
+                continue
+
+        # Stage 2: HTTP-level probe. OPTIONS is the safest verb for an
+        # unknown server — RFC-required to be implemented and Uvicorn's
+        # default handler responds 405-method-not-allowed even when the
+        # mounted app rejects all methods. Either response (200, 404,
+        # 405, etc.) is "HTTP layer ready".
+        req = urllib.request.Request(base_url, method="OPTIONS")
         try:
-            with socket.create_connection(
-                ("127.0.0.1", HA_MCP_ADDON_HOST_PORT), timeout=5.0
-            ):
-                LOG.info("Inaddon MCP port %d open (addon container up)",
-                         HA_MCP_ADDON_HOST_PORT)
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                last_status = resp.status
+                LOG.info(
+                    "Inaddon MCP HTTP ready at %s (OPTIONS → %d)",
+                    base_url, resp.status,
+                )
                 return base_url
-        except OSError as e:
+        except urllib.error.HTTPError as e:
+            last_status = e.code
+            # 4xx is a real HTTP response — server is up.
+            LOG.info(
+                "Inaddon MCP HTTP ready at %s (OPTIONS → %d, expected)",
+                base_url, e.code,
+            )
+            return base_url
+        except (urllib.error.URLError, OSError) as e:
             last_err = e
-        time.sleep(3.0)
+            time.sleep(3.0)
+
     raise TimeoutError(
         f"Inaddon MCP endpoint {base_url} did not become reachable within "
-        f"{timeout}s (last_exc={last_err!r})"
+        f"{timeout}s (last_status={last_status}, last_exc={last_err!r})"
     )
 
 
