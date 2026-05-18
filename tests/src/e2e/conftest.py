@@ -92,9 +92,9 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     going through pytest's own reporting plumbing is the reliable path.
     History: this gate-instrumentation was added in #1310; the
     ``HA_MCP_TOOLS_WAIT`` gate was added in #1346. The 5 gate budgets
-    were tightened with 2-63x headroom over observed-max in this
-    tightening PR after 24-69 [READINESS_GATE_TIMING] samples
-    accumulated across 23 master runs (49h cross-day span).
+    were tightened with 2-63x headroom over observed-max in #1369
+    after 24-69 [READINESS_GATE_TIMING] samples accumulated across
+    23 master runs (49h cross-day span).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
@@ -644,7 +644,7 @@ def _wait_for_ha_mcp_tools_services(
             )
             if svc_resp.status_code == 200:
                 # Filter on truthy domain to mirror the diagnostic dump at
-                # _dump_ha_readiness_diagnostics (L671). Drops None /
+                # _dump_ha_readiness_diagnostics. Drops None /
                 # empty-string ``domain`` values that would otherwise inflate
                 # ``len(domains)`` and pollute the ``ha_mcp_tools in domains``
                 # membership check.
@@ -1258,7 +1258,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # Tightened from 30s to 10s based on [READINESS_GATE_TIMING] samples
         # (#1310 instrumentation + 69-sample aggregate across 23 master runs):
         # observed max 3.04s, p95 2.07s. New budget gives 3.3× / 4.8× headroom
-        # while surfacing real degradations (>5s) as fast-fail signals.
+        # while surfacing real degradations (>10s) as fast-fail signals.
         # Precedent: #1273 tightened INPUT_BOOLEAN_WAIT the same way.
         STABILIZATION_TIMEOUT = 10
 
@@ -1478,7 +1478,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # Tightened from 30s to 5s based on the same 69-sample aggregate:
         # observed max 0.21s, p95 0.07s. Already the loosest gate by a wide
         # margin pre-tightening (142×); 5s still leaves 24× / 71× headroom.
-        # (The L967 HAOS-boot SUN_WAIT = 60 is a different scope — HAOS-qemu
+        # (The HAOS-boot branch's SUN_WAIT = 60 is a different scope — HAOS-qemu
         # readiness, no [READINESS_GATE_TIMING] emit — and is intentionally
         # left untouched here.)
         SUN_WAIT = 5
