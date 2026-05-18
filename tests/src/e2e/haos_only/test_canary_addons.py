@@ -91,7 +91,7 @@ async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
     tool to confirm the integration is reachable.
     """
     raw = await mcp_client.call_tool(
-        "ha_hacs_search", {"query": "hacs", "category": "integration", "limit": 1}
+        "ha_hacs_search", {"installed_only": True, "max_results": 1}
     )
     payload = parse_mcp_result(raw)
     # ha_hacs_search returns success=True with results when HACS is loaded.
