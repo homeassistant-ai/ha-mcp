@@ -6,6 +6,7 @@ especially for blueprint-based scripts (issue #466).
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -171,15 +172,8 @@ class TestScriptToolsValidation:
 
 
 class TestGetScriptCanonicalId:
-    """Issue #1334: ha_config_get_script returns the canonical storage key.
-
-    Previously the tool echoed the caller-supplied ``script_id`` unchanged,
-    forcing clients to do their own resolution before chaining into
-    ``ha_config_set_script`` / ``ha_config_remove_script``. The rest_client
-    envelope already carries the resolved storage key; this test pins the
-    tool to surface that value (with fallback to the input when absent),
-    matching scenes / dashboards / automations.
-    """
+    """Issue #1334: returned ``script_id`` is the canonical storage key,
+    falling back to the caller input when the rest_client envelope omits it."""
 
     @pytest.fixture
     def mock_client(self):
@@ -214,13 +208,16 @@ class TestGetScriptCanonicalId:
         result = await tools.ha_config_get_script(script_id="morning_routine")
 
         assert result["success"] is True
+        assert result["action"] == "get"
         assert result["script_id"] == "1234567890"
+        assert "config_hash" in result
 
-    async def test_falls_back_to_input_when_envelope_missing_key(
-        self, tools, mock_client
+    async def test_falls_back_to_input_and_warns_when_envelope_missing_key(
+        self, tools, mock_client, caplog
     ):
-        """If the rest_client envelope omits ``script_id`` (defensive
-        fallback), the tool surfaces the caller-supplied identifier."""
+        """If the rest_client envelope omits ``script_id`` (contract
+        violation), the tool surfaces the caller-supplied identifier and
+        logs a warning rather than masking the missing key silently."""
         mock_client.get_script_config = AsyncMock(
             return_value={
                 "success": True,
@@ -231,10 +228,19 @@ class TestGetScriptCanonicalId:
             }
         )
 
-        result = await tools.ha_config_get_script(script_id="caller_input")
+        with caplog.at_level(
+            logging.WARNING, logger="ha_mcp.tools.tools_config_scripts"
+        ):
+            result = await tools.ha_config_get_script(script_id="caller_input")
 
         assert result["success"] is True
+        assert result["action"] == "get"
         assert result["script_id"] == "caller_input"
+        assert any(
+            "rest_client contract violation" in r.message
+            and r.levelname == "WARNING"
+            for r in caplog.records
+        ), f"Expected contract-violation warning, got: {[r.message for r in caplog.records]}"
 
 
 class TestStripEmptyScriptFields:

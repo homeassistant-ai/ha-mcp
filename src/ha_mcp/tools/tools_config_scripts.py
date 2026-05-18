@@ -96,6 +96,8 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
+        The returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.
+
         EXAMPLES:
         - Get script: ha_config_get_script("morning_routine")
         - Get script: ha_config_get_script("backup_script")
@@ -128,16 +130,26 @@ class ConfigScriptTools:
             if cat_id:
                 config_result["category"] = cat_id
 
+            # Issue #1334: return the canonical storage key from the
+            # rest_client envelope so callers can thread the result into
+            # subsequent ha_config_*_script calls without re-resolving.
+            # Falls back to the input when the rest_client response omits
+            # the key — a contract violation that we surface via warning
+            # rather than mask silently.
+            canonical_id = config_result.get("script_id")
+            if canonical_id is None:
+                logger.warning(
+                    "get_script_config envelope missing 'script_id' for "
+                    "input %r; falling back to caller input. This indicates "
+                    "a rest_client contract violation.",
+                    script_id,
+                )
+                canonical_id = script_id
+
             return {
                 "success": True,
                 "action": "get",
-                # Issue #1334: return the canonical storage key from the
-                # rest_client envelope so callers can thread the result into
-                # subsequent ha_config_*_script calls without re-resolving.
-                # Falls back to the input on edge cases where the envelope
-                # lacks the key. Aligns scripts with scenes / dashboards /
-                # automations (see ha_config_get_automation's automation_id).
-                "script_id": config_result.get("script_id", script_id),
+                "script_id": canonical_id,
                 "config": config_result,
                 "config_hash": config_hash_value,
             }

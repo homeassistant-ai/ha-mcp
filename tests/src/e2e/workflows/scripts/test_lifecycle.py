@@ -293,6 +293,15 @@ class TestScriptOrchestration:
                 { "script_id": script_id}
             )
 
+            # Issue #1334: returned ``script_id`` is the canonical storage
+            # key. For inputs already in canonical form (as here), it must
+            # round-trip unchanged so callers can thread the result back
+            # into ha_config_set_script / ha_config_remove_script.
+            assert get_data.get("script_id") == script_id, (
+                f"Expected canonical script_id={script_id!r} in get response, "
+                f"got {get_data.get('script_id')!r}"
+            )
+
             config = extract_script_config(get_data)
             assert config.get("alias") == "Test Basic Script", (
                 f"Alias mismatch: {config}"
