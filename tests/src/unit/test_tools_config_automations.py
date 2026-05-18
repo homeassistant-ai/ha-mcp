@@ -45,6 +45,8 @@ def mock_client():
             }
         ]
     )
+    # Required by ``validate_config_references`` (asyncio.gather with get_states).
+    client.get_services = AsyncMock(return_value={})
     # fetch_entity_category path — empty success result keeps category injection off.
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": {"categories": {}}}
@@ -158,7 +160,6 @@ class TestPythonTransformAutomationIdKey:
         assert result["success"] is True
         assert result["action"] == "python_transform"
         assert "identifier" not in result
-        assert "unique_id" not in result
         assert result["automation_id"] == "automation.morning_routine"
 
     async def test_falls_back_to_entity_id_input_when_upsert_omits_it(
@@ -206,6 +207,73 @@ class TestPythonTransformAutomationIdKey:
         assert result["automation_id"] == "orphaned_unique_id"
 
 
+class TestFullConfigSetAutomationIdKey:
+    """`automation_id` parity on `ha_config_set_automation` full-config branch.
+
+    Covers both the create case (identifier=None → fresh insert, automation_id
+    derived from upsert's returned entity_id / generated unique_id) and the
+    update case (identifier provided → upsert replaces existing config).
+    """
+
+    @pytest.fixture
+    def canonical_config(self):
+        return {
+            "alias": "Morning Routine",
+            "trigger": [{"platform": "time", "at": "07:00:00"}],
+            "action": [
+                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
+            ],
+        }
+
+    async def test_create_uses_upsert_entity_id_as_automation_id(
+        self, tools, canonical_config
+    ):
+        """identifier omitted → automation_id mirrors upsert-returned entity_id."""
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, wait=False
+        )
+
+        assert result["success"] is True
+        assert result["automation_id"] == "automation.morning_routine"
+        assert "identifier" not in result
+        # unique_id retained — it's HA's internal identifier, distinct from entity_id.
+        assert result.get("unique_id") == "abc123unique"
+
+    async def test_update_uses_upsert_entity_id_as_automation_id(
+        self, tools, canonical_config
+    ):
+        """identifier provided → automation_id from entity_id (update path)."""
+        result = await tools.ha_config_set_automation(
+            identifier="automation.morning_routine",
+            config=canonical_config,
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["automation_id"] == "automation.morning_routine"
+        assert "identifier" not in result
+
+    async def test_create_falls_back_to_unique_id_when_entity_id_missing(
+        self, tools, mock_client, canonical_config
+    ):
+        """upsert returns no entity_id, identifier=None → automation_id falls back to unique_id."""
+        mock_client.upsert_automation_config = AsyncMock(
+            return_value={
+                "unique_id": "generated_unique_id_xyz",
+                "entity_id": None,
+                "result": "ok",
+                "operation": "created",
+            }
+        )
+
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, wait=False
+        )
+
+        assert result["success"] is True
+        assert result["automation_id"] == "generated_unique_id_xyz"
+
+
 class TestDeleteAutomationIdKey:
     """`automation_id` parity on `ha_config_remove_automation` (issue #1333 Boy-Scout).
 
@@ -217,9 +285,10 @@ class TestDeleteAutomationIdKey:
     async def test_returns_resolved_entity_id_when_input_is_unique_id(self, tools):
         """unique_id input → automation_id = resolved entity_id from registry.
 
-        Also pins the "single canonical typed key" shape — the spread of the
-        underlying ``delete_automation_config`` result must not leak the
-        legacy ``identifier`` / ``unique_id`` echo keys into the response.
+        Also pins the "single canonical typed-id key" shape — the spread of
+        the underlying ``delete_automation_config`` result must not leak the
+        redundant ``identifier`` echo into the response. ``unique_id`` is
+        intentionally retained (distinct from entity_id; callers track it).
         """
         result = await tools.ha_config_remove_automation(
             identifier="abc123unique", wait=False
@@ -229,7 +298,6 @@ class TestDeleteAutomationIdKey:
         assert result["action"] == "delete"
         assert result["automation_id"] == "automation.morning_routine"
         assert "identifier" not in result
-        assert "unique_id" not in result
 
     async def test_returns_input_when_input_is_entity_id(self, tools):
         """entity_id input → automation_id == identifier (resolver short-circuit)."""

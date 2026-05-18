@@ -406,7 +406,7 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
-        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when registration succeeds, falling back to the input `identifier` on the python_transform branch.
+        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when entity registration succeeds, falling back to the input `identifier` (update path) or the generated `unique_id` from the upsert response (fresh create when no identifier was passed).
 
         Before reaching for ``ha_config_set_automation``, consider whether a
         dedicated tool fits the use case better:
@@ -668,17 +668,20 @@ class AutomationConfigTools:
                 response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
-                    "automation_id": entity_id or identifier,
+                    "automation_id": (
+                        entity_id or identifier or result.get("unique_id")
+                    ),
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
                     # Merge upsert result, excluding "success" (we set it ourselves)
-                    # plus the now-redundant identifier/unique_id echo keys
-                    # — automation_id is the single canonical-with-fallback typed key.
+                    # plus the redundant identifier echo. unique_id stays in the
+                    # response — it's HA's internal identifier, distinct from
+                    # entity_id/automation_id, and callers track it for cleanup.
                     **{
                         k: v
                         for k, v in result.items()
-                        if k not in ("success", "identifier", "unique_id")
+                        if k not in ("success", "identifier")
                     },
                 }
                 if bp_warnings:
@@ -771,8 +774,8 @@ class AutomationConfigTools:
 
             return {
                 "success": True,
-                "automation_id": entity_id or identifier,
-                **{k: v for k, v in result.items() if k not in ("identifier", "unique_id")},
+                "automation_id": entity_id or identifier or result.get("unique_id"),
+                **{k: v for k, v in result.items() if k != "identifier"},
             }
 
         except ToolError:
@@ -1054,8 +1057,10 @@ class AutomationConfigTools:
             return {
                 "success": True,
                 "action": "delete",
-                "automation_id": entity_id_for_wait or identifier,
-                **{k: v for k, v in result.items() if k not in ("identifier", "unique_id")},
+                "automation_id": (
+                    entity_id_for_wait or identifier or result.get("unique_id")
+                ),
+                **{k: v for k, v in result.items() if k != "identifier"},
             }
         except ToolError:
             raise
