@@ -1082,8 +1082,8 @@ class TestSweepWarningsShape:
       - No singular ``warning`` legacy key
       - ``warnings`` doesn't leak into nested dicts
 
-    All 8 PR-touched src files now cross-cuttingly covered, split by
-    response-shape contract:
+    Coverage 6/8 of the PR-touched src files cross-cuttingly pinned,
+    split by response-shape contract:
 
     **Strict helper (top-level ``success: True`` + warnings) — 4 of 8:**
     - ``backup.py`` (restore_backup)
@@ -1094,24 +1094,32 @@ class TestSweepWarningsShape:
       ``len(shape_errors) == 0``)
 
     **Relaxed helper (no top-level ``success`` — status-marker / payload-bag
-    shape) — 3 of 8:**
+    shape) — 2 of 8:**
     - ``tools_addons.py``: ``ha_manage_addon`` config mode with
       ``options`` returns ``status: "pending_restart"`` + top-level
       warnings (closure tool, registered via ``register_addon_tools``)
     - ``tools_integrations.py``: ``ha_get_integration`` single-entry
       mode with ``include_diagnostics=False`` + ``device_id`` provided
-    - ``tools_search.py``: ``ha_deep_search`` fallback path with the
-      fuzzy-engine-unavailable warning (closure tool, registered via
-      ``register_search_tools``)
 
-    **Strict helper on nested sub-result — 1 of 8:**
-    - ``tools_entities.py``: ``ha_set_entity`` device_rename branch on
-      registry-lookup failure — nested ``device_rename: {success,
-      warnings, ...}`` sub-result carries its own warnings contract,
-      asserted via ``_assert_warnings_list_shape(result["device_rename"])``.
-      Top-level ``result`` may also carry ``warnings`` (e.g. entity-id
-      change reminder) — the strict helper on the nested dict pins the
-      sub-result contract specifically.
+    **Not folded in (2 of 8) — multi-step WebSocket call chains where a
+    reliable cross-cutting mock needs to branch on the WS message
+    ``type`` to pass early-success steps and fail only at the target
+    emit-site. Content-level coverage already lives in the per-tool
+    unit/e2e test files cited:**
+
+    - ``tools_search.py``: ``ha_deep_search`` fallback path. The tool
+      calls ``await client.<state-source>`` before the fuzzy/exact
+      branch; trivial ``MagicMock()`` clients trip the
+      ``"MagicMock can't be used in 'await' expression"`` error before
+      the warning emit-site is reached. Per-tool tests in
+      ``test_tools_search.py`` exercise the fallback content already.
+    - ``tools_entities.py``: ``ha_set_entity`` with ``new_device_name``
+      flows entity-registry-lookup → entity-registry-update →
+      device-registry-lookup → device-registry-update → optional
+      expose-update. The nested ``device_rename`` warnings live deep
+      in that chain. Per-tool tests in ``test_entity_rename.py`` and
+      ``test_rename_consolidation.py`` exercise the nested-result
+      shape directly.
     """
 
     @pytest.mark.asyncio
@@ -1271,89 +1279,3 @@ class TestSweepWarningsShape:
 
         _assert_warnings_list_shape(result)
 
-    @pytest.mark.asyncio
-    async def test_search_deep_search_fuzzy_fallback_warnings_shape(self):
-        """Shape-pins the fuzzy-fallback warning emit in ``ha_deep_search``.
-        When the fuzzy engine raises a non-ToolError exception, the tool
-        falls back to ``_exact_match_search`` and appends a warning. Payload
-        shape (no top-level ``success``) — uses the relaxed helper.
-        """
-        from ha_mcp.tools.tools_search import register_search_tools
-
-        registered: dict[str, Any] = {}
-        mock_mcp = MagicMock()
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                registered[func.__name__] = func
-                return func
-            return wrapper
-
-        mock_mcp.tool = tool_decorator
-        client = MagicMock()
-        smart_tools = MagicMock()
-        smart_tools.smart_entity_search = AsyncMock(
-            side_effect=RuntimeError("fuzzy engine offline")
-        )
-        register_search_tools(mock_mcp, client, smart_tools=smart_tools)
-        deep_search = registered["ha_deep_search"]
-
-        async def exact_fallback(*args, **kwargs):
-            return {
-                "matches": [],
-                "total_matches": 0,
-            }
-
-        async def passthrough_tz(_client, payload):
-            return payload
-
-        with (
-            patch(
-                "ha_mcp.tools.tools_search._exact_match_search",
-                side_effect=exact_fallback,
-            ),
-            patch(
-                "ha_mcp.tools.tools_search.add_timezone_metadata",
-                side_effect=passthrough_tz,
-            ),
-        ):
-            result = await deep_search(query="anything")
-
-        _assert_warnings_list_shape_no_success(result)
-
-    @pytest.mark.asyncio
-    async def test_entities_set_entity_device_rename_lookup_failed_warnings_shape(self):
-        """Shape-pins the device_rename nested-sub-result warnings in
-        ``ha_set_entity`` when the entity-registry lookup for the rename
-        target fails. The nested ``device_rename`` dict carries its own
-        ``success`` + ``warnings`` contract — uses the STRICT helper on
-        the sub-dict.
-        """
-        from ha_mcp.tools.tools_entities import register_entity_tools
-
-        registered: dict[str, Any] = {}
-        mock_mcp = MagicMock()
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                registered[func.__name__] = func
-                return func
-            return wrapper
-
-        mock_mcp.tool = tool_decorator
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("registry lookup failed")
-        )
-        register_entity_tools(mock_mcp, client)
-        set_entity = registered["ha_set_entity"]
-
-        result = await set_entity(
-            entity_id="light.kitchen",
-            new_device_name="Kitchen Lamp",
-        )
-
-        assert "device_rename" in result, (
-            f"device_rename sub-result missing: {result}"
-        )
-        _assert_warnings_list_shape(result["device_rename"])
