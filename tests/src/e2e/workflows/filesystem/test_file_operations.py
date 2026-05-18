@@ -33,6 +33,14 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 
+# Whole module is external-only: tests build their own ``Client`` from the
+# session-scope ``mcp_server`` (which yields None on the inaddon backend),
+# and they also flip ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` at runtime — both
+# patterns are in-process-server-shaped and cannot apply when ``mcp_client``
+# is an HTTP transport into the dev addon. Inaddon coverage of filesystem
+# tools is a future tier (#1349 follow-up).
+pytestmark = [pytest.mark.external_only]
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

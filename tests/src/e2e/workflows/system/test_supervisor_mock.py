@@ -22,6 +22,16 @@ from ha_mcp._version import get_supervisor_base_url, is_running_in_addon
 from ha_mcp.tools.tools_bug_report import _fetch_addon_logs
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+
+# Whole module is external-only: the ``supervisor_mock`` fixture
+# monkeypatches ``SUPERVISOR_TOKEN`` / ``SUPERVISOR_BASE_URL`` in the test
+# process. In inaddon mode ``mcp_client`` is an HTTP transport into the
+# real dev addon — the addon's process has its own real SUPERVISOR_TOKEN
+# and hits real ``http://supervisor`` regardless of the test-side
+# monkeypatch. Inaddon coverage of these Supervisor call sites comes
+# naturally from real Supervisor interactions in other tests; mocking
+# them inside the addon container is out of scope.
+pytestmark = [pytest.mark.external_only]
 from ...utilities.supervisor_mock import (
     MOCK_INSUFFICIENT_ROLE_TOKEN,
     MOCK_SUPERVISOR_TOKEN,

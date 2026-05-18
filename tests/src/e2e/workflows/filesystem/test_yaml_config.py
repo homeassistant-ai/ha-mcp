@@ -27,6 +27,14 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 
+# Whole module is external-only: tests use a module-local
+# ``mcp_client_with_yaml_config`` fixture that does ``Client(mcp_server.mcp)``
+# (mcp_server is None on inaddon backend) and flip
+# ``ENABLE_YAML_CONFIG_EDITING`` at runtime. Addon already has the flag
+# enabled via Supervisor options (set in build_image.py); inaddon-side
+# YAML coverage is a future tier (#1349 follow-up).
+pytestmark = [pytest.mark.external_only]
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
