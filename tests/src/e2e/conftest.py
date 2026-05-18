@@ -1411,22 +1411,20 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         try:
             yield container_info
         finally:
-            # Explicit container teardown: ``TESTCONTAINERS_RYUK_DISABLED=true``
-            # is set in CI (see .github/workflows/{pr,e2e-tests}.yml) to avoid
-            # the Ryuk reaper's known issues reaching spawned containers
-            # through the GHA runner's overlay network. Without Ryuk as a
-            # fallback we cannot rely on out-of-band cleanup, so stop the
-            # container ourselves here before the ``with`` block's
-            # ``__exit__`` runs. ``stop()`` is idempotent — the with-exit
-            # will no-op if cleanup already happened.
-            try:
-                container.stop()
-                logger.info("🛑 Container stopped explicitly (Ryuk-disabled CI)")
-            except Exception as exc:  # pragma: no cover - cleanup best-effort
-                logger.warning(
-                    f"⚠️ Explicit container.stop() raised; "
-                    f"with-block __exit__ will retry: {exc}"
-                )
+            # Container cleanup runs via the enclosing ``with container:``
+            # block's ``__exit__`` (calls ``stop()`` which removes the
+            # container). With ``TESTCONTAINERS_RYUK_DISABLED=true`` set in
+            # the CI workflow env (see .github/workflows/{pr,e2e-tests}.yml)
+            # the with-block exit IS the only cleanup mechanism — Python's
+            # context-manager protocol guarantees ``__exit__`` fires on
+            # both normal and exception flows, so the Ryuk reaper safety
+            # net is not needed. Refs #366.
+            #
+            # An earlier revision of this PR also called ``container.stop()``
+            # explicitly inside this finally; that turned out to race the
+            # with-block's __exit__ (testcontainers' ``stop()`` removes the
+            # container and is NOT idempotent — the second call raised
+            # ``docker.errors.NotFound`` at session teardown).
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.info("✅ Cleanup completed")
 

@@ -25,8 +25,9 @@ env:
   # Disable Testcontainers' Ryuk reaper: the reaper container struggles to
   # reach spawned containers through the GHA runner's overlay network,
   # leaving zombies that can hold the HA port for the next session. The
-  # E2E fixture in tests/src/e2e/conftest.py performs explicit
-  # container.stop() in its teardown to replace this fallback. Refs #366.
+  # E2E fixture in tests/src/e2e/conftest.py uses ``with container:``
+  # context-manager cleanup (which Python guarantees to fire on both
+  # normal and exception flows) instead of relying on Ryuk. Refs #366.
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
