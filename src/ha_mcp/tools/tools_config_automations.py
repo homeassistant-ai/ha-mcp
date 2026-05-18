@@ -12,6 +12,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import (
     ErrorCode,
     create_config_error,
@@ -717,7 +721,7 @@ class AutomationConfigTools:
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
             if result.get("entity_not_verified"):
-                result["warning"] = (
+                result.setdefault("warnings", []).append(
                     "Automation was submitted to Home Assistant but the entity was not found "
                     "after polling. The automation may still have been created -- check Home "
                     "Assistant logs and try reloading automations. Common causes: "
@@ -733,12 +737,18 @@ class AutomationConfigTools:
             if not entity_id and identifier and identifier.startswith("automation."):
                 entity_id = identifier
             if wait_bool and entity_id:
+                action_word = "created" if identifier is None else "updated"
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
-                        result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
-                except Exception as e:
-                    result["warning"] = f"Automation created but verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Automation {action_word} but {entity_id} not yet queryable. "
+                            "It may take a moment to become available."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Automation {action_word} but verification failed: {e}"
+                    )
 
             # Apply category to entity registry if provided
             if effective_category and entity_id:
@@ -1022,9 +1032,13 @@ class AutomationConfigTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id_for_wait)
                     if not removed:
-                        result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
-                except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
             return {"success": True, "action": "delete", **result}
         except ToolError:
