@@ -317,8 +317,10 @@ class GroupTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Group verification failed for {entity_id} "
-                        f"({type(e).__name__}): {e}"
+                        "Group verification failed for %s (%s): %s",
+                        entity_id,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Group {'created' if is_create else 'updated'} but verification failed: {e}"
@@ -426,8 +428,10 @@ class GroupTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Group removal verification failed for {entity_id} "
-                        f"({type(e).__name__}): {e}"
+                        "Group removal verification failed for %s (%s): %s",
+                        entity_id,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
