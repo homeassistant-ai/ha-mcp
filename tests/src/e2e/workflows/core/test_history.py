@@ -649,7 +649,7 @@ class TestGetHistoryNegativeInputs:
         ``sensor.home_temperature`` (which never existed in the seed) was the
         original cause of the silent skip flagged by #366.
 
-        Skipped on HAOS (tracked in #1348): the timestamp-refresh hook
+        Skipped on HAOS (tracked in #1349): the timestamp-refresh hook
         (refresh_recorder_in_qcow2) runs and the UPDATEs land in the
         on-disk DB (CI log: "Shifted recorder timestamps by +542375s"),
         but the booted HA Core only surfaces the live state row — none of

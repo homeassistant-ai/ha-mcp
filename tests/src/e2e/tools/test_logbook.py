@@ -369,7 +369,7 @@ async def test_logs_system_source_with_level_filter(mcp_client):
 async def test_logs_error_log_source(mcp_client):
     """Test raw error log retrieval via source='error_log'.
 
-    Skipped on HAOS (tracked in #1348) — surfaces a real ha-mcp gap that
+    Skipped on HAOS (tracked in #1349) — surfaces a real ha-mcp gap that
     the test tier can't paper over: HA Core's /api/error_log returns 404
     by-design on HAOS, and ha-mcp's get_error_log only routes to the
     Supervisor proxy when is_running_in_addon() returns True (i.e. when
@@ -538,7 +538,7 @@ async def test_logs_system_source_with_search(mcp_client):
 async def test_logs_error_log_with_level_filter(mcp_client):
     """Test error log filtering by level.
 
-    Skipped on HAOS (tracked in #1348) — same external-client-to-HAOS
+    Skipped on HAOS (tracked in #1349) — same external-client-to-HAOS
     gap as test_logs_error_log_source above (the level filter happens
     after get_error_log fetches the raw text, so both paths share the
     404).
