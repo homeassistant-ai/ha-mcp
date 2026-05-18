@@ -745,8 +745,10 @@ class AutomationConfigTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Automation verification failed for {entity_id} "
-                        f"({type(e).__name__}): {e}"
+                        "Automation verification failed for %s (%s): %s",
+                        entity_id,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Automation {'created' if identifier is None else 'updated'} but verification failed: {e}"
@@ -1039,8 +1041,10 @@ class AutomationConfigTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Automation removal verification failed for "
-                        f"{entity_id_for_wait} ({type(e).__name__}): {e}"
+                        "Automation removal verification failed for %s (%s): %s",
+                        entity_id_for_wait,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
