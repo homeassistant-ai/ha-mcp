@@ -28,18 +28,29 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 from testcontainers.core.container import DockerContainer
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
 from fastmcp import Client
+from haos_runtime import (
+    HAOS_IMAGE_ENV,
+    boot_haos_qemu,
+    is_haos_backend_selected,
+    login_for_token,
+    refresh_recorder_in_qcow2,
+)
 
 from ha_mcp.client import HomeAssistantClient
 from ha_mcp.config import get_global_settings
@@ -54,7 +65,7 @@ from .utilities.supervisor_mock import (
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from test_constants import HA_TEST_IMAGE, TEST_TOKEN
+from test_constants import HA_TEST_IMAGE, TEST_PASSWORD, TEST_TOKEN, TEST_USER
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
@@ -86,6 +97,27 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     empirical timings to scope a follow-up tightening PR).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
+
+
+def pytest_collection_modifyitems(config, items):
+    """Enforce haos_only / container_only markers and auto-apply haos_only.
+
+    Tests under ``tests/src/e2e/haos_only/`` get the marker for free so
+    individual files don't have to repeat ``pytestmark = pytest.mark.haos_only``.
+    Tests anywhere with either marker are skipped on the wrong backend.
+    """
+    del config
+    haos = is_haos_backend_selected()
+    skip_haos = pytest.mark.skip(reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)")
+    skip_container = pytest.mark.skip(reason="HAOS backend is active; test is container-only")
+    for item in items:
+        if "haos_only" in str(item.fspath):
+            item.add_marker(pytest.mark.haos_only)
+        keywords = item.keywords
+        if "haos_only" in keywords and not haos:
+            item.add_marker(skip_haos)
+        elif "container_only" in keywords and haos:
+            item.add_marker(skip_container)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -892,8 +924,133 @@ def _blueprint_http_server():
 
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config(_blueprint_http_server):
-    """Create Home Assistant container with fresh config using testcontainers."""
-    # --- Safety guard 1: ensure Docker is available before doing anything else ---
+    """Create Home Assistant test environment with fresh config.
+
+    Default backend: testcontainer (HA Core Docker image). When the
+    ``HAOS_TEST_IMAGE_PATH`` env var points to a pre-baked HAOS qcow2,
+    the fixture instead boots HAOS under QEMU/KVM and returns the same
+    base_url + token contract. Container-specific keys (container,
+    port, config_path) are None on the HAOS path — tests that depend on
+    those should skip when the HAOS backend is selected (see #1281).
+    """
+    # HAOS backend dispatch — short-circuit the testcontainer path entirely.
+    if is_haos_backend_selected():
+        image_path = Path(os.environ[HAOS_IMAGE_ENV])
+        logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
+        # Shift the baked recorder timestamps forward so seeded rows fall
+        # inside history's 24h window (same intent as the testcontainer
+        # path's _refresh_recorder_timestamps). Must run before boot
+        # because HA Core takes an exclusive lock on the DB.
+        refresh_recorder_in_qcow2(image_path)
+        with boot_haos_qemu(image_path) as base_url:
+            token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
+            # Mirror the env-var setup the testcontainer path does below at
+            # ~line 1077 — feature flags for the in-process MCP server, plus
+            # HA URL/token for any code reading from env. The cache reset
+            # ensures the WebSocket pool and settings pick up the HAOS URL.
+            os.environ["HOMEASSISTANT_URL"] = base_url
+            os.environ["HOMEASSISTANT_TOKEN"] = token
+            os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+            os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+            os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
+            _reset_ha_in_process_caches()
+            # Mirrors the sun.sun + entity wait loop in the testcontainer
+            # branch of ha_container_with_fresh_config: the first tests reach
+            # for sun.sun's state immediately, but HA Core may still be
+            # propagating registry → state-machine when boot_haos_qemu's
+            # /manifest.json gate releases (manifest.json is served by the
+            # frontend before all integrations finish loading). Wait for
+            # sun.sun to (a) exist, then (b) leave the "unknown" state so
+            # template tests don't race.
+            haos_headers = {"Authorization": f"Bearer {token}"}
+            sun_url = f"{base_url}/api/states/sun.sun"
+            SUN_WAIT = 60
+            sun_start = time.monotonic()
+            last_sun_err: Exception | None = None
+            last_sun_status: int | None = None
+            while time.monotonic() - sun_start < SUN_WAIT:
+                try:
+                    sun_resp = requests.get(
+                        sun_url, timeout=5, headers=haos_headers
+                    )
+                    last_sun_status = sun_resp.status_code
+                    if sun_resp.status_code == 200:
+                        sun_state = sun_resp.json().get("state", "unknown")
+                        if sun_state != "unknown":
+                            elapsed = time.monotonic() - sun_start
+                            logger.info(
+                                f"✅ HAOS sun.sun is '{sun_state}' after {elapsed:.1f}s"
+                            )
+                            break
+                except (
+                    requests.exceptions.RequestException,
+                    json.JSONDecodeError,
+                ) as exc:
+                    last_sun_err = exc
+                time.sleep(1)
+            else:
+                # Surface what we saw on the LAST attempt so a future
+                # operator can tell "HA returned 401 for 60s" from
+                # "connection refused for 60s" from "endpoint returned
+                # 200 but state was 'unknown'".
+                logger.warning(
+                    "⚠️ HAOS sun.sun still not ready after %ds "
+                    "(last_status=%s, last_exc=%r) — template / connection "
+                    "tests may race",
+                    SUN_WAIT, last_sun_status, last_sun_err,
+                )
+            # The session-scope _blueprint_http_server fixture computes its
+            # base_url using host.docker.internal — meaningless from inside
+            # the HAOS QEMU guest. Slirp user networking always reaches the
+            # host at 10.0.2.2, so rewrite the URL here for tests that fetch
+            # blueprints through HA's import_blueprint flow.
+            blueprint_for_haos = {
+                **_blueprint_http_server,
+                "base_url": f"http://10.0.2.2:{_blueprint_http_server['port']}",
+            }
+            try:
+                yield {
+                    "container": None,
+                    "port": None,
+                    "base_url": base_url,
+                    "config_path": None,
+                    "blueprint_server": blueprint_for_haos,
+                    "token": token,
+                    "backend": "haos",
+                }
+            finally:
+                # Pull HA Core's runtime log + Supervisor's own log via the
+                # Supervisor /core/logs and /supervisor/logs endpoints before
+                # QEMU shuts down. HA on HAOS logs to stdout (no file-based
+                # home-assistant.log) so this is the only way to see what HA
+                # itself said during the session. ?lines=20000 because the
+                # default returns just a tail and we lose the boot phase
+                # where recorder/integration init errors happen.
+                #
+                # IMPORTANT: each urlopen has its own 60s timeout so a hung
+                # Supervisor caps total teardown delay at 2 endpoints × 60s
+                # = 120s before boot_haos_qemu's own SIGTERM/SIGKILL kicks
+                # in. Without per-call timeout an indefinitely-hanging
+                # supervisor would stall session teardown forever.
+                log_dest = Path("/tmp/haos-diagnostics")
+                log_dest.mkdir(parents=True, exist_ok=True)
+                for name, url in (
+                    ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
+                    ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
+                ):
+                    try:
+                        req = urllib.request.Request(
+                            url, headers={"Authorization": f"Bearer {token}"},
+                        )
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            (log_dest / name).write_bytes(resp.read())
+                        logger.info("Dumped %s via supervisor", name)
+                    except Exception as exc:
+                        logger.warning("Failed to dump %s: %s", name, exc)
+        return
+
+    # --- Testcontainer path ---
+    # Safety guard 1: ensure Docker is available before doing anything else
     try:
         import docker as docker_sdk
 
@@ -1076,7 +1233,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # ``_wait_for_ha_api_ready`` helper. The helper extraction is
         # preserved as a single-contract surface in case a future bounded
         # retry path is reintroduced.
-        import requests
+        # NOTE: ``requests`` is imported at module top; do NOT re-import it
+        # locally here — Python's scoping rules would then make ``requests``
+        # a function-local for the entire ha_container_with_fresh_config,
+        # which previously caused UnboundLocalError in the HAOS branch.
 
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
@@ -1243,12 +1403,20 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # container-restart retry path that originally sat here added a
         # ~3-minute slow-failure penalty (matching the second readiness
         # sequence) for negligible recovery value once the underlying
-        # H_LOAD class — the only flake-class observed live — was fixed
-        # structurally by pre-installing manifest ``requirements`` in
-        # the container entrypoint above (see
-        # ``_collect_manifest_requirements`` call site). Reintroduce a
-        # bounded retry only if a future dump surfaces a recoverable
-        # class (H_DEPS / H_LISTEN / H_RESOURCE) in the wild.
+        # H_LOAD failure class — manifest-requirement-install never firing
+        # for synthetic config entries — was fixed structurally by
+        # pre-installing manifest ``requirements`` in the container
+        # entrypoint above (see ``_collect_manifest_requirements`` call
+        # site). The remaining unmitigated flake classes are tracked
+        # internally as:
+        #   H_DEPS    — async_setup_entry raises ModuleNotFoundError
+        #               despite manifest-listed deps being installed
+        #   H_LISTEN  — HA accepts the entry but never registers
+        #               services (silent setup-success-but-no-effect)
+        #   H_RESOURCE — entry setup deadlocks waiting on a resource
+        #               the test environment doesn't provide
+        # Reintroduce a bounded retry only if a future dump surfaces one
+        # of those in the wild.
         HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
@@ -1327,6 +1495,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             "base_url": base_url,
             "config_path": str(config_path),
             "blueprint_server": _blueprint_http_server,
+            "token": TEST_TOKEN,
+            "backend": "container",
         }
 
         try:
@@ -1341,11 +1511,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
 async def ha_client(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantClient]:
-    """Create Home Assistant client connected to the container."""
+    """Create Home Assistant client connected to the container or HAOS QEMU."""
     container_info = ha_container_with_fresh_config
     base_url = container_info["base_url"]
+    token = container_info.get("token", TEST_TOKEN)
 
-    client = HomeAssistantClient(base_url=base_url, token=TEST_TOKEN)
+    client = HomeAssistantClient(base_url=base_url, token=token)
 
     # Verify connection
     try:
@@ -1369,14 +1540,15 @@ async def ha_client(
 async def mcp_server(
     ha_container_with_fresh_config,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
-    """Create MCP server instance connected to the container."""
+    """Create MCP server instance connected to the container or HAOS QEMU."""
     logger.info("🚀 Creating MCP server instance...")
 
     container_info = ha_container_with_fresh_config
     base_url = container_info["base_url"]
+    token = container_info.get("token", TEST_TOKEN)
 
     # Create client for the server
-    client = HomeAssistantClient(base_url=base_url, token=TEST_TOKEN)
+    client = HomeAssistantClient(base_url=base_url, token=token)
 
     # Create server with the client
     server = HomeAssistantSmartMCPServer(client=client)
