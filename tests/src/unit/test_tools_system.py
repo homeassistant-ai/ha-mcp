@@ -4,6 +4,7 @@ Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
 ha_restart reports failure when a reverse proxy returns 504 during restart.
 """
 
+import asyncio
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -197,7 +198,7 @@ class TestGetSystemHealthGather:
         mock_zha = AsyncMock(return_value={"devices": [{"name": "A"}]})
         mock_zwave = AsyncMock(return_value={"nodes": []})
 
-        with _patch_health_info_baseline(), patch.object(
+        with _patch_health_info_baseline() as (_, ws_client), patch.object(
             SystemTools, "_fetch_repairs", new=mock_repairs
         ), patch.object(
             SystemTools, "_fetch_zha_network", new=mock_zha
@@ -216,6 +217,9 @@ class TestGetSystemHealthGather:
         mock_repairs.assert_awaited_once()
         mock_zha.assert_awaited_once()
         mock_zwave.assert_awaited_once()
+        # ``finally``-clause cleanup of the WS client must still fire on the
+        # gather path — guards against a regression that skips disconnect.
+        ws_client.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_unrequested_sections_not_called(self):
@@ -243,42 +247,153 @@ class TestGetSystemHealthGather:
         mock_zwave.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_one_section_raising_does_not_block_siblings(self):
+    @pytest.mark.parametrize(
+        "raising_section",
+        ["repairs", "zha_network", "zwave_network"],
+    )
+    async def test_one_section_raising_does_not_block_siblings(
+        self, raising_section
+    ):
         """A raising helper attributes its failure to its section; others still populate.
 
         The helpers themselves are written never to raise (each wraps its WS
         call in try/except). This test exercises the defensive
         ``return_exceptions=True`` path on ``gather`` against an
         unexpected-exception regression in any one helper.
+
+        Parametrized over which helper raises so a future zip/mis-attribution
+        regression gets caught regardless of position in the sections list.
         """
         client = MagicMock()
         tools = SystemTools(client)
-        mock_repairs = AsyncMock(side_effect=RuntimeError("repairs blew up"))
-        mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
-        mock_zwave = AsyncMock(return_value={"nodes": [{"id": 1}]})
+
+        section_to_helper = {
+            "repairs": "_fetch_repairs",
+            "zha_network": "_fetch_zha_network",
+            "zwave_network": "_fetch_zwave_network",
+        }
+        section_success_values = {
+            "repairs": {"issues": [], "count": 0},
+            "zha_network": {"devices": [{"name": "B"}]},
+            "zwave_network": {"nodes": [{"id": 1}]},
+        }
+
+        mocks = {
+            section: AsyncMock(
+                side_effect=RuntimeError(f"{section} blew up")
+                if section == raising_section
+                else None,
+                return_value=None
+                if section == raising_section
+                else section_success_values[section],
+            )
+            for section in section_to_helper
+        }
 
         with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
+            SystemTools, "_fetch_repairs", new=mocks["repairs"]
         ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
+            SystemTools, "_fetch_zha_network", new=mocks["zha_network"]
         ), patch.object(
-            SystemTools, "_fetch_zwave_network", new=mock_zwave
+            SystemTools, "_fetch_zwave_network", new=mocks["zwave_network"]
         ):
             result = await tools.ha_get_system_health(
                 include="repairs,zha_network,zwave_network"
             )
 
-        # Raising section attributed by name
-        assert "error" in result["repairs"]
-        assert "RuntimeError" in result["repairs"]["error"]
-        assert "repairs blew up" in result["repairs"]["error"]
-        # Sibling sections unaffected
+        # Raising section attributed by name — confirms zip alignment between
+        # the sections list (insertion order) and the gather result list.
+        assert "error" in result[raising_section]
+        assert "RuntimeError" in result[raising_section]["error"]
+        assert f"{raising_section} blew up" in result[raising_section]["error"]
+        # Sibling sections unaffected and carry their success payload.
+        for sibling in section_to_helper:
+            if sibling == raising_section:
+                continue
+            assert result[sibling] == section_success_values[sibling]
+        # All three were attempted — proves the gather didn't short-circuit.
+        for section in section_to_helper:
+            mocks[section].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_helpers_actually_run_concurrently(self):
+        """Two helpers can be in-flight simultaneously under the gather path
+        — guards against a regression that reverts to serial ``await``.
+
+        Helper A waits on an ``asyncio.Event`` that helper B sets. If gather
+        ran the helpers serially in registration order, helper A would
+        deadlock waiting for an event that helper B (queued behind it) has
+        no chance to set, and the test would time out. The parallel path
+        completes both helpers in well under the timeout."""
+        client = MagicMock()
+        tools = SystemTools(client)
+
+        signal = asyncio.Event()
+
+        async def waiting_helper(*_args, **_kwargs):
+            # Helper A: blocks until helper B signals; cap at 2s so a
+            # serial-regression fails fast rather than timing out the suite.
+            await asyncio.wait_for(signal.wait(), timeout=2.0)
+            return {"issues": [], "count": 0}
+
+        async def signalling_helper(*_args, **_kwargs):
+            # Helper B: trips the signal so helper A can complete.
+            signal.set()
+            return {"devices": [{"name": "B"}]}
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=AsyncMock(side_effect=waiting_helper)
+        ), patch.object(
+            SystemTools,
+            "_fetch_zha_network",
+            new=AsyncMock(side_effect=signalling_helper),
+        ):
+            result = await tools.ha_get_system_health(
+                include="repairs,zha_network"
+            )
+
+        assert result["repairs"] == {"issues": [], "count": 0}
         assert result["zha_network"] == {"devices": [{"name": "B"}]}
-        assert result["zwave_network"] == {"nodes": [{"id": 1}]}
-        # All three were attempted — proves the gather didn't short-circuit
-        mock_repairs.assert_awaited_once()
-        mock_zha.assert_awaited_once()
-        mock_zwave.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_propagated_not_demoted(self):
+        """``asyncio.CancelledError`` from a helper must propagate out of
+        ``ha_get_system_health`` rather than land as ``{"error": "CancelledError: …"}``.
+
+        ``asyncio.gather(return_exceptions=True)`` returns ``CancelledError``
+        as a result element instead of re-raising, so the pre-pass must
+        explicitly re-raise it. Without this, a cancelled request would
+        return ``success=True`` and the runtime wouldn't unwind."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), pytest.raises(asyncio.CancelledError):
+            await tools.ha_get_system_health(include="repairs,zha_network")
+
+    @pytest.mark.asyncio
+    async def test_tool_error_from_helper_re_raised_not_demoted(self):
+        """A ``ToolError`` raised inside a helper must propagate so the MCP
+        ``isError=true`` contract holds — not get silently demoted to
+        ``result[section] = {"error": "ToolError: …"}`` with ``success=True``."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        tool_err = ToolError("simulated helper-side tool error")
+        mock_repairs = AsyncMock(side_effect=tool_err)
+        mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
+
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch.object(
+            SystemTools, "_fetch_zha_network", new=mock_zha
+        ), pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_system_health(include="repairs,zha_network")
+        assert excinfo.value is tool_err
 
     @pytest.mark.asyncio
     async def test_zha_full_routes_to_full_flag(self):

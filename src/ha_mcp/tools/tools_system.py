@@ -9,6 +9,7 @@ This module provides tools for Home Assistant system administration including:
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -392,7 +393,7 @@ class SystemTools:
             want_zha = zha_full or zha_summary
             want_zwave = "zwave_network" in includes
 
-            sections: list[tuple[str, Any]] = []
+            sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
             if want_repairs:
                 sections.append(
                     (
@@ -414,13 +415,39 @@ class SystemTools:
 
             if sections:
                 gathered = await asyncio.gather(
-                    *(coro for _, coro in sections), return_exceptions=True
+                    *[coro for _, coro in sections], return_exceptions=True
                 )
-                for (section_name, _), section_result in zip(sections, gathered, strict=True):
-                    if isinstance(section_result, BaseException):
-                        # Mirrors the helpers' own embeddable-sub-dict contract
-                        # so an unexpected exception attributes to its section
-                        # instead of bubbling out and dropping the others.
+                # Pre-pass: re-raise anything that must unwind the request
+                # rather than land as an embedded section error. ``gather``
+                # with ``return_exceptions=True`` returns ``CancelledError``
+                # (and any other ``BaseException``) as a result element
+                # instead of propagating, and a ``ToolError`` raised from
+                # inside a helper would otherwise be silently demoted to
+                # ``{"error": "ToolError: …"}`` and break the MCP
+                # ``isError=true`` contract for the whole tool.
+                for section_result in gathered:
+                    if isinstance(section_result, asyncio.CancelledError):
+                        raise section_result
+                    if isinstance(section_result, ToolError):
+                        raise section_result
+                    if isinstance(section_result, BaseException) and not isinstance(
+                        section_result, Exception
+                    ):
+                        # ``KeyboardInterrupt`` / ``SystemExit`` — never demote
+                        # these to a section-level error string.
+                        raise section_result
+                for (section_name, _), section_result in zip(
+                    sections, gathered, strict=True
+                ):
+                    if isinstance(section_result, Exception):
+                        # Last-resort fallback: emit a minimal ``{error: ...}``
+                        # dict so an unexpected exception attributes to its
+                        # section instead of bubbling out and dropping siblings.
+                        # The helpers themselves return richer
+                        # ``{<key>: <baseline>, ..., error: ...}`` shapes on
+                        # their own (caught) failures; this branch is the
+                        # belt-and-suspenders path that fires only on a
+                        # helper-edit regression that lets an exception escape.
                         logger.warning(
                             "Concurrent fetch for section %r raised: %s: %s",
                             section_name,
