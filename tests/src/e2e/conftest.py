@@ -1005,6 +1005,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # itself said during the session. ?lines=20000 because the
                 # default returns just a tail and we lose the boot phase
                 # where recorder/integration init errors happen.
+                #
+                # IMPORTANT: each urlopen has its own 60s timeout so a hung
+                # Supervisor caps total teardown delay at 2 endpoints × 60s
+                # = 120s before boot_haos_qemu's own SIGTERM/SIGKILL kicks
+                # in. Without per-call timeout an indefinitely-hanging
+                # supervisor would stall session teardown forever.
                 log_dest = Path("/tmp/haos-diagnostics")
                 log_dest.mkdir(parents=True, exist_ok=True)
                 for name, url in (
@@ -1376,12 +1382,20 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # container-restart retry path that originally sat here added a
         # ~3-minute slow-failure penalty (matching the second readiness
         # sequence) for negligible recovery value once the underlying
-        # H_LOAD class — the only flake-class observed live — was fixed
-        # structurally by pre-installing manifest ``requirements`` in
-        # the container entrypoint above (see
-        # ``_collect_manifest_requirements`` call site). Reintroduce a
-        # bounded retry only if a future dump surfaces a recoverable
-        # class (H_DEPS / H_LISTEN / H_RESOURCE) in the wild.
+        # H_LOAD failure class — manifest-requirement-install never firing
+        # for synthetic config entries — was fixed structurally by
+        # pre-installing manifest ``requirements`` in the container
+        # entrypoint above (see ``_collect_manifest_requirements`` call
+        # site). The remaining unmitigated flake classes are tracked
+        # internally as:
+        #   H_DEPS    — async_setup_entry raises ModuleNotFoundError
+        #               despite manifest-listed deps being installed
+        #   H_LISTEN  — HA accepts the entry but never registers
+        #               services (silent setup-success-but-no-effect)
+        #   H_RESOURCE — entry setup deadlocks waiting on a resource
+        #               the test environment doesn't provide
+        # Reintroduce a bounded retry only if a future dump surfaces one
+        # of those in the wild.
         HA_MCP_TOOLS_WAIT = 180  # session-level cap; covers slow CI runners
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():

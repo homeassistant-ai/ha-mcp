@@ -83,8 +83,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
-          # Ubuntu installs the kernel image as 0600 root:root, but libguestfs's
-          # supermin appliance builder needs to read it. Standard workaround.
+          # Ubuntu installs the kernel image as 0600 root:root, but
+          # libguestfs's supermin appliance builder needs to read it as
+          # the invoking (unprivileged) user. Documented at
+          # https://libguestfs.org/guestfs-faq.1.html#kernel-permissions
+          # (search "kernel image is not readable") — workaround is to
+          # relax perms on /boot/vmlinuz-*.
           sudo chmod +r /boot/vmlinuz-*
 
       - name: Enable KVM group perms

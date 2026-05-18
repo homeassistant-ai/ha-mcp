@@ -62,8 +62,11 @@ ONBOARDING_NAME = "HA-MCP CI"
 HA_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_PORT", "18123"))
 SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 
-# OVMF firmware path varies by distribution. Default matches Ubuntu's
-# ovmf package (which is what the GitHub-hosted ubuntu-22.04 runner uses).
+# OVMF firmware path varies by distribution. Default matches the
+# Debian/Ubuntu ``ovmf`` package layout, which is what the GitHub-hosted
+# runner image used by build-haos-test-image.yml provides. Override via
+# HAOS_BUILD_OVMF on other distros (Fedora ships it under /usr/share/edk2,
+# Arch under /usr/share/edk2-ovmf).
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 
 
@@ -121,9 +124,12 @@ ADDONS: tuple[Addon, ...] = (
 
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
 # Has to start so it can do its one-shot install before we restart HA Core.
+# Explicit ``start=True`` for visual symmetry with the ADDONS tuple
+# entries; matches Addon's field default but reads more obviously.
 GET_HACS_ADDON = Addon(
     repo="https://github.com/hacs/addons",
     name="Get HACS",
+    start=True,
 )
 
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
@@ -605,7 +611,22 @@ def bake_test_state(qcow2: Path) -> None:
             # _install_custom_component (entry_id, source=import, version=1).
             ce_path = staging / ".storage" / "core.config_entries"
             ce_data = json.loads(ce_path.read_text())
-            entries = ce_data.setdefault("data", {}).setdefault("entries", [])
+            # Shape guard: silently creating ``data.entries`` on a malformed
+            # file would near-empty-wipe core.config_entries on the next
+            # write — losing the seed integrations (HACS, demo, etc.).
+            # If the storage schema ever bumps and breaks this expectation,
+            # fail loudly so we update the bake instead of shipping a
+            # broken image.
+            if not isinstance(ce_data, dict) or not isinstance(
+                ce_data.get("data"), dict
+            ) or not isinstance(ce_data["data"].get("entries"), list):
+                raise RuntimeError(
+                    f"core.config_entries at {ce_path} has unexpected shape "
+                    f"— expected dict with data.entries list; HA storage "
+                    f"schema may have bumped. Bake script must be updated "
+                    f"before continuing."
+                )
+            entries = ce_data["data"]["entries"]
             if not any(e.get("domain") == domain for e in entries):
                 entries.append({
                     "created_at": "2025-09-07T23:56:28.040744+00:00",
@@ -776,8 +797,16 @@ def build(work_dir: Path, output: Path) -> None:
             stop_qemu(qemu, ws)
     except Exception:
         LOG.exception("Image build failed — leaving qcow2 in %s for inspection", qcow2)
-        qemu.terminate()
-        qemu.wait(timeout=60)
+        # Defensive: if Popen returned before exec (binary missing, OOM)
+        # qemu.poll() will already be non-None and terminate() raises
+        # ProcessLookupError. Guard the teardown so it never masks the
+        # original build exception we're about to re-raise.
+        if qemu.poll() is None:
+            try:
+                qemu.terminate()
+                qemu.wait(timeout=60)
+            except (ProcessLookupError, subprocess.TimeoutExpired) as e:
+                LOG.warning("QEMU teardown after build failure: %r", e)
         raise
 
     # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
