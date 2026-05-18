@@ -1325,10 +1325,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # racing ``async_setup_entry`` for slow integrations — see #366
         # thread (Ilya0527 2026-05-18) and the docstring on
         # ``_wait_for_core_state_running`` for the structural rationale.
-        # 60s budget covers typical CI startup (well under 30s observed)
-        # with headroom for runner variance; HA's per-domain
-        # ``SLOW_SETUP_MAX_WAIT = 300`` is the upstream ceiling that
-        # would surface here as ``CoreState`` stuck at ``starting``.
+        # 60s is a conservative initial budget pending empirical data
+        # from ``[READINESS_GATE_TIMING]`` lines; the upstream per-domain
+        # ceiling ``SLOW_SETUP_MAX_WAIT = 300`` from
+        # ``homeassistant/setup.py`` is the latest point at which a
+        # stuck integration would surface here as ``CoreState`` stuck
+        # at ``starting``.
         CORE_STATE_TIMEOUT = 60
         logger.info("⏳ Waiting for HA CoreState to reach RUNNING...")
         (
