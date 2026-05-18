@@ -7,6 +7,7 @@ Issue #518: Tool errors were not being signaled via isError in MCP protocol resp
 """
 
 import json
+import logging
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -159,6 +160,51 @@ class TestExceptionToStructuredError:
         # Should not raise JSONDecodeError
         error_data = json.loads(str(exc_info.value))
         assert error_data["success"] is False
+
+
+class TestInternalErrorTracebackLogging:
+    """Issue #1302: unclassified exceptions log a traceback once, in the helper.
+
+    The PR removed redundant per-call-site `logger.error(..., exc_info=True)`
+    lines from config-tool except blocks. Tracebacks remain operationally
+    valuable for the INTERNAL_ERROR fallback path (programmer errors,
+    library bugs) where `str(error)` alone is uninformative; this test
+    pins that observability at the centralized helper instead.
+    """
+
+    def test_internal_error_path_logs_traceback(self, caplog):
+        """An unclassified exception logs at exception level with traceback."""
+        with caplog.at_level(logging.ERROR, logger="ha_mcp.tools.helpers"):
+            result = exception_to_structured_error(
+                Exception("weird thing in card traversal"),
+                raise_error=False,
+            )
+
+        assert result["error"]["code"] == ErrorCode.INTERNAL_ERROR
+        traceback_records = [
+            r for r in caplog.records if r.exc_info is not None
+        ]
+        assert traceback_records, (
+            f"Expected an exc_info=True log record, got: "
+            f"{[(r.levelname, r.message) for r in caplog.records]}"
+        )
+
+    def test_classified_error_does_not_log_traceback(self, caplog):
+        """A classified exception (VALIDATION_FAILED here) does not log."""
+        with caplog.at_level(logging.ERROR, logger="ha_mcp.tools.helpers"):
+            result = exception_to_structured_error(
+                ValueError("Invalid parameter"),
+                raise_error=False,
+            )
+
+        assert result["error"]["code"] == ErrorCode.VALIDATION_FAILED
+        traceback_records = [
+            r for r in caplog.records if r.exc_info is not None
+        ]
+        assert not traceback_records, (
+            f"Classified exceptions must not log a traceback (noise), got: "
+            f"{[(r.levelname, r.message) for r in caplog.records]}"
+        )
 
 
 class TestErrorCodeMapping:

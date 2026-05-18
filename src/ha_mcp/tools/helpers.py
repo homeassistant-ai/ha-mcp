@@ -396,6 +396,19 @@ def exception_to_structured_error(
 
     error_response = _classify_exception(error, error_str, error_msg, context)
 
+    # Tracebacks are operationally valuable only for genuinely unclassified
+    # exceptions (programmer errors, library bugs) — every other branch in
+    # _classify_exception produces a structured signal that's sufficient on
+    # its own. Logging at exception level here gives operators line numbers
+    # for the bug class where ``str(error)`` is least informative, without
+    # re-introducing the duplicate ERROR-log noise that classified failures
+    # produced.
+    if (
+        isinstance(error_response.get("error"), dict)
+        and error_response["error"].get("code") == ErrorCode.INTERNAL_ERROR
+    ):
+        logger.exception("Unclassified exception: %s", error_msg)
+
     if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
         # Set both `suggestion` (singular, first item) and `suggestions`
         # (plural, full list). create_error_response (errors.py) sets the
