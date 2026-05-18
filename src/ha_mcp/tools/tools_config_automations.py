@@ -325,7 +325,6 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error getting automation: {e}")
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
@@ -761,7 +760,6 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error upserting automation: {e}")
             suggestions = [
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
@@ -1033,7 +1031,6 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error deleting automation: {e}")
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "delete"},

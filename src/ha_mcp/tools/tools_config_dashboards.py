@@ -803,12 +803,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             raise
         except Exception as e:
             if search_mode:
-                logger.error(
-                    f"Error finding card in dashboard: url_path={url_path}, "
-                    f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
-                    f"error={e}",
-                    exc_info=True,
-                )
                 suggestions = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
@@ -821,7 +815,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "heading": heading,
                 }
             else:
-                logger.error(f"Error getting dashboard: {e}", exc_info=True)
                 suggestions = [
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Check if you have permission to access this dashboard",
@@ -1482,7 +1475,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error setting dashboard: {e}")
             exception_to_structured_error(
                 e,
                 context={"action": "set", "url_path": url_path},
@@ -1564,8 +1556,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 else:
                     error_str = str(error_msg)
 
-                logger.error(f"Error deleting dashboard: {error_str}")
-
                 # If the error is "not found" / "doesn't exist", treat as success (idempotent)
                 if (
                     "unable to find" in error_str.lower()
@@ -1606,7 +1596,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error deleting dashboard: {e}")
             exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},
