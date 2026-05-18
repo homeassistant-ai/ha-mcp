@@ -294,6 +294,8 @@ cd worktree/<branch-name>
 - **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
 - **For obvious choices**: Implement and document in final summary
 
+**When you notice an improvement during a PR**: fix it in place by default. See [Boy Scout Rule — Handling Discovered Improvements](#boy-scout-rule--handling-discovered-improvements) below for the deferral scale.
+
 **Final reporting (only after ALL workflow steps complete):**
 
 Once the PR is ready (all checks green, comments addressed), provide:
@@ -315,17 +317,63 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-### Handling Discovered Improvements
+### Boy Scout Rule — Handling Discovered Improvements
 
-When you notice something that could be improved while working on a PR, use this scale:
+**IMPORTANT — Default is fix-in-place.** "Boy Scout Rule" means leave touched code better than you found it. "Improve incrementally" means commit-by-commit within *this* PR — not across follow-up PRs. Deferral is the exception, not the default. Weigh fix-in-place sweeps against regression risk: if a sweep would meaningfully expand the diff or change the review surface, treat it as Mid-sized and ask the user.
 
-| Size | Action |
-|------|--------|
-| **Small** — a few lines, clearly in scope | Fix it inline, no mention needed |
-| **Mid-sized** — meaningful effort, worth doing but out of scope | Pause **before pushing** and ask the user whether to include it |
-| **Large / unrelated** — many files, design decisions, or different domain | Document in the PR description's **Future improvements** section; open a separate PR only if the user asks |
+**Never open a follow-up PR or issue without explicit user approval.**
 
-**Never open a separate improvement PR without explicit user approval.** Document it in the PR description first — it may already be covered by an open issue or the user may not want it at all.
+When you notice something while working on a PR, apply this scale:
+
+| What you find | Action |
+|---|---|
+| **Small** — a few lines, clearly in scope (see examples below) | **Fix in this PR** as a separate commit. No mention in PR description. |
+| **Mid-sized** — meaningful effort, worth doing but out of scope (e.g. adding a new helper module that doesn't exist yet, a gap that needs non-trivial new test scaffolding, a code-quality issue that's *not* really low) | **Pause before pushing.** Ask the user whether to bundle. |
+| **Large / unrelated** — many files, design decisions, different subsystem (e.g. would double the diff size or change the review surface, code quality is *really* low / technical debt) | Mention in PR description only if the user confirms. Open a separate issue **only if** the user asks AND you can state a concrete benefit in one sentence. |
+
+**"Small" examples — fix these inline, no mention needed:**
+
+- Typo, dead import, misnamed local
+- Stale docstring/comment or stale reference
+- 1–N line cleanup of code in this diff
+- Multi-site sweep of the same pattern you can grep for
+- Missing test for code you're touching (add the test without refactoring the surrounding code)
+- Low coverage for the area you're working in
+- Straightforward test-quality fix (better assertions, clearer names, removing duplication)
+- "Mirror X parity onto Y" where Y is in the diff
+- Migrating a singular→list or similar shape-consistency fix
+- Drift between docs and live state you can fix by reading both
+
+**When to ask the user about bundling.** ~200 lines is a *should-I-ask* heuristic, not a bundling cap. Under ~200 lines: bundle without asking. Over ~200 lines: ask the user whether to bundle — but **bundling at any size is fine if the work is not grossly out of scope**. The 200-line mark exists so the user hears about large bundled changes before they land, not to push large work out of the PR. Estimate honestly; do not inflate to manufacture a reason to defer.
+
+**Anti-noise gate — before filing any follow-up issue or PR, all three must be true:**
+
+1. The work is genuinely too large to bundle (i.e. truly out of scope, not just over the ~200-line ask-heuristic above). **All three sub-tests must pass:**
+   (a) It cannot be done by mirroring an existing sibling pattern in the same file or a closely-related file.
+   (b) You can name the actual design choice in one sentence with two named alternatives, **OR** the work is a genuinely large mechanical migration (e.g. *"replace `requests` with `httpx` across 40 sites"*) that exceeds this PR's scope by size alone.
+   (c) It would meaningfully change this PR's review surface, not just add to it.
+2. You can name a concrete end-user-facing or maintainer benefit in one sentence.
+3. A maintainer reading the issue 6 months later would act on it, not close as stale.
+
+If any are false: fix it now, or let it go. **Do not file an issue to "track" it.**
+
+These phrases are escape hatches that signal the AI is making a scope decision the user should make instead. When you find yourself drafting any of them, treat it as a cue to re-apply the rules in this section before continuing:
+
+- "Post-merge follow-up" / "follow-up consideration"
+- "Nice to have"
+- "Happy to file an issue (or note in PR body)"
+- "Pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of the Boy Scout Rule)
+- "Out of scope for this PR" (used as an assertion to skip — not as a question to the user via the verification template below)
+- "Real design work, not N lines"
+- "Worth tracking as a real follow-up issue rather than buried in a comment"
+
+**Scope is the user's call, not yours.** You do not decide whether something is in scope. If you think a discovered improvement is out of scope, say so explicitly and ask the user to confirm — do not silently drop it into a "future improvements" bucket:
+
+> *"This may be out of scope — user should verify. I think it is out of scope because [specific reason]. Should I fix it here or defer?"*
+
+Then defer to the user's answer.
+
+**Code-review bot suggestions** (Gemini Code Assist, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -343,17 +391,6 @@ gh pr create --draft --base master
 
 On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
 
-### Boy Scout Rule
-
-Improve code incrementally when touching it — especially tool docstrings and tests. Balance against regression risk (complexity, coverage, scope).
-
-| Scenario | Action |
-|----------|--------|
-| **No tests exist for code you're touching** | Add tests for the specific behavior you're implementing/fixing, without refactoring existing code |
-| **Tests exist but coverage is low** | Add tests for gaps if you're already working in that area |
-| **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
-| **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
-
 ### Test Coverage Requirements
 
 **When tests ARE required:**
@@ -368,7 +405,7 @@ Improve code incrementally when touching it — especially tool docstrings and t
 - Minor parameter additions to well-tested tools
 - Internal utilities already covered by E2E tests
 
-**When to open an issue instead:** Refactoring would touch many files, requires design decisions, or would significantly expand PR scope.
+**When to open an issue instead:** See § *Boy Scout Rule — Handling Discovered Improvements* for the gate. Never open without explicit user approval.
 
 ## CI/CD Workflows
 
