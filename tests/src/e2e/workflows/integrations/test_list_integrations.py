@@ -13,7 +13,7 @@ from typing import ClassVar
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -600,3 +600,89 @@ class TestGetIntegrationNegativeInputs:
         assert "not found" in error_msg, (
             f"Expected 'not found' in error message, got: {data['error']}"
         )
+
+
+class TestGetIntegrationDiagnostics:
+    """E2E coverage for include_diagnostics=True on ha_get_integration."""
+
+    @pytest.mark.asyncio
+    async def test_include_diagnostics_returns_subdict_with_entry_id(
+        self, mcp_client
+    ):
+        """include_diagnostics=True attaches a `diagnostics` sub-dict that always
+        carries `config_entry_id`. Whether it also carries `data` (helper happy
+        path) or `error` (404 from integrations without a diagnostics platform —
+        typical in CI's bare HA container) depends on the loaded integrations.
+        """
+        logger.info("Locating a config entry to probe diagnostics on...")
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = parse_mcp_result(list_result)
+        assert list_data.get("success"), f"List failed: {list_data}"
+        entries = list_data.get("entries") or list_data.get("results") or []
+        if not entries:
+            pytest.skip("No config entries loaded in test container")
+        entry = entries[0]
+        entry_id = entry.get("entry_id")
+        entry_domain = entry.get("domain")
+        entry_title = entry.get("title")
+        assert entry_id, f"First entry has no entry_id: {entry}"
+
+        logger.info(
+            "Probing diagnostics for entry_id=%s domain=%s title=%s",
+            entry_id,
+            entry_domain,
+            entry_title,
+        )
+        result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {"entry_id": entry_id, "include_diagnostics": True},
+        )
+        data = parse_mcp_result(result)
+        assert "diagnostics" in data, (
+            f"Expected 'diagnostics' key when include_diagnostics=True. Got: {list(data.keys())}"
+        )
+        diag = data["diagnostics"]
+        assert diag.get("config_entry_id") == entry_id, (
+            f"Diagnostics sub-dict should echo entry_id. Got: {diag}"
+        )
+        # Either success (`data` populated) OR a graceful error string — never both
+        has_data = "data" in diag
+        has_error = "error" in diag
+        assert has_data ^ has_error, (
+            f"Diagnostics sub-dict should have exactly one of 'data' or 'error'. Got: {diag}"
+        )
+        if has_error:
+            logger.info(
+                "Diagnostics 404 path exercised for domain=%s: %s",
+                entry_domain,
+                diag["error"],
+            )
+        else:
+            logger.info(
+                "Diagnostics happy path exercised for domain=%s", entry_domain
+            )
+
+    @pytest.mark.asyncio
+    async def test_device_id_without_include_surfaces_warning(self, mcp_client):
+        """device_id without include_diagnostics=True is ignored with a warning."""
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = parse_mcp_result(list_result)
+        entries = list_data.get("entries") or list_data.get("results") or []
+        if not entries:
+            pytest.skip("No config entries loaded in test container")
+        entry_id = entries[0].get("entry_id")
+
+        result = await mcp_client.call_tool(
+            "ha_get_integration",
+            {
+                "entry_id": entry_id,
+                "include_diagnostics": False,
+                "device_id": "spurious_device_id",
+            },
+        )
+        data = parse_mcp_result(result)
+        assert "diagnostics" not in data
+        warnings = data.get("warnings") or []
+        assert any(
+            "device_id" in w and "ignored" in w for w in warnings
+        ), f"Expected ignored-device_id warning. Got warnings: {warnings}"

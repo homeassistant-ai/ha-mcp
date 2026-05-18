@@ -23,7 +23,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param, filter_active_repairs
+from .util_helpers import (
+    coerce_bool_param,
+    coerce_int_param,
+    fetch_integration_diagnostics,
+    filter_active_repairs,
+    parse_diagnostics_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -334,17 +340,24 @@ class SystemTools:
 
     @tool(
         name="ha_get_system_health",
-        tags={"System", "Zigbee", "Z-Wave"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)"},
+        tags={"System", "Zigbee", "Z-Wave", "Integrations"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)"},
     )
     @log_tool_usage
     async def ha_get_system_health(
         self,
         include: str | None = None,
         include_dismissed_repairs: bool | str | None = False,
+        config_entry_id: str | None = None,
+        device_id: str | None = None,
+        diagnostics_fields: list[str] | str | None = None,
+        diagnostics_truncate_at_bytes: int | str | None = None,
+        diagnostics_data_path: str | None = None,
+        diagnostics_data_offset: int | str | None = 0,
+        diagnostics_data_limit: int | str | None = None,
     ) -> dict[str, Any]:
         """
-        Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
+        Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 
         Returns health check results from integrations, system resources, and connectivity.
         Available information varies by installation type and loaded integrations.
@@ -355,8 +368,50 @@ class SystemTools:
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
+          - "diagnostics": Per-integration diagnostics dump — integration-defined JSON
+            (commonly includes redacted config, device list, state snapshots; exact
+            top-level keys vary by integration). REQUIRES ``config_entry_id``. The
+            canonical artifact users grab via Settings → Devices & Services →
+            [integration] → ⋯ → Download diagnostics. Use this when triaging integration
+            bugs or filing ``ha_report_issue`` for a specific integration. Payloads can
+            be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with
+            ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM
+            context budget.
           - Example: include="repairs,zha_network,zwave_network"
+          - Example: include="diagnostics", config_entry_id="abc123..."
         - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
+        - config_entry_id: Required when ``include`` contains ``diagnostics``. The config
+          entry ID of the integration (find via ``ha_get_integration``).
+        - device_id: Optional. When set with ``include=diagnostics``, returns the
+          device-scoped diagnostics dump for that specific device under the integration
+          (rather than the full integration dump). Some integrations only expose
+          config-entry-level dumps; others expose both.
+        - diagnostics_fields: Optional list of top-level keys to keep from the
+          diagnostics ``data`` payload (e.g. ``["home_assistant", "issues"]``). Accepts
+          a JSON list or comma-separated string. Only applies with ``include=diagnostics``.
+        - diagnostics_truncate_at_bytes: Optional byte cap on the serialized
+          diagnostics payload (post-projection / post-data_path). On hit,
+          drops ``data`` and emits ``truncated=true``, ``bytes_total``,
+          ``byte_cap``, plus ``available_fields`` (when the capped value
+          is a dict). Only applies when ``include`` contains ``diagnostics``.
+          Recommended starting point: 20000 bytes.
+        - diagnostics_data_path: Optional dotted path into the diagnostics
+          ``data`` sub-tree (e.g. ``"data.devices"`` for ZHA per-device records).
+          Walks into the post-fields payload. Resolution failures replace
+          ``data`` with ``null`` and surface ``data_path_error``. Only applies
+          when ``include`` contains ``diagnostics``.
+        - diagnostics_data_offset / diagnostics_data_limit: Pagination on
+          list-valued ``diagnostics_data_path`` results. When ``data_limit``
+          is set and the resolved path is a list, ``data`` becomes
+          ``{"path", "items", "offset", "limit", "total", "has_more"}``. Only
+          applies when ``include`` contains ``diagnostics``.
+
+          Example workflow (walk a list-valued sub-tree one page at a time;
+          the exact ``data_path`` varies by integration version):
+          ``ha_get_system_health(include="diagnostics", config_entry_id="abc",
+          diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10)``
+          → inspect the page envelope's ``total`` / ``has_more`` → repeat
+          with ``diagnostics_data_offset=10`` for the next slice.
         """
         includes = self._parse_includes(include)
         include_dismissed_repairs_bool = bool(
@@ -373,10 +428,18 @@ class SystemTools:
             ws_client, result = await self._fetch_health_info()
 
             # Warn about unrecognized include values
-            VALID_INCLUDES = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
+            VALID_INCLUDES = {
+                "repairs",
+                "zha_network",
+                "zha_network_full",
+                "zwave_network",
+                "diagnostics",
+            }
             unknown = includes - VALID_INCLUDES
             if unknown:
-                result["warning"] = f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+                result.setdefault("warnings", []).append(
+                    f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+                )
 
             # Fetch optional sections concurrently. The ws_client serialises
             # outgoing writes via its internal `_send_lock`, but per-message
@@ -461,6 +524,81 @@ class SystemTools:
                         }
                     else:
                         result[section_name] = section_result
+
+            # Diagnostics-related coercions live outside the includes branch
+            # so the orphan-args warning at the ``elif`` after the
+            # ``if "diagnostics" in includes`` block (see below) can see
+            # canonicalised values — passing ``diagnostics_data_offset=20``
+            # without ``include=diagnostics`` would otherwise slip past the gate.
+            fields_list = parse_diagnostics_fields(diagnostics_fields)
+            truncate_bytes = coerce_int_param(
+                diagnostics_truncate_at_bytes,
+                "diagnostics_truncate_at_bytes",
+                default=None,
+                min_value=1,
+            )
+            data_offset_int = coerce_int_param(
+                diagnostics_data_offset,
+                "diagnostics_data_offset",
+                default=0,
+                min_value=0,
+            )
+            data_limit_int = coerce_int_param(
+                diagnostics_data_limit,
+                "diagnostics_data_limit",
+                default=None,
+                min_value=1,
+            )
+            # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
+            # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
+            # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
+            # downstream. Mirrors the coerce_int_param guards above.
+            if diagnostics_data_path is not None and not isinstance(
+                diagnostics_data_path, str
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "diagnostics_data_path must be a string, got "
+                        f"{type(diagnostics_data_path).__name__}",
+                        context={"parameter": "diagnostics_data_path"},
+                    )
+                )
+
+            if "diagnostics" in includes:
+                # ``fetch_integration_diagnostics`` carries the empty-id guard
+                # (returns {"config_entry_id": ..., "error": ...}); calling it
+                # unconditionally keeps the missing-id error shape consistent
+                # with the populated path instead of returning a bare
+                # ``{"error": ...}`` sub-dict on the inline branch. Forward
+                # ``config_entry_id`` as-is (None / "") so the helper's echo
+                # field reflects what the caller actually passed.
+                result["diagnostics"] = await fetch_integration_diagnostics(
+                    self._client,
+                    config_entry_id,
+                    device_id,
+                    fields=fields_list,
+                    truncate_at_bytes=truncate_bytes,
+                    data_path=diagnostics_data_path,
+                    data_offset=data_offset_int,
+                    data_limit=data_limit_int,
+                )
+            elif (
+                config_entry_id
+                or device_id
+                or diagnostics_fields is not None
+                or diagnostics_truncate_at_bytes is not None
+                or diagnostics_data_path is not None
+                or diagnostics_data_limit is not None
+                or data_offset_int > 0
+            ):
+                result.setdefault("warnings", []).append(
+                    "config_entry_id, device_id, diagnostics_fields, "
+                    "diagnostics_truncate_at_bytes, diagnostics_data_path, "
+                    "diagnostics_data_offset, and/or diagnostics_data_limit "
+                    "were provided but ignored because 'diagnostics' is not "
+                    "in include"
+                )
 
             return result
 

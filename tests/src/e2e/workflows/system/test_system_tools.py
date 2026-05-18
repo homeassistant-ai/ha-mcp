@@ -582,10 +582,12 @@ class TestSystemTools:
             else:
                 pytest.fail(f"Get system health with unknown include failed: {error_msg}")
 
-        assert "warning" in data, "Unknown include value should produce a warning"
-        assert "bogus_section" in data["warning"], "Warning should mention the unknown section"
+        assert "warnings" in data, "Unknown include value should produce a warnings entry"
+        assert any(
+            "bogus_section" in w for w in data["warnings"]
+        ), "Warnings should mention the unknown section"
 
-        logger.info(f"Unknown include warning: {data['warning']}")
+        logger.info(f"Unknown include warnings: {data['warnings']}")
 
 
 @pytest.mark.system
@@ -753,3 +755,67 @@ class TestSystemToolsIntegration:
             assert not_found, "Test notification should be dismissed"
 
         logger.info("Notification lifecycle test completed successfully")
+
+
+class TestGetSystemHealthDiagnosticsE2E:
+    """E2E coverage for include='diagnostics' on ha_get_system_health."""
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_without_config_entry_id_returns_error_subdict(
+        self, mcp_client
+    ):
+        """include='diagnostics' without config_entry_id returns an error inside
+        result['diagnostics'] — the outer call still succeeds (matches the
+        repairs/zha_network embed pattern)."""
+        logger.info("Testing include='diagnostics' without config_entry_id...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "diagnostics"}
+        )
+        data = parse_mcp_result(result)
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Outer call should succeed; got: {error_msg}")
+        assert "diagnostics" in data, "Missing 'diagnostics' sub-dict"
+        diag = data["diagnostics"]
+        assert "error" in diag, f"Expected error in diagnostics sub-dict, got: {diag}"
+        assert "config_entry_id" in diag["error"]
+        assert "ha_get_integration" in diag["error"]
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_with_config_entry_id_returns_subdict(
+        self, mcp_client
+    ):
+        """include='diagnostics' + a real config_entry_id returns either a
+        populated data payload or a graceful 404 error — same contract as the
+        helper test."""
+        logger.info("Locating a config entry to probe diagnostics on...")
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        list_data = parse_mcp_result(list_result)
+        entries = list_data.get("entries") or list_data.get("results") or []
+        if not entries:
+            pytest.skip("No config entries loaded in test container")
+        entry_id = entries[0].get("entry_id")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health",
+            {"include": "diagnostics", "config_entry_id": entry_id},
+        )
+        data = parse_mcp_result(result)
+        if not data.get("success"):
+            error_msg = str(data.get("error", ""))
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Outer call should succeed; got: {error_msg}")
+        assert "diagnostics" in data
+        diag = data["diagnostics"]
+        assert diag.get("config_entry_id") == entry_id
+        has_data = "data" in diag
+        has_error = "error" in diag
+        assert has_data ^ has_error, (
+            f"Diagnostics sub-dict should have exactly one of 'data' or 'error'. Got: {diag}"
+        )

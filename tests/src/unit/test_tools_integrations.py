@@ -820,3 +820,282 @@ class TestDeleteHelpersIntegrations:
         assert "sensor.energy_offpeak" in result["warning"]
         assert "sensor.energy_peak" not in result["warning"]
         assert mock_wait.await_count == 2
+
+
+class TestGetIntegrationDiagnostics:
+    """Wire-up tests for ha_get_integration's include_diagnostics/device_id branch."""
+
+    @pytest.mark.asyncio
+    async def test_include_diagnostics_attaches_helper_result(self) -> None:
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        diag_payload = {
+            "config_entry_id": "entry_abc",
+            "data": {"home_assistant": {"version": "2026.5.0"}},
+        }
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(return_value=diag_payload),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                entry_id="entry_abc", include_diagnostics=True
+            )
+        assert result["diagnostics"] == diag_payload
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=None,
+            truncate_at_bytes=None,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_device_id_forwarded_to_helper(self) -> None:
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_integration(
+                entry_id="entry_abc",
+                include_diagnostics=True,
+                device_id="dev_xyz",
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            "dev_xyz",
+            fields=None,
+            truncate_at_bytes=None,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_device_id_without_include_surfaces_warning(self) -> None:
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                entry_id="entry_abc",
+                include_diagnostics=False,
+                device_id="dev_xyz",
+            )
+        mock_fetch.assert_not_awaited()
+        assert "diagnostics" not in result
+        assert "warnings" in result
+        assert any(
+            "device_id" in w and "ignored" in w for w in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_include_diagnostics_false_omits_call(self) -> None:
+        """The diagnostics helper must not run when the flag is off."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                entry_id="entry_abc", include_diagnostics=False
+            )
+        mock_fetch.assert_not_awaited()
+        assert "diagnostics" not in result
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_list_mode_with_diagnostics_args_surfaces_warning(self) -> None:
+        """include_diagnostics or device_id without entry_id (list mode) surfaces a warning."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        list_payload = {"entries": [], "count": 0}
+        with patch.object(
+            IntegrationTools,
+            "_list_entries",
+            new=AsyncMock(return_value=list_payload),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                include_diagnostics=True, device_id="dev_xyz"
+            )
+        mock_fetch.assert_not_awaited()
+        assert "warnings" in result
+        assert any(
+            "entry_id was not set" in w for w in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_fields_and_truncate_forwarded(self) -> None:
+        """Tool surfaces ``diagnostics_fields`` + ``diagnostics_truncate_at_bytes``."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_integration(
+                entry_id="entry_abc",
+                include_diagnostics=True,
+                diagnostics_fields='["home_assistant", "issues"]',
+                diagnostics_truncate_at_bytes=15000,
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=["home_assistant", "issues"],
+            truncate_at_bytes=15000,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_data_path_and_pagination_forwarded(self) -> None:
+        """Tool surfaces ``diagnostics_data_path`` + offset/limit on the
+        single-entry path."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_get_single_entry",
+            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_integration(
+                entry_id="entry_abc",
+                include_diagnostics=True,
+                diagnostics_data_path="data.devices",
+                diagnostics_data_offset="5",
+                diagnostics_data_limit="10",
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=None,
+            truncate_at_bytes=None,
+            data_path="data.devices",
+            data_offset=5,
+            data_limit=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_mode_warns_on_data_path_too(self) -> None:
+        """``diagnostics_data_path`` / ``diagnostics_data_limit`` in list mode
+        are also caught by the orphan-args parity warning."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_list_entries",
+            new=AsyncMock(return_value={"entries": [], "count": 0}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                diagnostics_data_path="data.devices",
+                diagnostics_data_limit=10,
+            )
+        mock_fetch.assert_not_awaited()
+        assert any(
+            "diagnostics_data_path" in w for w in result.get("warnings", [])
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_mode_warns_on_diagnostics_fields_too(self) -> None:
+        """Passing ``diagnostics_fields`` in list mode is also ignored, with warning."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_list_entries",
+            new=AsyncMock(return_value={"entries": [], "count": 0}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                diagnostics_fields=["home_assistant"],
+            )
+        mock_fetch.assert_not_awaited()
+        assert any(
+            "diagnostics_fields" in w for w in result.get("warnings", [])
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_mode_warns_on_data_offset_alone(self) -> None:
+        """Pure ``diagnostics_data_offset > 0`` (no other diagnostics args)
+        in list mode triggers the orphan-args warning — guards the
+        ``data_offset_int > 0`` term in the predicate. A regression that
+        drops the term would silently swallow the orphan offset."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_list_entries",
+            new=AsyncMock(return_value={"entries": [], "count": 0}),
+        ), patch(
+            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_integration(
+                diagnostics_data_offset=5,
+            )
+        mock_fetch.assert_not_awaited()
+        assert any(
+            "diagnostics_data_offset" in w for w in result.get("warnings", [])
+        )
+
+    @pytest.mark.asyncio
+    async def test_data_path_non_string_rejected_with_validation_error(self) -> None:
+        """Non-string ``diagnostics_data_path`` (dict / list / int) surfaces
+        as ``VALIDATION_INVALID_PARAMETER`` instead of leaking ``INTERNAL_ERROR``
+        from the resolver's ``.strip()`` call downstream. Pins the
+        ``isinstance(str)`` type-guard."""
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_integration(
+                entry_id="entry_abc",
+                include_diagnostics=True,
+                diagnostics_data_path={"not": "a string"},  # type: ignore[arg-type]
+            )
+        err_payload = json.loads(str(excinfo.value))
+        assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "diagnostics_data_path" in err_payload["error"]["message"]
