@@ -63,17 +63,24 @@ jobs:
 
       - name: Compute image cache key
         id: key
-        # MUST match haos-e2e-tests.yml's cache-key formula exactly so
-        # both workflows share the same actions/cache entry. Any drift
-        # here means the inaddon job re-bakes from scratch every run.
+        # Distinct ``-inaddon`` suffix from haos-e2e-tests.yml's cache
+        # key. The inaddon tier requires the bake-installed dev addon
+        # to be present in the qcow2, but the GHCR ``:HAOS_VERSION-latest``
+        # tag the external tier falls back to is published from master
+        # and doesn't yet include the addon. Sharing the cache would
+        # let an external-tier run save a GHCR-served (addon-less)
+        # qcow2 into the cache, breaking inaddon for everyone hitting
+        # that cache.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
             tests/initial_test_state \
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy/mcp_proxy \
+            homeassistant-addon \
+            homeassistant-addon-dev \
             | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
+          echo "cache-key=haos-image-inaddon-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore image from cache
         id: restore-cache
@@ -96,27 +103,18 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Try pulling from GHCR
-        if: steps.restore-cache.outputs.cache-hit != 'true'
-        id: ghcr-pull
-        continue-on-error: true
-        run: |
-          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
-          tag="${IMAGE_REPO}:${version}-latest"
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
-            -u ${{ github.actor }} --password-stdin
-          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
-            | tar -xz -C /tmp oras
-          mkdir -p /tmp/haos-pull
-          (cd /tmp/haos-pull && /tmp/oras pull "$tag")
-          mv /tmp/haos-pull/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
+      # No GHCR fallback for the inaddon tier: GHCR's ``:HAOS_VERSION-latest``
+      # tag is published from master by build-haos-test-image.yml, but the
+      # addon-install bake step lives on this PR branch. Until the PR
+      # lands and the publish workflow re-bakes, GHCR doesn't have an
+      # inaddon-ready image. Cache miss here always means local build.
 
-      - name: Install build-script Python deps (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Install build-script Python deps (cache miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Build image locally (cache miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
