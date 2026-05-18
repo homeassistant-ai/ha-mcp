@@ -17,7 +17,9 @@ sys.modules["homeassistant.components"] = homeassistant.components
 sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
 sys.modules["homeassistant.core"] = homeassistant.core
 sys.modules["homeassistant.helpers"] = homeassistant.helpers
-sys.modules["homeassistant.helpers.config_validation"] = homeassistant.helpers.config_validation
+sys.modules["homeassistant.helpers.config_validation"] = (
+    homeassistant.helpers.config_validation
+)
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
     _THREAD_LOCAL,

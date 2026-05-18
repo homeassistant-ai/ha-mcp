@@ -417,9 +417,7 @@ def _build_edit_yaml_config_handler(hass):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_name = normalized.replace(os.sep, "_")
                 backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
-                await hass.async_add_executor_job(
-                    backup_file.write_text, raw_content
-                )
+                await hass.async_add_executor_job(backup_file.write_text, raw_content)
                 backup_path_str = str(backup_file.relative_to(config_dir))
                 _LOGGER.info("Backup created: %s", backup_path_str)
 
@@ -457,7 +455,9 @@ def _build_edit_yaml_config_handler(hass):
                 if action == "add":
                     if url_path in dashboards:
                         existing = dashboards[url_path]
-                        if isinstance(existing, dict) and isinstance(parsed_content, dict):
+                        if isinstance(existing, dict) and isinstance(
+                            parsed_content, dict
+                        ):
                             existing.update(parsed_content)
                         else:
                             return {
@@ -493,9 +493,13 @@ def _build_edit_yaml_config_handler(hass):
                     if yaml_key in data:
                         existing = data[yaml_key]
                         # Merge: list extends list, dict merges dict
-                        if isinstance(existing, list) and isinstance(parsed_content, list):
+                        if isinstance(existing, list) and isinstance(
+                            parsed_content, list
+                        ):
                             data[yaml_key] = existing + parsed_content
-                        elif isinstance(existing, dict) and isinstance(parsed_content, dict):
+                        elif isinstance(existing, dict) and isinstance(
+                            parsed_content, dict
+                        ):
                             existing.update(parsed_content)
                         else:
                             return {
