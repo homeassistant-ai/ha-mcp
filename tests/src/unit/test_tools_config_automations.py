@@ -157,7 +157,8 @@ class TestPythonTransformAutomationIdKey:
 
         assert result["success"] is True
         assert result["action"] == "python_transform"
-        assert result["identifier"] == "abc123unique"
+        assert "identifier" not in result
+        assert "unique_id" not in result
         assert result["automation_id"] == "automation.morning_routine"
 
     async def test_falls_back_to_entity_id_input_when_upsert_omits_it(
@@ -214,7 +215,12 @@ class TestDeleteAutomationIdKey:
     """
 
     async def test_returns_resolved_entity_id_when_input_is_unique_id(self, tools):
-        """unique_id input → automation_id = resolved entity_id from registry."""
+        """unique_id input → automation_id = resolved entity_id from registry.
+
+        Also pins the "single canonical typed key" shape — the spread of the
+        underlying ``delete_automation_config`` result must not leak the
+        legacy ``identifier`` / ``unique_id`` echo keys into the response.
+        """
         result = await tools.ha_config_remove_automation(
             identifier="abc123unique", wait=False
         )
@@ -222,6 +228,8 @@ class TestDeleteAutomationIdKey:
         assert result["success"] is True
         assert result["action"] == "delete"
         assert result["automation_id"] == "automation.morning_routine"
+        assert "identifier" not in result
+        assert "unique_id" not in result
 
     async def test_returns_input_when_input_is_entity_id(self, tools):
         """entity_id input → automation_id == identifier (resolver short-circuit)."""

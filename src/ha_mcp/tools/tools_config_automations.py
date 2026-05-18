@@ -668,13 +668,18 @@ class AutomationConfigTools:
                 response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
-                    "identifier": identifier,
                     "automation_id": entity_id or identifier,
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
                     # Merge upsert result, excluding "success" (we set it ourselves)
-                    **{k: v for k, v in result.items() if k != "success"},
+                    # plus the now-redundant identifier/unique_id echo keys
+                    # — automation_id is the single canonical-with-fallback typed key.
+                    **{
+                        k: v
+                        for k, v in result.items()
+                        if k not in ("success", "identifier", "unique_id")
+                    },
                 }
                 if bp_warnings:
                     response["best_practice_warnings"] = bp_warnings
@@ -766,7 +771,8 @@ class AutomationConfigTools:
 
             return {
                 "success": True,
-                **result,
+                "automation_id": entity_id or identifier,
+                **{k: v for k, v in result.items() if k not in ("identifier", "unique_id")},
             }
 
         except ToolError:
@@ -1048,8 +1054,8 @@ class AutomationConfigTools:
             return {
                 "success": True,
                 "action": "delete",
-                **result,
                 "automation_id": entity_id_for_wait or identifier,
+                **{k: v for k, v in result.items() if k not in ("identifier", "unique_id")},
             }
         except ToolError:
             raise
