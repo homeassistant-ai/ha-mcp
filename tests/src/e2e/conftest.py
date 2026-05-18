@@ -525,7 +525,7 @@ def _install_custom_component(
     if storage_file.exists():
         data = json.loads(storage_file.read_text())
         entries = data.get("data", {}).get("entries", [])
-        if not any(e.get("domain") == domain for e in entries):
+        if not any(isinstance(e, dict) and e.get("domain") == domain for e in entries):
             entries.append(
                 {
                     "created_at": "2025-09-07T23:56:28.040744+00:00",
@@ -650,7 +650,7 @@ def _snapshot_config_entries(base_url: str, headers: dict[str, str]) -> tuple[in
         if not isinstance(entries, list):
             return 0, 0
         total = len(entries)
-        loaded = sum(1 for e in entries if e.get("state") == "loaded")
+        loaded = sum(1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded")
         return loaded, total
     except (_requests.exceptions.RequestException, json.JSONDecodeError):
         return 0, 0
@@ -819,11 +819,11 @@ def _dump_ha_readiness_diagnostics(
         if entries_resp.status_code == 200:
             entries = entries_resp.json()
             entry_domains = sorted(
-                {e.get("domain") for e in entries if e.get("domain")}
+                {e.get("domain") for e in entries if isinstance(e, dict) and e.get("domain")}
             )
             if config_entry_domain:
                 matching = [
-                    e for e in entries if e.get("domain") == config_entry_domain
+                    e for e in entries if isinstance(e, dict) and e.get("domain") == config_entry_domain
                 ]
                 if matching:
                     for entry in matching:
