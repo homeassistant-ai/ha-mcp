@@ -14,6 +14,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import (
@@ -747,7 +748,12 @@ class AutomationConfigTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Automation verification failed for {entity_id} "
+                        f"({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Automation {'created' if identifier is None else 'updated'} but verification failed: {e}"
                     )
@@ -1041,7 +1047,12 @@ class AutomationConfigTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Automation removal verification failed for "
+                        f"{entity_id_for_wait} ({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
