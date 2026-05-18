@@ -529,7 +529,11 @@ class HomeAssistantClient:
         ``get_error_log``) keep their pre-supervised behavior on probe
         failure, never inheriting a probe-side exception.
         """
-        if self._supervised_detected is True:
+        # getattr fallback so test fixtures that patch __init__ to a no-op
+        # (see tests/src/unit/test_tools_utility_supervisor_logs.py::mock_client)
+        # don't trip an AttributeError. Real instantiation always sets it
+        # to None in __init__.
+        if getattr(self, "_supervised_detected", None) is True:
             return True
         try:
             config = await self._request("GET", "/config")
