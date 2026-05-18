@@ -745,7 +745,6 @@ class AutomationConfigTools:
                             f"Automation {'created' if identifier is None else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
@@ -1044,7 +1043,6 @@ class AutomationConfigTools:
                             f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
