@@ -5,8 +5,12 @@ session fixtures) and ``tests/src/haos_e2e/conftest.py`` (for the
 HAOS-only canary suite). Keeping the QEMU lifecycle + HA login-flow
 code in one place avoids drift between the two backends.
 
-Stdlib-only on purpose so this module imports cleanly without
-requiring the build-script's websockets dep.
+Mostly stdlib — ``websockets`` is required for the inaddon-tier
+Supervisor API helper (#1349 item 7). The Supervisor's ``addons/{slug}/update``
+endpoint isn't in HA Core's REST PATHS_ADMIN allowlist, so triggering
+an addon update from outside the addon container requires the HA Core
+WebSocket API's ``supervisor/api`` command. ``websockets`` is already
+a project test dep (used by ``build_image.py`` for the same reason).
 """
 
 from __future__ import annotations
@@ -545,3 +549,66 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             )
             proc.kill()
             proc.wait()
+
+
+def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.0) -> None:
+    """Trigger Supervisor's ``addons/{slug}/update`` for the dev addon.
+
+    The cached qcow2 ships with the addon installed at the bake-time
+    source version; ``refresh_dev_addon_source_in_qcow2`` has just
+    overwritten ``/addons/local/ha_mcp_dev/`` with the PR's source and
+    bumped the addon's ``config.yaml`` version. Asking Supervisor to
+    update detects the new version, rebuilds the addon's Docker image
+    (Docker layer cache → only COPY src/ + uv-sync-project layers
+    re-execute), and restarts the container — no HA Core reboot.
+
+    Uses the HA Core WebSocket API's ``supervisor/api`` command because
+    ``addons/{slug}/update`` is NOT in HA Core's REST PATHS_ADMIN
+    allowlist (HAOS source verified: ``hassio/http.py:PATHS_ADMIN`` only
+    covers logs/changelog/documentation/backups). Same mechanism as
+    ``build_image.py``'s ``HAWebSocket.supervisor_api``.
+    """
+    import websockets.sync.client
+
+    ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+    LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
+    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+        # Auth handshake: HA sends auth_required, client sends auth, HA replies auth_ok.
+        ws.recv()  # auth_required
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        # Trigger the update. ``backup=false`` skips Supervisor's pre-update
+        # snapshot (saves ~30s, irrelevant for CI).
+        ws.send(json.dumps({
+            "id": msg_id,
+            "type": "supervisor/api",
+            "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update",
+            "method": "post",
+            "timeout": timeout,
+            "data": {"backup": False},
+        }))
+        # Supervisor's update call blocks until Docker rebuild finishes.
+        # ``timeout`` here is the WS-side budget; the HA Core relay may
+        # need its own larger budget under heavy layer-rebuild load.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/update failed: "
+                    f"{resp.get('error')}"
+                )
+            LOG.info("Dev addon update completed via Supervisor WS")
+            return
+        raise TimeoutError(
+            f"Supervisor addon update did not complete within {timeout}s"
+        )
