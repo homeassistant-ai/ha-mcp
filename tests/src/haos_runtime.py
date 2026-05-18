@@ -560,7 +560,7 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
 
 
 def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.0) -> None:
-    """Trigger Supervisor's ``addons/{slug}/update`` for the dev addon.
+    """Trigger Supervisor's ``addons/{slug}/update`` then start the dev addon.
 
     The cached qcow2 ships with the addon installed at the bake-time
     source version; ``refresh_dev_addon_source_in_qcow2`` has just
@@ -568,7 +568,10 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
     bumped the addon's ``config.yaml`` version. Asking Supervisor to
     update detects the new version, rebuilds the addon's Docker image
     (Docker layer cache → only COPY src/ + uv-sync-project layers
-    re-execute), and restarts the container — no HA Core reboot.
+    re-execute) — but does NOT auto-restart the container. We explicitly
+    call ``/start`` after update completes; without this, the addon ends
+    up in Supervisor's ``boot_fail`` state with the new image built but
+    never running (verified at CI run 26046741970 supervisor log).
 
     Uses the HA Core WebSocket API's ``supervisor/api`` command because
     ``addons/{slug}/update`` is NOT in HA Core's REST PATHS_ADMIN
@@ -615,8 +618,39 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
                     f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/update failed: "
                     f"{resp.get('error')}"
                 )
-            LOG.info("Dev addon update completed via Supervisor WS")
+            LOG.info("Dev addon update completed via Supervisor WS; starting addon")
+            break
+        else:
+            raise TimeoutError(
+                f"Supervisor addon update did not complete within {timeout}s"
+            )
+
+        # Explicit start after update — Supervisor leaves the addon in
+        # boot_fail state otherwise, with the new image built but no
+        # running container. See docstring for the CI log evidence.
+        msg_id = 2
+        ws.send(json.dumps({
+            "id": msg_id,
+            "type": "supervisor/api",
+            "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start",
+            "method": "post",
+            "timeout": 120,
+        }))
+        start_deadline = time.monotonic() + 120
+        while time.monotonic() < start_deadline:
+            raw = ws.recv(timeout=max(start_deadline - time.monotonic(), 1.0))
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"supervisor/api addons/{HA_MCP_DEV_ADDON_SLUG}/start failed: "
+                    f"{resp.get('error')}"
+                )
+            LOG.info("Dev addon started via Supervisor WS")
             return
         raise TimeoutError(
-            f"Supervisor addon update did not complete within {timeout}s"
+            "Supervisor addon start did not complete within 120s"
         )
