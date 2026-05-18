@@ -106,6 +106,9 @@ When implementing features or debugging, consult these resources:
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
+
+**Triage-state labels** (applied by `gemini-triage.yml` or manual triage):
+
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
@@ -115,6 +118,35 @@ When implementing features or debugging, consult these resources:
 | `triaged` | Automated Gemini triage complete |
 | `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
+
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+
+| Label | Meaning |
+|-------|---------|
+| `runtime-bug` | Bug occurring during normal operation (post-startup) |
+| `startup-bug` | Bug during startup, install, or connect |
+| `agent-behavior` | AI agent behavior or workflow feedback (tool selection, prompt drift, etc.) |
+
+**Scope labels** (manually applied during triage; orthogonal to bug-class — an issue can carry both `runtime-bug` AND a scope marker):
+
+| Label | Meaning |
+|-------|---------|
+| `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
+| `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
+
+**Lifecycle labels** (manually applied; do not double as close-reasons):
+
+| Label | Meaning |
+|-------|---------|
+| `wontfix` | Issue is valid but will not be addressed. Typically used when closing an issue to record the rejection rationale. |
+| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, a pending design decision). Recorded so a sweeper search can find what's waiting |
+
+**Tracking / automation labels** (applied by tooling):
+
+| Label | Meaning |
+|-------|---------|
+| `python-upgrade` | Auto-attached to every Renovate-managed PR (including non-Python dependency updates) via `renovate.json` global `labels` array. |
 
 ### Issue Analysis Workflow
 
