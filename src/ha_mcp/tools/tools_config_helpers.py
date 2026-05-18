@@ -1473,8 +1473,8 @@ async def _apply_registry_updates_to_entity(
     elif cat_result is not None:
         if "category" in cat_result:
             applied["category"] = cat_result["category"]
-        elif "category_warning" in cat_result:
-            warnings.append(f"{entity_id}: {cat_result['category_warning']}")
+        elif cat_result.get("warnings"):
+            warnings.extend(f"{entity_id}: {w}" for w in cat_result["warnings"])
 
     return applied
 
@@ -2864,7 +2864,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Apply category via shared helper (consistent with automations/scripts).
                     # Issue #1293: route the success/failure through ``cat_result`` so any
-                    # ``category_warning`` lands in the top-level ``warnings`` list instead
+                    # category-apply failure lands in the top-level ``warnings`` list instead
                     # of leaking nested into ``helper_data``. Mirrors the precedent in
                     # ``_handle_flow_helper`` (the ``cat_result`` block near the end of
                     # ``_apply_registry_updates_to_entity``).
@@ -2880,8 +2880,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                         if "category" in cat_result:
                             helper_data["category"] = cat_result["category"]
-                        elif "category_warning" in cat_result:
-                            warnings.append(cat_result["category_warning"])
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
                     return _helper_response(
                         "create",
@@ -3495,7 +3495,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
 
                     # Apply category via shared helper. Issue #1293: route through
-                    # ``cat_result`` so any ``category_warning`` lands in the top-level
+                    # ``cat_result`` so any category-apply failure lands in the top-level
                     # ``warnings`` list instead of nested in ``updated_data``.
                     if category:
                         cat_result = {}
@@ -3509,8 +3509,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                         if "category" in cat_result:
                             updated_data["category"] = cat_result["category"]
-                        elif "category_warning" in cat_result:
-                            warnings.append(cat_result["category_warning"])
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
                 else:
                     # Fallback for unknown/future helper types: entity registry update only
@@ -3558,8 +3558,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                         if "category" in cat_result:
                             updated_data["category"] = cat_result["category"]
-                        elif "category_warning" in cat_result:
-                            warnings.append(cat_result["category_warning"])
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)

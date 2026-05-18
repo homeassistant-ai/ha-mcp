@@ -15,7 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 
 
 @pytest.fixture
@@ -415,6 +418,10 @@ class TestUniformResponseShape:
         warning to the top-level ``warnings`` list (mirrors the precedent in
         ``_handle_flow_helper``'s ``cat_result`` block in
         ``_apply_registry_updates_to_entity``).
+
+        Post-#1355: writer now appends directly to ``result_dict["warnings"]``
+        instead of setting singular ``category_warning``; the leak-check
+        assertions still hold (neither key should appear in ``data``).
         """
 
         async def ws_handler(msg: dict) -> dict:
@@ -434,7 +441,7 @@ class TestUniformResponseShape:
         async def fake_apply(
             client, entity_id, category, scope, result_dict, entity_type
         ):
-            result_dict["category_warning"] = (
+            result_dict.setdefault("warnings", []).append(
                 "Helper saved but failed to set category: forced failure"
             )
 
@@ -457,6 +464,9 @@ class TestUniformResponseShape:
         _assert_uniform_shape(result, expect_warnings=True)
         assert "category_warning" not in result["data"], (
             "category_warning leaked into data payload"
+        )
+        assert "warnings" not in result["data"], (
+            "warnings leaked into data payload — must stay top-level"
         )
         assert "category" not in result["data"], (
             "category should not be set in data when apply failed"
@@ -501,7 +511,7 @@ class TestUniformResponseShape:
         async def fake_apply(
             client, entity_id, category, scope, result_dict, entity_type
         ):
-            result_dict["category_warning"] = (
+            result_dict.setdefault("warnings", []).append(
                 "Helper saved but failed to set category: forced failure"
             )
 
@@ -525,6 +535,9 @@ class TestUniformResponseShape:
         _assert_uniform_shape(result, expect_warnings=True)
         assert "category_warning" not in result["data"], (
             "category_warning leaked into data payload"
+        )
+        assert "warnings" not in result["data"], (
+            "warnings leaked into data payload — must stay top-level"
         )
         assert "category" not in result["data"], (
             "category should not be set in data when apply failed"
@@ -560,3 +573,424 @@ class TestUniformResponseShape:
         )
         assert isinstance(result.get("warnings"), list)
         assert any("not yet queryable" in w for w in result["warnings"])
+
+
+def _assert_warnings_list_shape(result: dict[str, Any]) -> None:
+    """Cross-cutting warnings-list contract for lifecycle-write tools (#1332).
+
+    Tighter than ``_assert_uniform_shape`` for the warnings half: applies to
+    any successful tool response, regardless of payload-wrapper key.
+
+    - ``success`` is True
+    - ``warnings`` is a non-empty ``list[str]`` at the top level
+    - No singular ``warning`` string at the top level (legacy shape)
+    - ``warnings`` does not leak into any nested dict value (no
+      ``"data": {"warnings": [...]}`` or ``"result": {"warnings": [...]}``
+      nesting pattern that pre-#1332 callers had to chase)
+    """
+    assert result["success"] is True
+    assert "warning" not in result, (
+        "singular 'warning' key must not appear at top level"
+    )
+    assert isinstance(result.get("warnings"), list), (
+        f"warnings missing or not a list: {result.get('warnings')!r}"
+    )
+    assert all(isinstance(w, str) for w in result["warnings"]), (
+        f"non-string warning entries: {result['warnings']!r}"
+    )
+    assert result["warnings"], "warnings list present but empty"
+    # Defence against re-introduction of nested warning bags: scan every
+    # dict-typed top-level value for ``warnings`` / ``warning`` keys.
+    # ``validation`` is the intentional reference-validator metadata bag
+    # (``merge_validation_meta`` — separate concern from #1332's lifecycle
+    # warnings) and is whitelisted from the leak check.
+    nested_warnings_whitelist = {"validation"}
+    for key, value in result.items():
+        if key == "warnings" or key in nested_warnings_whitelist:
+            continue
+        if isinstance(value, dict):
+            assert "warnings" not in value, (
+                f"warnings leaked into nested '{key}': must stay top-level"
+            )
+            assert "warning" not in value, (
+                f"singular 'warning' leaked into nested '{key}'"
+            )
+
+
+class TestLifecycleWriteWarningsShape:
+    """Cross-cutting shape regression for the 4 lifecycle-write families
+    migrated under #1332. Asserts the warnings-list contract holds on
+    every emission path that landed in #1337-#1340 (now consolidated into #1340).
+
+    Per the narrow exception tuple decision (#1340 thread with kingpanther13):
+    only HomeAssistantConnectionError and HomeAssistantAuthError propagate
+    from wait_for_entity_registered / wait_for_entity_removed to the call
+    sites — TimeoutError returns False (handled separately), HomeAssistantAPIError
+    is fully swallowed by the helpers (util_helpers.py:495-499 + :537-543).
+    Tests only the two exception types that actually reach the call sites.
+    """
+
+    # ------------------------------------------------------------------
+    # Per-family tool factories.
+    # Each returns a tools instance plus a mock client wired so the
+    # underlying write succeeds and only the wait-verification step
+    # raises (the codepath under test).
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def groups_tools(self):
+        from ha_mcp.tools.tools_groups import GroupTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock(return_value=None)
+        client.get_entity_state = AsyncMock(return_value={"state": "on"})
+        client.get_states = AsyncMock(return_value=[])
+        return GroupTools(client)
+
+    @pytest.fixture
+    def scripts_tools(self):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"script_id": "test_script"}
+        )
+        client.delete_script_config = AsyncMock(
+            return_value={"script_id": "test_script"}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "off", "entity_id": "script.test_script"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return ConfigScriptTools(client)
+
+    @pytest.fixture
+    def automations_tools(self):
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+
+        client = MagicMock()
+        client.upsert_automation_config = AsyncMock(
+            return_value={"entity_id": "automation.test_auto"}
+        )
+        client.delete_automation_config = AsyncMock(
+            return_value={"identifier": "automation.test_auto"}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "on", "entity_id": "automation.test_auto"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        # _resolve_automation_entity_id reads states; for entity_id input
+        # the short-circuit triggers and this is never consulted.
+        client.get_states = AsyncMock(return_value=[])
+        return AutomationConfigTools(client)
+
+    @pytest.fixture
+    def scenes_tools(self, monkeypatch):
+        from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
+
+        # Issue #1168 R3 blocker 1 sleep — zero it so registry-miss
+        # retry doesn't stretch the unit-test wall clock.
+        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+
+        client = MagicMock()
+        client.upsert_scene_config = AsyncMock(
+            return_value={"scene_id": "test_scene"}
+        )
+        client.delete_scene_config = AsyncMock(
+            return_value={"scene_id": "test_scene"}
+        )
+        client.resolve_scene_id = AsyncMock(
+            side_effect=lambda sid: sid.removeprefix("scene.")
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "state": "2026-05-18T00:00:00+00:00",
+                "entity_id": "scene.test_scene",
+            }
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        # _resolve_scene_entity_id: empty registry → falls back to
+        # f"scene.{scene_id}" which matches what wait_for_entity_registered
+        # is patched to receive.
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        return ConfigSceneTools(client)
+
+    # ------------------------------------------------------------------
+    # Groups: set + remove × 2 exception types
+    # ------------------------------------------------------------------
+
+    async def test_groups_set_connection_error_yields_top_level_warnings_list(
+        self, groups_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await groups_tools.ha_config_set_group(
+                object_id="test_group",
+                entities=["light.kitchen"],
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_groups_set_auth_error_yields_top_level_warnings_list(
+        self, groups_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await groups_tools.ha_config_set_group(
+                object_id="test_group",
+                entities=["light.kitchen"],
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_groups_remove_connection_error_yields_top_level_warnings_list(
+        self, groups_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_groups.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await groups_tools.ha_config_remove_group(
+                object_id="test_group",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    async def test_groups_remove_auth_error_yields_top_level_warnings_list(
+        self, groups_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_groups.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await groups_tools.ha_config_remove_group(
+                object_id="test_group",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    # ------------------------------------------------------------------
+    # Scripts: set + remove × 2 exception types
+    # ------------------------------------------------------------------
+
+    async def test_scripts_set_connection_error_yields_top_level_warnings_list(
+        self, scripts_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await scripts_tools.ha_config_set_script(
+                script_id="test_script",
+                config={"sequence": [{"delay": {"seconds": 1}}]},
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_scripts_set_auth_error_yields_top_level_warnings_list(
+        self, scripts_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await scripts_tools.ha_config_set_script(
+                script_id="test_script",
+                config={"sequence": [{"delay": {"seconds": 1}}]},
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_scripts_remove_connection_error_yields_top_level_warnings_list(
+        self, scripts_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await scripts_tools.ha_config_remove_script(
+                script_id="test_script",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    async def test_scripts_remove_auth_error_yields_top_level_warnings_list(
+        self, scripts_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await scripts_tools.ha_config_remove_script(
+                script_id="test_script",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    # ------------------------------------------------------------------
+    # Automations: set + remove × 2 exception types
+    # ------------------------------------------------------------------
+
+    async def test_automations_set_connection_error_yields_top_level_warnings_list(
+        self, automations_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await automations_tools.ha_config_set_automation(
+                config={
+                    "alias": "Test Auto",
+                    "trigger": [{"platform": "time", "at": "07:00:00"}],
+                    "action": [{"service": "light.turn_on"}],
+                },
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_automations_set_auth_error_yields_top_level_warnings_list(
+        self, automations_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await automations_tools.ha_config_set_automation(
+                config={
+                    "alias": "Test Auto",
+                    "trigger": [{"platform": "time", "at": "07:00:00"}],
+                    "action": [{"service": "light.turn_on"}],
+                },
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_automations_remove_connection_error_yields_top_level_warnings_list(
+        self, automations_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await automations_tools.ha_config_remove_automation(
+                identifier="automation.test_auto",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    async def test_automations_remove_auth_error_yields_top_level_warnings_list(
+        self, automations_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await automations_tools.ha_config_remove_automation(
+                identifier="automation.test_auto",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    # ------------------------------------------------------------------
+    # Scenes: set + remove × 2 exception types
+    # ------------------------------------------------------------------
+
+    async def test_scenes_set_connection_error_yields_top_level_warnings_list(
+        self, scenes_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scenes.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await scenes_tools.ha_config_set_scene(
+                scene_id="test_scene",
+                config={
+                    "name": "Test Scene",
+                    "entities": {"light.kitchen": {"state": "on"}},
+                },
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_scenes_set_auth_error_yields_top_level_warnings_list(
+        self, scenes_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scenes.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await scenes_tools.ha_config_set_scene(
+                scene_id="test_scene",
+                config={
+                    "name": "Test Scene",
+                    "entities": {"light.kitchen": {"state": "on"}},
+                },
+            )
+        _assert_warnings_list_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    async def test_scenes_remove_connection_error_yields_top_level_warnings_list(
+        self, scenes_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scenes.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await scenes_tools.ha_config_remove_scene(
+                scene_id="test_scene",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )
+
+    async def test_scenes_remove_auth_error_yields_top_level_warnings_list(
+        self, scenes_tools
+    ):
+        with patch(
+            "ha_mcp.tools.tools_config_scenes.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantAuthError("forced for test"),
+        ):
+            result = await scenes_tools.ha_config_remove_scene(
+                scene_id="test_scene",
+            )
+        _assert_warnings_list_shape(result)
+        assert any(
+            "removal verification failed" in w for w in result["warnings"]
+        )

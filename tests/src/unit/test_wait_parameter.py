@@ -102,7 +102,7 @@ class TestAutomationWaitParameter:
     async def test_set_automation_wait_timeout_adds_warning(
         self, register_tools, mock_client
     ):
-        """When wait times out, a warning is added to the response."""
+        """When wait times out, a warning is added to the top-level warnings list."""
         with patch(
             "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -116,7 +116,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert isinstance(result.get("warnings"), list) and result["warnings"]
+            assert any("not yet queryable" in w for w in result["warnings"])
 
     async def test_remove_automation_wait_default_true(
         self, register_tools, mock_client
@@ -200,7 +201,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert isinstance(result.get("warnings"), list) and result["warnings"]
+            assert any("verification failed" in w for w in result["warnings"])
 
 
 class TestScriptWaitParameter:
