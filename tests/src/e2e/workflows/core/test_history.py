@@ -637,7 +637,6 @@ class TestGetHistoryNegativeInputs:
         assert result["success"] is False
         assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
 
-    @pytest.mark.container_only
     async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
         """Offset pagination works for a single entity and returns correct metadata.
 
@@ -649,18 +648,17 @@ class TestGetHistoryNegativeInputs:
         ``sensor.home_temperature`` (which never existed in the seed) was the
         original cause of the silent skip flagged by #366.
 
-        Skipped on HAOS (tracked in #1349): the timestamp-refresh hook
-        (refresh_recorder_in_qcow2) runs and the UPDATEs land in the
-        on-disk DB (CI log: "Shifted recorder timestamps by +542375s"),
-        but the booted HA Core only surfaces the live state row — none of
-        the 10 seeded historical rows are visible to ha_get_history.
-        Suspect HAOS's recorder regenerates states_meta on first boot,
-        orphaning the seeded states.metadata_id FKs.
-
-        Re-enable on HAOS when ``SELECT COUNT(*) FROM states WHERE
-        metadata_id IN (SELECT metadata_id FROM states_meta)`` matches
-        the bake-time seed row count after boot — i.e. the FKs survive
-        first-boot recorder init.
+        Previously HAOS-skipped (#1349 hypothesis: states_meta orphan). The
+        real cause was diagnosed in PR #1361 from the inaddon diagnostics
+        artifact: ``refresh_recorder_in_qcow2`` left the workdir DB in WAL
+        mode with unsynced WAL frames, so the .db copy-in landed in the
+        qcow2 missing pages. HA Core's ``basic_sanity_check`` raised
+        ``sqlite3.DatabaseError: database disk image is malformed`` on
+        first boot and renamed the seed to ``.corrupt.<ts>`` before
+        starting with an empty DB — making the live state the only row
+        ha_get_history could surface. Fixed by checkpointing WAL and
+        switching to DELETE journal mode pre-UPDATE in
+        ``haos_runtime.refresh_recorder_in_qcow2``.
         """
         target = "input_number.e2e_pagination_seed"
         # First page: offset=0, limit=5

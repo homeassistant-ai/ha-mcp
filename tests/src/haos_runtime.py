@@ -132,6 +132,23 @@ def refresh_recorder_in_qcow2(
         }
         conn = sqlite3.connect(str(db_local))
         try:
+            # The bake's seed DB is in WAL journal mode. Our copy-in only
+            # ships the .db file (not -wal / -shm) into the qcow2, so any
+            # pending WAL frames written during our UPDATE would land in
+            # the workdir alongside the .db and never reach HAOS — HA Core
+            # then sees a .db whose page tree is mid-transaction, raises
+            # ``sqlite3.DatabaseError: database disk image is malformed``,
+            # and renames the seed to ``.corrupt.<ts>`` before booting with
+            # an empty fresh DB. (Captured in PR #1361 diagnostics: see
+            # /supervisor/homeassistant/home-assistant_v2.db.corrupt.*.)
+            #
+            # Fix: checkpoint any preexisting WAL into the main file, then
+            # switch this connection to DELETE mode so our UPDATEs write
+            # straight to .db with no journal artefacts. End state on disk:
+            # one self-contained .db file. HA Core will switch it back to
+            # WAL on first boot — its preferred mode.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("PRAGMA journal_mode=DELETE")
             newest = 0.0
             matched_columns = 0
             for table, cols in TIMESTAMP_COLUMNS.items():
