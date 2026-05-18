@@ -94,10 +94,14 @@ async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
         "ha_hacs_search", {"installed_only": True, "max_results": 1}
     )
     payload = parse_mcp_result(raw)
-    # ha_hacs_search returns success=True with results when HACS is loaded.
-    # If HACS isn't loaded, the tool surfaces a structured error containing
-    # an HACS-specific message (e.g. "HACS is not installed").
-    assert payload.get("success"), (
+    # ha_hacs_search wraps the payload as {"data": {"success": True, ...}}
+    # — the nested ``data`` envelope is the post-tool-formatter shape,
+    # and ``success`` lives inside it. If HACS isn't loaded, the tool
+    # raises ToolError (parse_mcp_result then surfaces it as
+    # {"success": False, "error": ...} at the top level), so we accept
+    # either shape and only fail when neither is present.
+    inner = payload.get("data", payload)
+    assert inner.get("success"), (
         f"HACS integration not reachable via ha_hacs_search — "
         f"bootstrap from 'Get HACS' addon may have silently failed. "
         f"Response: {payload}"
