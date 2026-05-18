@@ -45,9 +45,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Submodules required because bake_test_state stages
-          # custom_components/ha_mcp_tools (+ siblings) into the image —
-          # see haos-e2e-tests.yml for the same rationale.
+          # Required for tests/src/e2e/tools/test_skills_resources.py — the
+          # skills bundle lives at src/ha_mcp/resources/skills-vendor. Kept
+          # in parity with haos-e2e-tests.yml even though the publish bake
+          # itself doesn't touch the submodule, so the two checkout shapes
+          # don't drift.
           submodules: true
 
       - name: Install build dependencies
