@@ -579,12 +579,24 @@ def _wait_for_ha_mcp_tools_services(
     base_url: str,
     headers: dict[str, str],
     timeout: int,
-) -> bool:
+) -> tuple[bool, float, int]:
     """Poll ``/api/services`` for the ``ha_mcp_tools`` domain.
 
-    Returns True if the domain appears within ``timeout`` seconds, False
-    on timeout. The single caller lives in ``ha_container_with_fresh_config``;
-    the helper extraction is preserved so a future bounded retry (if a
+    Returns ``(ready, elapsed_s, domain_count)``:
+
+    - ``ready`` — True if the domain appears within ``timeout`` seconds,
+      False on timeout.
+    - ``elapsed_s`` — wall-clock seconds spent polling, float-precise
+      (matches the precision the other readiness gates emit).
+      Always populated, both on success and on timeout, so the caller can
+      ``_log_readiness_timing`` regardless of branch.
+    - ``domain_count`` — size of the registered-domain set when the
+      target domain appeared (0 on timeout / no-200-response). Surfaces
+      as the ``count=`` extra on the timing line, parity with the
+      ``components`` / ``entities`` gates.
+
+    The single caller lives in ``ha_container_with_fresh_config``; the
+    helper extraction is preserved so a future bounded retry (if a
     recoverable flake class surfaces in the dump) can re-use the same
     wait contract without duplicating the polling loop.
     """
@@ -601,16 +613,18 @@ def _wait_for_ha_mcp_tools_services(
             if svc_resp.status_code == 200:
                 domains = {s.get("domain") for s in svc_resp.json()}
                 if "ha_mcp_tools" in domains:
-                    elapsed = int(time.monotonic() - start_time)
-                    logger.info(f"✅ ha_mcp_tools services ready after {elapsed}s")
-                    return True
+                    elapsed_s = time.monotonic() - start_time
+                    logger.info(
+                        f"✅ ha_mcp_tools services ready after {elapsed_s:.2f}s"
+                    )
+                    return True, elapsed_s, len(domains)
         except (
             _requests.exceptions.RequestException,
             json.JSONDecodeError,
         ) as exc:
             logger.debug(f"ha_mcp_tools service check failed: {exc}")
         time.sleep(1)
-    return False
+    return False, time.monotonic() - start_time, 0
 
 
 def _dump_ha_readiness_diagnostics(
@@ -1232,9 +1246,22 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
         if ha_mcp_tools_src.exists():
             logger.info("⏳ Waiting for ha_mcp_tools services to register...")
-            if not _wait_for_ha_mcp_tools_services(
-                base_url, headers, HA_MCP_TOOLS_WAIT
-            ):
+            ha_mcp_ready, ha_mcp_elapsed, ha_mcp_domain_count = (
+                _wait_for_ha_mcp_tools_services(
+                    base_url, headers, HA_MCP_TOOLS_WAIT
+                )
+            )
+            if ha_mcp_ready:
+                # Success-only emit, parity with the other four readiness
+                # gates above (components / entities / input_boolean / sun)
+                # which call _log_readiness_timing only inside their hit
+                # branch. ``count`` mirrors components/entities.
+                _log_readiness_timing(
+                    "ha_mcp_tools",
+                    ha_mcp_elapsed,
+                    count=ha_mcp_domain_count,
+                )
+            else:
                 _dump_ha_readiness_diagnostics(
                     container,
                     base_url,
