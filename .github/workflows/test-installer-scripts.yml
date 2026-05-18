@@ -3,12 +3,16 @@ name: Test Installer Scripts
 on:
   push:
     paths:
+      - 'scripts/install.sh'
       - 'scripts/install-macos.sh'
+      - 'scripts/install-linux.sh'
       - 'scripts/install-windows.ps1'
       - '.github/workflows/test-installer-scripts.yml'
   pull_request:
     paths:
+      - 'scripts/install.sh'
       - 'scripts/install-macos.sh'
+      - 'scripts/install-linux.sh'
       - 'scripts/install-windows.ps1'
       - '.github/workflows/test-installer-scripts.yml'
   schedule:
@@ -25,12 +29,12 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Run macOS installer script (first run)
-        run: sh scripts/install-macos.sh
+        run: sh scripts/install.sh
 
       - name: Run macOS installer script (second run - idempotency test)
         run: |
           # Should skip uv install and show "uv is already installed"
-          sh scripts/install-macos.sh
+          sh scripts/install.sh
 
       - name: Verify uv is installed
         run: |
@@ -40,6 +44,37 @@ jobs:
       - name: Verify Claude Desktop config was created
         run: |
           CONFIG_FILE="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Config file not created"
+            exit 1
+          fi
+          cat "$CONFIG_FILE"
+          # Verify it contains Home Assistant config
+          grep -q '"Home Assistant"' "$CONFIG_FILE" || (echo "Home Assistant config not found" && exit 1)
+          grep -q 'ha-mcp@latest' "$CONFIG_FILE" || (echo "ha-mcp not configured" && exit 1)
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Linux installer script (first run)
+        run: sh scripts/install.sh
+
+      - name: Run Linux installer script (second run - idempotency test)
+        run: |
+          # Should skip uv install and show "uv is already installed"
+          sh scripts/install.sh
+
+      - name: Verify uv is installed
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v uvx || (echo "uvx not found" && exit 1)
+          uvx --version
+
+      - name: Verify Claude Desktop config was created
+        run: |
+          CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json"
           if [ ! -f "$CONFIG_FILE" ]; then
             echo "Config file not created"
             exit 1
