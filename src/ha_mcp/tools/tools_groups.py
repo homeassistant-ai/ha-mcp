@@ -13,7 +13,6 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -316,11 +315,7 @@ class GroupTools:
                         result.setdefault("warnings", []).append(
                             f"Group {'created' if is_create else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
-                except (
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                    HomeAssistantAuthError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
                         f"Group verification failed for {entity_id} "
                         f"({type(e).__name__}): {e}"
@@ -429,11 +424,7 @@ class GroupTools:
                         result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except (
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                    HomeAssistantAuthError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
                         f"Group removal verification failed for {entity_id} "
                         f"({type(e).__name__}): {e}"
