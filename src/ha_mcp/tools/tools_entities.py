@@ -379,6 +379,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "warnings": [
                             "Entity registry lookup failed — could not determine device. Retry may succeed."
                         ],
+                        "lookup_failed": True,
                     }
 
             device_id = (
@@ -533,10 +534,14 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
-            # Only mark partial when device rename was attempted and failed
-            # (not when entity simply has no device)
-            if device_rename_result.get("warnings") and device_rename_result.get(
-                "device_id"
+            # Mark partial when a device rename was requested but didn't complete
+            # for an operational reason: WS-call failure (device_id present + warnings)
+            # or upstream registry lookup failure (lookup_failed marker). Not partial
+            # when the entity simply has no device — that's a no-op, not an incomplete
+            # operation.
+            if device_rename_result.get("warnings") and (
+                device_rename_result.get("device_id")
+                or device_rename_result.get("lookup_failed")
             ):
                 response_data["partial"] = True
 
