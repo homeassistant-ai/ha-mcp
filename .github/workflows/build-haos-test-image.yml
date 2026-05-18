@@ -28,6 +28,13 @@ permissions:
 
 env:
   IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+  # libguestfs defaults to libvirt which isn't running on GitHub-hosted
+  # runners (per-user libvirtd socket missing for the unprivileged
+  # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
+  # Same setting as haos-e2e-tests.yml; the bake_test_state step added in
+  # #1326 shells out to guestfish and would otherwise hang trying to talk
+  # to libvirt.
+  LIBGUESTFS_BACKEND: direct
 
 jobs:
   build:
@@ -37,12 +44,23 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Required for tests/src/e2e/tools/test_skills_resources.py — the
+          # skills bundle lives at src/ha_mcp/resources/skills-vendor. Kept
+          # in parity with haos-e2e-tests.yml even though the publish bake
+          # itself doesn't touch the submodule, so the two checkout shapes
+          # don't drift.
+          submodules: true
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils ovmf xz-utils curl
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
+          # Ubuntu installs the kernel image as 0600 root:root, but
+          # libguestfs's supermin appliance builder needs to read it.
+          # See https://libguestfs.org/guestfs-faq.1.html#kernel-permissions
+          sudo chmod +r /boot/vmlinuz-*
 
       - name: Enable KVM group perms
         # Same udev trick used by home-assistant/operating-system's test workflow:
@@ -69,6 +87,50 @@ jobs:
 
       - name: Build image
         run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
+
+      - name: Extract publish-build diagnostics (always)
+        # On build failure (boot timeout, onboarding rejection, addon
+        # install error, bake step crash) Python's stdout via --verbose
+        # is the only signal otherwise. Grab the serial log + a
+        # post-mortem of the intermediate qcow2's /config dir so a
+        # future failure can be triaged without re-running locally.
+        # Tolerates missing files because the failure may be before
+        # boot (no serial yet) or before bake (no /config yet).
+        if: always()
+        run: |
+          sudo chmod +r /boot/vmlinuz-* || true
+          mkdir -p /tmp/haos-publish-diagnostics
+          intermediate=/tmp/haos-build/haos-test-image.qcow2
+          if [ -f "$intermediate" ]; then
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > /tmp/haos-publish-diagnostics/config-dir-listing.txt 2>&1 \
+              || echo "directory listing failed (qcow2 may not be baked yet)"
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage \
+                /tmp/haos-publish-diagnostics/storage.tar \
+              || echo ".storage tar-out failed"
+          else
+            echo "intermediate qcow2 not present — build failed before bake" \
+              > /tmp/haos-publish-diagnostics/no-qcow2.txt
+          fi
+          # build_image.start_qemu writes the serial log to <work_dir>/
+          # haos-serial.log (default work_dir = /tmp/haos-build); copy
+          # it out for upload.
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-publish-diagnostics/ \
+            2>/dev/null || true
+          ls -la /tmp/haos-publish-diagnostics/ || true
+
+      - name: Upload publish-build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: haos-publish-diagnostics-${{ github.sha }}
+          path: /tmp/haos-publish-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload built image as workflow artifact
         # Always upload — even on PRs that don't push to GHCR — so reviewers
