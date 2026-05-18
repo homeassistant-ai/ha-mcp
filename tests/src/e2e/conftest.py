@@ -701,6 +701,12 @@ def _wait_for_core_state_running(
             response = _requests.get(
                 f"{base_url}/api/core/state", timeout=2, headers=headers
             )
+            # Surface HTTP status as a fallback ``last_state`` so a
+            # persistent non-200 (e.g. 503 during HA boot) shows up in
+            # the timeout ``pytest.fail`` message instead of the initial
+            # ``"<no response>"`` — distinguishes connection-failure
+            # (caught in the except below) from API-error-response.
+            last_state = f"HTTP {response.status_code}"
             if response.status_code == 200:
                 last_state = response.json().get("state", "<unknown>")
                 if last_state == "RUNNING":
