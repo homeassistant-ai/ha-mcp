@@ -510,46 +510,61 @@ class HomeAssistantClient:
             )
             return raw_response.text
 
-        logger.debug("Fetching error log via HA Core proxy")
-        json_response = await self._request("GET", "/error_log")
-        return (
-            json_response if isinstance(json_response, str) else str(json_response)
+        logger.debug("Fetching error log via HA Core proxy (Container/pip)")
+        raw_response = await self._raw_request(
+            "GET", "/error_log", headers={"Accept": "text/plain"}
         )
+        return raw_response.text
 
     async def _is_supervised_install(self) -> bool:
         """Detect whether the target HA is a Supervised / HAOS install.
 
         Probes ``/api/config`` once per client instance and returns
-        ``"hassio" in components``. Cached on the instance ONLY when the
-        probe succeeds and returns True; a transient failure (timeout,
-        network glitch, non-200) returns False without raising AND
-        without poisoning the cache, so the next call re-probes.
+        ``"hassio" in components``. Cached for the session lifetime on
+        BOTH definite outcomes (True or False), since a successful
+        ``/api/config`` response with or without ``hassio`` is a
+        definitive signal — HA's loaded-components set doesn't change
+        between Supervised and Container at runtime.
 
-        Designed to fail open: callers that depend on this check (e.g.
-        ``get_error_log``) keep their pre-supervised behavior on probe
-        failure, never inheriting a probe-side exception.
+        Cache is NOT poisoned on probe failure: a transient network
+        glitch or HTTP error returns False without setting the cache,
+        so the next call re-probes. This is the only path that
+        intentionally fails open — caller proceeds on the historical
+        Container branch (which on HAOS will also fail, but with a
+        clearer 404 than a probe-side exception would surface).
+
+        Auth / connection / HTTP errors are caught explicitly; runtime
+        bugs (TypeError, AttributeError) and BaseException derivatives
+        (KeyboardInterrupt, CancelledError) deliberately propagate so
+        they're not silenced as "not supervised".
         """
-        # getattr fallback so test fixtures that patch __init__ to a no-op
-        # (see tests/src/unit/test_tools_utility_supervisor_logs.py::mock_client)
-        # don't trip an AttributeError. Real instantiation always sets it
-        # to None in __init__.
-        if getattr(self, "_supervised_detected", None) is True:
-            return True
+        if self._supervised_detected is not None:
+            return self._supervised_detected
         try:
             config = await self._request("GET", "/config")
-        except Exception as exc:
-            # Fail-open contract: any probe failure (timeout, connection
-            # error, non-2xx propagated as HomeAssistantAPIError, etc.)
-            # falls through to "not supervised" so the caller proceeds
-            # on the historical branch. The negative is NOT cached so
-            # the next call re-probes.
-            logger.debug("Supervised probe failed (fail-open to False): %r", exc)
+        except (
+            HomeAssistantAuthError,
+            HomeAssistantAPIError,
+            HomeAssistantConnectionError,
+            httpx.HTTPError,
+            TimeoutError,
+        ) as exc:
+            # Fail-open on transport / HTTP-layer failures only. Note:
+            # a 401 here likely means the LLA is bad and the /error_log
+            # fallback will also 401 — the user gets a clearer auth error
+            # from that path than a swallowed probe error would surface.
+            # Logged at WARNING so it's visible at default log levels
+            # without spamming on every call (probe runs at most once
+            # per session per outcome).
+            logger.warning(
+                "Supervised-install probe failed (fail-open to non-supervised): %r",
+                exc,
+            )
             return False
         components = config.get("components", []) if isinstance(config, dict) else []
-        if isinstance(components, list) and "hassio" in components:
-            self._supervised_detected = True
-            return True
-        return False
+        is_supervised = isinstance(components, list) and "hassio" in components
+        self._supervised_detected = is_supervised
+        return is_supervised
 
     async def get_addon_logs(self, slug: str) -> str:
         """Fetch an add-on's container logs.

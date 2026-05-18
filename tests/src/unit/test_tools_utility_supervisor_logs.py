@@ -39,7 +39,14 @@ from ha_mcp.tools.tools_utility import register_utility_tools
 
 @pytest.fixture
 def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network."""
+    """HomeAssistantClient with stubbed internals — no real network.
+
+    Mirror every instance attribute the real ``__init__`` sets, so a
+    `getattr` fallback in production code isn't needed to paper over a
+    test-fixture omission (and so future `__init__` attribute additions
+    that this fixture forgets to mirror fail loudly here instead of
+    silently no-op-ing).
+    """
     with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
         client = HomeAssistantClient()
         client.base_url = "http://test.local:8123"
@@ -47,6 +54,7 @@ def mock_client():
         client.timeout = 30
         client.verify_ssl = True
         client.httpx_client = MagicMock()
+        client._supervised_detected = None
         return client
 
 
@@ -528,26 +536,26 @@ class TestGetErrorLogBranchSelection:
         The probe of /api/config is the supervised-detection hop added
         with the #1349 item 4 fix; on Container HA it returns a config
         without ``hassio`` in components, so we fall through to the
-        historical /error_log branch.
+        historical /error_log branch. That branch uses ``_raw_request``
+        (text/plain), not ``_request`` (JSON) — earlier code lost log
+        content to a silent JSONDecodeError.
         """
+        mock_response = MagicMock()
+        mock_response.text = "error log via proxy\n"
         mock_client._request = AsyncMock(
-            side_effect=[
-                # 1st call: /api/config probe — no hassio component.
-                {"components": ["sun", "demo"]},
-                # 2nd call: /api/error_log — returns the actual log text.
-                "error log via proxy\n",
-            ]
+            return_value={"components": ["sun", "demo"]}
         )
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
             result = await mock_client.get_error_log()
 
         assert "error log via proxy" in result
-        # Probe first, then fetch — order matters because the branch
-        # decision depends on the probe outcome.
-        assert mock_client._request.await_args_list[0].args == ("GET", "/config")
-        assert mock_client._request.await_args_list[1].args == ("GET", "/error_log")
-        assert mock_client._request.await_count == 2
+        # Probe via _request, fetch via _raw_request.
+        mock_client._request.assert_awaited_once_with("GET", "/config")
+        mock_client._raw_request.assert_awaited_once_with(
+            "GET", "/error_log", headers={"Accept": "text/plain"}
+        )
 
     @pytest.mark.asyncio
     async def test_non_addon_supervised_uses_hassio_core_logs_proxy(
