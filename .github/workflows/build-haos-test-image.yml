@@ -88,6 +88,50 @@ jobs:
       - name: Build image
         run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
 
+      - name: Extract publish-build diagnostics (always)
+        # On build failure (boot timeout, onboarding rejection, addon
+        # install error, bake step crash) Python's stdout via --verbose
+        # is the only signal otherwise. Grab the serial log + a
+        # post-mortem of the intermediate qcow2's /config dir so a
+        # future failure can be triaged without re-running locally.
+        # Tolerates missing files because the failure may be before
+        # boot (no serial yet) or before bake (no /config yet).
+        if: always()
+        run: |
+          sudo chmod +r /boot/vmlinuz-* || true
+          mkdir -p /tmp/haos-publish-diagnostics
+          intermediate=/tmp/haos-build/haos-test-image.qcow2
+          if [ -f "$intermediate" ]; then
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > /tmp/haos-publish-diagnostics/config-dir-listing.txt 2>&1 \
+              || echo "directory listing failed (qcow2 may not be baked yet)"
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage \
+                /tmp/haos-publish-diagnostics/storage.tar \
+              || echo ".storage tar-out failed"
+          else
+            echo "intermediate qcow2 not present — build failed before bake" \
+              > /tmp/haos-publish-diagnostics/no-qcow2.txt
+          fi
+          # build_image.start_qemu writes the serial log to <work_dir>/
+          # haos-serial.log (default work_dir = /tmp/haos-build); copy
+          # it out for upload.
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-publish-diagnostics/ \
+            2>/dev/null || true
+          ls -la /tmp/haos-publish-diagnostics/ || true
+
+      - name: Upload publish-build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: haos-publish-diagnostics-${{ github.sha }}
+          path: /tmp/haos-publish-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload built image as workflow artifact
         # Always upload — even on PRs that don't push to GHCR — so reviewers
         # can pull the artifact and verify locally.
