@@ -137,7 +137,7 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 # Dev-channel ha-mcp addon baked into the qcow2 from local source for the
 # inaddon HAOS E2E tier (#1349 item 7). The dev addon's config.yaml lives at
 # ``homeassistant-addon-dev/`` in the repo; we stage it under
-# ``/addons/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
+# ``/supervisor/addons/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
 # a local addon (slug: ``local_<config-slug>`` → ``local_ha_mcp_dev``).
 #
 # The secret_path option must be set deterministically so the test harness
@@ -550,7 +550,7 @@ def _check_core_auth(base_url: str, token: str) -> None:
 
 
 def stage_dev_addon_source(qcow2: Path) -> None:
-    """Bake the ha-mcp dev addon's source into the qcow2 under /addons/local/.
+    """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
 
     Runs BEFORE first start_qemu so HAOS boots with the local addon visible
     to Supervisor in the store. The bake then installs + builds the addon
@@ -573,7 +573,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             f"checkout is incomplete; the image cannot be built."
         )
 
-    LOG.info("Staging ha-mcp dev addon source into qcow2 /addons/local/ha_mcp_dev/")
+    LOG.info("Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/")
     workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
     try:
         staging = workdir / "ha_mcp_dev"
@@ -594,7 +594,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
 
         # Dockerfile in homeassistant-addon-dev/ uses
         # ``COPY homeassistant-addon/start.py /`` because it's authored to
-        # be built from the repo root context. Inside /addons/local/ the
+        # be built from the repo root context. Inside /supervisor/addons/local/ the
         # build context is the addon dir itself, so the path needs to be
         # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
         dockerfile = staging / "Dockerfile"
@@ -610,7 +610,7 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             )
         dockerfile.write_text(patched)
 
-        # tar root-owned, root-mode files into /addons/local/ on the qcow2's
+        # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.
         seed_tar = workdir / "ha_mcp_dev.tar"
         _run([
@@ -625,11 +625,11 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             ":",
             "mount", "/dev/sda8", "/",
             ":",
-            "mkdir-p", "/addons/local",
+            "mkdir-p", "/supervisor/addons/local",
             ":",
-            "tar-in", str(seed_tar), "/addons/local",
+            "tar-in", str(seed_tar), "/supervisor/addons/local",
         ])
-        LOG.info("Dev addon source staged at /addons/local/ha_mcp_dev/")
+        LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -638,7 +638,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     """Install the local ha-mcp dev addon during the bake's running phase.
 
     Assumes ``stage_dev_addon_source`` ran before start_qemu so the source
-    is already at /addons/local/ha_mcp_dev/. Supervisor's local store
+    is already at /supervisor/addons/local/ha_mcp_dev/. Supervisor's local store
     scanner picks up the addon automatically on boot; we reload to be
     explicit, install (which builds the Docker image — slow, ~5 min, but
     only paid once per cache lifetime), set options including a
@@ -929,7 +929,7 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     qcow2 = fetch_haos_qcow2(work_dir)
-    # Stage the ha-mcp dev addon source into /addons/local/ BEFORE first
+    # Stage the ha-mcp dev addon source into /supervisor/addons/local/ BEFORE first
     # boot so Supervisor's local-store scanner picks it up during the
     # running phase below. install_ha_mcp_dev_addon then builds the addon's
     # Docker image while HAOS is up — that built image stays in the cached

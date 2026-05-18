@@ -52,7 +52,7 @@ HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 # into the test runtime path.
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # Slug Supervisor assigns to a local addon staged under
-# /addons/local/<dir>/. Derived from config.yaml's slug ``ha_mcp_dev``
+# /supervisor/addons/local/<dir>/. Derived from config.yaml's slug ``ha_mcp_dev``
 # with the ``local_`` prefix that Supervisor applies to local-store
 # addons.
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
@@ -251,7 +251,7 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
        distinct PR commit produces a distinct version (Supervisor caches
        by exact version string).
-    3. libguestfs replaces /addons/local/ha_mcp_dev/ contents on the
+    3. libguestfs replaces /supervisor/addons/local/ha_mcp_dev/ contents on the
        offline qcow2.
 
     Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
@@ -326,7 +326,7 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
         config_path.write_text("".join(new_lines))
         LOG.info("Bumped addon version to pr-%s for update-detection", sha)
 
-        # Build the tar, then replace /addons/local/ha_mcp_dev/ in the qcow2.
+        # Build the tar, then replace /supervisor/addons/local/ha_mcp_dev/ in the qcow2.
         # rm-rf + tar-in (rather than tar-in alone) so removed files in the
         # PR source actually disappear from the addon dir — leftover files
         # would be picked up by the next Docker build.
@@ -347,9 +347,9 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
                 ":",
                 "mount", "/dev/sda8", "/",
                 ":",
-                "rm-rf", "/addons/local/ha_mcp_dev",
+                "rm-rf", "/supervisor/addons/local/ha_mcp_dev",
                 ":",
-                "tar-in", str(seed_tar), "/addons/local",
+                "tar-in", str(seed_tar), "/supervisor/addons/local",
             ],
             check=True,
             capture_output=True,
@@ -556,7 +556,7 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
 
     The cached qcow2 ships with the addon installed at the bake-time
     source version; ``refresh_dev_addon_source_in_qcow2`` has just
-    overwritten ``/addons/local/ha_mcp_dev/`` with the PR's source and
+    overwritten ``/supervisor/addons/local/ha_mcp_dev/`` with the PR's source and
     bumped the addon's ``config.yaml`` version. Asking Supervisor to
     update detects the new version, rebuilds the addon's Docker image
     (Docker layer cache → only COPY src/ + uv-sync-project layers

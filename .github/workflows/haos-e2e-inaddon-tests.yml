@@ -7,7 +7,7 @@ name: HAOS E2E Tests (inaddon)
 # when they install the addon + cloudflared on a real HAOS install.
 #
 # The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
-# refresh_dev_addon_source_in_qcow2 overwrites /addons/local/ha_mcp_dev/
+# refresh_dev_addon_source_in_qcow2 overwrites /supervisor/addons/local/ha_mcp_dev/
 # with PR source + bumps config.yaml ``version:`` → Supervisor detects an
 # update on next boot → trigger_dev_addon_update calls supervisor/api
 # addons/{slug}/update via WS → Docker rebuilds with layer cache → addon
@@ -182,12 +182,12 @@ jobs:
           # source actually landed.
           guestfish --ro -a /tmp/haos-test-image.qcow2 run \
             : mount /dev/sda8 / \
-            : ll /addons/local/ha_mcp_dev \
+            : ll /supervisor/addons/local/ha_mcp_dev \
             > /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt 2>&1 \
             || echo "addon dir listing failed"
           guestfish --ro -a /tmp/haos-test-image.qcow2 run \
             : mount /dev/sda8 / \
-            : copy-out /addons/local/ha_mcp_dev/config.yaml /tmp/haos-inaddon-diagnostics/ \
+            : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml /tmp/haos-inaddon-diagnostics/ \
             || echo "addon config.yaml copy-out failed"
           ls -la /tmp/haos-inaddon-diagnostics/ || true
           echo '--- config dir listing ---'
