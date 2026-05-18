@@ -214,9 +214,28 @@ def refresh_recorder_in_qcow2(
         finally:
             conn.close()
 
-        # copy-in the shifted DB. --rw so guestfish opens the qcow2 for
-        # write; the file's owner/perms inside the qcow2 are preserved by
-        # libguestfs when overwriting an existing path.
+        # copy-in the shifted DB, and PURGE any stale ``-wal`` / ``-shm``
+        # sidecars in the qcow2. The bake (build_image.py) boots HA Core
+        # to bootstrap state — Core writes the recorder DB in WAL mode and
+        # leaves ``home-assistant_v2.db``, ``home-assistant_v2.db-wal``,
+        # and ``home-assistant_v2.db-shm`` in the supervisor data dir.
+        # Our copy-out only fetches the ``.db``, so when we copy the
+        # edited ``.db`` back, the old ``-wal`` / ``-shm`` from bake are
+        # still there — referencing page numbers from the pre-edit ``.db``
+        # that no longer exist. On boot HA Core opens ``.db`` + ``-wal``
+        # together, sqlite finds the page-tree inconsistent, and raises
+        # ``sqlite3.DatabaseError: database disk image is malformed``
+        # (PR #1361 diagnostics: ha-core-runtime.log captured this exact
+        # message, plus ``home-assistant_v2.db-wal.corrupt.<ts>`` proving
+        # a WAL file was present). The seed is then renamed to
+        # ``.corrupt.<ts>`` and HA boots with a fresh empty DB — losing
+        # all the pre-baked history rows.
+        #
+        # --rw so guestfish opens the qcow2 for write; the file's
+        # owner/perms inside the qcow2 are preserved by libguestfs when
+        # overwriting an existing path. ``rm-f`` is a no-op if the file
+        # is absent (no error), so the sidecar deletion is safe whether
+        # or not the bake leaves them.
         try:
             subprocess.run(
                 [
@@ -230,6 +249,12 @@ def refresh_recorder_in_qcow2(
                     "copy-in",
                     str(db_local),
                     "/supervisor/homeassistant/",
+                    ":",
+                    "rm-f",
+                    "/supervisor/homeassistant/home-assistant_v2.db-wal",
+                    ":",
+                    "rm-f",
+                    "/supervisor/homeassistant/home-assistant_v2.db-shm",
                 ],
                 check=True,
                 capture_output=True,
