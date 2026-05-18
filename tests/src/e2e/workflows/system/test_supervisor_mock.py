@@ -22,6 +22,11 @@ from ha_mcp._version import get_supervisor_base_url, is_running_in_addon
 from ha_mcp.tools.tools_bug_report import _fetch_addon_logs
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.supervisor_mock import (
+    MOCK_INSUFFICIENT_ROLE_TOKEN,
+    MOCK_SUPERVISOR_TOKEN,
+    SYSTEM_SERVICES,
+)
 
 # Whole module is external-only: the ``supervisor_mock`` fixture
 # monkeypatches ``SUPERVISOR_TOKEN`` / ``SUPERVISOR_BASE_URL`` in the test
@@ -32,11 +37,6 @@ from ...utilities.assertions import MCPAssertions, safe_call_tool
 # naturally from real Supervisor interactions in other tests; mocking
 # them inside the addon container is out of scope.
 pytestmark = [pytest.mark.external_only]
-from ...utilities.supervisor_mock import (
-    MOCK_INSUFFICIENT_ROLE_TOKEN,
-    MOCK_SUPERVISOR_TOKEN,
-    SYSTEM_SERVICES,
-)
 
 logger = logging.getLogger(__name__)
 
