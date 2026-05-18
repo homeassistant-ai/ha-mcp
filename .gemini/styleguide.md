@@ -185,3 +185,5 @@ Scope is defined by the user (the maintainer / author of the PR), not by the rev
 If you believe a finding is likely out of scope, say so explicitly so the user can verify: *"This may be out of scope — user should verify. I think it is out of scope because [specific reason]."* Do not bucket findings as "for a future PR" or "post-merge follow-up."
 
 Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the user decide.
+
+See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the author/agent-side rule.
