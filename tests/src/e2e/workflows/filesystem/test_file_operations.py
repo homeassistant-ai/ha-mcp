@@ -33,14 +33,6 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 
-# Whole module is external-only: tests build their own ``Client`` from the
-# session-scope ``mcp_server`` (which yields None on the inaddon backend),
-# and they also flip ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` at runtime — both
-# patterns are in-process-server-shaped and cannot apply when ``mcp_client``
-# is an HTTP transport into the dev addon. Inaddon coverage of filesystem
-# tools is a future tier (#1349 follow-up).
-pytestmark = [pytest.mark.external_only]
-
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,8 +45,12 @@ FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 def filesystem_tools_enabled(ha_container_with_fresh_config):
     """Enable filesystem tools feature flag for the test module.
 
-    Note: This only sets the feature flag. The ha_mcp_tools component must
-    already be installed in the initial_test_state for tests to pass.
+    Note: This only sets the feature flag in the test process. The
+    ha_mcp_tools component must already be installed in the
+    initial_test_state for tests to pass. In inaddon mode the addon
+    container has its own env and is started with this flag set at
+    install time (see ``build_image.install_ha_mcp_dev_addon``), so
+    this env-flip is a no-op for the server but harmless.
     """
     # Enable the feature flag
     os.environ[FEATURE_FLAG] = "true"
@@ -68,8 +64,25 @@ def filesystem_tools_enabled(ha_container_with_fresh_config):
 
 
 @pytest.fixture
-async def mcp_client_with_filesystem(filesystem_tools_enabled, mcp_server):
-    """Create MCP client with filesystem tools feature flag enabled."""
+async def mcp_client_with_filesystem(
+    filesystem_tools_enabled,
+    mcp_server,
+    mcp_client,
+    ha_container_with_fresh_config,
+):
+    """Yield an MCP client with the filesystem feature flag enabled.
+
+    In inaddon mode ``mcp_server`` is None (the addon is the server) and
+    the session-scope ``mcp_client`` already speaks HTTP to the addon —
+    which was started with HAMCP_ENABLE_FILESYSTEM_TOOLS=true via the
+    Supervisor options dict at install time. Yield that client directly
+    instead of building a new in-memory one.
+    """
+    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        logger.debug("FastMCP client (inaddon, HTTP) reused for filesystem tests")
+        yield mcp_client
+        return
+
     from fastmcp import Client
 
     client = Client(mcp_server.mcp)

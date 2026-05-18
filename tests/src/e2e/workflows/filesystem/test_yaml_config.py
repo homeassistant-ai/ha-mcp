@@ -27,14 +27,6 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 
-# Whole module is external-only: tests use a module-local
-# ``mcp_client_with_yaml_config`` fixture that does ``Client(mcp_server.mcp)``
-# (mcp_server is None on inaddon backend) and flip
-# ``ENABLE_YAML_CONFIG_EDITING`` at runtime. Addon already has the flag
-# enabled via Supervisor options (set in build_image.py); inaddon-side
-# YAML coverage is a future tier (#1349 follow-up).
-pytestmark = [pytest.mark.external_only]
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -45,7 +37,12 @@ READ_TOOL = "ha_read_file"
 
 @pytest.fixture(scope="module")
 def yaml_config_tools_enabled(ha_container_with_fresh_config):
-    """Enable YAML config editing feature flag for the test module."""
+    """Enable YAML config editing feature flag for the test module.
+
+    In inaddon mode the env-flip applies only to the test process; the
+    addon container has its own env and is started with the flag set at
+    install time (see ``build_image.install_ha_mcp_dev_addon``).
+    """
     os.environ[FEATURE_FLAG] = "true"
     logger.info("YAML config editing feature flag enabled")
     yield
@@ -53,8 +50,24 @@ def yaml_config_tools_enabled(ha_container_with_fresh_config):
 
 
 @pytest.fixture
-async def mcp_client_with_yaml_config(yaml_config_tools_enabled, mcp_server):
-    """Create MCP client with YAML config editing enabled."""
+async def mcp_client_with_yaml_config(
+    yaml_config_tools_enabled,
+    mcp_server,
+    mcp_client,
+    ha_container_with_fresh_config,
+):
+    """Yield an MCP client with YAML-config editing enabled.
+
+    In inaddon mode ``mcp_server`` is None (the addon is the server) and
+    the session ``mcp_client`` already speaks HTTP to the addon —
+    started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options
+    at install time. Yield that client directly.
+    """
+    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        logger.debug("FastMCP client (inaddon, HTTP) reused for YAML tests")
+        yield mcp_client
+        return
+
     from fastmcp import Client
 
     client = Client(mcp_server.mcp)
