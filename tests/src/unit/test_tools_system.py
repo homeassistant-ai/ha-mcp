@@ -5,6 +5,7 @@ ha_restart reports failure when a reverse proxy returns 504 during restart.
 """
 
 import asyncio
+import json
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -436,3 +437,270 @@ class TestGetSystemHealthGather:
         mock_repairs.assert_not_awaited()
         mock_zha.assert_not_awaited()
         mock_zwave.assert_not_awaited()
+
+
+class TestGetSystemHealthDiagnostics:
+    """Wire-up tests for ha_get_system_health's include='diagnostics' branch."""
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_without_config_entry_id_returns_error_subdict(self):
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health(include="diagnostics")
+        assert "diagnostics" in result
+        assert "error" in result["diagnostics"]
+        assert "config_entry_id is required" in result["diagnostics"]["error"]
+        assert "ha_get_integration" in result["diagnostics"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_with_config_entry_id_calls_helper(self):
+        client = MagicMock()
+        tools = SystemTools(client)
+        diag_payload = {
+            "config_entry_id": "entry_abc",
+            "data": {"home_assistant": {"version": "2026.5.0"}},
+        }
+        with _patch_health_info_baseline(), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(return_value=diag_payload),
+        ) as mock_fetch:
+            result = await tools.ha_get_system_health(
+                include="diagnostics", config_entry_id="entry_abc"
+            )
+        assert result["diagnostics"] == diag_payload
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=None,
+            truncate_at_bytes=None,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_with_device_id_forwarded_to_helper(self):
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_system_health(
+                include="diagnostics",
+                config_entry_id="entry_abc",
+                device_id="dev_xyz",
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            "dev_xyz",
+            fields=None,
+            truncate_at_bytes=None,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_combined_with_repairs(self):
+        """include='repairs,diagnostics' should populate both sections."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_repairs = AsyncMock(return_value={"issues": [], "count": 0})
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools, "_fetch_repairs", new=mock_repairs
+        ), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {"x": 1}}),
+        ) as mock_diag:
+            result = await tools.ha_get_system_health(
+                include="repairs,diagnostics", config_entry_id="entry_abc"
+            )
+        assert "repairs" in result
+        assert "diagnostics" in result
+        assert result["diagnostics"]["data"] == {"x": 1}
+        # Both branches actually fired — guards against a silent no-op
+        # in either fetch.
+        mock_repairs.assert_awaited_once()
+        mock_diag.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_fields_and_truncate_forwarded_to_helper(self):
+        """Tool surfaces ``diagnostics_fields`` + ``diagnostics_truncate_at_bytes``."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_system_health(
+                include="diagnostics",
+                config_entry_id="entry_abc",
+                diagnostics_fields="home_assistant, issues",
+                diagnostics_truncate_at_bytes="20000",
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=["home_assistant", "issues"],
+            truncate_at_bytes=20000,
+            data_path=None,
+            data_offset=0,
+            data_limit=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_data_path_and_pagination_forwarded_to_helper(self):
+        """Tool surfaces ``diagnostics_data_path`` + offset/limit through to
+        the helper."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(return_value={"data": {}}),
+        ) as mock_fetch:
+            await tools.ha_get_system_health(
+                include="diagnostics",
+                config_entry_id="entry_abc",
+                diagnostics_data_path="data.devices",
+                diagnostics_data_offset="10",
+                diagnostics_data_limit="5",
+            )
+        mock_fetch.assert_awaited_once_with(
+            client,
+            "entry_abc",
+            None,
+            fields=None,
+            truncate_at_bytes=None,
+            data_path="data.devices",
+            data_offset=10,
+            data_limit=5,
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_config_entry_id_forwarded_as_none_not_empty_string(
+        self,
+    ):
+        """``include=diagnostics`` without ``config_entry_id`` forwards ``None``
+        to the helper (not ``""``) so the echo field reflects the actual input
+        rather than a coerced placeholder."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(
+                return_value={
+                    "config_entry_id": None,
+                    "error": "config_entry_id is required for diagnostics fetch.",
+                }
+            ),
+        ) as mock_fetch:
+            result = await tools.ha_get_system_health(include="diagnostics")
+        # Positional config_entry_id is None, not "".
+        assert mock_fetch.await_args.args[1] is None
+        assert result["diagnostics"]["config_entry_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_omitted_from_include_skips_helper(self):
+        """include='repairs' (no diagnostics) must not invoke the diagnostics helper."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools,
+            "_fetch_repairs",
+            new=AsyncMock(return_value={"issues": [], "count": 0}),
+        ), patch(
+            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+            new=AsyncMock(),
+        ) as mock_fetch:
+            result = await tools.ha_get_system_health(
+                include="repairs", config_entry_id="entry_abc"
+            )
+        mock_fetch.assert_not_awaited()
+        assert "diagnostics" not in result
+
+    @pytest.mark.asyncio
+    async def test_orphaned_ids_surface_parity_warning(self):
+        """config_entry_id/device_id without 'diagnostics' in include surface a
+        warnings entry (parity with ha_get_integration's `include_diagnostics=False
+        + device_id` warning)."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools,
+            "_fetch_repairs",
+            new=AsyncMock(return_value={"issues": [], "count": 0}),
+        ):
+            result = await tools.ha_get_system_health(
+                include="repairs",
+                config_entry_id="entry_abc",
+                device_id="dev_xyz",
+            )
+        assert "warnings" in result
+        assert any(
+            "config_entry_id" in w or "device_id" in w
+            for w in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_orphaned_data_offset_alone_surfaces_warning(self):
+        """Pure ``diagnostics_data_offset > 0`` (no other diagnostics args)
+        without 'diagnostics' in include triggers the orphan-args warning —
+        guards the ``data_offset_int > 0`` term in the predicate."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), patch.object(
+            SystemTools,
+            "_fetch_repairs",
+            new=AsyncMock(return_value={"issues": [], "count": 0}),
+        ):
+            result = await tools.ha_get_system_health(
+                include="repairs",
+                diagnostics_data_offset=5,
+            )
+        assert "warnings" in result
+        assert any(
+            "diagnostics_data_offset" in w for w in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_data_path_non_string_rejected_with_validation_error(self):
+        """Non-string ``diagnostics_data_path`` (dict / list / int) surfaces
+        as ``VALIDATION_INVALID_PARAMETER`` instead of leaking ``INTERNAL_ERROR``
+        from the resolver's ``.strip()`` call downstream. Pins the
+        ``isinstance(str)`` type-guard at the ``ha_get_system_health`` layer."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_system_health(
+                include="diagnostics",
+                config_entry_id="entry_abc",
+                diagnostics_data_path={"not": "a string"},  # type: ignore[arg-type]
+            )
+        err_payload = json.loads(str(excinfo.value))
+        assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "diagnostics_data_path" in err_payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_data_limit_zero_rejected_with_validation_error(self):
+        """``diagnostics_data_limit=0`` violates the ``min_value=1`` guard on
+        the coerce_int_param call — surfaces as a structured validation
+        error rather than slipping through as a no-op pagination window.
+        Coercion was moved outside the includes branch deliberately (see
+        ``tools_system.py`` comment); a regression putting it back would
+        skip validation for no-include callers."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with _patch_health_info_baseline(), pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_system_health(
+                include="diagnostics",
+                config_entry_id="entry_abc",
+                diagnostics_data_limit=0,
+            )
+        msg = str(excinfo.value)
+        assert "diagnostics_data_limit" in msg
+        assert "min" in msg.lower() or "must be" in msg.lower()
