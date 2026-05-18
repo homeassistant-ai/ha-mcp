@@ -14,6 +14,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -319,7 +320,12 @@ class GroupTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Group verification failed for {entity_id} "
+                        f"({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Group {'created' if is_create else 'updated'} but verification failed: {e}"
                     )
@@ -428,7 +434,12 @@ class GroupTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Group removal verification failed for {entity_id} "
+                        f"({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
