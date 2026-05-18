@@ -323,7 +323,7 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
-async def _fetch_dashboards_list(
+async def fetch_dashboards_list(
     client: Any,
 ) -> list[dict[str, Any]] | None:
     """Fetch and normalise the lovelace/dashboards/list WebSocket response.
@@ -381,7 +381,7 @@ async def _resolve_dashboard(
       to the registry id before issuing the delete. Discards
       ``dashboards``.
     """
-    dashboards = await _fetch_dashboards_list(client)
+    dashboards = await fetch_dashboards_list(client)
     if dashboards is None:
         return None, None
 
@@ -598,7 +598,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         try:
             # List mode
             if list_only:
-                dashboards = await _fetch_dashboards_list(client) or []
+                dashboards = await fetch_dashboards_list(client) or []
                 return {
                     "success": True,
                     "action": "list",
@@ -1249,9 +1249,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if pre_fetched_dashboards is not None:
                 existing_dashboards = pre_fetched_dashboards
             else:
-                existing_dashboards = (
-                    await _fetch_dashboards_list(client) or []
-                )
+                existing_dashboards = await fetch_dashboards_list(client) or []
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards
             )
