@@ -14,6 +14,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -595,7 +596,12 @@ class ConfigScriptTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Script verification failed for {entity_id} "
+                        f"({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Script created but verification failed: {e}"
                     )
@@ -703,7 +709,12 @@ class ConfigScriptTools:
                     TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
+                    HomeAssistantAuthError,
                 ) as e:
+                    logger.warning(
+                        f"Script removal verification failed for {entity_id} "
+                        f"({type(e).__name__}): {e}"
+                    )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
