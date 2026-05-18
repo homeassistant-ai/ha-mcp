@@ -297,6 +297,18 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             "COPY start.py /",
         ))
 
+        # Strip image: from config.yaml — Supervisor pulls from GHCR when
+        # image: is set, but the per-PR version we bump to below doesn't
+        # exist there. Force local Dockerfile build by removing the field.
+        # Same fix the bake's stage_dev_addon_source applies.
+        config_path_pre = staging / "config.yaml"
+        config_path_pre.write_text(
+            "".join(
+                ln for ln in config_path_pre.read_text().splitlines(keepends=True)
+                if not ln.startswith("image:")
+            )
+        )
+
         # Bump version so Supervisor detects an update.
         # Tag with GITHUB_SHA when in CI so each PR commit gets its own
         # version string — important because Supervisor caches install

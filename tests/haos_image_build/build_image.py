@@ -610,6 +610,20 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             )
         dockerfile.write_text(patched)
 
+        # Strip the ``image:`` field from config.yaml. Production dev-addon
+        # ships built images at ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch};
+        # when Supervisor sees ``image:``, it tries to PULL from GHCR rather
+        # than build from the local Dockerfile. Per-PR version bumps produce
+        # tags that don't exist in GHCR → 404 → addon update fails.
+        # Removing the field forces Supervisor to build locally from the
+        # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
+        config_yaml = staging / "config.yaml"
+        config_lines = [
+            ln for ln in config_yaml.read_text().splitlines(keepends=True)
+            if not ln.startswith("image:")
+        ]
+        config_yaml.write_text("".join(config_lines))
+
         # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.
         seed_tar = workdir / "ha_mcp_dev.tar"
