@@ -177,3 +177,11 @@ A change is BREAKING only if it removes functionality that users depend on.
 - Tool renaming with clear migration path
 
 **Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only flag CRITICAL when functionality is genuinely lost forever.
+
+## Non-blocking suggestions and scope
+
+Scope is defined by the maintainer / author of the PR, not by the reviewer (bot or human). **Never request a follow-up issue or PR unless a finding is grossly unrelated to the PR at hand.** For everything else, raise the finding in the PR review and let the author decide whether to address it inline, defer it, or dismiss it. Do not skip legitimate findings — surface them.
+
+If you believe a finding is likely out of scope, say so explicitly so the author can verify: *"This may not be within scope — author should verify. I think it is out of scope because [specific reason]."* Do not unilaterally bucket findings as "for a future PR" or "post-merge follow-up."
+
+Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the author decide.

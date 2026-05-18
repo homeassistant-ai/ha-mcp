@@ -294,6 +294,8 @@ cd worktree/<branch-name>
 - **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
 - **For obvious choices**: Implement and document in final summary
 
+**When you notice an improvement during a PR**: fix it in place by default. See *Boy Scout Rule — Handling Discovered Improvements* below for the deferral scale.
+
 **Final reporting (only after ALL workflow steps complete):**
 
 Once the PR is ready (all checks green, comments addressed), provide:
@@ -315,17 +317,59 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-### Handling Discovered Improvements
+### Boy Scout Rule — Handling Discovered Improvements
 
-When you notice something that could be improved while working on a PR, use this scale:
+**IMPORTANT — Default is fix-in-place.** "Boy Scout Rule" means leave touched code better than you found it. "Improve incrementally" means commit-by-commit within *this* PR — not across follow-up PRs. Deferral is the exception, not the default.
 
-| Size | Action |
-|------|--------|
-| **Small** — a few lines, clearly in scope | Fix it inline, no mention needed |
-| **Mid-sized** — meaningful effort, worth doing but out of scope | Pause **before pushing** and ask the user whether to include it |
-| **Large / unrelated** — many files, design decisions, or different domain | Document in the PR description's **Future improvements** section; open a separate PR only if the user asks |
+When you notice something while working on a PR, apply this scale:
 
-**Never open a separate improvement PR without explicit user approval.** Document it in the PR description first — it may already be covered by an open issue or the user may not want it at all.
+| What you find | Examples | Action |
+|---|---|---|
+| **Small** — a few lines, clearly in scope | Typo, dead import, stale docstring/comment, misnamed local, 1–N line cleanup of code in this diff, multi-site sweep of the same pattern you can grep for, missing test for code you're touching, low coverage for the area you're working in, straightforward test-quality fix (better assertions, clearer names, removing duplication) | **Fix in this PR** as a separate commit. No mention in PR description. |
+| **Mid-sized** — meaningful effort, worth doing but out of scope | Refactor of a sibling function, gap that needs non-trivial new test scaffolding, code-quality issue that's *not* really low | **Pause before pushing.** Ask the author whether to bundle. |
+| **Large / unrelated** — many files, design decisions, different subsystem | Would double the diff size or change the review surface, code quality is *really* low (technical debt) | One-line mention in PR description. Open a separate issue **only if** the author asks AND you can state a concrete benefit in one sentence. |
+
+**Size threshold for deferral.** A rough size benchmark: if you expect the discovered improvement to stay under ~100 lines of changes, bundle it in this PR by default. If you expect it to exceed ~100 lines, flag it to the author and ask whether to bundle or defer — the author decides. Estimate honestly; do not inflate an estimate to manufacture a reason to defer. If you're uncertain about the size, ask the author rather than guessing high.
+
+**Anti-noise gate — before filing any follow-up issue or PR, all three must be true:**
+
+1. The work is genuinely too large to bundle. **All three sub-tests must pass:**
+   (a) It cannot be done by mirroring an existing sibling pattern in the same file or a closely-related file.
+   (b) You can name the actual design choice in one sentence, with two named alternatives.
+   (c) It would meaningfully change this PR's review surface, not just add to it.
+2. You can name a concrete user-facing or maintainer benefit in one sentence.
+3. A maintainer reading the issue 6 months later would act on it, not close as stale.
+
+If any are false: fix it now, or let it go. **Do not file an issue to "track" it.**
+
+**Sometimes a follow-up is genuinely necessary.** The rules above tighten the bar; they do not abolish follow-ups. But these phrases are escape hatches that signal the AI is making a scope decision the author should make instead. When you find yourself drafting any of them, treat it as a cue to re-apply the rules in this section before continuing:
+
+- "Post-merge follow-up" / "follow-up consideration"
+- "Nice to have"
+- "Happy to file an issue (or note in PR body)"
+- "Pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of the Boy Scout Rule)
+- "Out of scope for this PR"
+- "Real design work, not N lines"
+- "Worth tracking as a real follow-up issue rather than buried in a comment"
+
+**Scope is the author's call, not yours.** You do not decide whether something is in scope. If you think a discovered improvement is out of scope, say so explicitly and ask the author to confirm — do not silently drop it into a "future improvements" bucket:
+
+> "This may be out of scope — author should verify. I think it is out of scope because [specific reason]. Should I fix it here or defer?"
+
+Then defer to the author's answer.
+
+**These are NOT follow-up material — fix them in this PR:**
+
+- Anything describable by line count ("one-line fix", "3-site sweep", "N call sites")
+- Sweeps of the same pattern across files (find them with grep, fix them all in the same PR that introduced or revealed the inconsistency — do not split a sweep across multiple issues)
+- Drift between docs and live state you can fix by reading both
+- Stale references in docstrings or comments
+- "Mirror X parity onto Y" where Y is in the diff
+- "Migrate singular → list" or similar shape consistency fixes
+
+**Same rule for issues as for PRs.** AGENTS.md forbids opening a separate improvement PR without approval — the same applies to issues. The default for things you noticed is *fix it now* or *let it go*, not *file paperwork*.
+
+**Code-review bot suggestions** (Gemini Code Assist, CodeRabbit, Copilot non-blocking nits) are informational. Either apply them inline or dismiss them — do **not** spawn a follow-up issue from a bot suggestion **UNLESS** it is a genuinely large, legitimate change AND the author (maintainer) explicitly confirms it is out of scope for the current PR. Scope is the author's call, not the bot's. The bot phrasing something as "consider" or "for future work" is not on its own sufficient.
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -342,17 +386,6 @@ gh pr create --draft --base master
 ```
 
 On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
-
-### Boy Scout Rule
-
-Improve code incrementally when touching it — especially tool docstrings and tests. Balance against regression risk (complexity, coverage, scope).
-
-| Scenario | Action |
-|----------|--------|
-| **No tests exist for code you're touching** | Add tests for the specific behavior you're implementing/fixing, without refactoring existing code |
-| **Tests exist but coverage is low** | Add tests for gaps if you're already working in that area |
-| **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
-| **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
 
 ### Test Coverage Requirements
 
