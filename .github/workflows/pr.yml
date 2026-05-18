@@ -12,6 +12,12 @@ env:
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
   HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.5.1"
+  # Disable Testcontainers' Ryuk reaper: the reaper container struggles to
+  # reach spawned containers through the GHA runner's overlay network,
+  # leaving zombies that can hold the HA port for the next session. The
+  # E2E fixture in tests/src/e2e/conftest.py performs explicit
+  # container.stop() in its teardown to replace this fallback. Refs #366.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
   lockfile:
