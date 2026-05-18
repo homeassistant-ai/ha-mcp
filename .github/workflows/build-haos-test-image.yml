@@ -28,6 +28,13 @@ permissions:
 
 env:
   IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+  # libguestfs defaults to libvirt which isn't running on GitHub-hosted
+  # runners (per-user libvirtd socket missing for the unprivileged
+  # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
+  # Same setting as haos-e2e-tests.yml; the bake_test_state step added in
+  # #1326 shells out to guestfish and would otherwise hang trying to talk
+  # to libvirt.
+  LIBGUESTFS_BACKEND: direct
 
 jobs:
   build:
@@ -37,12 +44,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Submodules required because bake_test_state stages
+          # custom_components/ha_mcp_tools (+ siblings) into the image —
+          # see haos-e2e-tests.yml for the same rationale.
+          submodules: true
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils ovmf xz-utils curl
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
+          # Ubuntu installs the kernel image as 0600 root:root, but
+          # libguestfs's supermin appliance builder needs to read it.
+          # See https://libguestfs.org/guestfs-faq.1.html#kernel-permissions
+          sudo chmod +r /boot/vmlinuz-*
 
       - name: Enable KVM group perms
         # Same udev trick used by home-assistant/operating-system's test workflow:
