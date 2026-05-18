@@ -317,7 +317,6 @@ class GroupTools:
                             f"Group {'created' if is_create else 'updated'} but {entity_id} not yet queryable. It may take a moment to become available."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
@@ -431,7 +430,6 @@ class GroupTools:
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
