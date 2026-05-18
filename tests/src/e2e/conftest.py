@@ -92,8 +92,8 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     going through pytest's own reporting plumbing is the reliable path.
     History: this gate-instrumentation was added in #1310; the
     ``HA_MCP_TOOLS_WAIT`` gate was added in #1346. The 5 gate budgets
-    were tightened with 2-63x headroom over observed-max in their
-    respective tightening PR after 69 [READINESS_GATE_TIMING] samples
+    were tightened with 2-63x headroom over observed-max in this
+    tightening PR after 24-69 [READINESS_GATE_TIMING] samples
     accumulated across 23 master runs (49h cross-day span).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
