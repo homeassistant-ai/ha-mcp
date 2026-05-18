@@ -374,42 +374,33 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
 
 def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
-    """Poll the inaddon MCP HTTP endpoint until it responds 2xx/3xx/405.
+    """Poll the inaddon MCP HTTP port until TCP-accept succeeds.
 
-    Returns the full base URL on success. The MCP endpoint at
-    ``<hostfwd>/<secret_path>`` accepts POST for JSON-RPC and may 405 on
-    a bare GET — that's still "endpoint is up". Anything other than
-    Connection-Refused / 404 indicates the addon container is alive.
+    Returns the full base URL on success.
+
+    Uses TCP-level connect probe rather than HTTP because the addon's
+    FastMCP streamable-HTTP transport RSTs plain GET requests (it
+    expects MCP-shaped POSTs only). A successful TCP handshake proves
+    the addon container is up and the listener is bound; the actual MCP
+    handshake happens at fixture-driven Client connect time.
     """
     base_url = f"http://127.0.0.1:{HA_MCP_ADDON_HOST_PORT}{HA_MCP_TEST_SECRET_PATH}"
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
-    last_status: int | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(base_url, timeout=5.0) as resp:
-                last_status = resp.status
-                if 200 <= resp.status < 400:
-                    LOG.info("Inaddon MCP endpoint ready at %s (status=%d)",
-                             base_url, resp.status)
-                    return base_url
-        except urllib.error.HTTPError as e:
-            last_status = e.code
-            # 405 (method not allowed) on bare GET — endpoint exists,
-            # just doesn't accept the verb. Still proves the addon's up.
-            if e.code == 405:
-                LOG.info(
-                    "Inaddon MCP endpoint ready at %s (405 on GET — accepts POST)",
-                    base_url,
-                )
+            with socket.create_connection(
+                ("127.0.0.1", HA_MCP_ADDON_HOST_PORT), timeout=5.0
+            ):
+                LOG.info("Inaddon MCP port %d open (addon container up)",
+                         HA_MCP_ADDON_HOST_PORT)
                 return base_url
-            last_err = e
-        except (urllib.error.URLError, OSError) as e:
+        except OSError as e:
             last_err = e
         time.sleep(3.0)
     raise TimeoutError(
-        f"Inaddon MCP endpoint {base_url} did not become ready within "
-        f"{timeout}s (last_status={last_status}, last_exc={last_err!r})"
+        f"Inaddon MCP endpoint {base_url} did not become reachable within "
+        f"{timeout}s (last_exc={last_err!r})"
     )
 
 
