@@ -73,11 +73,21 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
+_CACHED_YAML: YAML | None = None
+
+
 def make_yaml() -> YAML:
-    """Return a fresh round-trip YAML instance with HA tag support."""
-    ry = YAML(typ="rt")
-    ry.preserve_quotes = True
-    return ry
+    """Return a round-trip YAML instance with HA tag support.
+
+    The instance is cached to prevent ruamel.yaml from performing
+    expensive plugin discovery (glob/scandir) on every call, which
+    causes CPU spikes and event loop blocking during bulk edits.
+    """
+    global _CACHED_YAML
+    if _CACHED_YAML is None:
+        _CACHED_YAML = YAML(typ="rt")
+        _CACHED_YAML.preserve_quotes = True
+    return _CACHED_YAML
 
 
 def yaml_dumps(ry: YAML, data: Any) -> str:
