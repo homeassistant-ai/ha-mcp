@@ -1055,14 +1055,19 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # cache → only the COPY src/ + uv-sync-project layers
             # re-execute), then wait for the addon's MCP endpoint.
             addon_mcp_url: str | None = None
-            if inaddon:
-                logger.info(
-                    "Inaddon mode: triggering Supervisor addon update for PR source"
-                )
-                trigger_dev_addon_update(base_url, token, timeout=600.0)
-                addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
-                logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
+            # Pull setup-time work INTO the try/finally so post-mortem log
+            # dump runs even when trigger_dev_addon_update or
+            # wait_for_addon_mcp_ready raises — those steps own ~all the
+            # inaddon-specific failure surface, and without logs they're
+            # opaque "unknown error" failures.
             try:
+                if inaddon:
+                    logger.info(
+                        "Inaddon mode: triggering Supervisor addon update for PR source"
+                    )
+                    trigger_dev_addon_update(base_url, token, timeout=600.0)
+                    addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
+                    logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
                 yield {
                     "container": None,
                     "port": None,
