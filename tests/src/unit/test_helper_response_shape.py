@@ -1037,3 +1037,95 @@ class TestLifecycleWriteWarningsShape:
         assert any(
             "removal verification failed" in w for w in result["warnings"]
         )
+
+
+class TestSweepWarningsShape:
+    """Cross-cutting warnings-list shape coverage for tools migrated under
+    #1341 (the non-lifecycle-write half of #1332).
+
+    Mirrors the TestLifecycleWriteWarningsShape pattern from #1340, using
+    ``_assert_warnings_list_shape`` which enforces:
+      - ``success: True`` at top level
+      - ``warnings`` is a non-empty ``list[str]`` at the top level
+      - No singular ``warning`` legacy key
+      - ``warnings`` doesn't leak into nested dicts
+
+    **In-scope here (3 of 8 PR-touched src files):**
+    - ``backup.py`` (restore_backup) — top-level success+warnings
+    - ``tools_service.py`` (ha_call_event timeout) — top-level success+warnings
+    - ``tools_system.py`` (ha_restart success) — top-level success+warnings
+
+    **Out-of-scope here (5 of 8) — divergent shape, by design:**
+    - ``tools_addons.py``: ``ha_manage_addon`` returns ``status: "pending_restart"``
+      instead of ``success: True``. Content-level coverage of the ``ignored_fields``
+      warning lives in ``test_tools_addons.py::test_config_mode_options_unknown_fields_warned``.
+    - ``tools_entities.py``: ``ha_set_entity`` has a nested ``device_rename: {warnings: [...]}``
+      sub-result (its own success/warnings shape per the lookup_failed/no-device design).
+      Content-level coverage lives in ``test_entity_rename.py`` and
+      ``test_rename_consolidation.py``.
+    - ``tools_energy.py``: ``ha_manage_energy_prefs`` dry_run returns ``mode/dry_run/...``
+      payload without top-level ``success``.
+    - ``tools_integrations.py``: ``ha_get_integration`` (list mode) returns ``integrations``
+      payload without top-level ``success``.
+    - ``tools_search.py``: ``ha_deep_search`` fallback path returns ``search_type/by_domain/...``
+      payload without top-level ``success``.
+
+    These 5 divergent shapes are pre-existing design choices, not regressions
+    of #1332. Each tool's migrated warning emit is content-asserted in its
+    per-tool unit/e2e test file. A future "uniform success-marker contract"
+    PR would be the natural place to bring them under one shape-test umbrella.
+    """
+
+    @pytest.mark.asyncio
+    async def test_backup_restore_warnings_shape(self):
+        from ha_mcp.tools.backup import restore_backup
+
+        ws = AsyncMock()
+        ws.send_command.side_effect = [
+            {"success": True, "result": {"backups": [{"backup_id": "abc"}]}},
+            {"success": True, "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]}},
+            {"success": True, "result": {"config": {"create_backup": {"password": "pw"}}}},
+            {"success": True, "result": {"backup_job_id": "job"}},
+            {"success": True, "result": {"backups": [{"name": "Pre_Restore_Safety", "backup_id": "sxyz"}]}},
+            {"success": True},
+        ]
+        client = MagicMock()
+        client.base_url = "http://test"
+        client.token = "t"
+        client.verify_ssl = False
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await restore_backup(client, "abc")
+        _assert_warnings_list_shape(result)
+
+
+    @pytest.mark.asyncio
+    async def test_service_call_event_timeout_warnings_shape(self):
+        import httpx
+
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        conn_error = HomeAssistantConnectionError("timeout")
+        conn_error.__cause__ = httpx.TimeoutException("read timed out")
+        client = MagicMock()
+        client.fire_event = AsyncMock(side_effect=conn_error)
+        tools = ServiceTools.__new__(ServiceTools)
+        tools._client = client
+        tools._device_tools = MagicMock()
+
+        result = await tools.ha_call_event("evt_x")
+        _assert_warnings_list_shape(result)
+
+    @pytest.mark.asyncio
+    async def test_system_restart_warnings_shape(self):
+        from ha_mcp.tools.tools_system import SystemTools
+
+        client = AsyncMock()
+        client.check_config.return_value = {"result": "valid"}
+        client.call_service.return_value = None
+        tools = SystemTools(client)
+
+        result = await tools.ha_restart(confirm=True)
+        _assert_warnings_list_shape(result)

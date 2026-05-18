@@ -299,12 +299,14 @@ class SystemTools:
                         if "not found" not in error_msg.lower():
                             errors.append(f"{reload_target}: {error_msg}")
 
-                return {
+                response: dict[str, Any] = {
                     "success": True,
                     "message": f"Reloaded {len(results)} components",
                     "reloaded": results,
-                    "warnings": errors if errors else None,
                 }
+                if errors:
+                    response["warnings"] = errors
+                return response
 
             else:
                 # Reload specific component
