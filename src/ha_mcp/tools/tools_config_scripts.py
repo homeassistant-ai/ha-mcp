@@ -593,8 +593,10 @@ class ConfigScriptTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Script verification failed for {entity_id} "
-                        f"({type(e).__name__}): {e}"
+                        "Script verification failed for %s (%s): %s",
+                        entity_id,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Script created but verification failed: {e}"
@@ -701,8 +703,10 @@ class ConfigScriptTools:
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     logger.warning(
-                        f"Script removal verification failed for {entity_id} "
-                        f"({type(e).__name__}): {e}"
+                        "Script removal verification failed for %s (%s): %s",
+                        entity_id,
+                        type(e).__name__,
+                        e,
                     )
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
