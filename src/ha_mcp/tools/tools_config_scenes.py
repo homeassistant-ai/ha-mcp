@@ -17,6 +17,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -732,11 +733,7 @@ class ConfigSceneTools:
                                 f"Scene updated but {entity_id} not yet queryable. "
                                 "It may take a moment to become available."
                             )
-                    except (
-                        TimeoutError,
-                        HomeAssistantAPIError,
-                        HomeAssistantConnectionError,
-                    ) as e:
+                    except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                         result.setdefault("warnings", []).append(
                             f"Scene updated but verification failed: {e}"
                         )
@@ -853,11 +850,7 @@ class ConfigSceneTools:
                             f"Scene created but {entity_id} not yet queryable. "
                             "It may take a moment to become available."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     result.setdefault("warnings", []).append(
                         f"Scene created but verification failed: {e}"
                     )
@@ -982,11 +975,7 @@ class ConfigSceneTools:
                         result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
