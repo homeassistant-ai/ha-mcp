@@ -611,7 +611,14 @@ def _wait_for_ha_mcp_tools_services(
                 f"{base_url}/api/services", timeout=5, headers=headers
             )
             if svc_resp.status_code == 200:
-                domains = {s.get("domain") for s in svc_resp.json()}
+                # Filter on truthy domain to mirror the diagnostic dump at
+                # _dump_ha_readiness_diagnostics (L671). Drops None /
+                # empty-string ``domain`` values that would otherwise inflate
+                # ``len(domains)`` and pollute the ``ha_mcp_tools in domains``
+                # membership check.
+                domains = {
+                    s.get("domain") for s in svc_resp.json() if s.get("domain")
+                }
                 if "ha_mcp_tools" in domains:
                     elapsed_s = time.monotonic() - start_time
                     logger.info(
