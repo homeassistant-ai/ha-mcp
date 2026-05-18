@@ -2091,9 +2091,11 @@ class TestSceneVerificationFailureWarnings:
         assert all(isinstance(w, str) for w in warnings), (
             f"warnings list must be list[str]; got {warnings!r}"
         )
-        # Family-specific verbiage from the create branch.
-        assert any("Scene created but verification failed" in w for w in warnings), (
-            f"expected scene-create verbiage; got {warnings!r}"
+        # Neutral verbiage on the full-config branch — upsert_scene_config
+        # returns no create/update signal, so wording follows the scripts
+        # pattern (rest_client.py::upsert_scene_config L1417-1428).
+        assert any("Scene saved but verification failed" in w for w in warnings), (
+            f"expected scene-saved verbiage; got {warnings!r}"
         )
         # Exception message captured for caller-side diagnosis.
         assert any("forced for test" in w for w in warnings), (
@@ -2127,8 +2129,8 @@ class TestSceneVerificationFailureWarnings:
         warnings = result.get("warnings")
         assert isinstance(warnings, list) and warnings
         assert all(isinstance(w, str) for w in warnings)
-        assert any("Scene created but verification failed" in w for w in warnings), (
-            f"expected scene-create verbiage; got {warnings!r}"
+        assert any("Scene saved but verification failed" in w for w in warnings), (
+            f"expected scene-saved verbiage; got {warnings!r}"
         )
         assert any("forced for test" in w for w in warnings)
 

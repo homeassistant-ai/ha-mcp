@@ -668,7 +668,8 @@ async def apply_entity_category(
 
     Updates result_dict in-place: sets ``'category'`` on success, or appends
     to the top-level ``'warnings'`` list on failure. The list shape mirrors
-    the canonical response contract documented at ``AGENTS.md`` L641-649.
+    the canonical response contract documented in ``AGENTS.md`` →
+    *Writing MCP Tools → Return Values*.
 
     Args:
         client: HomeAssistantClient instance

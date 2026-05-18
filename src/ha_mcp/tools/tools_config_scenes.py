@@ -847,12 +847,12 @@ class ConfigSceneTools:
                     )
                     if not registered:
                         result.setdefault("warnings", []).append(
-                            f"Scene created but {entity_id} not yet queryable. "
+                            f"Scene saved but {entity_id} not yet queryable. "
                             "It may take a moment to become available."
                         )
                 except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                     result.setdefault("warnings", []).append(
-                        f"Scene created but verification failed: {e}"
+                        f"Scene saved but verification failed: {e}"
                     )
 
             # Apply category to entity registry if provided.

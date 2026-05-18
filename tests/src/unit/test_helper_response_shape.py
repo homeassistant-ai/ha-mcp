@@ -785,6 +785,26 @@ class TestLifecycleWriteWarningsShape:
             "removal verification failed" in w for w in result["warnings"]
         )
 
+    async def test_groups_update_path_uses_updated_action_word(
+        self, groups_tools
+    ):
+        # Rename-only call (name set, entities/add/remove all None) — the
+        # is_create branch in tools_groups.py:306 evaluates to False, so
+        # action_word must be "updated". Pins the create/update branching
+        # against a regression hardcoding "created" on the update path.
+        with patch(
+            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await groups_tools.ha_config_set_group(
+                object_id="test_group",
+                name="Renamed Test Group",
+            )
+        _assert_warnings_list_shape(result)
+        assert any("updated but" in w for w in result["warnings"])
+        assert not any("created but" in w for w in result["warnings"])
+
     # ------------------------------------------------------------------
     # Scripts: set + remove × 2 exception types
     # ------------------------------------------------------------------
@@ -922,6 +942,29 @@ class TestLifecycleWriteWarningsShape:
         assert any(
             "removal verification failed" in w for w in result["warnings"]
         )
+
+    async def test_automations_update_path_uses_updated_action_word(
+        self, automations_tools
+    ):
+        # identifier supplied — tools_config_automations.py:740 selects
+        # action_word = "updated". Pins the create/update branching against
+        # a regression hardcoding "created" on the update path.
+        with patch(
+            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            side_effect=HomeAssistantConnectionError("forced for test"),
+        ):
+            result = await automations_tools.ha_config_set_automation(
+                identifier="automation.test_auto",
+                config={
+                    "alias": "Test Auto",
+                    "trigger": [{"platform": "time", "at": "07:00:00"}],
+                    "action": [{"service": "light.turn_on"}],
+                },
+            )
+        _assert_warnings_list_shape(result)
+        assert any("updated but" in w for w in result["warnings"])
+        assert not any("created but" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
     # Scenes: set + remove × 2 exception types
