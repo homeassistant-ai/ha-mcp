@@ -451,6 +451,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
+- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 - `ha_set_integration_enabled` — Enable/disable integration (config entry).
 
 ### Labels & Categories
@@ -489,7 +490,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
 - `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
-- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
