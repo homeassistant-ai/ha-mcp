@@ -593,7 +593,6 @@ class ConfigScriptTools:
                             f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
@@ -706,7 +705,6 @@ class ConfigScriptTools:
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
                 except (
-                    TimeoutError,
                     HomeAssistantAPIError,
                     HomeAssistantConnectionError,
                     HomeAssistantAuthError,
