@@ -106,24 +106,52 @@ def ssh_exec(
         *cmd,
     ]
     env = {**os.environ, "SSHPASS": SSH_ADDON_PASSWORD}
-    try:
-        return subprocess.run(
-            ssh_cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        # subprocess.CalledProcessError's default __str__ only includes the
-        # exit code — the actual SSH/docker error lives on stderr and would
-        # otherwise be lost in CI output. Re-raise as RuntimeError with
-        # full stderr+stdout so failures are actionable.
-        raise RuntimeError(
-            f"ssh_exec failed (exit {exc.returncode}): cmd={cmd!r} "
-            f"stderr={exc.stderr!r} stdout={exc.stdout!r}"
-        ) from exc
+
+    # The Advanced SSH addon's sshd takes a beat to start accepting key
+    # exchange after Supervisor reports the addon as "started" — verified
+    # on PR #1375 CI run 287c5ced where the first ssh attempt failed with
+    # ``kex_exchange_identification: read: Connection reset by peer``.
+    # Retry the entire ``subprocess.run`` on that specific stderr token
+    # (and the connection-refused variant) so cold-start races don't
+    # require every caller to embed retry logic.
+    deadline = time.monotonic() + max(timeout, 60.0)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return subprocess.run(
+                ssh_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").lower()
+            transient = (
+                "kex_exchange_identification" in stderr
+                or "connection reset by peer" in stderr
+                or "connection refused" in stderr
+                or "no route to host" in stderr
+            )
+            if transient and time.monotonic() < deadline:
+                LOG.debug(
+                    "ssh_exec transient on attempt %d (stderr=%r); retrying",
+                    attempt,
+                    exc.stderr,
+                )
+                time.sleep(2.0)
+                continue
+            # subprocess.CalledProcessError's default __str__ only includes
+            # the exit code — the actual SSH/docker error lives on stderr
+            # and would otherwise be lost in CI output. Re-raise as
+            # RuntimeError with full stderr+stdout so failures are
+            # actionable.
+            raise RuntimeError(
+                f"ssh_exec failed (exit {exc.returncode}, attempt={attempt}): "
+                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}"
+            ) from exc
 
 
 def docker_exec_in_addon(
@@ -688,7 +716,11 @@ DEFAULT_BACKUP_PASSWORD = "e2e-test-backup-password"
 
 
 def set_default_backup_password(
-    base_url: str, token: str, *, password: str = DEFAULT_BACKUP_PASSWORD
+    base_url: str,
+    token: str,
+    *,
+    password: str = DEFAULT_BACKUP_PASSWORD,
+    overall_timeout: float = 120.0,
 ) -> None:
     """Set HA Core's default backup-create password via WS at session start.
 
@@ -699,7 +731,18 @@ def set_default_backup_password(
     (the file is written by HA Core's backup integration on first save —
     pre-baking the file occasionally races with the integration's own
     storage migration on a fresh-boot HAOS). Doing it at session start
-    via the WS ``backup/config/update`` command is deterministic.
+    via the WS ``backup/config/update`` command is deterministic — once
+    the backup integration's WS handlers are registered.
+
+    HA Core's frontend serves ``/manifest.json`` (the readiness gate the
+    conftest's ``boot_haos_qemu`` polls) BEFORE all integrations finish
+    loading; the ``backup`` integration may register its WS commands
+    seconds after that gate releases. Calling ``backup/config/update``
+    against an unregistered command returns
+    ``{"code": "unknown_command", "message": "Unknown command."}`` —
+    so we retry the WS call on that specific error until the integration
+    is available, bounded by ``overall_timeout``. Once registered the
+    command itself completes sub-second.
 
     Idempotent: HA Core overwrites the stored ``password`` field on
     each call, so re-running this against a HAOS that already has a
@@ -711,53 +754,97 @@ def set_default_backup_password(
         base_url.replace("http://", "ws://").replace("https://", "wss://")
         + "/api/websocket"
     )
-    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
-        first = json.loads(ws.recv())
-        if first.get("type") != "auth_required":
-            raise RuntimeError(
-                f"WS handshake: expected auth_required, got {first!r}"
-            )
-        ws.send(json.dumps({"type": "auth", "access_token": token}))
-        auth_resp = json.loads(ws.recv())
-        if auth_resp.get("type") != "auth_ok":
-            raise RuntimeError(f"WS auth rejected: {auth_resp}")
-
-        msg_id = 1
-        ws.send(json.dumps({
-            "id": msg_id,
-            "type": "backup/config/update",
-            "create_backup": {"password": password},
-        }))
-        # Read frames until our id arrives. Short timeout: this is a
-        # storage write, not a Docker rebuild — sub-second under normal
-        # conditions.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            try:
-                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
-            except TimeoutError:
-                continue
-            try:
-                if not isinstance(raw, str):
-                    raw = raw.decode()
-                resp = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    deadline = time.monotonic() + overall_timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        with websockets.sync.client.connect(
+            ws_url, max_size=None, open_timeout=30
+        ) as ws:
+            first = json.loads(ws.recv())
+            if first.get("type") != "auth_required":
                 raise RuntimeError(
-                    f"backup/config/update: malformed WS frame: {exc} "
-                    f"(raw={raw!r})"
-                ) from exc
-            if resp.get("id") != msg_id:
+                    f"WS handshake: expected auth_required, got {first!r}"
+                )
+            ws.send(json.dumps({"type": "auth", "access_token": token}))
+            auth_resp = json.loads(ws.recv())
+            if auth_resp.get("type") != "auth_ok":
+                raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+            msg_id = 1
+            ws.send(json.dumps({
+                "id": msg_id,
+                "type": "backup/config/update",
+                "create_backup": {"password": password},
+            }))
+            # Per-call read budget. The actual command is sub-second once
+            # the integration is loaded; the outer ``overall_timeout``
+            # covers the case where backup integration hasn't registered
+            # its WS handlers yet (we retry the whole call below).
+            call_deadline = time.monotonic() + 15
+            resp: dict[str, Any] | None = None
+            while time.monotonic() < call_deadline:
+                try:
+                    raw = ws.recv(
+                        timeout=max(call_deadline - time.monotonic(), 1.0)
+                    )
+                except TimeoutError:
+                    continue
+                try:
+                    if not isinstance(raw, str):
+                        raw = raw.decode()
+                    candidate = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"backup/config/update: malformed WS frame: {exc} "
+                        f"(raw={raw!r})"
+                    ) from exc
+                if candidate.get("id") != msg_id:
+                    continue
+                resp = candidate
+                break
+
+            if resp is None:
+                raise TimeoutError(
+                    "backup/config/update: no matching response within "
+                    "per-call 15s window"
+                )
+            if resp.get("success", False):
+                LOG.info(
+                    "Default backup password configured via WS "
+                    "(attempt=%d)",
+                    attempt,
+                )
+                return
+            err = resp.get("error") or {}
+            err_code = err.get("code") if isinstance(err, dict) else None
+            if err_code == "unknown_command":
+                # Backup integration's WS handlers haven't registered
+                # yet — sleep briefly and retry the whole connect+call.
+                # Reconnecting (rather than reusing the open socket) is
+                # the simplest way to also pick up auth_required state
+                # if HA Core happened to restart the WS server during
+                # initial integration load.
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"backup/config/update still 'unknown_command' "
+                        f"after {overall_timeout}s; backup integration "
+                        f"never registered its WS handlers. Did HA Core "
+                        f"fail to load the integration? Check ha-core "
+                        f"runtime log in the diagnostics artifact."
+                    )
+                LOG.debug(
+                    "backup integration not yet loaded (attempt=%d); "
+                    "retrying in 2s",
+                    attempt,
+                )
+                time.sleep(2.0)
                 continue
-            if not resp.get("success", False):
-                # ``error`` may be missing or None — include the full
-                # frame so a maintainer can see what Supervisor sent.
-                err = resp.get("error") or resp
-                raise RuntimeError(f"backup/config/update failed: {err!r}")
-            LOG.info("Default backup password configured via WS")
-            return
-        raise TimeoutError(
-            "backup/config/update did not complete within 30s"
-        )
+            # Any other failure: include the full frame so a maintainer
+            # can see what HA Core sent.
+            raise RuntimeError(
+                f"backup/config/update failed: {resp.get('error') or resp!r}"
+            )
 
 
 def login_for_token(base_url: str, username: str, password: str) -> str:

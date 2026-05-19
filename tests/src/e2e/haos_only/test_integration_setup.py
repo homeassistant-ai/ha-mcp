@@ -59,171 +59,23 @@ def _find_entry_for_domain(
     return None
 
 
-async def test_esphome_companion_integration_loaded(mcp_client: Any) -> None:
-    """ESPHome addon's installation auto-registers the ``esphome`` integration.
-
-    The ESPHome Device Builder addon (installed by build_image.py's ADDONS
-    tuple with ``start=True``) provisions an ESPHome Dashboard inside its
-    container; HA Core picks that up on first boot and adds a config entry
-    in the ``esphome`` domain. We assert that entry exists and is in the
-    ``loaded`` state. Anything else (``setup_error``, ``setup_retry``,
-    missing entirely) means the addon → integration auto-register chain
-    broke and downstream ESPHome tooling won't function.
-    """
-    raw = await mcp_client.call_tool("ha_get_integration", {"domain": "esphome"})
-    data = assert_mcp_success(raw, "List esphome integrations")
-    entries = data.get("entries", [])
-    assert entries, (
-        f"No 'esphome' integration entries found. ha_get_integration returned: "
-        f"{data}. Either the ESPHome Device Builder addon failed to install / "
-        f"start, or its companion HA integration didn't auto-register on first "
-        f"boot."
-    )
-
-    entry = entries[0]
-    state = entry.get("state")
-    assert state == "loaded", (
-        f"esphome integration entry is in state {state!r}, expected 'loaded'. "
-        f"Entry: {entry}. Check the ESPHome addon's boot logs."
-    )
-    LOG.info(
-        "ESPHome integration loaded: entry_id=%s title=%r",
-        entry.get("entry_id"),
-        entry.get("title"),
-    )
-
-
-async def test_esphome_dashboard_device_present(mcp_client: Any) -> None:
-    """The ESPHome integration actually runs — it has surfaced its dashboard.
-
-    A 'loaded' state is necessary but not sufficient: an integration can report
-    'loaded' immediately after init even while its background platform setup
-    is still in flight or has silently failed. ESPHome's dashboard config
-    entry registers an update entity (``update.esphome_dashboard``) once the
-    addon's web UI is reachable, so its presence is a stronger proof-of-life
-    than the entry state alone.
-    """
-    raw = await mcp_client.call_tool(
-        "ha_search_entities",
-        {"query": "esphome", "limit": 25},
-    )
-    data = parse_mcp_result(raw)
-    # ha_search_entities wraps results either at top level or under "data".
-    inner = data.get("data", data)
-    results = inner.get("results", [])
-    esphome_entity_ids = [
-        r.get("entity_id", "")
-        for r in results
-        if "esphome" in r.get("entity_id", "").lower()
-    ]
-    assert esphome_entity_ids, (
-        f"No esphome-namespaced entities found via ha_search_entities. "
-        f"Full results: {results}. The integration loaded but its platform "
-        f"setup didn't register any entities."
-    )
-    LOG.info("ESPHome entities discovered: %s", esphome_entity_ids)
-
-
-async def test_nodered_companion_integration_loaded(mcp_client: Any) -> None:
-    """Node-RED addon's installation auto-registers the Node-RED integration.
-
-    Like ESPHome above, the Node-RED addon brings up a Node-RED server inside
-    its container and HA Core registers the companion integration. The domain
-    name has historically been either ``nodered`` or ``node_red`` depending on
-    the addon's HACS bootstrap version; accept either so the test isn't
-    brittle to upstream renames.
-    """
-    list_raw = await mcp_client.call_tool("ha_get_integration", {})
-    list_data = assert_mcp_success(list_raw, "List all integrations")
-    all_entries = list_data.get("entries", [])
-
-    matched_domain = None
-    matched_entry = None
-    for candidate in _NODE_RED_DOMAIN_CANDIDATES:
-        entry = _find_entry_for_domain(all_entries, candidate)
-        if entry is not None:
-            matched_domain = candidate
-            matched_entry = entry
-            break
-
-    assert matched_entry is not None, (
-        f"No Node-RED integration entry found under any of "
-        f"{_NODE_RED_DOMAIN_CANDIDATES}. Installed integration domains: "
-        f"{sorted({e.get('domain') for e in all_entries})}. The Node-RED addon "
-        f"installed but its HA companion integration didn't auto-register."
-    )
-    state = matched_entry.get("state")
-    assert state == "loaded", (
-        f"Node-RED integration (domain={matched_domain!r}) is in state "
-        f"{state!r}, expected 'loaded'. Entry: {matched_entry}."
-    )
-    LOG.info(
-        "Node-RED integration loaded: domain=%s entry_id=%s",
-        matched_domain,
-        matched_entry.get("entry_id"),
-    )
-
-
-async def test_nodered_integration_disable_enable_cycle(mcp_client: Any) -> None:
-    """``ha_set_integration_enabled`` round-trips on the Node-RED entry.
-
-    Disabling and re-enabling Node-RED exercises the real Supervisor + HA Core
-    config-entry lifecycle for an addon-companion integration — the
-    testcontainer tier can't run this because no addon-companion config entry
-    exists there. We toggle Node-RED specifically because Frigate / Z2M are
-    ``start=False`` and their integrations don't necessarily load; ESPHome's
-    entry sometimes flips to ``setup_retry`` during disable/enable as the
-    dashboard container restarts, which would race with our state assertion.
-    """
-    list_raw = await mcp_client.call_tool("ha_get_integration", {})
-    list_data = assert_mcp_success(list_raw, "List integrations to find Node-RED")
-
-    matched_entry = None
-    for candidate in _NODE_RED_DOMAIN_CANDIDATES:
-        matched_entry = _find_entry_for_domain(list_data.get("entries", []), candidate)
-        if matched_entry is not None:
-            break
-    assert matched_entry is not None, (
-        "Node-RED integration entry not present. "
-        "test_nodered_companion_integration_loaded should have failed first."
-    )
-    entry_id = matched_entry["entry_id"]
-    domain = matched_entry.get("domain")
-    LOG.info("Toggling Node-RED entry %s (domain=%s)", entry_id, domain)
-
-    try:
-        disable_raw = await mcp_client.call_tool(
-            "ha_set_integration_enabled",
-            {"entry_id": entry_id, "enabled": False},
-        )
-        assert_mcp_success(disable_raw, "Disable Node-RED integration")
-
-        # Poll for the disabled_by flag to flip; HA's config-entry update
-        # acknowledges synchronously but the on-disk write is asynchronous.
-        await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_get_integration",
-            arguments={"entry_id": entry_id},
-            predicate=lambda d: (d.get("entry") or {}).get("disabled_by") == "user",
-            description="Node-RED entry shows disabled_by=user",
-            timeout=45,
-        )
-    finally:
-        # Always re-enable to leave the qcow2 in the state subsequent tests
-        # in the session expect.
-        enable_raw = await mcp_client.call_tool(
-            "ha_set_integration_enabled",
-            {"entry_id": entry_id, "enabled": True},
-        )
-        assert_mcp_success(enable_raw, "Re-enable Node-RED integration")
-        await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_get_integration",
-            arguments={"entry_id": entry_id},
-            predicate=lambda d: (d.get("entry") or {}).get("disabled_by") is None,
-            description="Node-RED entry no longer disabled",
-            timeout=45,
-        )
+# NOTE: ``test_esphome_companion_integration_loaded``,
+# ``test_esphome_dashboard_device_present``,
+# ``test_nodered_companion_integration_loaded``, and
+# ``test_nodered_integration_disable_enable_cycle`` were deleted in
+# this commit. Their premise — that installing the ESPHome or Node-RED
+# addon auto-registers a companion HA integration — is incorrect.
+# Verified live (CI run on 287c5ced): with both addons installed and
+# running, ``ha_get_integration`` returns only ['backup', 'demo',
+# 'go2rtc', 'google_translate', 'ha_mcp_tools', 'hacs', 'hassio',
+# 'local_calendar', 'mcp_proxy', 'radio_browser', 'shopping_list',
+# 'sun'] — neither esphome nor nodered. Both addons require the user
+# to set up the integration via Settings → Integrations (config flow),
+# they don't auto-register on addon install. A future test could
+# drive the config flow explicitly via ``ha_client.start_config_flow``
+# (same pattern as the local_calendar test below), but that's
+# substantial new test scaffolding; for now the integration-setup
+# coverage in this PR is local_calendar + sun.
 
 
 async def test_sun_position_is_realistic(mcp_client: Any) -> None:

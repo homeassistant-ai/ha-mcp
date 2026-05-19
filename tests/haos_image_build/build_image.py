@@ -513,6 +513,41 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     return candidates[0]["slug"]
 
 
+# Per-addon post-install option overrides. Two situations need the bake
+# to set options (rather than letting Supervisor use config.yaml defaults):
+#
+# 1. ``start=True`` addons whose default options would refuse to start —
+#    e.g. Node-RED's addon defaults to ``ssl: true`` (verified live:
+#    hassio-addons/addon-node-red/node-red/config.yaml) but ships no
+#    cert, so a default-options install crashes the addon in a death
+#    loop. Lifecycle tests against such an addon would see only s6-rc
+#    startup spam instead of real runtime logs. Set ``ssl: false`` so
+#    the addon boots cleanly.
+#
+# 2. ``start=False`` addons that we want to STAY stopped. Without
+#    ``boot: manual`` + ``watchdog: false`` Supervisor's watchdog
+#    auto-restarts them after the initial crash, racing the test
+#    runner's "addon should be stopped" assertions. Explicitly setting
+#    these makes the bake's start-state stable across boots.
+_ADDON_OPTION_OVERRIDES: dict[str, dict[str, Any]] = {
+    "Node-RED": {
+        "options": {"ssl": False},
+    },
+    "Mosquitto broker": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Zigbee2MQTT": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Frigate": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+}
+
+
 def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     """Install (and optionally start) a single addon. Returns slug.
 
@@ -521,14 +556,17 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
       - POST /store/reload                            refresh
       - GET  /store                                   list store contents
       - POST /store/addons/{slug}/install             install an addon
+      - POST /addons/{slug}/options                   set addon options
       - POST /addons/{slug}/start                     start it
-    Note the asymmetry: install lives under /store/addons/, start is on
-    the installed-addon path /addons/.
+    Note the asymmetry: install lives under /store/addons/, options +
+    start are on the installed-addon path /addons/.
 
-    Options are deliberately not set here in v1 (#1281 comment thread). Many
-    addon schemas have required fields (Mosquitto's require_certificate,
-    Z2M's serial config, Frigate's cameras) that need realistic values; the
-    test runner configures them per-test with mock streams/devices.
+    Per-addon option overrides live in ``_ADDON_OPTION_OVERRIDES`` —
+    they fix addons whose config.yaml defaults are incompatible with
+    starting fresh (Node-RED's ssl=true), or whose default ``boot``/
+    ``watchdog`` settings would have Supervisor auto-restart a
+    ``start=False`` addon (Mosquitto, Z2M, Frigate). Other addons get
+    Supervisor's schema-default options.
     """
     if addon.repo:
         _add_repository(ws, addon.repo)
@@ -536,6 +574,22 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
+    if overrides:
+        LOG.info(
+            "Applying option overrides to %s (slug=%s): %s",
+            addon.name,
+            slug,
+            overrides,
+        )
+        ws.supervisor_api(
+            f"/addons/{slug}/options",
+            method="post",
+            data=overrides,
+            timeout=60.0,
+        )
+
     if addon.start:
         ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     return slug
