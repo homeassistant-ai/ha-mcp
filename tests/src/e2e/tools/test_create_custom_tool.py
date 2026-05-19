@@ -1831,33 +1831,119 @@ class TestCodeModeProxyLaunderingBlocked:
 class TestCodeModeSavePersistenceFailure:
     """Companion to the unit tests in ``test_saved_tools_persistence.py``
     — verifies the user-facing E2E shape of the save_warning rollback.
-    Reaches the persistence-failure path by configuring an unwriteable
-    directory.
+    Reaches the persistence-failure path by ``chmod``-ing the addon's
+    ``/data/saved_tools.json`` unwriteable mid-test via the SSH-addon
+    docker-exec helper.
     """
 
-    async def test_save_warning_rollback_shape(
-        self, mcp_client_with_code_mode, tmp_path, monkeypatch
-    ):
+    @pytest.mark.inaddon_only
+    async def test_save_warning_rollback_shape(self, mcp_client):
         """When persistence fails, the response must include
         ``save_warning`` and reset ``saved_as`` to None. The unit
-        suite covers the helper behaviour; this test pins the
-        end-to-end shape returned to MCP clients.
+        suite covers the helper behaviour; this E2E pins the shape
+        returned to MCP clients against the real addon container.
 
-        Skipped when the in-process server doesn't expose a way to
-        reconfigure the saved-tools path mid-run; the unit tests
-        cover the core behaviour either way.
+        Mechanism: SSH into HAOS via the bake-installed Advanced SSH
+        addon and ``docker exec`` ``chmod 444`` on the dev addon's
+        ``/data/saved_tools.json``. The addon's persistence write then
+        fails with EACCES, ``_save_saved_tools`` returns False, and the
+        ``ha_manage_custom_tool`` response surfaces the rollback shape.
+        Restoration via ``chmod 644`` runs in the test's ``finally``
+        regardless of outcome.
+
+        Uses the session-scoped ``mcp_client`` fixture (HTTP transport
+        to the addon) rather than ``mcp_client_with_code_mode`` (an
+        in-process server that wouldn't exercise the addon's on-disk
+        ``/data/saved_tools.json``). The dev addon has code mode
+        enabled at install time via ``build_image.install_ha_mcp_dev_addon``
+        options, so ``ha_manage_custom_tool`` is exposed on the addon's
+        MCP endpoint.
         """
-        check = await _check_tool_available(mcp_client_with_code_mode)
-        _skip_if_unavailable(check, "save_warning rollback path")
-        # The E2E fixture spins up the addon container; we can't easily
-        # poison /data from the test runner. The unit tests cover the
-        # rollback behaviour; this E2E is a placeholder skip so future
-        # maintainers see the gap and the test file documents the
-        # contract. See test_saved_tools_persistence.py:TestSaveSavedTools
-        # for the round-trip + return-bool coverage.
-        pytest.skip(
-            "save_warning rollback covered by unit tests "
-            "(test_saved_tools_persistence.py); E2E requires runtime "
-            "filesystem poisoning that the addon container model "
-            "doesn't currently expose."
+        from haos_runtime import HA_MCP_DEV_ADDON_SLUG, docker_exec_in_addon
+
+        # Precondition: the addon must expose ``ha_manage_custom_tool``.
+        # On the inaddon tier this is the bake-time config, but assert
+        # rather than silently no-op so a regression in the bake's
+        # ENABLE_CODE_MODE wiring fails this test loudly.
+        tools = await mcp_client.list_tools()
+        tool_names = {t.name for t in tools}
+        assert TOOL_NAME in tool_names, (
+            f"{TOOL_NAME!r} not exposed by addon MCP endpoint — the dev "
+            f"addon's ENABLE_CODE_MODE option must be enabled by "
+            f"build_image.install_ha_mcp_dev_addon for this test. "
+            f"Available tools: {sorted(tool_names)[:10]}..."
+        )
+
+        saved_tools_path = "/data/saved_tools.json"
+
+        # Ensure the file exists before chmod (the addon creates it
+        # lazily on first save, and chmod on a non-existent path errors).
+        docker_exec_in_addon(
+            HA_MCP_DEV_ADDON_SLUG, ["touch", saved_tools_path]
+        )
+        docker_exec_in_addon(
+            HA_MCP_DEV_ADDON_SLUG, ["chmod", "444", saved_tools_path]
+        )
+        try:
+            # First save: persistence must fail; response surfaces
+            # save_warning and saved_as=None while success stays True
+            # (the sandbox code executed; only the durability of the
+            # save_as entry failed).
+            code = "result = {'value': 42}\nresult"
+            data = await safe_call_tool(
+                mcp_client,
+                TOOL_NAME,
+                {
+                    "code": code,
+                    "justification": "E2E test: save_warning rollback",
+                    "save_as": "test_save_warning",
+                },
+            )
+            assert data.get("success") is True, (
+                f"Sandbox itself should still succeed even when persistence "
+                f"fails: {data}"
+            )
+            payload = data.get("data", {})
+            assert payload.get("saved_as") is None, (
+                f"saved_as must be reset to None after rollback: {data}"
+            )
+            warning = payload.get("save_warning")
+            assert isinstance(warning, str) and warning, (
+                f"save_warning must be a non-empty string explaining the "
+                f"persistence failure: {data}"
+            )
+            logger.info(
+                "save_warning surfaced as expected on unwriteable "
+                "/data/saved_tools.json: %r",
+                warning,
+            )
+        finally:
+            # Always restore writeability so the rest of the session
+            # (and any retry) sees a usable persistence path.
+            docker_exec_in_addon(
+                HA_MCP_DEV_ADDON_SLUG, ["chmod", "644", saved_tools_path]
+            )
+
+        # Second save (after restore): proves the restore worked and
+        # that the same code path now persists cleanly. Uses a distinct
+        # save_as so it doesn't collide with the first attempt (which
+        # was rolled back from the in-memory cache but never written).
+        data = await safe_call_tool(
+            mcp_client,
+            TOOL_NAME,
+            {
+                "code": code,
+                "justification": "E2E test: save_warning rollback (post-restore)",
+                "save_as": "test_save_warning_restored",
+            },
+        )
+        assert data.get("success") is True, (
+            f"Post-restore save must succeed: {data}"
+        )
+        payload = data.get("data", {})
+        assert payload.get("saved_as") == "test_save_warning_restored", (
+            f"saved_as must reflect the persisted name after restore: {data}"
+        )
+        assert "save_warning" not in payload, (
+            f"save_warning must not appear on a clean save: {data}"
         )
