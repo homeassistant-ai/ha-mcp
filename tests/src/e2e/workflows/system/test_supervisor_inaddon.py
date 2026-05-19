@@ -44,14 +44,16 @@ pytestmark = [pytest.mark.inaddon_only]
 
 logger = logging.getLogger(__name__)
 
+
 # Real Supervisor system-service slugs that expose ``/logs`` on the
 # HAOS-17.3 / Supervisor-2026.05.0 baseline. Verified on PR #1375 CI
-# run 287c5ced: ``cli`` is listed by Supervisor as a known service
-# but its ``/cli/logs`` endpoint returns 404 ("Service 'cli' not
-# found at http://supervisor/cli/logs — Supervisor may not expose it
-# on this HA OS version"); the other 7 services return parseable
-# journald content. ``cli`` is omitted here to keep CI green; if a
-# future HAOS bump exposes its logs, add it back.
+# runs 287c5ced (``cli`` 404s) and c80006d9 (``observer`` 404s):
+# both are listed by Supervisor as known services but their
+# ``/<service>/logs`` endpoints return 404 ("Service 'X' not found
+# at http://supervisor/X/logs — Supervisor may not expose it on
+# this HA OS version"); the other 6 return parseable journald
+# content. Omitted here to keep CI green; if a future HAOS bump
+# exposes their logs, add back.
 # Kept as a tuple (not a frozenset) so parametrize id ordering is
 # stable across runs.
 SYSTEM_SERVICES: tuple[str, ...] = (
@@ -60,7 +62,6 @@ SYSTEM_SERVICES: tuple[str, ...] = (
     "dns",
     "host",
     "multicast",
-    "observer",
     "supervisor",
 )
 

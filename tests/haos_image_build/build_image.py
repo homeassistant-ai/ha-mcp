@@ -771,9 +771,16 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
     """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
 
     Sets a known root password ("haosdebug") so the CI workflow can
-    SSH in unattended. Configures listen port 22222 (avoids HAOS host
-    SSHD on 22) — the QEMU hostfwd in haos_runtime.py exposes this on
-    127.0.0.1:22222 on the runner.
+    SSH in unattended. **Remaps the container's port 22 to HAOS port
+    22222** via Supervisor's ``network`` option, because the addon's
+    upstream default (verified at
+    https://raw.githubusercontent.com/hassio-addons/addon-ssh/main/ssh/config.yaml :
+    ``ports: 22/tcp: 22``) collides with HAOS's host sshd on port 22
+    under ``host_network: true``. The collision causes the addon's
+    sshd to silently fail to bind, which surfaces downstream as
+    ``kex_exchange_identification: read: Connection reset by peer``
+    (verified on PR #1375 CI run 26090534093). The QEMU hostfwd in
+    ``haos_runtime.boot_haos_qemu`` exposes guest:22222 on host:22222.
     """
     slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
     LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
@@ -791,7 +798,11 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
                     "password": SSH_ADDON_PASSWORD,
                     "authorized_keys": [],
                     "sftp": False,
-                    "compatibility_mode": False,
+                    # Without ``compatibility_mode: true`` modern OpenSSH
+                    # in this addon refuses root-with-password auth from
+                    # the CI runner's older ssh client. Enable it so
+                    # sshpass succeeds against the bake-set password.
+                    "compatibility_mode": True,
                     "allow_agent_forwarding": False,
                     "allow_remote_port_forwarding": False,
                     "allow_tcp_forwarding": False,
@@ -801,6 +812,10 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
                 "packages": [],
                 "init_commands": [],
             },
+            # Remap container port 22 → HAOS port 22222 so the addon's
+            # sshd doesn't collide with HAOS's host sshd. Key is the
+            # internal port spec; value is the HAOS-side port.
+            "network": {"22/tcp": 22222},
             "boot": "auto",
         },
         timeout=60.0,
