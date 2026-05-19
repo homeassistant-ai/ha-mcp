@@ -530,7 +530,8 @@ class TestDryRun:
         assert result["success"] is True  # shape is fine
         assert result["current_state_validation_errors"] == []
         assert result["partial"] is True
-        assert "websocket timeout" in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        assert any("websocket timeout" in w for w in result["warnings"])
         assert any(
             "energy/validate (current state) failed" in rec.message
             for rec in caplog.records
@@ -650,7 +651,7 @@ class TestSetPrefs:
         assert result["success"] is True  # save succeeded
         assert "post_save_validation_errors" in result
         assert len(result["post_save_validation_errors"]) == 1
-        assert "warning" in result
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
 
     async def test_post_save_validation_failure_non_fatal(self, tools):
         """If the post-save validate itself fails, the save still succeeded.
@@ -675,7 +676,8 @@ class TestSetPrefs:
         assert result["success"] is True
         assert "post_save_validation_errors" not in result
         assert result["partial"] is True
-        assert "validate blew up" in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        assert any("validate blew up" in w for w in result["warnings"])
 
     async def test_post_save_validate_failure_surfaced_as_warning(self, tools, caplog):
         """If post-save energy/validate returns success=false, the caller sees
@@ -700,7 +702,8 @@ class TestSetPrefs:
         assert result["success"] is True
         assert "post_save_validation_errors" not in result
         assert result["partial"] is True
-        assert "validate endpoint missing" in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        assert any("validate endpoint missing" in w for w in result["warnings"])
         assert any(
             "energy/validate (post-save) failed" in rec.message
             for rec in caplog.records
@@ -2141,7 +2144,7 @@ class TestConvenienceResponsePassthrough:
         assert result["success"] is True
         assert "post_save_validation_errors" in result
         assert len(result["post_save_validation_errors"]) == 1
-        assert "warning" in result
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
 
     async def test_partial_warning_bubbles_through(self, tools):
         """When post-save validate itself fails, _set_prefs sets
@@ -2160,4 +2163,5 @@ class TestConvenienceResponsePassthrough:
         )
         assert result["success"] is True
         assert result["partial"] is True
-        assert "validate broken" in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        assert any("validate broken" in w for w in result["warnings"])

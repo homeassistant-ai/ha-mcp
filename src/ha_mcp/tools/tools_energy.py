@@ -673,7 +673,7 @@ class EnergyTools:
             }
             if validate_warning is not None:
                 response["partial"] = True
-                response["warning"] = validate_warning
+                response.setdefault("warnings", []).append(validate_warning)
             return response
 
         except ToolError:
@@ -953,14 +953,14 @@ class EnergyTools:
             }
             if post_save_errors:
                 response["post_save_validation_errors"] = post_save_errors
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but the persisted config has "
                     f"{len(post_save_errors)} validation error(s). Review "
                     "and re-write if any relate to this change."
                 )
             elif post_save_validate_error is not None:
                 response["partial"] = True
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but post-save energy/validate "
                     f"failed: {post_save_validate_error}. The persisted "
                     "config has not been re-validated."

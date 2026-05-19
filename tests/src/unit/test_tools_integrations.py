@@ -693,7 +693,7 @@ class TestDeleteHelpersIntegrations:
                 wait=True,
             )
         assert result["success"] is True
-        assert "warning" not in result
+        assert not result.get("warnings"), f"Unexpected warnings: {result.get('warnings')}"
         mock_wait.assert_awaited_once()
 
     async def test_simple_path_wait_true_timeout_warns(
@@ -718,8 +718,8 @@ class TestDeleteHelpersIntegrations:
                 wait=True,
             )
         assert result["success"] is True
-        assert "warning" in result
-        assert "still present" in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        assert any("still present" in w for w in result["warnings"])
 
     async def test_simple_path_wait_true_propagates_connection_error(
         self, tools, mock_client
@@ -816,9 +816,10 @@ class TestDeleteHelpersIntegrations:
                 wait=True,
             )
         assert result["success"] is True
-        assert "warning" in result
-        assert "sensor.energy_offpeak" in result["warning"]
-        assert "sensor.energy_peak" not in result["warning"]
+        assert result.get("warnings"), f"Expected warnings list, got: {result}"
+        warnings_text = " ".join(result["warnings"])
+        assert "sensor.energy_offpeak" in warnings_text
+        assert "sensor.energy_peak" not in warnings_text
         assert mock_wait.await_count == 2
 
 

@@ -64,11 +64,17 @@ class TestRenameConsolidationEdgeCases:
         )
 
         # Rename should include a warning about updating references
-        assert "warning" in rename_data, (
-            f"Rename should include a warning about updating references: {rename_data.keys()}"
+        warnings = rename_data.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Rename should include warnings about updating references: {rename_data.keys()}"
+        )
+        assert any(
+            "automations, scripts, or dashboards" in w for w in warnings
+        ), (
+            f"Expected update-references warning content; got: {warnings!r}"
         )
 
-        logger.info("Verified simple response format (no 'results' key, has warning)")
+        logger.info("Verified simple response format (no 'results' key, has warnings)")
 
         # Cleanup
         await safe_call_tool(
