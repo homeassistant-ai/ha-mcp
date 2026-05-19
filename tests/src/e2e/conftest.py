@@ -91,25 +91,16 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     writes don't survive pytest-xdist's per-worker capture buffer, so
     going through pytest's own reporting plumbing is the reliable path.
 
-    History: gate-instrumentation was added in #1310; the
-    ``HA_MCP_TOOLS_WAIT`` gate was added in #1346; the five budgets
-    were tightened with 2-63x headroom in #1369 after 24-69
-    ``[READINESS_GATE_TIMING]`` samples across 23 master runs (49h
-    cross-day span). Subsequently the five polling gates were
-    replaced by a single ``/api/core/state`` ``CoreState.RUNNING``
-    check (``_wait_for_core_state_running``), with a residual tight
-    ``sun.sun`` state poll kept inline because sun's first periodic
-    position computation runs as a scheduled task after
-    ``async_setup_entry`` returns. The structural rationale lives in
-    the #366 thread (Ilya0527 2026-05-18).
-
-    Emissions now include the entry-state snapshot
-    (``entries_loaded`` / ``entries_total``) from
-    ``_snapshot_config_entries`` at the ``CoreState.RUNNING`` trip
-    moment. Any post-merge run where ``entries_loaded <
-    entries_total`` means a slow integration finished
-    ``async_setup_entry`` after the gate exited, which would justify
-    a follow-up gate.
+    The current ``core_state`` emission includes ``entries_loaded`` /
+    ``entries_total`` / ``snapshot_ok`` from ``_snapshot_config_entries``
+    at the trip moment. ``pytest_terminal_summary`` warns when any
+    ``snapshot_ok`` sample shows ``entries_loaded < entries_total`` —
+    that drift means a slow integration finished ``async_setup_entry``
+    after ``CoreState.RUNNING`` was set and a follow-up gate is
+    justified. Gate-instrumentation history: introduced in #1310 and
+    iterated through #1346 / #1369; consolidated onto the single
+    ``CoreState.RUNNING`` check in the PR referencing #366
+    (Ilya0527 2026-05-18 thread for the structural rationale).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
@@ -176,6 +167,26 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             else:
                 parts.append(f"{key}={value}")
         terminalreporter.write_line("[READINESS_GATE_TIMING] " + " ".join(parts))
+
+    # Drift check (warn-only): the ``_log_readiness_timing`` docstring
+    # promises this invariant — if any ``core_state`` sample shows
+    # ``entries_loaded < entries_total`` at trip time, a slow integration
+    # finished ``async_setup_entry`` after ``CoreState.RUNNING`` was set
+    # and a follow-up gate would be justified. ``snapshot_ok=False``
+    # samples are skipped (sentinel zeros, not real data).
+    drift_samples = [
+        p for p in timings
+        if p.get("gate") == "core_state"
+        and p.get("snapshot_ok")
+        and p.get("entries_loaded", 0) < p.get("entries_total", 0)
+    ]
+    if drift_samples:
+        terminalreporter.write_line(
+            f"⚠️ [READINESS_GATE_DRIFT] {len(drift_samples)} core_state sample(s) "
+            f"with entries_loaded < entries_total — a slow integration "
+            f"finished async_setup_entry after CoreState.RUNNING; "
+            f"follow-up gate justified."
+        )
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -625,45 +636,63 @@ def _wait_for_ha_api_ready(
     return False
 
 
-def _snapshot_config_entries(base_url: str, headers: dict[str, str]) -> tuple[int, int]:
-    """Return ``(loaded_count, total_count)`` from ``/api/config/config_entries/entry``.
+def _snapshot_config_entries(
+    base_url: str,
+    headers: dict[str, str],
+    *,
+    timeout: float = 5.0,
+) -> tuple[int, int, bool]:
+    """Return ``(loaded_count, total_count, snapshot_ok)`` from
+    ``/api/config/config_entries/entry``.
 
     Used by ``_wait_for_core_state_running`` to capture the entry-state
     snapshot at the trip moment (and on timeout) so post-merge data can
     verify whether ``CoreState.RUNNING`` actually closes the race for
     slow integrations or whether late-binding entries are still loading
-    when the gate exits. Returns ``(0, 0)`` if the endpoint is
-    unreachable — the snapshot is best-effort instrumentation, not a
-    hard requirement.
+    when the gate exits.
+
+    ``snapshot_ok=False`` signals that the count fields are sentinel
+    ``(0, 0)`` rather than a legitimately empty entries list — the
+    distinction matters for the ``pytest_terminal_summary`` drift check,
+    which would otherwise read both sides as 0 on a persistently-broken
+    endpoint and never fire. The endpoint hit is best-effort
+    instrumentation, not a hard requirement.
     """
     import requests as _requests
 
     try:
         resp = _requests.get(
             f"{base_url}/api/config/config_entries/entry",
-            timeout=5,
+            timeout=timeout,
             headers=headers,
         )
         if resp.status_code != 200:
-            return 0, 0
+            logger.debug(f"snapshot_config_entries: HTTP {resp.status_code}")
+            return 0, 0, False
         entries = resp.json()
         if not isinstance(entries, list):
-            return 0, 0
+            logger.debug(
+                f"snapshot_config_entries: unexpected body type {type(entries).__name__}"
+            )
+            return 0, 0, False
         total = len(entries)
         loaded = sum(1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded")
-        return loaded, total
-    except (_requests.exceptions.RequestException, json.JSONDecodeError):
-        return 0, 0
+        return loaded, total, True
+    except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+        logger.debug(f"snapshot_config_entries: {type(exc).__name__}: {exc}")
+        return 0, 0, False
 
 
 def _wait_for_core_state_running(
     base_url: str,
     headers: dict[str, str],
     timeout: int,
-) -> tuple[bool, float, str, int, int]:
+) -> tuple[bool, float, str, int, int, bool]:
     """Poll ``/api/core/state`` until ``state == "RUNNING"``.
 
-    Returns ``(success, elapsed_s, last_state, entries_loaded, entries_total)``.
+    Returns ``(success, elapsed_s, last_state, entries_loaded,
+    entries_total, snapshot_ok)``. ``snapshot_ok=False`` flags that the
+    entries fields are sentinel zeros rather than real data.
 
     HA Core's ``APICoreStateView`` (``homeassistant/components/api/__init__.py``)
     is the documented Supervisor-facing readiness endpoint: it reports the
@@ -701,42 +730,56 @@ def _wait_for_core_state_running(
             response = _requests.get(
                 f"{base_url}/api/core/state", timeout=2, headers=headers
             )
-            # Surface HTTP status as a fallback ``last_state`` so a
-            # persistent non-200 (e.g. 503 during HA boot) shows up in
-            # the timeout ``pytest.fail`` message instead of the initial
-            # ``"<no response>"`` — distinguishes connection-failure
-            # (caught in the except below) from API-error-response.
-            last_state = f"HTTP {response.status_code}"
             if response.status_code == 200:
-                last_state = response.json().get("state", "<unknown>")
-                if last_state == "RUNNING":
+                # Parse before stamping last_state — a JSONDecodeError on
+                # a 200 body would otherwise leave last_state misreporting
+                # "HTTP 200" when the actual cause was malformed JSON,
+                # which the except below correctly attributes to the
+                # exception class.
+                state_value = response.json().get("state", "<unknown>")
+                last_state = state_value
+                if state_value == "RUNNING":
                     elapsed = time.monotonic() - start_time
-                    entries_loaded, entries_total = _snapshot_config_entries(
-                        base_url, headers
+                    entries_loaded, entries_total, snapshot_ok = (
+                        _snapshot_config_entries(base_url, headers)
                     )
                     logger.info(
                         f"🏃 CoreState.RUNNING after {elapsed:.1f}s "
-                        f"(entries loaded: {entries_loaded}/{entries_total})"
+                        f"(entries loaded: {entries_loaded}/{entries_total}"
+                        f"{'' if snapshot_ok else ', snapshot unavailable'})"
                     )
                     return (
                         True,
                         elapsed,
-                        last_state,
+                        state_value,
                         entries_loaded,
                         entries_total,
+                        snapshot_ok,
                     )
+            else:
+                # Surface HTTP status as a fallback ``last_state`` so a
+                # persistent non-200 (e.g. 503 during HA boot) shows up
+                # in the timeout ``pytest.fail`` message instead of the
+                # initial ``"<no response>"``.
+                last_state = f"HTTP {response.status_code}"
         except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+            last_state = type(exc).__name__
             logger.debug(f"core_state check failed: {exc}")
         time.sleep(1)
 
-    # Final snapshot for the failure-diagnostics path
-    entries_loaded, entries_total = _snapshot_config_entries(base_url, headers)
+    # Final snapshot for the failure-diagnostics path — HA is known-bad
+    # by this point, so use a tight 2s timeout rather than the default 5s
+    # to keep teardown responsive.
+    entries_loaded, entries_total, snapshot_ok = _snapshot_config_entries(
+        base_url, headers, timeout=2.0
+    )
     return (
         False,
         time.monotonic() - start_time,
         last_state,
         entries_loaded,
         entries_total,
+        snapshot_ok,
     )
 
 
@@ -754,10 +797,11 @@ def _dump_ha_readiness_diagnostics(
     Generic best-effort dump used by every readiness gate in
     ``ha_container_with_fresh_config``. The optional ``service_domain``
     and ``config_entry_domain`` arguments let the caller surface
-    domain-specific presence/absence information (e.g.
-    ``service_domain="ha_mcp_tools"`` makes the dump call out whether
-    that specific domain is missing from ``/api/services``) instead of
-    only the generic counts.
+    domain-specific presence/absence information (e.g. the sun-gate
+    failure path passes ``config_entry_domain="sun"`` to make the
+    config-entries section call out whether that specific entry is
+    present or which state it's stuck in) instead of only the generic
+    counts.
 
     Without those arguments, the dump shows aggregate ``/api/services``
     and ``/api/config/config_entries/entry`` domain lists — enough
@@ -1266,6 +1310,29 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         restore_file.unlink()
         logger.info("🗑️ Removed .HA_RESTORE file from config")
 
+    # Readiness-gate budgets for the testcontainer path. Hoisted from the
+    # ``with container:`` block for grep-ability — successor of the
+    # five per-gate constants the single ``CoreState.RUNNING`` check
+    # replaced. The HAOS branch above keeps its own ``SUN_WAIT = 60``
+    # local (HAOS-qemu boot is a different scope, no
+    # ``[READINESS_GATE_TIMING]`` emit).
+    #
+    # ``CORE_STATE_TIMEOUT = 60`` ≈ 12× the observed-max of ~5s across the
+    # first CI window (4 worker sessions, ``entries_loaded ==
+    # entries_total == 11``). The upstream per-domain ceiling
+    # ``SLOW_SETUP_MAX_WAIT = 300`` from ``homeassistant/setup.py`` is the
+    # latest point at which a stuck integration would surface as
+    # ``CoreState`` stuck at ``starting`` — 60s is well clear of that
+    # without paying the worst-case wall-clock if a slow integration
+    # legitimately needs the full budget.
+    CORE_STATE_TIMEOUT = 60
+    # ``SUN_WAIT = 5`` is the residual tight poll: ``CoreState.RUNNING``
+    # does not strictly imply ``sun.sun != "unknown"`` because sun's
+    # first periodic position computation runs as a scheduled task after
+    # ``async_setup_entry`` returns. Template tests asserting
+    # above/below_horizon would fail without this inline check.
+    SUN_WAIT = 5
+
     with container:
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
@@ -1331,13 +1398,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # racing ``async_setup_entry`` for slow integrations — see #366
         # thread (Ilya0527 2026-05-18) and the docstring on
         # ``_wait_for_core_state_running`` for the structural rationale.
-        # 60s is a conservative initial budget pending empirical data
-        # from ``[READINESS_GATE_TIMING]`` lines; the upstream per-domain
-        # ceiling ``SLOW_SETUP_MAX_WAIT = 300`` from
-        # ``homeassistant/setup.py`` is the latest point at which a
-        # stuck integration would surface here as ``CoreState`` stuck
-        # at ``starting``.
-        CORE_STATE_TIMEOUT = 60
+        # ``CORE_STATE_TIMEOUT`` is defined at the top of this ``with
+        # container:`` block alongside ``SUN_WAIT`` for grep-ability.
         logger.info("⏳ Waiting for HA CoreState to reach RUNNING...")
         (
             core_state_ok,
@@ -1345,6 +1407,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             core_state_last,
             entries_loaded,
             entries_total,
+            snapshot_ok,
         ) = _wait_for_core_state_running(base_url, headers, CORE_STATE_TIMEOUT)
         if not core_state_ok:
             _dump_ha_readiness_diagnostics(
@@ -1354,9 +1417,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 f"HA CoreState did not reach 'RUNNING' within "
                 f"{CORE_STATE_TIMEOUT}s. Last observed state: "
                 f"{core_state_last!r}. Config entries loaded: "
-                f"{entries_loaded}/{entries_total}. Most likely an "
-                f"integration's async_setup_entry hit the 300s "
-                f"SLOW_SETUP_MAX_WAIT ceiling. Check Docker logs."
+                f"{entries_loaded}/{entries_total}"
+                f"{'' if snapshot_ok else ' (snapshot unavailable)'}. "
+                f"Most likely an integration's async_setup_entry hit the "
+                f"300s SLOW_SETUP_MAX_WAIT ceiling. Check Docker logs."
             )
         _log_readiness_timing(
             "core_state",
@@ -1364,18 +1428,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             state=core_state_last,
             entries_loaded=entries_loaded,
             entries_total=entries_total,
+            snapshot_ok=snapshot_ok,
         )
 
-        # Residual tight ``sun.sun`` poll: ``CoreState.RUNNING`` does not
-        # strictly imply ``sun.sun != "unknown"`` because the sun
-        # integration's first periodic position computation runs as a
-        # scheduled task after ``async_setup_entry`` returns. Template
-        # tests that assert above/below_horizon would fail without this
-        # inline check.
-        # (The HAOS-boot branch's ``SUN_WAIT = 60`` is a different scope —
-        # HAOS-qemu readiness, no ``[READINESS_GATE_TIMING]`` emit — and
-        # is intentionally left untouched here.)
-        SUN_WAIT = 5
         logger.info("⏳ Waiting for sun.sun to reach a known state...")
         sun_start = time.monotonic()
         while time.monotonic() - sun_start < SUN_WAIT:
@@ -1428,11 +1483,11 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # both normal and exception flows, so the Ryuk reaper safety
             # net is not needed. Refs #366.
             #
-            # An earlier revision of this PR also called ``container.stop()``
-            # explicitly inside this finally; that turned out to race the
-            # with-block's __exit__ (testcontainers' ``stop()`` removes the
-            # container and is NOT idempotent — the second call raised
-            # ``docker.errors.NotFound`` at session teardown).
+            # Do NOT add an explicit ``container.stop()`` here.
+            # testcontainers' ``DockerContainer.stop()`` calls
+            # ``remove(force=True)`` and is non-idempotent — a second call
+            # from the enclosing ``with container:`` ``__exit__`` raises
+            # ``docker.errors.NotFound`` at session teardown.
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.info("✅ Cleanup completed")
 
