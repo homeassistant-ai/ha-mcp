@@ -520,7 +520,7 @@ class TestRestartAddon:
         restart was initiated.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
         # Patch the AsyncClient at the module level so the restart's
         # `httpx.AsyncClient(...)` block resolves to a controllable mock.
@@ -546,7 +546,7 @@ class TestRestartAddon:
         which returns 502 with `CONNECTION_FAILED`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
         mock_client = MagicMock()
         mock_client.post = AsyncMock(side_effect=httpx.ConnectError("no route"))
@@ -569,7 +569,7 @@ class TestRestartAddon:
         last unconvered transport-error path in `_restart_addon`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
         mock_client = MagicMock()
         # PoolTimeout subclasses httpx.HTTPError but is NOT in the
@@ -594,7 +594,7 @@ class TestRestartAddon:
         initiated. Pins the `status_code >= 400` branch in `_restart_addon`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
         response = MagicMock()
         response.status_code = 401
