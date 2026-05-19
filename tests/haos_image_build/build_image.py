@@ -531,7 +531,26 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
 #    these makes the bake's start-state stable across boots.
 _ADDON_OPTION_OVERRIDES: dict[str, dict[str, Any]] = {
     "Node-RED": {
-        "options": {"ssl": False},
+        "options": {
+            # ``ssl: true`` is the addon's upstream default but ships
+            # no cert, crashing the addon's init-nginx on boot
+            # (verified by curling
+            # https://raw.githubusercontent.com/hassio-addons/addon-node-red/main/node-red/config.yaml ).
+            "ssl": False,
+            # ``leave_front_door_open: true`` is required for
+            # ``ha_manage_addon``'s proxy mode to work against this
+            # addon. The proxy path goes Supervisor →
+            # ``/addons/{slug}/api/...`` → the addon's DIRECT port,
+            # which is fronted by nginx with an ``auth_request``
+            # directive that demands HA Supervisor authentication.
+            # The default (false) blocks ha_manage_addon's calls with
+            # 401; ``true`` removes the auth_request and lets the
+            # proxy path through. Aligning the bake's options with
+            # what real users hit when they reach for ha_manage_addon
+            # — see node-red/rootfs/etc/nginx/templates/direct.gtpl
+            # for the ``{{ if not .leave_front_door_open }}`` block.
+            "leave_front_door_open": True,
+        },
     },
     "Mosquitto broker": {
         "boot": "manual",
