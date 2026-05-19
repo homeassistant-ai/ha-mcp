@@ -107,8 +107,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
-                    "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify'). For YAML-mode dashboards, "
+                    "YAML-only or YAML-heavy integration keys is accepted (e.g., "
+                    "'command_line', 'rest', 'shell_command', 'notify', 'knx'). "
+                    "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
                     "route. No other dotted paths are supported. Not for template "
@@ -174,7 +175,8 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms),
-        and for registering YAML-mode dashboards via
+        for integrations with significant YAML-only configuration (knx
+        entities in package files), and for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
         Check ``post_action`` in the response: most keys need a full HA
         restart; template, mqtt, and group support reload. Preserves YAML
