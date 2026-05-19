@@ -577,6 +577,33 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
 
     overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
     if overrides:
+        # Supervisor's POST /addons/{slug}/options behaviour:
+        #
+        # - ``options`` is a FULL-REPLACE field; the value must satisfy
+        #   the addon's config schema in its entirety. Sending a partial
+        #   options payload drops every other required field and
+        #   Supervisor rejects with e.g. "Missing option 'http_static'
+        #   in root" (verified on PR #1375 CI run 29357350 for Node-RED).
+        # - Top-level fields like ``boot``, ``watchdog``,
+        #   ``auto_update`` are PARTIAL updates — only the keys present
+        #   in the POST are touched. So a ``boot:manual /
+        #   watchdog:false`` override doesn't need to include
+        #   ``options`` in the same POST.
+        #
+        # Strategy: when overrides include an ``options`` block, GET
+        # the addon's current options, merge our override on top, and
+        # send the merged whole. When overrides only touch top-level
+        # fields, skip the GET and POST just those fields.
+        merged: dict[str, Any] = {
+            k: v for k, v in overrides.items() if k != "options"
+        }
+        if "options" in overrides:
+            current = ws.supervisor_api(
+                f"/addons/{slug}/info", method="get", timeout=30.0
+            )
+            current_options = current.get("options") or {}
+            merged["options"] = {**current_options, **overrides["options"]}
+
         LOG.info(
             "Applying option overrides to %s (slug=%s): %s",
             addon.name,
@@ -586,7 +613,7 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
         ws.supervisor_api(
             f"/addons/{slug}/options",
             method="post",
-            data=overrides,
+            data=merged,
             timeout=60.0,
         )
 
