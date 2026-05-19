@@ -53,6 +53,10 @@ jobs:
           # Required for tests/src/e2e/tools/test_skills_resources.py — the
           # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
+          # Full history needed for the bake-changes detection step below
+          # (``git diff origin/<base>...HEAD``). Default depth=1 doesn't
+          # have the base ref locally.
+          fetch-depth: 0
 
       - name: Compute image cache key
         id: key
@@ -98,8 +102,29 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Detect PR-modified bake inputs
+        # GHCR's ``:HAOS_VERSION-latest`` tag is published from master, so
+        # any PR that modifies the qcow2's bake inputs (custom_components,
+        # initial_test_state, the build script itself, or the webhook-proxy
+        # source the bake stages) would otherwise see a stale image with
+        # master's content. The cache key already invalidates on these
+        # paths (see ``Compute image cache key`` above), but the GHCR
+        # fallback below would still hand back master's image. Detect the
+        # condition here and skip GHCR — fall straight through to the
+        # local-build step instead. Keep this list in sync with the cache
+        # key's ``git ls-tree`` paths.
+        id: bake-changes
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only \
+              "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/mcp_proxy/)'; then
+            echo "bake_inputs_changed=true" >> "$GITHUB_OUTPUT"
+            echo "PR modifies bake inputs; skipping GHCR fallback (would return stale master image)."
+          fi
+
       - name: Try pulling from GHCR
-        if: steps.restore-cache.outputs.cache-hit != 'true'
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.bake-changes.outputs.bake_inputs_changed != 'true'
         id: ghcr-pull
         continue-on-error: true
         run: |
