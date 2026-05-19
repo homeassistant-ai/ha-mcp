@@ -6,11 +6,14 @@ to complete, and other asynchronous conditions in Home Assistant.
 """
 
 import asyncio
+import json
 import logging
+import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
+import websockets
 from fastmcp.exceptions import ClientError, FastMCPError
 from mcp import McpError
 
@@ -383,3 +386,138 @@ async def wait_for_entity_registration(
     return await wait_for_condition(
         entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
     )
+
+
+async def wait_for_entities_registered_via_ws(
+    expected_entity_ids: Iterable[str],
+    *,
+    timeout: float = 30.0,
+    ha_url: str | None = None,
+    token: str | None = None,
+) -> set[str]:
+    """Block until ``state_changed`` arrives for every expected entity_id, via HA WS.
+
+    Opens a fresh WebSocket connection to HA, authenticates with the
+    test token, subscribes to ``state_changed``, and resolves as soon as
+    each entity_id in ``expected_entity_ids`` has produced at least one
+    state_changed event. Avoids the chronic 10s ``ha_list_states`` polling
+    burn observed in the HAOS bulk-fixture wait (#1349 audit).
+
+    Pairs with a subsequent ``ha_list_states`` call (or per-entity
+    ``ha_get_state``) for a final correctness check — this helper only
+    confirms HA has published the entity to the state machine; the
+    caller does the authoritative read.
+
+    Args:
+        expected_entity_ids: The set of entity_ids whose registration we
+            need to observe. Returns as soon as all have fired.
+        timeout: Hard ceiling in seconds. Returns the set of entity_ids
+            actually seen (may be a strict subset of ``expected_entity_ids``)
+            when the timeout fires.
+        ha_url: HA base URL. Defaults to ``$HOMEASSISTANT_URL``.
+        token: Long-lived access token. Defaults to ``$HOMEASSISTANT_TOKEN``,
+            falling back to ``tests.test_constants.TEST_TOKEN``.
+
+    Returns:
+        Set of entity_ids that fired ``state_changed`` (and so are
+        confirmed registered) before the timeout.
+    """
+    expected = set(expected_entity_ids)
+    if not expected:
+        return set()
+
+    if ha_url is None:
+        ha_url = os.environ.get("HOMEASSISTANT_URL")
+    if not ha_url:
+        raise RuntimeError(
+            "wait_for_entities_registered_via_ws: no ha_url and "
+            "$HOMEASSISTANT_URL is unset"
+        )
+    if token is None:
+        token = os.environ.get("HOMEASSISTANT_TOKEN")
+    if not token:
+        # Fall back to the test constant for tiers where the env var
+        # isn't set by the fixture (kept centralized in test_constants).
+        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
+
+        token = _DEFAULT_TOKEN
+
+    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    ws_url = ws_url.rstrip("/") + "/api/websocket"
+
+    seen: set[str] = set()
+    deadline = time.monotonic() + timeout
+
+    logger.info(
+        f"⏳ Waiting for {len(expected)} entity registrations via WS "
+        f"(timeout={timeout}s): {sorted(expected)[:5]}"
+        f"{'…' if len(expected) > 5 else ''}"
+    )
+
+    try:
+        async with websockets.connect(ws_url, open_timeout=10.0) as ws:
+            # HA WS handshake: server sends auth_required, client sends
+            # auth with access_token, server replies auth_ok (or auth_invalid).
+            hello = json.loads(await ws.recv())
+            if hello.get("type") != "auth_required":
+                raise RuntimeError(
+                    f"Expected auth_required handshake, got {hello!r}"
+                )
+            await ws.send(json.dumps({"type": "auth", "access_token": token}))
+            auth_result = json.loads(await ws.recv())
+            if auth_result.get("type") != "auth_ok":
+                raise RuntimeError(f"WS auth failed: {auth_result!r}")
+
+            # Subscribe to state_changed. HA's response carries the
+            # subscription id as the request id (not in result).
+            sub_msg_id = 1
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": sub_msg_id,
+                        "type": "subscribe_events",
+                        "event_type": "state_changed",
+                    }
+                )
+            )
+            sub_result = json.loads(await ws.recv())
+            if not (
+                sub_result.get("type") == "result"
+                and sub_result.get("success") is True
+                and sub_result.get("id") == sub_msg_id
+            ):
+                raise RuntimeError(
+                    f"subscribe_events failed: {sub_result!r}"
+                )
+
+            while seen != expected:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                except TimeoutError:
+                    break
+                payload = json.loads(raw)
+                if payload.get("type") != "event":
+                    continue
+                event = payload.get("event") or {}
+                data = event.get("data") or {}
+                entity_id = data.get("entity_id")
+                if entity_id in expected:
+                    seen.add(entity_id)
+    except Exception as e:
+        logger.warning(
+            f"WS-based entity-registration wait failed: {e!r}. "
+            f"Seen {len(seen)}/{len(expected)} before failure."
+        )
+
+    if seen == expected:
+        logger.info(f"✅ All {len(expected)} entity registrations observed via WS")
+    else:
+        logger.warning(
+            f"⚠️ WS wait incomplete after {timeout}s — "
+            f"saw {len(seen)}/{len(expected)}; missing: "
+            f"{sorted(expected - seen)[:10]}"
+        )
+    return seen
