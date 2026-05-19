@@ -393,3 +393,40 @@ class TestSubscribeEventsContract:
 
         with pytest.raises(HomeAssistantConnectionError):
             await client.subscribe_events("state_changed")
+
+    @pytest.mark.asyncio
+    async def test_timeout_cancels_pending_future_and_raises(self, monkeypatch):
+        """If HA never sends the subscribe-result, the 30s ``wait_for``
+        deadline fires, the pending future is cancelled (preventing a
+        leaked state entry), and ``TimeoutError`` propagates.
+
+        Pins the third raise site in subscribe_events. Without this, a
+        regression that swallows the timeout or forgets the cleanup
+        would only surface as a stuck WS subscription dict on the
+        production server.
+        """
+        client = self._prepare_client()
+
+        # Drop the message on the floor — never resolve the future.
+        async def _drop(message: dict) -> None:
+            return None
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+
+        # Shorten the deadline so the test doesn't actually wait 30s.
+        # Patches asyncio.wait_for to immediately raise TimeoutError.
+        async def _instant_timeout(_coro, timeout):
+            raise TimeoutError("test-injected timeout")
+
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.asyncio.wait_for", _instant_timeout
+        )
+
+        with pytest.raises(TimeoutError):
+            await client.subscribe_events("state_changed")
+
+        # Pending future for the subscribe message must have been cleaned up.
+        assert not client._state._pending_requests, (
+            f"Expected pending_requests to be cleaned up after timeout, "
+            f"still have: {list(client._state._pending_requests)}"
+        )

@@ -141,6 +141,32 @@ async def test_state_change_handler_ignores_event_missing_entity_id(listener_ser
 
 
 @pytest.mark.asyncio
+async def test_state_change_handler_ignores_event_missing_new_state(listener_service):
+    """``event["data"]`` present with entity_id but missing new_state →
+    handler returns without dispatching.
+
+    HA fires state_changed with ``new_state=None`` on entity removal —
+    operation matching is only meaningful for state transitions to a
+    real new state. Symmetric mirror of the missing-entity_id case.
+    """
+    event = {
+        "event_type": "state_changed",
+        "data": {
+            "entity_id": "light.removed_bulb",
+            "new_state": None,
+            "old_state": {"state": "off"},
+        },
+    }
+
+    with patch(
+        "ha_mcp.client.websocket_listener.update_pending_operations"
+    ) as mock_update:
+        await listener_service._handle_state_change(event)
+
+    mock_update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_state_change_handler_increments_events_processed(listener_service):
     """Stats counter advances per event even when no operations match —
     the audit observed silent dispatch failures because the counter was

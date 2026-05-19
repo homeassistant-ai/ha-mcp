@@ -177,11 +177,12 @@ class TestBugReportAddonLogsReal:
 
         # ``ha_report_issue`` always succeeds; the addon_logs field is the
         # signal we care about. install_method is "addon" inside the dev
-        # addon, so the tool's gate at tools_bug_report.py:506-507 fires
-        # and ``_fetch_addon_logs()`` runs. ``installation_method`` is
-        # nested inside ``diagnostic_info`` (verified by inaddon CI 76759618777
-        # — full keys list confirms the nesting); ``addon_logs`` is a
-        # top-level field.
+        # addon, so the tool's ``if install_method == "addon"`` gate in
+        # ``tools_bug_report.ha_report_issue`` fires and
+        # ``_fetch_addon_logs()`` runs. ``installation_method`` is
+        # nested inside ``diagnostic_info`` (verified by inaddon CI
+        # 76759618777 — full keys list confirms the nesting);
+        # ``addon_logs`` is a top-level field.
         diagnostic_info = result.get("diagnostic_info") or {}
         install_method = diagnostic_info.get("installation_method")
         assert install_method == "addon", (
