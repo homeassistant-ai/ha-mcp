@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any
 
 import pytest
@@ -40,6 +39,7 @@ from ..utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ..utilities.log_shapes import LOG_TIMESTAMP_RE
 
 LOG = logging.getLogger(__name__)
 
@@ -58,12 +58,6 @@ Z2M_NAME = "Zigbee2MQTT"
 # start crashed, never ran, or the schema is incomplete. Treat the whole
 # family as "not running" rather than coupling tests to a single value.
 STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "error"})
-
-# Journald-style timestamp prefix that real Supervisor addon logs always
-# carry (e.g. ``2026-05-18T14:23:01.234567+00:00 ...``). Avoid level-name
-# tokens like INFO/DEBUG — addons configure their own loggers and may
-# suppress those entirely.
-_LOG_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
 # Tight set of tokens that genuinely identify a Supervisor schema/
 # config refusal (vs unrelated 500/timeout/slug-not-found errors).
@@ -334,7 +328,7 @@ async def test_nodered_logs_fetch_shape(mcp_client: Any) -> None:
     assert isinstance(log_text, str) and log_text.strip(), (
         f"Supervisor log for running addon should be non-empty, got {log_text!r}"
     )
-    assert _LOG_TIMESTAMP_RE.search(log_text), (
+    assert LOG_TIMESTAMP_RE.search(log_text), (
         f"Supervisor log should contain a journald-style timestamp; "
         f"first 200 chars: {log_text[:200]!r}"
     )
@@ -441,7 +435,7 @@ async def test_esphome_logs_fetch_shape(mcp_client: Any) -> None:
     assert isinstance(log_text, str) and log_text.strip(), (
         f"Supervisor log for running addon should be non-empty, got {log_text!r}"
     )
-    assert _LOG_TIMESTAMP_RE.search(log_text), (
+    assert LOG_TIMESTAMP_RE.search(log_text), (
         f"Supervisor log should contain a journald-style timestamp; "
         f"first 200 chars: {log_text[:200]!r}"
     )
@@ -494,7 +488,7 @@ async def test_frigate_info_and_options_reachable(mcp_client: Any) -> None:
     # contain boot-fail output. Accept either; only assert the journald
     # timestamp shape when there's content to check.
     if log_text.strip():
-        assert _LOG_TIMESTAMP_RE.search(log_text), (
+        assert LOG_TIMESTAMP_RE.search(log_text), (
             f"Non-empty Frigate log should still carry a journald timestamp; "
             f"first 200 chars: {log_text[:200]!r}"
         )
@@ -576,7 +570,7 @@ async def test_zigbee2mqtt_info_and_options_reachable(mcp_client: Any) -> None:
         f"log field must be a string, got {type(log_text).__name__}"
     )
     if log_text.strip():
-        assert _LOG_TIMESTAMP_RE.search(log_text), (
+        assert LOG_TIMESTAMP_RE.search(log_text), (
             f"Non-empty Zigbee2MQTT log should still carry a journald "
             f"timestamp; first 200 chars: {log_text[:200]!r}"
         )

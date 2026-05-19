@@ -159,6 +159,13 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 # in homeassistant-addon/start.py).
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+# Advanced SSH addon user/password set at install time so the runtime
+# helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
+# CI-test-only credential — overridable via env so the value never has
+# to live in source for a deployable image. Must stay in sync with
+# ``haos_runtime.SSH_ADDON_USER`` / ``SSH_ADDON_PASSWORD``.
+SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
+SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 
 
 # ---------------------------------------------------------------------------
@@ -699,8 +706,8 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
         data={
             "options": {
                 "ssh": {
-                    "username": "root",
-                    "password": "haosdebug",
+                    "username": SSH_ADDON_USER,
+                    "password": SSH_ADDON_PASSWORD,
                     "authorized_keys": [],
                     "sftp": False,
                     "compatibility_mode": False,

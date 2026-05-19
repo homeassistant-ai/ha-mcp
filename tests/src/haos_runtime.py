@@ -62,10 +62,17 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 # Advanced SSH Web Terminal addon's installed slug. Bake-installed by
 # build_image.install_advanced_ssh; available on host port
-# SSH_DEBUG_HOST_PORT (22222) with user=root, password=haosdebug.
+# SSH_DEBUG_HOST_PORT (22222). User/password are CI-test-only and can
+# be overridden via env vars (matching the ONBOARDING_PASSWORD pattern
+# used by the testcontainer + HAOS auth path) so this constant never
+# carries a deployable credential.
 SSH_ADDON_SLUG = "local_homeassistant_advanced_ssh"
-SSH_ADDON_USER = "root"
-SSH_ADDON_PASSWORD = "haosdebug"
+SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
+SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
+# Path to the ``sshpass`` binary. Make configurable so a future
+# packaging change (e.g. distro-specific path or a Nix-style absolute
+# path) doesn't break the helper.
+SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
 
 
 def ssh_exec(
@@ -84,8 +91,12 @@ def ssh_exec(
     The caller passes the COMMAND list (``["docker", "exec", ...]``);
     this helper assembles the ssh wrapper.
     """
+    # Pass the password via the SSHPASS env var + ``-e`` flag instead
+    # of ``-p`` on the command line — ``-p`` makes the credential
+    # visible in ``ps`` for every other user on the runner, even
+    # though this is a test-only credential.
     ssh_cmd = [
-        "sshpass", "-p", SSH_ADDON_PASSWORD,
+        SSHPASS_BIN, "-e",
         "ssh",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
@@ -94,6 +105,7 @@ def ssh_exec(
         f"{SSH_ADDON_USER}@127.0.0.1",
         *cmd,
     ]
+    env = {**os.environ, "SSHPASS": SSH_ADDON_PASSWORD}
     try:
         return subprocess.run(
             ssh_cmd,
@@ -101,6 +113,7 @@ def ssh_exec(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.CalledProcessError as exc:
         # subprocess.CalledProcessError's default __str__ only includes the
@@ -552,6 +565,7 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
                     )
             except OSError as e:
                 last_err = e
+                LOG.debug("Inaddon MCP TCP probe failed: %r", e)
                 time.sleep(3.0)
                 continue
 
@@ -697,7 +711,7 @@ def set_default_backup_password(
         base_url.replace("http://", "ws://").replace("https://", "wss://")
         + "/api/websocket"
     )
-    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
         first = json.loads(ws.recv())
         if first.get("type") != "auth_required":
             raise RuntimeError(
@@ -898,7 +912,7 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
             f"({op_deadline - (op_deadline - timeout):.0f}s after start)"
         )
 
-    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
         first_frame = json.loads(ws.recv())
         if first_frame.get("type") != "auth_required":
             raise RuntimeError(

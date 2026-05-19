@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import socket
 import time
 
@@ -51,6 +50,7 @@ from ha_mcp._version import get_supervisor_base_url, is_running_in_addon
 from ha_mcp.tools.tools_bug_report import _fetch_addon_logs
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.log_shapes import LOG_TIMESTAMP_RE
 
 pytestmark = [pytest.mark.inaddon_only]
 
@@ -68,12 +68,6 @@ SYSTEM_SERVICES: tuple[str, ...] = (
     "observer",
     "supervisor",
 )
-
-# Journald-style timestamp pattern emitted by Supervisor's log endpoints
-# (e.g. ``2026-05-18T12:34:56.789012+00:00`` or shorter ISO variants).
-# Used as a sentinel that we got real log content, not an empty stub.
-_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
-
 
 def _wait_for_tcp_port(
     port: int, host: str = "127.0.0.1", timeout: float = 90.0
@@ -187,7 +181,7 @@ class TestGetLogsSupervisorReal:
             f"Expected non-empty log string for {HA_MCP_DEV_ADDON_SLUG}, "
             f"got log={log_text!r}"
         )
-        assert _TIMESTAMP_RE.search(log_text), (
+        assert LOG_TIMESTAMP_RE.search(log_text), (
             f"Expected a journald-style ISO timestamp in addon log output; "
             f"got log (first 500 chars)={log_text[:500]!r}"
         )
@@ -212,7 +206,7 @@ class TestBugReportAddonLogsReal:
         assert isinstance(text, str) and text, (
             f"Expected non-empty log text from _fetch_addon_logs, got {text!r}"
         )
-        assert _TIMESTAMP_RE.search(text), (
+        assert LOG_TIMESTAMP_RE.search(text), (
             f"Expected a journald-style ISO timestamp in self-log output; "
             f"got text (first 500 chars)={text[:500]!r}"
         )
