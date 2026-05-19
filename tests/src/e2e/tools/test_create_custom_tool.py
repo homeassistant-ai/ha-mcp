@@ -1670,16 +1670,13 @@ class TestCodeModeAdditionalResourceLimits:
         ``SANDBOX_LIMIT_EXCEEDED`` (covered by the unit-level
         ``test_classify_recursion_error`` in
         ``tests/src/unit/test_saved_tools_persistence.py``-adjacent
-        suite). This test is a deliberate skip so a future maintainer
-        sees the gap and the rationale rather than rediscovering the
-        Monty constraint from scratch.
+        suite).
+
+        The function body is intentionally empty: keeping the name +
+        docstring preserves the architectural-gap documentation for
+        future maintainers without contributing a skipped test to CI
+        (per #1349 close-out).
         """
-        pytest.skip(
-            "Monty doesn't support recursive user-defined functions; "
-            "the recursion limit fires only on Monty's internal AST "
-            "evaluation depth, which sandbox-supplied code can't reach. "
-            "Classifier mapping is unit-tested directly."
-        )
 
     async def test_invocation_cap_enforced(self, mcp_client_with_code_mode):
         """Looping past ``code_mode_max_invocations`` must trip the cap
