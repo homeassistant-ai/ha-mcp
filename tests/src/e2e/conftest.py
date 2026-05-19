@@ -24,6 +24,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -216,7 +217,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     # and a follow-up gate would be justified. ``snapshot_ok=False``
     # samples are skipped (sentinel zeros, not real data).
     drift_samples = [
-        p for p in timings
+        p
+        for p in timings
         if p.get("gate") == "core_state"
         and p.get("snapshot_ok")
         and p.get("entries_loaded", 0) < p.get("entries_total", 0)
@@ -717,7 +719,9 @@ def _snapshot_config_entries(
             )
             return 0, 0, False
         total = len(entries)
-        loaded = sum(1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded")
+        loaded = sum(
+            1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded"
+        )
         return loaded, total, True
     except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
         logger.debug(f"snapshot_config_entries: {type(exc).__name__}: {exc}")
@@ -892,11 +896,17 @@ def _dump_ha_readiness_diagnostics(
         if entries_resp.status_code == 200:
             entries = entries_resp.json()
             entry_domains = sorted(
-                {e.get("domain") for e in entries if isinstance(e, dict) and e.get("domain")}
+                {
+                    e.get("domain")
+                    for e in entries
+                    if isinstance(e, dict) and e.get("domain")
+                }
             )
             if config_entry_domain:
                 matching = [
-                    e for e in entries if isinstance(e, dict) and e.get("domain") == config_entry_domain
+                    e
+                    for e in entries
+                    if isinstance(e, dict) and e.get("domain") == config_entry_domain
                 ]
                 if matching:
                     for entry in matching:
@@ -1069,6 +1079,72 @@ def _blueprint_http_server():
         srv.shutdown()
 
 
+def _haos_worker_setup(base_image_path: Path) -> Path:
+    """Allocate per-worker ports + qcow2 overlay for parallel HAOS runs (#1350).
+
+    Each pytest-xdist worker gets its own QEMU instance, so it needs its
+    own port set (otherwise hostfwd collides on bind) and its own
+    writable qcow2 (otherwise the recorder-refresh + dev-addon-staging
+    mutations race). On a single-worker (no ``-n``) run, ``worker_id``
+    is ``"master"`` and we keep the base ports + base image path — same
+    behavior as before the parallel work.
+
+    Returns the image path the worker should hand to QEMU. For
+    parallel runs that's a qcow2 overlay backed by ``base_image_path``;
+    libguestfs writes follow the backing chain so the recorder-refresh
+    and dev-addon staging helpers mutate only the overlay.
+    """
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    # pytest-xdist worker IDs are ``gw0``/``gw1``/.../``gwN``. ``master``
+    # (no ``-n``) gets offset 0, identical to the pre-parallel behavior.
+    if worker_id.startswith("gw") and worker_id[2:].isdigit():
+        worker_idx = int(worker_id[2:])
+    else:
+        worker_idx = 0
+    # +100 per worker is large enough that none of the four port sets
+    # (HA / SSH / addon MCP / SSH-debug) collide between adjacent
+    # workers, even after future port additions.
+    offset = worker_idx * 100
+    os.environ["HAOS_TEST_HA_PORT"] = str(18123 + offset)
+    os.environ["HAOS_TEST_SSH_PORT"] = str(12222 + offset)
+    os.environ["HAOS_TEST_ADDON_PORT"] = str(19583 + offset)
+    os.environ["HAOS_TEST_SSH_DEBUG_PORT"] = str(22222 + offset)
+    if worker_idx == 0 and worker_id == "master":
+        # Single-worker run — no overlay needed, mutate the base image
+        # directly (matches the pre-parallel path).
+        return base_image_path
+    overlay_path = base_image_path.with_name(
+        f"{base_image_path.stem}-{worker_id}{base_image_path.suffix}"
+    )
+    if overlay_path.exists():
+        overlay_path.unlink()
+    # qcow2-backed overlay: empty file pointing at the base image. Writes
+    # land in the overlay; reads fall through to the base. Tiny on disk
+    # at creation (~200 KB), grows only as the worker mutates state.
+    subprocess.run(
+        [
+            "qemu-img",
+            "create",
+            "-f",
+            "qcow2",
+            "-F",
+            "qcow2",
+            "-b",
+            str(base_image_path),
+            str(overlay_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    logger.info(
+        "HAOS parallel: worker %s using port offset %d, overlay qcow2 %s",
+        worker_id,
+        offset,
+        overlay_path,
+    )
+    return overlay_path
+
+
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config(_blueprint_http_server):
     """Create Home Assistant test environment with fresh config.
@@ -1082,8 +1158,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     """
     # HAOS backend dispatch — short-circuit the testcontainer path entirely.
     if is_haos_backend_selected():
-        image_path = Path(os.environ[HAOS_IMAGE_ENV])
+        base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
         inaddon = is_haos_inaddon_mode()
+        # Per-worker port + overlay setup for pytest-xdist parallel HAOS
+        # (#1350). Single-worker runs short-circuit and reuse the base
+        # image path unchanged.
+        image_path = _haos_worker_setup(base_image_path)
         logger.info(
             "HAOS backend selected (mode=%s) — booting qcow2 at %s",
             "inaddon" if inaddon else "external",
@@ -1128,9 +1208,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             last_sun_status: int | None = None
             while time.monotonic() - sun_start < SUN_WAIT:
                 try:
-                    sun_resp = requests.get(
-                        sun_url, timeout=5, headers=haos_headers
-                    )
+                    sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
                     last_sun_status = sun_resp.status_code
                     if sun_resp.status_code == 200:
                         sun_state = sun_resp.json().get("state", "unknown")
@@ -1155,7 +1233,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "⚠️ HAOS sun.sun still not ready after %ds "
                     "(last_status=%s, last_exc=%r) — template / connection "
                     "tests may race",
-                    SUN_WAIT, last_sun_status, last_sun_err,
+                    SUN_WAIT,
+                    last_sun_status,
+                    last_sun_err,
                 )
             # Set HA Core's default backup-create password via WS so
             # ha_backup_create tests pass without a pre-baked seed. Must
@@ -1234,8 +1314,14 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 log_dest = Path("/tmp/haos-diagnostics")
                 log_dest.mkdir(parents=True, exist_ok=True)
                 log_endpoints = [
-                    ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
-                    ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
+                    (
+                        "ha-core-runtime.log",
+                        f"{base_url}/api/hassio/core/logs?lines=20000",
+                    ),
+                    (
+                        "supervisor-runtime.log",
+                        f"{base_url}/api/hassio/supervisor/logs?lines=20000",
+                    ),
                 ]
                 # Inaddon mode: also grab the dev addon container's logs —
                 # often the real "Check Supervisor logs for details" detail
@@ -1245,8 +1331,10 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # hassio/http.py).
                 if inaddon:
                     log_endpoints.append(
-                        ("ha-mcp-dev-addon.log",
-                         f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000"),
+                        (
+                            "ha-mcp-dev-addon.log",
+                            f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000",
+                        ),
                     )
                 # Narrow except: any non-network error (NameError, KeyError
                 # from a future refactor) should propagate instead of being
@@ -1255,13 +1343,18 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 for name, url in log_endpoints:
                     try:
                         req = urllib.request.Request(
-                            url, headers={"Authorization": f"Bearer {token}"},
+                            url,
+                            headers={"Authorization": f"Bearer {token}"},
                         )
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             (log_dest / name).write_bytes(resp.read())
                         logger.info("Dumped %s via supervisor", name)
-                    except (OSError, urllib.error.URLError,
-                            urllib.error.HTTPError, TimeoutError) as exc:
+                    except (
+                        OSError,
+                        urllib.error.URLError,
+                        urllib.error.HTTPError,
+                        TimeoutError,
+                    ) as exc:
                         logger.warning("Failed to dump %s: %s", name, exc)
         return
 

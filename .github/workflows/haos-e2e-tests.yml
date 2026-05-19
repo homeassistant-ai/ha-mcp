@@ -182,11 +182,18 @@ jobs:
         # that need testcontainer-specific behavior (file mounts, etc.)
         # are marked container_only and skip automatically.
         #
+        # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
+        # each booting its own QEMU (per-worker port offset + qcow2 overlay
+        # — see _haos_worker_setup in tests/src/e2e/conftest.py). loadscope
+        # keeps all tests in the same module on the same worker so each
+        # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
+        # QEMU at -smp 2 -m 4096 each (#1350).
+        #
         # --maxfail=0 overrides pytest.ini's --maxfail=3 so we see the full
         # failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
-          uv run pytest src/e2e/ -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+          uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
