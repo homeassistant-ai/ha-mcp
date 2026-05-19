@@ -584,24 +584,68 @@ class HomeAssistantWebSocketClient:
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
 
+        HA's WebSocket API identifies a subscription by the ``id`` of the
+        original ``subscribe_events`` command — not by a field inside the
+        ``result`` payload. ``handle_subscribe_events`` in HA Core
+        (``websocket_api/commands.py``) ends with
+        ``connection.send_result(msg["id"])``, and ``send_result(msg_id)``
+        emits ``{"id": N, "type": "result", "success": true, "result": null}``.
+        Subsequent event deliveries arrive as
+        ``{"id": N, "type": "event", "event": {...}}`` with the same ``id``.
+
+        The previous implementation called ``send_command`` (which discards
+        the message_id it generated) and then looked for
+        ``response["result"]["subscription"]``, a field HA does not send.
+        That branch never matched, so this function always raised
+        ``"Failed to get subscription ID"`` — even though the underlying
+        subscription on HA's side WAS established. The ``WebSocketListenerService``
+        treated the raised exception as a startup failure and left
+        ``_listener_started = False``, so every device-control call
+        repeatedly retried (and re-failed) and ``OperationManager.process_state_change``
+        was never invoked, leaving every async operation in PENDING until
+        ``OperationManager.get_operation`` flipped it to TIMEOUT after
+        the 10s ``timeout_ms`` budget. Surfaced during PR #1375 HAOS log
+        audit (3x "Failed to get subscription ID" per bulk-control test).
+
         Args:
             event_type: Specific event type to subscribe to (None for all)
 
         Returns:
-            Subscription ID
+            Subscription ID (the message_id used when subscribing)
         """
-        kwargs = {}
+        if not self._state.is_ready:
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message: dict[str, Any] = {"id": message_id, "type": "subscribe_events"}
         if event_type:
-            kwargs["event_type"] = event_type
+            message["event_type"] = event_type
 
-        response = await self.send_command("subscribe_events", **kwargs)
-        result = response.get("result")
-        if isinstance(result, dict):
-            subscription_id = result.get("subscription")
-            if isinstance(subscription_id, int):
-                return subscription_id
+        future = self.register_pending_response(message_id)
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self.cancel_pending_response(message_id)
+            raise
 
-        raise Exception("Failed to get subscription ID")
+        try:
+            response = await asyncio.wait_for(future, timeout=30.0)
+        except TimeoutError:
+            self.cancel_pending_response(message_id)
+            raise
+
+        if response.get("type") == "result" and response.get("success"):
+            return message_id
+
+        error = response.get("error", {})
+        error_msg = (
+            error.get("message", str(error))
+            if isinstance(error, dict)
+            else str(error)
+        )
+        raise HomeAssistantCommandError(
+            f"subscribe_events failed: {error_msg}"
+        )
 
     def add_event_handler(
         self,
