@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.13-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.15-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.13-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.15-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.13-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.15-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.13-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.15-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.13-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.15-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
