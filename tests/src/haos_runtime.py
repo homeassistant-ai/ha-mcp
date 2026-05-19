@@ -94,13 +94,23 @@ def ssh_exec(
         f"{SSH_ADDON_USER}@127.0.0.1",
         *cmd,
     ]
-    return subprocess.run(
-        ssh_cmd,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            ssh_cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.CalledProcessError as exc:
+        # subprocess.CalledProcessError's default __str__ only includes the
+        # exit code — the actual SSH/docker error lives on stderr and would
+        # otherwise be lost in CI output. Re-raise as RuntimeError with
+        # full stderr+stdout so failures are actionable.
+        raise RuntimeError(
+            f"ssh_exec failed (exit {exc.returncode}): cmd={cmd!r} "
+            f"stderr={exc.stderr!r} stdout={exc.stdout!r}"
+        ) from exc
 
 
 def docker_exec_in_addon(
@@ -110,9 +120,9 @@ def docker_exec_in_addon(
 
     ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
     the helper resolves it to the Docker container name (
-    ``addon_<slug>``). Returns stdout of the command. Raises on
-    non-zero exit (caller can catch ``subprocess.CalledProcessError``
-    for graceful diagnostics).
+    ``addon_<slug>``). Returns stdout of the command. Raises
+    ``RuntimeError`` with stderr+stdout context on non-zero exit
+    (via the wrapping in ``ssh_exec``).
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
@@ -713,15 +723,22 @@ def set_default_backup_password(
                 raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
             except TimeoutError:
                 continue
-            if not isinstance(raw, str):
-                raw = raw.decode()
-            resp = json.loads(raw)
+            try:
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"backup/config/update: malformed WS frame: {exc} "
+                    f"(raw={raw!r})"
+                ) from exc
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success", False):
-                raise RuntimeError(
-                    f"backup/config/update failed: {resp.get('error')}"
-                )
+                # ``error`` may be missing or None — include the full
+                # frame so a maintainer can see what Supervisor sent.
+                err = resp.get("error") or resp
+                raise RuntimeError(f"backup/config/update failed: {err!r}")
             LOG.info("Default backup password configured via WS")
             return
         raise TimeoutError(
@@ -857,14 +874,23 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
                 raw = ws.recv(timeout=remaining)
             except TimeoutError:
                 continue
-            if not isinstance(raw, str):
-                raw = raw.decode()
-            resp = json.loads(raw)
+            try:
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"supervisor/api {op_endpoint}: malformed WS frame: "
+                    f"{exc} (raw={raw!r})"
+                ) from exc
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success", False):
+                # ``error`` may be missing or None — include the full
+                # frame so a maintainer can see what Supervisor sent.
+                err = resp.get("error") or resp
                 raise RuntimeError(
-                    f"supervisor/api {op_endpoint} failed: {resp.get('error')}"
+                    f"supervisor/api {op_endpoint} failed: {err!r}"
                 )
             return
         raise TimeoutError(
