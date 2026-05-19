@@ -2811,9 +2811,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # ``result.get("warnings", [])`` uniformly.
                     warnings: list[str] = []
 
-                    # Wait for entity to be properly registered before proceeding
+                    # Wait for entity to be properly registered before proceeding.
+                    # Tags live in their own tag registry and never appear in
+                    # ``/api/states/<entity_id>`` — polling there always 404s
+                    # for the full timeout. The update branch already skips the
+                    # wait for this reason; mirror it here so create doesn't burn
+                    # 10s per tag on every CI run.
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
-                    if wait_bool and entity_id:
+                    if wait_bool and entity_id and helper_type != "tag":
                         try:
                             registered = await wait_for_entity_registered(
                                 client, entity_id
