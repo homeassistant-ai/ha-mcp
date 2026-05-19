@@ -4,8 +4,8 @@ Validates the `automation_id` typed-id key across the automation config
 tool lifecycle:
 
 - `ha_config_get_automation` (issues #1299 + #1334, PR #1329)
-- `ha_config_set_automation` python_transform branch (issue #1333)
-- `ha_config_remove_automation` (issue #1333 Boy-Scout)
+- `ha_config_set_automation` python_transform + full-config branches (issue #1333)
+- `ha_config_remove_automation` (issue #1333, response-shape parity)
 
 Gives sibling parity with `ha_config_get_script` (`script_id`),
 `ha_config_get_scene` (`scene_id`), and `ha_config_get_dashboard`
@@ -273,9 +273,36 @@ class TestFullConfigSetAutomationIdKey:
         assert result["success"] is True
         assert result["automation_id"] == "generated_unique_id_xyz"
 
+    async def test_create_omits_automation_id_when_all_fallbacks_falsy(
+        self, tools, mock_client, canonical_config
+    ):
+        """upsert returns no entity_id AND no unique_id, identifier=None →
+        automation_id key omitted entirely rather than surfacing as None.
+
+        Defensive contract: HA's upsert API makes this branch unreachable in
+        practice, but pinning the shape prevents a future upsert regression
+        from silently producing `automation_id: None` and lying about
+        resolvability.
+        """
+        mock_client.upsert_automation_config = AsyncMock(
+            return_value={
+                "unique_id": None,
+                "entity_id": None,
+                "result": "ok",
+                "operation": "created",
+            }
+        )
+
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, wait=False
+        )
+
+        assert result["success"] is True
+        assert "automation_id" not in result
+
 
 class TestDeleteAutomationIdKey:
-    """`automation_id` parity on `ha_config_remove_automation` (issue #1333 Boy-Scout).
+    """`automation_id` parity on `ha_config_remove_automation` (issue #1333).
 
     `wait=False` skips `wait_for_entity_removed` so the tests don't have to
     mock the polling helper — `automation_id` is set from
@@ -298,6 +325,8 @@ class TestDeleteAutomationIdKey:
         assert result["action"] == "delete"
         assert result["automation_id"] == "automation.morning_routine"
         assert "identifier" not in result
+        # unique_id retained — distinct from entity_id; callers track it.
+        assert result.get("unique_id") == "abc123unique"
 
     async def test_returns_input_when_input_is_entity_id(self, tools):
         """entity_id input → automation_id == identifier (resolver short-circuit)."""
@@ -307,6 +336,7 @@ class TestDeleteAutomationIdKey:
 
         assert result["success"] is True
         assert result["automation_id"] == "automation.morning_routine"
+        assert result.get("unique_id") == "abc123unique"
 
     async def test_falls_back_to_identifier_when_registry_lookup_misses(
         self, tools, mock_client
@@ -320,3 +350,4 @@ class TestDeleteAutomationIdKey:
 
         assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
+        assert result.get("unique_id") == "abc123unique"
