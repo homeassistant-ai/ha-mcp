@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from io import StringIO
 from typing import Any
 
@@ -73,11 +74,24 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
+_THREAD_LOCAL = threading.local()
+
+
 def make_yaml() -> YAML:
-    """Return a fresh round-trip YAML instance with HA tag support."""
-    ry = YAML(typ="rt")
-    ry.preserve_quotes = True
-    return ry
+    """Return a round-trip YAML instance with HA tag support.
+
+    The instance is cached per-thread to prevent ruamel.yaml from performing
+    expensive plugin discovery (glob/scandir) on every call, which
+    causes CPU spikes and event loop blocking during bulk edits.
+
+    Thread-local storage is used because ruamel.yaml instances are not
+    thread-safe.
+    """
+    if not hasattr(_THREAD_LOCAL, "yaml"):
+        ry = YAML(typ="rt")
+        ry.preserve_quotes = True
+        _THREAD_LOCAL.yaml = ry
+    return _THREAD_LOCAL.yaml
 
 
 def yaml_dumps(ry: YAML, data: Any) -> str:
