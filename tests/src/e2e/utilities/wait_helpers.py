@@ -442,6 +442,10 @@ async def wait_for_ha_event(
     or ``None`` on timeout. Predicate lets the caller filter by entity_id,
     context, or any other field of the event.
 
+    Opens a **dedicated** WebSocket connection — independent of the
+    MCP client's listener subscriptions and not visible to other
+    callers. Each invocation pays one WS handshake + auth round-trip.
+
     Useful for replacing 10s logbook polls with sub-second event waits —
     e.g. ``automation_triggered`` after a manual ``automation.trigger``
     service call (~10s saved per ``test_basic_automation_lifecycle``).
@@ -463,15 +467,15 @@ async def wait_for_ha_event(
             logger.warning(f"subscribe_events({event_type!r}) failed: {sub_result!r}")
             return None
 
-        # Subscription is live; now fire the trigger. Anything emitted
-        # from this point on is captured by the subscription.
-        try:
-            trigger_result = trigger()
-            if asyncio.iscoroutine(trigger_result):
-                await trigger_result
-        except Exception as e:
-            logger.warning(f"wait_for_ha_event trigger raised: {e!r}")
-            return None
+        # Subscription is live; now fire the trigger. Trigger errors are
+        # NOT caught — a test's setup crashing (TypeError, AssertionError,
+        # KeyError, etc.) is a bug, not a transient, and should surface
+        # immediately with a clear traceback rather than being indistinguishable
+        # from "no matching event arrived". Matches the
+        # _POLLING_TRANSIENT_ERRORS discipline AGENTS.md mandates.
+        trigger_result = trigger()
+        if asyncio.iscoroutine(trigger_result):
+            await trigger_result
 
         deadline = time.monotonic() + timeout
         while True:
@@ -490,13 +494,24 @@ async def wait_for_ha_event(
                 continue
             if predicate is None or predicate(event):
                 return event
-    except Exception as e:
-        logger.warning(f"wait_for_ha_event({event_type!r}) error: {e!r}")
+    except (
+        websockets.exceptions.WebSocketException,
+        ConnectionError,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
+        # Narrow catch: WS transport / handshake / malformed frame are
+        # transients we want to gracefully degrade to timeout. Caller
+        # bugs (TypeError, AttributeError, KeyError from a buggy
+        # predicate) propagate.
+        logger.warning(f"wait_for_ha_event({event_type!r}) transient error: {e!r}")
         return None
     finally:
         try:
             await ws.close()
-        except Exception:
+        except (websockets.exceptions.WebSocketException, OSError):
+            # Close errors on an already-broken socket — don't mask the
+            # caller's outcome with them.
             pass
 
 
@@ -532,7 +547,12 @@ async def wait_for_entities_registered_via_ws(
 
     Returns:
         Set of entity_ids that fired ``state_changed`` (and so are
-        confirmed registered) before the timeout.
+        confirmed registered) before the timeout. Also returns the
+        partial seen set on transient WS/parsing failure (caller's
+        fallback path picks up the missing ids via REST polling);
+        config/auth failures (RuntimeError) propagate so a permanently
+        broken WS path fails loudly rather than silently masking
+        every CI run.
     """
     expected = set(expected_entity_ids)
     if not expected:
@@ -618,9 +638,21 @@ async def wait_for_entities_registered_via_ws(
                 entity_id = data.get("entity_id")
                 if entity_id in expected:
                     seen.add(entity_id)
-    except Exception as e:
+    except (
+        websockets.exceptions.WebSocketException,
+        ConnectionError,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
+        # Narrow catch: same discipline as ``wait_for_ha_event`` above —
+        # transient WS / parsing errors degrade gracefully to "missing
+        # entities" (caller's fallback path handles it), but
+        # ``RuntimeError`` (auth failure, missing url/token, malformed
+        # handshake) and ``TypeError``/``AttributeError``/``KeyError``
+        # (caller bug) propagate so a permanently broken WS path
+        # surfaces loud rather than silently masking every CI run.
         logger.warning(
-            f"WS-based entity-registration wait failed: {e!r}. "
+            f"WS-based entity-registration wait transient error: {e!r}. "
             f"Seen {len(seen)}/{len(expected)} before failure."
         )
 
