@@ -388,6 +388,118 @@ async def wait_for_entity_registration(
     )
 
 
+async def _open_ha_ws(ha_url: str | None = None, token: str | None = None):
+    """Open + authenticate a fresh HA WebSocket connection.
+
+    Shared setup for the ``*_via_ws`` helpers below. Returns the connected
+    websocket; caller is responsible for closing it (use ``async with``).
+    """
+    if ha_url is None:
+        ha_url = os.environ.get("HOMEASSISTANT_URL")
+    if not ha_url:
+        raise RuntimeError("No ha_url and $HOMEASSISTANT_URL unset")
+    if token is None:
+        token = os.environ.get("HOMEASSISTANT_TOKEN")
+    if not token:
+        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
+
+        token = _DEFAULT_TOKEN
+
+    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    ws_url = ws_url.rstrip("/") + "/api/websocket"
+
+    ws = await websockets.connect(ws_url, open_timeout=10.0)
+    try:
+        hello = json.loads(await ws.recv())
+        if hello.get("type") != "auth_required":
+            await ws.close()
+            raise RuntimeError(f"Expected auth_required handshake, got {hello!r}")
+        await ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_result = json.loads(await ws.recv())
+        if auth_result.get("type") != "auth_ok":
+            await ws.close()
+            raise RuntimeError(f"WS auth failed: {auth_result!r}")
+    except Exception:
+        await ws.close()
+        raise
+    return ws
+
+
+async def wait_for_ha_event(
+    event_type: str,
+    trigger: Callable[[], Any],
+    *,
+    predicate: Callable[[dict[str, Any]], bool] | None = None,
+    timeout: float = 5.0,
+    ha_url: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any] | None:
+    """Subscribe to ``event_type``, invoke ``trigger``, return first matching event.
+
+    Subscribes BEFORE running the trigger so events fired during the
+    trigger's awaitable cannot be missed. Returns the matching event
+    dict (HA's full event payload — ``{"event_type", "data", "time_fired", ...}``)
+    or ``None`` on timeout. Predicate lets the caller filter by entity_id,
+    context, or any other field of the event.
+
+    Useful for replacing 10s logbook polls with sub-second event waits —
+    e.g. ``automation_triggered`` after a manual ``automation.trigger``
+    service call (~10s saved per ``test_basic_automation_lifecycle``).
+    """
+    ws = await _open_ha_ws(ha_url=ha_url, token=token)
+    try:
+        sub_id = 1
+        await ws.send(
+            json.dumps(
+                {"id": sub_id, "type": "subscribe_events", "event_type": event_type}
+            )
+        )
+        sub_result = json.loads(await ws.recv())
+        if not (
+            sub_result.get("type") == "result"
+            and sub_result.get("success") is True
+            and sub_result.get("id") == sub_id
+        ):
+            logger.warning(f"subscribe_events({event_type!r}) failed: {sub_result!r}")
+            return None
+
+        # Subscription is live; now fire the trigger. Anything emitted
+        # from this point on is captured by the subscription.
+        try:
+            trigger_result = trigger()
+            if asyncio.iscoroutine(trigger_result):
+                await trigger_result
+        except Exception as e:
+            logger.warning(f"wait_for_ha_event trigger raised: {e!r}")
+            return None
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except TimeoutError:
+                return None
+            payload = json.loads(raw)
+            if payload.get("type") != "event":
+                continue
+            event = payload.get("event") or {}
+            if event.get("event_type") != event_type:
+                continue
+            if predicate is None or predicate(event):
+                return event
+    except Exception as e:
+        logger.warning(f"wait_for_ha_event({event_type!r}) error: {e!r}")
+        return None
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 async def wait_for_entities_registered_via_ws(
     expected_entity_ids: Iterable[str],
     *,
