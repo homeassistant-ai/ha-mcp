@@ -28,6 +28,7 @@ display-name listing — mirroring the canary's pattern.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -64,23 +65,25 @@ STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "
 # suppress those entirely.
 _LOG_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
-# Recognizable tokens that appear in a Supervisor start-failure response
-# when an addon refuses to boot for config reasons. The Supervisor
-# message varies by addon and version (e.g. "missing config",
-# "device not configured", "addon failed to start") — match on the
-# substring family rather than an exact phrase, and fall back to the
-# structural ``success=False`` check so a future Supervisor wording
-# change still fails loudly only if start unexpectedly succeeds.
+# Tight set of tokens that genuinely identify a Supervisor schema/
+# config refusal (vs unrelated 500/timeout/slug-not-found errors).
+# Wider sets like {"start", "boot", "config"} match almost any
+# Supervisor error string and would pass for the wrong reasons.
 _START_FAILURE_TOKENS: tuple[str, ...] = (
     "missing",
-    "config",
-    "device",
-    "failed",
     "schema",
     "required",
-    "boot",
-    "start",
+    "unhealthy",
+    "device",  # Frigate/Z2M without a configured device
 )
+
+
+# Polling parameters for "did the addon state actually move?" — Supervisor
+# returns success once the request is accepted, not once the container
+# reached the target state. Real CI runners need 1-3s on average,
+# occasionally more on cache-cold restarts.
+_STATE_POLL_TIMEOUT = 30.0
+_STATE_POLL_INTERVAL = 0.5
 
 
 async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
@@ -102,7 +105,12 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
             )
             return str(slug)
 
-    installed = sorted(a.get("name") for a in payload.get("addons", []))
+    # Filter ``None`` names so a future Supervisor addition with a
+    # missing display name can't crash the sort with a TypeError on
+    # str-vs-None comparison.
+    installed = sorted(
+        n for n in (a.get("name") for a in payload.get("addons", [])) if n
+    )
     pytest.fail(
         f"Addon {display_name!r} not found in installed listing. "
         f"Installed: {installed}. Check build_image.py ADDONS tuple."
@@ -140,6 +148,41 @@ async def _addon_action(
     )
 
 
+async def _wait_for_state(
+    mcp_client: Any,
+    slug: str,
+    expected: str | frozenset[str] | set[str],
+    *,
+    timeout: float = _STATE_POLL_TIMEOUT,
+) -> str:
+    """Poll ``ha_get_addon(slug=...)`` until ``state`` matches ``expected``.
+
+    Supervisor returns success from ``addon_{start,stop,restart}`` once
+    the request is accepted, NOT once the container has reached the
+    target state. Without polling the lifecycle tests would race the
+    Supervisor on every assertion. ``expected`` can be a single string
+    or a set of acceptable states (e.g. STOPPED_STATES for the
+    stopped-family).
+    """
+    expected_set: frozenset[str] = (
+        frozenset({expected}) if isinstance(expected, str) else frozenset(expected)
+    )
+    import time as _time  # local import — keep module-level imports tidy
+
+    deadline = _time.monotonic() + timeout
+    last_state: str | None = None
+    while _time.monotonic() < deadline:
+        detail = await _get_addon_detail(mcp_client, slug)
+        last_state = detail.get("state")
+        if last_state in expected_set:
+            return str(last_state)
+        await asyncio.sleep(_STATE_POLL_INTERVAL)
+    raise AssertionError(
+        f"Addon {slug!r} state did not reach {sorted(expected_set)!r} "
+        f"within {timeout}s (last observed: {last_state!r})"
+    )
+
+
 async def _ensure_started(mcp_client: Any, slug: str) -> None:
     """Best-effort cleanup: leave the addon in ``started`` state.
 
@@ -147,16 +190,27 @@ async def _ensure_started(mcp_client: Any, slug: str) -> None:
     addon doesn't leak ``stopped`` state into a sibling test that assumes
     it's running. Failures here are logged but not raised — the addon's
     state isn't part of the contract under test, the lifecycle call is.
+
+    Wrapped in a broad ``try/except`` so a flake during cleanup (e.g.
+    ``_get_addon_detail``'s internal ``assert`` raising on a transient
+    Supervisor response) doesn't replace the original test exception in
+    the traceback head.
     """
-    detail = await _get_addon_detail(mcp_client, slug)
-    if detail.get("state") == "started":
-        return
-    result = await _addon_action(mcp_client, slug, "start")
-    if not result.get("success"):
-        LOG.warning(
-            "Cleanup: hassio.addon_start(%s) returned failure: %s",
+    try:
+        detail = await _get_addon_detail(mcp_client, slug)
+        if detail.get("state") == "started":
+            return
+        result = await _addon_action(mcp_client, slug, "start")
+        if not result.get("success"):
+            LOG.warning(
+                "Cleanup: hassio.addon_start(%s) returned failure: %s",
+                slug,
+                result,
+            )
+    except Exception:
+        LOG.exception(
+            "Cleanup of addon %s failed; original test exception preserved",
             slug,
-            result,
         )
 
 
@@ -178,28 +232,19 @@ async def test_nodered_start_stop_restart_roundtrip(mcp_client: Any) -> None:
         assert stop_result.get("success"), (
             f"hassio.addon_stop({slug}) failed: {stop_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") in STOPPED_STATES, (
-            f"Expected stopped-family state after stop, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
 
         start_result = await _addon_action(mcp_client, slug, "start")
         assert start_result.get("success"), (
             f"hassio.addon_start({slug}) failed: {start_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") == "started", (
-            f"Expected state=started after start, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, "started")
 
         restart_result = await _addon_action(mcp_client, slug, "restart")
         assert restart_result.get("success"), (
             f"hassio.addon_restart({slug}) failed: {restart_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") == "started", (
-            f"Expected state=started after restart, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, "started")
     finally:
         await _ensure_started(mcp_client, slug)
 
@@ -216,12 +261,17 @@ async def test_nodered_options_get_returns_dict(mcp_client: Any) -> None:
 
 
 async def test_nodered_options_set_persists(mcp_client: Any) -> None:
-    """`ha_manage_addon(options=...)` round-trips through Supervisor.
+    """`ha_manage_addon(options=...)` round-trips a probe key through Supervisor.
 
-    Reads current options, writes them back unchanged, then re-reads —
-    a no-op write is the safest persistence check because it doesn't risk
-    breaking the addon's runtime config. Supervisor still exercises the
-    full validate-merge-write path on a no-op payload.
+    Reads current options, writes a probe value (toggles ``log_level``
+    between "info" and "debug" — a schema-known Node-RED option that's
+    safe to flip mid-test), reads back, asserts the probe took effect,
+    then restores the original value in ``finally``.
+
+    A pure no-op write would only verify that Supervisor accepts the
+    request, not that the merge-write path actually persisted; the
+    probe-key roundtrip catches a regression where Supervisor silently
+    drops the payload.
     """
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     try:
@@ -230,22 +280,44 @@ async def test_nodered_options_set_persists(mcp_client: Any) -> None:
         assert isinstance(current_options, dict), (
             f"Pre-write options must be a dict, got {current_options!r}"
         )
+        # Pick a probe value distinct from current so the round-trip
+        # actually moves the field. Node-RED's schema accepts "info" /
+        # "debug" / "warning" / "error" — flip between info and debug.
+        original_log_level = current_options.get("log_level", "info")
+        probe_log_level = "debug" if original_log_level != "debug" else "info"
+        probe_options = dict(current_options)
+        probe_options["log_level"] = probe_log_level
 
-        write_raw = await mcp_client.call_tool(
-            "ha_manage_addon",
-            {"slug": slug, "options": dict(current_options)},
-        )
-        write_payload = parse_mcp_result(write_raw)
-        assert write_payload.get("success"), (
-            f"ha_manage_addon options write failed: {write_payload}"
-        )
+        try:
+            write_raw = await mcp_client.call_tool(
+                "ha_manage_addon",
+                {"slug": slug, "options": probe_options},
+            )
+            write_payload = parse_mcp_result(write_raw)
+            assert write_payload.get("success"), (
+                f"ha_manage_addon options probe write failed: {write_payload}"
+            )
 
-        detail_after = await _get_addon_detail(mcp_client, slug)
-        options_after = detail_after.get("options") or {}
-        assert options_after == current_options, (
-            f"Options changed after no-op write. Before: {current_options}, "
-            f"After: {options_after}"
-        )
+            detail_after = await _get_addon_detail(mcp_client, slug)
+            options_after = detail_after.get("options") or {}
+            assert options_after.get("log_level") == probe_log_level, (
+                f"Probe log_level={probe_log_level!r} did not persist. "
+                f"After-write options: {options_after}"
+            )
+        finally:
+            # Restore the original log_level so the addon's runtime
+            # config matches its pre-test state. Swallow restore errors
+            # here only — the parent ``finally`` (_ensure_started) is
+            # the durable cleanup.
+            restore_options = dict(current_options)
+            if "log_level" in restore_options or current_options:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_manage_addon",
+                        {"slug": slug, "options": restore_options},
+                    )
+                except Exception:
+                    LOG.exception("Failed to restore Node-RED options")
     finally:
         await _ensure_started(mcp_client, slug)
 
@@ -281,28 +353,19 @@ async def test_esphome_start_stop_restart_roundtrip(mcp_client: Any) -> None:
         assert stop_result.get("success"), (
             f"hassio.addon_stop({slug}) failed: {stop_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") in STOPPED_STATES, (
-            f"Expected stopped-family state after stop, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
 
         start_result = await _addon_action(mcp_client, slug, "start")
         assert start_result.get("success"), (
             f"hassio.addon_start({slug}) failed: {start_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") == "started", (
-            f"Expected state=started after start, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, "started")
 
         restart_result = await _addon_action(mcp_client, slug, "restart")
         assert restart_result.get("success"), (
             f"hassio.addon_restart({slug}) failed: {restart_result}"
         )
-        detail = await _get_addon_detail(mcp_client, slug)
-        assert detail.get("state") == "started", (
-            f"Expected state=started after restart, got {detail.get('state')!r}"
-        )
+        await _wait_for_state(mcp_client, slug, "started")
     finally:
         await _ensure_started(mcp_client, slug)
 
@@ -319,7 +382,12 @@ async def test_esphome_options_get_returns_dict(mcp_client: Any) -> None:
 
 
 async def test_esphome_options_set_persists(mcp_client: Any) -> None:
-    """`ha_manage_addon(options=...)` no-op write round-trips for ESPHome."""
+    """`ha_manage_addon(options=...)` round-trips a probe key for ESPHome.
+
+    ESPHome Device Builder's schema accepts ``leave_front_door_open``
+    (a public toggle that's safe to flip mid-test). Use it as the
+    probe field — same shape as the Node-RED test.
+    """
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     try:
         detail = await _get_addon_detail(mcp_client, slug)
@@ -327,22 +395,36 @@ async def test_esphome_options_set_persists(mcp_client: Any) -> None:
         assert isinstance(current_options, dict), (
             f"Pre-write options must be a dict, got {current_options!r}"
         )
+        probe_key = "leave_front_door_open"
+        original_value = current_options.get(probe_key, False)
+        probe_value = not bool(original_value)
+        probe_options = dict(current_options)
+        probe_options[probe_key] = probe_value
 
-        write_raw = await mcp_client.call_tool(
-            "ha_manage_addon",
-            {"slug": slug, "options": dict(current_options)},
-        )
-        write_payload = parse_mcp_result(write_raw)
-        assert write_payload.get("success"), (
-            f"ha_manage_addon options write failed: {write_payload}"
-        )
+        try:
+            write_raw = await mcp_client.call_tool(
+                "ha_manage_addon",
+                {"slug": slug, "options": probe_options},
+            )
+            write_payload = parse_mcp_result(write_raw)
+            assert write_payload.get("success"), (
+                f"ha_manage_addon options probe write failed: {write_payload}"
+            )
 
-        detail_after = await _get_addon_detail(mcp_client, slug)
-        options_after = detail_after.get("options") or {}
-        assert options_after == current_options, (
-            f"Options changed after no-op write. Before: {current_options}, "
-            f"After: {options_after}"
-        )
+            detail_after = await _get_addon_detail(mcp_client, slug)
+            options_after = detail_after.get("options") or {}
+            assert options_after.get(probe_key) == probe_value, (
+                f"Probe {probe_key}={probe_value!r} did not persist. "
+                f"After-write options: {options_after}"
+            )
+        finally:
+            try:
+                await mcp_client.call_tool(
+                    "ha_manage_addon",
+                    {"slug": slug, "options": dict(current_options)},
+                )
+            except Exception:
+                LOG.exception("Failed to restore ESPHome options")
     finally:
         await _ensure_started(mcp_client, slug)
 
@@ -438,15 +520,19 @@ async def test_frigate_start_fails_with_recognizable_error(
             f"config-incomplete Frigate, but returned success: {result}"
         )
     error_msg = extract_error_message(result).lower()
-    # Either a recognizable failure token OR the bare success=False
-    # structural marker is acceptable — both prove Supervisor rejected
-    # the start. The token list isn't exhaustive; we just want one
-    # familiar word in the error so a totally unrelated failure (auth,
-    # 500, slug-not-found) doesn't quietly satisfy the assertion.
+    # Tight assertion: the slug must appear in the error (proves it's
+    # this addon failing, not an unrelated 401/500), AND one of the
+    # tight schema-refusal tokens must appear (filters out generic
+    # "start failed" wording that could mask totally unrelated bugs).
+    assert slug.lower() in error_msg, (
+        f"Frigate start-failure message should reference the slug "
+        f"{slug!r} so we know Supervisor rejected the right addon, got: "
+        f"{error_msg!r}"
+    )
     assert any(token in error_msg for token in _START_FAILURE_TOKENS), (
         f"Frigate start-failure message should contain at least one of "
-        f"{list(_START_FAILURE_TOKENS)}, got: {error_msg!r}. Full result: "
-        f"{result}"
+        f"{list(_START_FAILURE_TOKENS)} (proving schema/config refusal, "
+        f"not e.g. a timeout or auth error), got: {error_msg!r}"
     )
 
 
@@ -508,8 +594,12 @@ async def test_zigbee2mqtt_start_fails_with_recognizable_error(
             f"device-less Zigbee2MQTT, but returned success: {result}"
         )
     error_msg = extract_error_message(result).lower()
+    assert slug.lower() in error_msg, (
+        f"Zigbee2MQTT start-failure message should reference the slug "
+        f"{slug!r}, got: {error_msg!r}"
+    )
     assert any(token in error_msg for token in _START_FAILURE_TOKENS), (
         f"Zigbee2MQTT start-failure message should contain at least one of "
-        f"{list(_START_FAILURE_TOKENS)}, got: {error_msg!r}. Full result: "
-        f"{result}"
+        f"{list(_START_FAILURE_TOKENS)} (schema/config refusal markers), "
+        f"got: {error_msg!r}"
     )

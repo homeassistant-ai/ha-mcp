@@ -100,6 +100,39 @@ def _wait_for_tcp_port(
     )
 
 
+def _wait_for_tcp_port_closed(
+    port: int, host: str = "127.0.0.1", timeout: float = 30.0
+) -> None:
+    """Poll until ``host:port`` REFUSES connections (or ``timeout`` elapses).
+
+    Pre-restart probe for the SSH-addon restart test — without this,
+    ``_wait_for_tcp_port`` returns instantly because the SSH addon's
+    listener is still up (Supervisor hasn't actually stopped the
+    container yet). Waiting for the port to close first proves the
+    restart kicked in; then the post-close ``_wait_for_tcp_port`` call
+    proves the new listener actually started.
+
+    Note: slirp NAT may keep the host-side hostfwd bound briefly after
+    the guest listener drops, so this can falsely report "open" for
+    a beat. A 30s window is enough for the addon container to fully
+    stop on any realistic CI runner.
+    """
+    deadline = time.monotonic() + timeout
+    last_open_at: float | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                last_open_at = time.monotonic()
+                time.sleep(0.5)
+        except OSError:
+            return
+    raise TimeoutError(
+        f"{host}:{port} never closed within {timeout}s; "
+        f"last open at t+{(last_open_at or 0) - (deadline - timeout):.1f}s. "
+        f"The Supervisor restart request may have been silently ignored."
+    )
+
+
 @pytest.mark.system
 class TestGetLogsSystemServiceReal:
     """ha_get_logs source='system_service' against real Supervisor."""
@@ -225,10 +258,14 @@ class TestSettingsUiRestartReal:
             f"got {resp.status_code}; body={resp.text!r}"
         )
 
-        # The SSH addon container restarts asynchronously. Wait for its TCP
-        # listener (port 22222 inside HAOS, exposed on the host as
-        # SSH_DEBUG_HOST_PORT) to come back. 90s covers cache-cold Docker
-        # restarts on slow CI runners.
+        # Two-phase wait. ``_wait_for_tcp_port`` alone would return
+        # instantly because the SSH addon's listener was up before the
+        # restart POST and Supervisor returns 200 once the request is
+        # accepted — not once the container actually went down. Without
+        # the close-then-open sequence, a Supervisor-side bug that
+        # silently ignored the restart would still pass this test.
+        _wait_for_tcp_port_closed(SSH_DEBUG_HOST_PORT, timeout=30.0)
+        # 90s covers cache-cold Docker restarts on slow CI runners.
         _wait_for_tcp_port(SSH_DEBUG_HOST_PORT, timeout=90.0)
 
     async def test_restart_request_rejects_bad_token(self) -> None:
@@ -275,6 +312,18 @@ class TestMockResilienceReal:
         assert all(r.get("success") is True for r in results), (
             f"Expected success=True on every concurrent fetch, got: "
             f"{[(r.get('slug'), r.get('success')) for r in results]!r}"
+        )
+        # Catch a single-shared-buffer regression: every per-service log
+        # should be distinct content. Compare first 200 chars (the
+        # journald-prefix-plus-some-detail surface) — multiple identical
+        # prefixes would indicate Supervisor or the tool is returning a
+        # shared response object across calls.
+        log_prefixes = {r.get("log", "")[:200] for r in results}
+        assert len(log_prefixes) > 1, (
+            f"All {len(results)} concurrent log fetches returned identical "
+            f"content (first-200-char fingerprint). This looks like a "
+            f"shared-buffer regression in the supervisor proxy or the tool. "
+            f"Fingerprint: {next(iter(log_prefixes))[:100]!r}"
         )
 
     async def test_addon_logs_limit_truncation(self, mcp_client) -> None:

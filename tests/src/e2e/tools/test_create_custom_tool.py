@@ -1876,14 +1876,39 @@ class TestCodeModeSavePersistenceFailure:
 
         saved_tools_path = "/data/saved_tools.json"
 
-        # Ensure the file exists before chmod (the addon creates it
-        # lazily on first save, and chmod on a non-existent path errors).
+        # ``chmod 444`` is a no-op against root inside the addon
+        # container (root bypasses DAC mode bits via CAP_DAC_OVERRIDE),
+        # so the save would succeed and the test would silently fail to
+        # exercise the rollback path. Replace the file with a DIRECTORY
+        # at the same name: ``open(path, "w")`` then raises
+        # ``IsADirectoryError`` (errno=EISDIR) which root can't bypass.
+        # This is the smallest cross-fs-compatible trick to make a path
+        # truly unwriteable to any caller. Restore in ``finally`` by
+        # removing the dir and re-creating an empty file at the path.
         docker_exec_in_addon(
-            HA_MCP_DEV_ADDON_SLUG, ["touch", saved_tools_path]
+            HA_MCP_DEV_ADDON_SLUG,
+            ["sh", "-c", f"rm -rf {saved_tools_path} && mkdir {saved_tools_path}"],
         )
-        docker_exec_in_addon(
-            HA_MCP_DEV_ADDON_SLUG, ["chmod", "444", saved_tools_path]
+        # Verify the poisoning actually blocks writes — root in the addon
+        # container will see EISDIR on open(path, "w"). If a future
+        # filesystem layout makes /data a tmpfs that allows the
+        # directory→file flip, this preflight fails loudly rather than
+        # the test silently passing.
+        preflight = docker_exec_in_addon(
+            HA_MCP_DEV_ADDON_SLUG,
+            [
+                "sh",
+                "-c",
+                f"echo probe > {saved_tools_path}/probe.json 2>&1; echo exit=$?",
+            ],
         )
+        assert "exit=0" not in preflight, (
+            f"Filesystem-poisoning precondition failed: writes to "
+            f"{saved_tools_path}/probe.json succeeded, so the addon's save "
+            f"would also succeed and the rollback path would never fire. "
+            f"Probe output: {preflight!r}"
+        )
+
         try:
             # First save: persistence must fail; response surfaces
             # save_warning and saved_as=None while success stays True
@@ -1919,10 +1944,28 @@ class TestCodeModeSavePersistenceFailure:
             )
         finally:
             # Always restore writeability so the rest of the session
-            # (and any retry) sees a usable persistence path.
-            docker_exec_in_addon(
-                HA_MCP_DEV_ADDON_SLUG, ["chmod", "644", saved_tools_path]
-            )
+            # (and any retry) sees a usable persistence path. Wrap in
+            # its own try/except so a flaky SSH session here doesn't
+            # mask the original test exception — log the restore
+            # failure and re-raise, leaving the directory poisoned so
+            # the next test fails loudly instead of cascading on a
+            # stale 444/EISDIR.
+            try:
+                docker_exec_in_addon(
+                    HA_MCP_DEV_ADDON_SLUG,
+                    [
+                        "sh",
+                        "-c",
+                        f"rm -rf {saved_tools_path} && touch {saved_tools_path}",
+                    ],
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to restore %s; subsequent tests in this session "
+                    "may cascade on the leftover directory",
+                    saved_tools_path,
+                )
+                raise
 
         # Second save (after restore): proves the restore worked and
         # that the same code path now persists cleanly. Uses a distinct

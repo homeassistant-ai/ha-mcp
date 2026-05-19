@@ -7,10 +7,12 @@ companion addons whose containers register HA integrations on first boot
 ``nodered`` integration), or (b) HA's real Sun-position math (the testcontainer
 stub returns static values from a frozen world clock).
 
-Layout (~6 tests):
+Layout:
 
 * ESPHome companion integration loaded (auto-registered by addon install).
+* ESPHome surfaces at least one entity (proves background platform setup ran).
 * Node-RED companion integration loaded (auto-registered by addon install).
+* Node-RED disable / re-enable round-trip via ``ha_set_integration_enabled``.
 * Sun integration's ``sun.sun`` exposes realistic next_dawn / next_dusk
   attributes within 24h of the test-process clock.
 * Local Calendar config-entry lifecycle: create entry → entity registers →
@@ -47,7 +49,9 @@ pytestmark = [pytest.mark.haos_only]
 _NODE_RED_DOMAIN_CANDIDATES: tuple[str, ...] = ("nodered", "node_red")
 
 
-def _find_entry_for_domain(entries: list[dict[str, Any]], domain: str) -> dict[str, Any] | None:
+def _find_entry_for_domain(
+    entries: list[dict[str, Any]], domain: str
+) -> dict[str, Any] | None:
     """Return the first entry in ``entries`` whose domain matches ``domain``."""
     for entry in entries:
         if entry.get("domain") == domain:
@@ -66,9 +70,7 @@ async def test_esphome_companion_integration_loaded(mcp_client: Any) -> None:
     missing entirely) means the addon → integration auto-register chain
     broke and downstream ESPHome tooling won't function.
     """
-    raw = await mcp_client.call_tool(
-        "ha_get_integration", {"domain": "esphome"}
-    )
+    raw = await mcp_client.call_tool("ha_get_integration", {"domain": "esphome"})
     data = assert_mcp_success(raw, "List esphome integrations")
     entries = data.get("entries", [])
     assert entries, (
@@ -110,7 +112,8 @@ async def test_esphome_dashboard_device_present(mcp_client: Any) -> None:
     inner = data.get("data", data)
     results = inner.get("results", [])
     esphome_entity_ids = [
-        r.get("entity_id", "") for r in results
+        r.get("entity_id", "")
+        for r in results
         if "esphome" in r.get("entity_id", "").lower()
     ]
     assert esphome_entity_ids, (
@@ -203,7 +206,7 @@ async def test_nodered_integration_disable_enable_cycle(mcp_client: Any) -> None
             arguments={"entry_id": entry_id},
             predicate=lambda d: (d.get("entry") or {}).get("disabled_by") == "user",
             description="Node-RED entry shows disabled_by=user",
-            timeout=15,
+            timeout=45,
         )
     finally:
         # Always re-enable to leave the qcow2 in the state subsequent tests
@@ -219,7 +222,7 @@ async def test_nodered_integration_disable_enable_cycle(mcp_client: Any) -> None
             arguments={"entry_id": entry_id},
             predicate=lambda d: (d.get("entry") or {}).get("disabled_by") is None,
             description="Node-RED entry no longer disabled",
-            timeout=15,
+            timeout=45,
         )
 
 
@@ -262,7 +265,9 @@ async def test_sun_position_is_realistic(mcp_client: Any) -> None:
     window_end = now + timedelta(hours=24)
     # HA emits these as ISO 8601 strings, optionally with trailing 'Z'.
     for label, raw_val in (("next_dawn", next_dawn_raw), ("next_dusk", next_dusk_raw)):
-        normalized = raw_val.replace("Z", "+00:00") if isinstance(raw_val, str) else raw_val
+        normalized = (
+            raw_val.replace("Z", "+00:00") if isinstance(raw_val, str) else raw_val
+        )
         parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
@@ -325,9 +330,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
             f"local_calendar flow did not create an entry: {flow_done}"
         )
         entry_id = flow_done["result"]["entry_id"]
-        LOG.info(
-            "Created local_calendar entry %s (name=%r)", entry_id, calendar_name
-        )
+        LOG.info("Created local_calendar entry %s (name=%r)", entry_id, calendar_name)
 
         # Step 2 — wait for the calendar entity to register, then verify via
         # ha_get_entity that it shows up in the entity registry.
@@ -381,7 +384,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
                 e.get("summary") == event_summary for e in d.get("events", [])
             ),
             description=f"event {event_summary!r} visible in calendar",
-            timeout=15,
+            timeout=45,
         )
         matching = [
             e for e in retrieved.get("events", []) if e.get("summary") == event_summary
@@ -389,9 +392,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
         assert matching, (
             f"Created event not in retrieved set. Events: {retrieved.get('events')}"
         )
-        LOG.info(
-            "Round-tripped event %r through %s", event_summary, expected_entity_id
-        )
+        LOG.info("Round-tripped event %r through %s", event_summary, expected_entity_id)
 
     finally:
         # Step 5 — tear down the config entry. Skipped only when entry creation
@@ -404,10 +405,9 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
                 "ha_delete_helpers_integrations",
                 {"target": entry_id, "helper_type": None, "confirm": True},
             )
-            if not cleanup.get("success"):
-                LOG.warning(
-                    "Teardown of local_calendar entry %s did not report "
-                    "success: %s",
-                    entry_id,
-                    cleanup,
-                )
+            assert cleanup.get("success"), (
+                f"Teardown of local_calendar entry {entry_id} failed; "
+                f"the qcow2 will leak this entry across the session and "
+                f"subsequent ha_search_entities calls will slow over time. "
+                f"Result: {cleanup}"
+            )
