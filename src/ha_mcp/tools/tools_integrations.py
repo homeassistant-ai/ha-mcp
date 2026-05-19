@@ -1237,13 +1237,13 @@ class IntegrationTools:
                     if res is not True
                 ]
                 if not_removed:
-                    response["warning"] = (
+                    response.setdefault("warnings", []).append(
                         f"Deletion confirmed but the following entities "
                         f"are still present after the wait window: "
                         f"{not_removed}"
                     )
             if warnings:
-                response["warnings"] = warnings
+                response.setdefault("warnings", []).extend(warnings)
             return response
 
         except ToolError:
@@ -1388,7 +1388,7 @@ class IntegrationTools:
                             client, entity_id
                         )
                         if not removed:
-                            response["warning"] = (
+                            response.setdefault("warnings", []).append(
                                 f"Deletion confirmed but {entity_id} "
                                 "is still present after the wait window."
                             )
@@ -1531,7 +1531,7 @@ class IntegrationTools:
                         client, entity_id
                     )
                     if not removed:
-                        response["warning"] = (
+                        response.setdefault("warnings", []).append(
                             f"Deletion confirmed but {entity_id} "
                             "is still present after the wait window."
                         )

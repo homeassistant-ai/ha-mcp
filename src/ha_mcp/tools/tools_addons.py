@@ -1272,7 +1272,7 @@ def _apply_array_ops(
                 and inspectable
                 and not any(field in it for it in inspectable)
             ):
-                entry["warning"] = (
+                entry.setdefault("warnings", []).append(
                     f"field {field!r} is not present on any item — "
                     "check for a typo in the field name"
                 )
@@ -2212,7 +2212,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     "submitted_fields": submitted_fields,
                 }
             if ignored_fields:
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
                     f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
                     "declared schema."

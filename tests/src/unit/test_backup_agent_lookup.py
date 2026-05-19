@@ -5,12 +5,12 @@ tools on HA Core installs (which only register `backup.local`).
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.backup import _get_local_backup_agent_id
+from ha_mcp.tools.backup import _get_local_backup_agent_id, restore_backup
 
 
 def _ws_client(agents_payload: dict) -> AsyncMock:
@@ -109,3 +109,50 @@ class TestGetLocalBackupAgentId:
             await _get_local_backup_agent_id(ws)
         error = json.loads(str(exc_info.value))
         assert "No local backup agent found" in error["error"]["message"]
+
+
+class TestRestoreBackupWarnings:
+    """Pin the post-#1332 warnings-list contract on the restore_backup
+    success path (``backup.py`` ~L447-457). Pre-#1332 emitted singular
+    ``warning``; the migrated shape is ``warnings: list[str]`` containing
+    the connection-lost-during-restart notice.
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_returns_top_level_warnings_list(self):
+        ws = AsyncMock()
+        ws.send_command.side_effect = [
+            # backup/info — verify backup exists
+            {"success": True, "result": {"backups": [{"backup_id": "abc123"}]}},
+            # _get_local_backup_agent_id → backup/agents/info
+            {"success": True, "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]}},
+            # _get_backup_password → backup/config/info
+            {"success": True, "result": {"config": {"create_backup": {"password": "pw"}}}},
+            # _create_safety_backup → backup/generate
+            {"success": True, "result": {"backup_job_id": "safety_job_1"}},
+            # _create_safety_backup polling → backup/info loop
+            {"success": True, "result": {"backups": [{"name": "Pre_Restore_Safety", "backup_id": "safety_xyz"}]}},
+            # backup/restore — the actual restore call
+            {"success": True},
+        ]
+
+        client = MagicMock()
+        client.base_url = "http://test"
+        client.token = "token"
+        client.verify_ssl = False
+
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await restore_backup(client, "abc123")
+
+        assert result["success"] is True
+        assert result["backup_id"] == "abc123"
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Expected non-empty warnings list, got: {result!r}"
+        )
+        assert any("Connection will be temporarily lost" in w for w in warnings), (
+            f"Expected connection-lost warning content; got: {warnings!r}"
+        )

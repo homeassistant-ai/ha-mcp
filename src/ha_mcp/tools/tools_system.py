@@ -186,10 +186,10 @@ class SystemTools:
                     "Home Assistant restart initiated. "
                     "The system will be unavailable for 1-5 minutes."
                 ),
-                "warning": (
+                "warnings": [
                     "Connection will be lost during restart. "
                     "Wait for Home Assistant to become available again."
-                ),
+                ],
             }
 
         except ToolError:
@@ -208,7 +208,7 @@ class SystemTools:
                         "Home Assistant restart initiated. "
                         "Connection was closed as expected during restart."
                     ),
-                    "warning": "Wait 1-5 minutes for Home Assistant to restart.",
+                    "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
                 }
 
             exception_to_structured_error(e)
@@ -299,12 +299,14 @@ class SystemTools:
                         if "not found" not in error_msg.lower():
                             errors.append(f"{reload_target}: {error_msg}")
 
-                return {
+                response: dict[str, Any] = {
                     "success": True,
                     "message": f"Reloaded {len(results)} components",
                     "reloaded": results,
-                    "warnings": errors if errors else None,
                 }
+                if errors:
+                    response["warnings"] = errors
+                return response
 
             else:
                 # Reload specific component
