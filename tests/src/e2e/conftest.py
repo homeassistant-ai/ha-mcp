@@ -789,24 +789,23 @@ def _dump_ha_readiness_diagnostics(
     headers: dict[str, str],
     label: str,
     *,
-    service_domain: str | None = None,
     config_entry_domain: str | None = None,
 ) -> None:
     """Emit HA-side diagnostics for any readiness-gate failure.
 
     Generic best-effort dump used by every readiness gate in
-    ``ha_container_with_fresh_config``. The optional ``service_domain``
-    and ``config_entry_domain`` arguments let the caller surface
+    ``ha_container_with_fresh_config``. The optional
+    ``config_entry_domain`` argument lets the caller surface
     domain-specific presence/absence information (e.g. the sun-gate
     failure path passes ``config_entry_domain="sun"`` to make the
     config-entries section call out whether that specific entry is
     present or which state it's stuck in) instead of only the generic
     counts.
 
-    Without those arguments, the dump shows aggregate ``/api/services``
-    and ``/api/config/config_entries/entry`` domain lists — enough
-    context to distinguish "HA never finished starting" from "HA started
-    but a specific domain regressed".
+    Without it, the dump shows aggregate ``/api/services`` and
+    ``/api/config/config_entries/entry`` domain lists — enough context
+    to distinguish "HA never finished starting" from "HA started but a
+    specific domain regressed".
 
     Each capture is wrapped in its own try/except so a single failure
     (container already exited, HA API gone) does not lose the other
@@ -826,18 +825,7 @@ def _dump_ha_readiness_diagnostics(
             domains = sorted(
                 {s.get("domain") for s in svc_resp.json() if s.get("domain")}
             )
-            if service_domain:
-                present = service_domain in domains
-                logger.warning(
-                    f"  /api/services: {len(domains)} domains; "
-                    f"{service_domain}={'present' if present else 'absent'}"
-                )
-                if not present:
-                    # Surface adjacent domains so a reader can rule out a
-                    # regex / casing / typo class mismatch.
-                    logger.warning(f"  /api/services domains: {domains}")
-            else:
-                logger.warning(f"  /api/services: {len(domains)} domains: {domains}")
+            logger.warning(f"  /api/services: {len(domains)} domains: {domains}")
         else:
             logger.warning(
                 f"  /api/services: HTTP {svc_resp.status_code} {svc_resp.text[:200]}"
@@ -1310,30 +1298,32 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         restore_file.unlink()
         logger.info("🗑️ Removed .HA_RESTORE file from config")
 
-    # Readiness-gate budgets for the testcontainer path. Hoisted from the
-    # ``with container:`` block for grep-ability — successor of the
-    # five per-gate constants the single ``CoreState.RUNNING`` check
-    # replaced. The HAOS branch above keeps its own ``SUN_WAIT = 60``
-    # local (HAOS-qemu boot is a different scope, no
-    # ``[READINESS_GATE_TIMING]`` emit).
-    #
-    # ``CORE_STATE_TIMEOUT = 60`` ≈ 12× the observed-max of ~5s across the
-    # first CI window (4 worker sessions, ``entries_loaded ==
-    # entries_total == 11``). The upstream per-domain ceiling
-    # ``SLOW_SETUP_MAX_WAIT = 300`` from ``homeassistant/setup.py`` is the
-    # latest point at which a stuck integration would surface as
-    # ``CoreState`` stuck at ``starting`` — 60s is well clear of that
-    # without paying the worst-case wall-clock if a slow integration
-    # legitimately needs the full budget.
-    CORE_STATE_TIMEOUT = 60
-    # ``SUN_WAIT = 5`` is the residual tight poll: ``CoreState.RUNNING``
-    # does not strictly imply ``sun.sun != "unknown"`` because sun's
-    # first periodic position computation runs as a scheduled task after
-    # ``async_setup_entry`` returns. Template tests asserting
-    # above/below_horizon would fail without this inline check.
-    SUN_WAIT = 5
-
     with container:
+        # Readiness-gate budgets for the testcontainer path. Defined at
+        # the top of this ``with container:`` block for grep-ability —
+        # successor of the five per-gate constants the single
+        # ``CoreState.RUNNING`` check replaced. The HAOS branch above
+        # keeps its own ``SUN_WAIT = 60`` local (HAOS-qemu boot is a
+        # different scope, no ``[READINESS_GATE_TIMING]`` emit).
+        #
+        # ``CORE_STATE_TIMEOUT = 60`` ≈ 12× the observed-max of ~5s
+        # across the first CI window (4 worker sessions,
+        # ``entries_loaded == entries_total == 11``). The upstream
+        # per-domain ceiling ``SLOW_SETUP_MAX_WAIT = 300`` from
+        # ``homeassistant/setup.py`` is the latest point at which a
+        # stuck integration would surface as ``CoreState`` stuck at
+        # ``starting`` — 60s is well clear of that without paying the
+        # worst-case wall-clock if a slow integration legitimately
+        # needs the full budget.
+        CORE_STATE_TIMEOUT = 60
+        # ``SUN_WAIT = 5`` is the residual tight poll:
+        # ``CoreState.RUNNING`` does not strictly imply
+        # ``sun.sun != "unknown"`` because sun's first periodic position
+        # computation runs as a scheduled task after
+        # ``async_setup_entry`` returns. Template tests asserting
+        # above/below_horizon would fail without this inline check.
+        SUN_WAIT = 5
+
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
         base_url = f"http://localhost:{host_port}"
