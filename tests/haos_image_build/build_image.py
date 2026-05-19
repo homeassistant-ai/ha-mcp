@@ -820,8 +820,27 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
         },
         timeout=60.0,
     )
+    # Disable Supervisor's per-addon "protection mode" so the SSH
+    # addon can ``docker exec`` into sibling addon containers (the
+    # filesystem-poisoning E2E in ``test_create_custom_tool.py`` needs
+    # this). With protection mode ON (Supervisor's default), the addon
+    # is denied Docker socket access and ``docker exec`` returns
+    # ``PROTECTION MODE ENABLED!`` instead of executing the command
+    # (verified on PR #1375 CI run 26091787525). The /security
+    # endpoint is Supervisor's documented way to flip this — see
+    # https://developers.home-assistant.io/docs/api/supervisor/endpoints#addon
+    # under "POST /addons/{slug}/security".
+    ws.supervisor_api(
+        f"/addons/{slug}/security",
+        method="post",
+        data={"protected": False},
+        timeout=30.0,
+    )
     ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
-    LOG.info("Advanced SSH installed + started on port 22222 (user=root)")
+    LOG.info(
+        "Advanced SSH installed + started on port 22222 "
+        "(user=root, protected=false)"
+    )
     return slug
 
 
