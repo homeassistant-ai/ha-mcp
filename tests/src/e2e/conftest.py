@@ -1089,10 +1089,12 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
     is ``"master"`` and we keep the base ports + base image path — same
     behavior as before the parallel work.
 
-    Returns the image path the worker should hand to QEMU. For
-    parallel runs that's a qcow2 overlay backed by ``base_image_path``;
-    libguestfs writes follow the backing chain so the recorder-refresh
-    and dev-addon staging helpers mutate only the overlay.
+    Per-worker qcow2 is a backing-file overlay rather than a full
+    reflink copy: GitHub-hosted Linux runners are ext4 (no reflink),
+    so ``cp --reflink=auto`` falls back to a real 12 GB copy that
+    overflows the runner's 14 GB SSD when multiplied across workers.
+    The overlay is tiny at creation (~200 KB) and grows only as the
+    worker mutates state on top of the shared read-only base.
     """
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
     # pytest-xdist worker IDs are ``gw0``/``gw1``/.../``gwN``. ``master``
@@ -1118,9 +1120,6 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
     )
     if overlay_path.exists():
         overlay_path.unlink()
-    # qcow2-backed overlay: empty file pointing at the base image. Writes
-    # land in the overlay; reads fall through to the base. Tiny on disk
-    # at creation (~200 KB), grows only as the worker mutates state.
     subprocess.run(
         [
             "qemu-img",
@@ -1236,6 +1235,48 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     SUN_WAIT,
                     last_sun_status,
                     last_sun_err,
+                )
+            # Sun.sun ready means all *integrations* finished setup, but
+            # the demo platform that registers ``light.bed_light`` and the
+            # other seeded fixtures publishes its initial states *after*
+            # its integration's async_setup returns — the recorder + state
+            # machine writes are scheduled tasks. Under the parallel
+            # HAOS run (-n2) the first test on each worker hits the search
+            # / state API before those tasks complete, and search returns
+            # ``total_matches=0`` for ``light`` (verified on PR #1379 CI
+            # run 26130708983 diagnostics: core.entity_registry has all 6
+            # lights, but the state machine had no light.* entries at the
+            # moment the test fired). Poll for one of the known seeded
+            # light entities so downstream tests don't race.
+            light_url = f"{base_url}/api/states/light.bed_light"
+            LIGHT_WAIT = 60
+            light_start = time.monotonic()
+            last_light_status: int | None = None
+            while time.monotonic() - light_start < LIGHT_WAIT:
+                try:
+                    light_resp = requests.get(
+                        light_url, timeout=5, headers=haos_headers
+                    )
+                    last_light_status = light_resp.status_code
+                    if light_resp.status_code == 200:
+                        elapsed = time.monotonic() - light_start
+                        logger.info(
+                            "✅ HAOS light.bed_light is in state machine after %.1fs",
+                            elapsed,
+                        )
+                        break
+                except (
+                    requests.exceptions.RequestException,
+                    json.JSONDecodeError,
+                ):
+                    pass
+                time.sleep(1)
+            else:
+                logger.warning(
+                    "⚠️ HAOS light.bed_light still not in state machine after "
+                    "%ds (last_status=%s) — search / state tests may race",
+                    LIGHT_WAIT,
+                    last_light_status,
                 )
             # Set HA Core's default backup-create password via WS so
             # ha_backup_create tests pass without a pre-baked seed. Must
