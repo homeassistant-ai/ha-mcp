@@ -82,7 +82,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
           # Ubuntu installs the kernel image as 0600 root:root, but
           # libguestfs's supermin appliance builder needs to read it as
           # the invoking (unprivileged) user. Documented at

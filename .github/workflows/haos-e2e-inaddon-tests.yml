@@ -93,7 +93,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
           sudo chmod +r /boot/vmlinuz-*
 
       - name: Enable KVM group perms

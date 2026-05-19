@@ -60,6 +60,68 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # with the ``local_`` prefix that Supervisor applies to local-store
 # addons.
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+# Advanced SSH Web Terminal addon's installed slug. Bake-installed by
+# build_image.install_advanced_ssh; available on host port
+# SSH_DEBUG_HOST_PORT (22222) with user=root, password=haosdebug.
+SSH_ADDON_SLUG = "local_homeassistant_advanced_ssh"
+SSH_ADDON_USER = "root"
+SSH_ADDON_PASSWORD = "haosdebug"
+
+
+def ssh_exec(
+    cmd: list[str], *, timeout: float = 30.0
+) -> subprocess.CompletedProcess[str]:
+    """Run ``cmd`` over SSH against the booted HAOS's Advanced SSH addon.
+
+    Used by inaddon-only tests that need to run a process inside HAOS
+    itself (typically ``docker exec`` into a sibling addon container to
+    poison its filesystem mid-test). The Advanced SSH addon is bake-
+    installed with a known root password; we use ``sshpass`` for
+    non-interactive auth and disable host-key checking because the
+    addon container's key changes whenever it restarts (commit 6's
+    restart-retarget test relies on this leniency).
+
+    The caller passes the COMMAND list (``["docker", "exec", ...]``);
+    this helper assembles the ssh wrapper.
+    """
+    ssh_cmd = [
+        "sshpass", "-p", SSH_ADDON_PASSWORD,
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-p", str(SSH_DEBUG_HOST_PORT),
+        f"{SSH_ADDON_USER}@127.0.0.1",
+        *cmd,
+    ]
+    return subprocess.run(
+        ssh_cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def docker_exec_in_addon(
+    addon_slug: str, cmd: list[str], *, timeout: float = 30.0
+) -> str:
+    """Run ``cmd`` inside an addon container via SSH + docker exec.
+
+    ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
+    the helper resolves it to the Docker container name (
+    ``addon_<slug>``). Returns stdout of the command. Raises on
+    non-zero exit (caller can catch ``subprocess.CalledProcessError``
+    for graceful diagnostics).
+
+    Used by item 8's filesystem-poisoning E2E to make
+    ``/data/saved_tools.json`` unwriteable inside the dev addon
+    container mid-test, force the save-warning rollback, then chmod
+    back in the test's finally block.
+    """
+    container = f"addon_{addon_slug}"
+    result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
+    return result.stdout
 
 
 def is_haos_inaddon_mode() -> bool:
