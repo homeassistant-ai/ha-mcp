@@ -148,7 +148,16 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_container)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
-        elif "external_only" in keywords and not external_haos:
+        # ``external_only`` skips ONLY on the inaddon tier. The name is
+        # historical (from #1361 where the only motivating consumer was
+        # ``test_supervisor_mock.py``, whose monkeypatch-based fixture
+        # works fine on testcontainer + external HAOS but can't reach
+        # the addon's separate process inaddon). Skipping on
+        # testcontainer too was a dispatcher bug — the mock fixture is
+        # in-process and runs cleanly there. Surfaced during PR #1375
+        # final-skip audit; 14 supervisor_mock tests were silently
+        # skipping on every testcontainer e2e-tests.yml run.
+        elif "external_only" in keywords and inaddon:
             item.add_marker(skip_external_only)
 
 
