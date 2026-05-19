@@ -874,7 +874,7 @@ def register_settings_routes(
             }
         )
 
-    async def _restart_addon(_: Request) -> JSONResponse:
+    async def _restart_addon(request: Request) -> JSONResponse:
         if not os.environ.get("SUPERVISOR_TOKEN"):
             return JSONResponse(
                 create_error_response(
@@ -884,13 +884,32 @@ def register_settings_routes(
                 ),
                 status_code=400,
             )
-        # Short timeout — the supervisor kills our process during restart so
-        # the connection will drop. A connection drop is actually success.
+        # Optional slug from the request body lets callers restart a sibling
+        # addon instead of self. The UI's restart button posts an empty body
+        # and gets the historical self-restart behavior; the inaddon E2E
+        # suite uses ``slug`` to exercise the Supervisor restart wire
+        # contract against a non-test-critical addon (the dev addon's
+        # session would otherwise drop). The token's hassio_role gates
+        # whether the call actually succeeds for non-self targets.
+        target_slug = "self"
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            requested = payload.get("slug")
+            if isinstance(requested, str) and requested.strip():
+                target_slug = requested.strip()
+
+        endpoint = f"/addons/{target_slug}/restart"
+        # Short timeout — when restarting self, the supervisor kills our
+        # process during restart so the connection will drop. A connection
+        # drop is actually success on that path.
         try:
             async with make_supervisor_httpx_client(
                 timeout=5.0, verify=server.settings.verify_ssl
             ) as client:
-                resp = await client.post("/addons/self/restart")
+                resp = await client.post(endpoint)
         except (httpx.ReadError, httpx.RemoteProtocolError):
             # Connection dropped mid-request — restart is happening.
             # `ConnectError` is deliberately NOT in this tuple: it fires
@@ -898,7 +917,7 @@ def register_settings_routes(
             # Supervisor socket misconfigured) and means the restart was
             # never initiated. Falls through to the `httpx.HTTPError`
             # handler below, which returns 502 + CONNECTION_FAILED.
-            logger.info("Restart request connection dropped (expected during restart)")
+            logger.info("Restart request connection dropped (expected during self-restart)")
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
@@ -912,7 +931,12 @@ def register_settings_routes(
 
         if resp.status_code >= 400:
             body = resp.text
-            logger.error("Supervisor restart failed: %d %s", resp.status_code, body)
+            logger.error(
+                "Supervisor restart failed (slug=%s): %d %s",
+                target_slug,
+                resp.status_code,
+                body,
+            )
             return JSONResponse(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
