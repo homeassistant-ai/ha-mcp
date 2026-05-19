@@ -91,10 +91,23 @@ def ssh_exec(
     The caller passes the COMMAND list (``["docker", "exec", ...]``);
     this helper assembles the ssh wrapper.
     """
+    import shlex
+
     # Pass the password via the SSHPASS env var + ``-e`` flag instead
     # of ``-p`` on the command line — ``-p`` makes the credential
     # visible in ``ps`` for every other user on the runner, even
     # though this is a test-only credential.
+    #
+    # SSH transmits the remote command as a single space-joined string,
+    # NOT as an argv. So
+    # ``["docker", "exec", "addon_x", "sh", "-c", "rm -rf foo && mkdir foo"]``
+    # arrives on the remote side as ``docker exec addon_x sh -c rm -rf
+    # foo && mkdir foo`` — sh sees ``-c rm`` (script body is "rm"), the
+    # rest become positional args, and ``rm`` runs with no operands.
+    # Verified on PR #1375 CI run 26092611982: ``stderr="rm: missing
+    # operand"``. Use ``shlex.join`` to produce a single shell-safe
+    # string that the remote shell will re-tokenize correctly.
+    remote_command = shlex.join(cmd)
     ssh_cmd = [
         SSHPASS_BIN, "-e",
         "ssh",
@@ -103,7 +116,7 @@ def ssh_exec(
         "-o", "LogLevel=ERROR",
         "-p", str(SSH_DEBUG_HOST_PORT),
         f"{SSH_ADDON_USER}@127.0.0.1",
-        *cmd,
+        remote_command,
     ]
     env = {**os.environ, "SSHPASS": SSH_ADDON_PASSWORD}
 
