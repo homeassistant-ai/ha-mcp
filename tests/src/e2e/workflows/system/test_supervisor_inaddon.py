@@ -127,41 +127,113 @@ class TestGetLogsSupervisorReal:
         )
 
 
-# NOTE: Three test classes were deleted in this commit:
+# NOTE on inaddon coverage scope:
 #
-# - ``TestBugReportAddonLogsReal::test_fetches_self_logs`` —
-#   ``_fetch_addon_logs()`` reads ``SUPERVISOR_TOKEN`` from the
-#   CURRENT process's env. On inaddon, the current process is the
-#   pytest test runner (running on the CI host), NOT the addon
-#   container — SUPERVISOR_TOKEN is unset, the function's defensive
-#   guard returns ``""``, and the test fails on the non-empty
-#   assertion. To exercise this against the addon's real
-#   SUPERVISOR_TOKEN would require running the assertion INSIDE the
-#   addon container (e.g. via an MCP tool that wraps
-#   ``_fetch_addon_logs``), which doesn't exist as a public tool. The
-#   helper's unit tests in ``tests/src/unit/`` cover the function's
-#   in-process behavior.
+# The inaddon tier reaches the MCP tool code via ``mcp_client`` — the test
+# process is on the CI host but the tool runs INSIDE the addon, where
+# ``SUPERVISOR_TOKEN`` is set by Supervisor. So any helper that the test
+# runner can reach THROUGH a public MCP tool can be exercised against the
+# real Supervisor; ``TestBugReportAddonLogsReal`` below uses
+# ``ha_report_issue`` to do exactly that for ``_fetch_addon_logs()``.
 #
-# - ``TestFixtureWiringReal::{test_is_running_in_addon,test_supervisor_base_url}``
-#   — same problem. ``is_running_in_addon()`` and
-#   ``get_supervisor_base_url()`` read the current process's env.
-#   The test runner doesn't have those vars set. To test that the
-#   ADDON has them set, you'd have to invoke the assertion from
-#   inside the addon process.
+# A few mock-tier surfaces remain mock-only on purpose:
 #
-# - ``TestSettingsUiRestartReal::{test_restart_request_succeeds,test_restart_request_rejects_bad_token}``
-#   — same root cause. The test reads ``os.environ["SUPERVISOR_TOKEN"]``
-#   to construct a Bearer auth header for a direct httpx POST. The
-#   test runner has no such env var; ``KeyError`` on access.
-#   Retargeting to the SSH addon doesn't help — the problem is the
-#   AUTH token, not the target endpoint.
-#
-# All four scenarios remain covered by the in-process mock-tier tests
-# in ``test_supervisor_mock.py`` (which run on testcontainer + HAOS-
-# external where the test process IS the MCP server process and shares
-# its env). The inaddon module retains coverage for the wire-contract
-# tests that go THROUGH the addon via ``mcp_client`` (system_service
-# logs, supervisor addon logs, concurrent fetches, limit truncation).
+# - ``TestBugReportAddonLogs::test_returns_empty_when_token_missing`` and
+#   ``TestFixtureWiring::*`` — verify defensive behavior when SUPERVISOR_TOKEN
+#   is unset or the runtime helpers see an addon-less env. On inaddon the
+#   addon process always has the token set; we can't ``monkeypatch.delenv``
+#   the addon-process env without restarting the addon, so the missing-token
+#   branch can only be exercised on the mock tier.
+# - ``TestSettingsUiRestart::test_restart_request_succeeds`` — POSTing to
+#   ``/api/settings/restart`` actually restarts the addon and kills
+#   ``mcp_client`` for every subsequent test. ``TestSettingsUiRestartReal``
+#   below uses the ``slug`` parameter against the SSH addon instead so the
+#   real wire contract gets exercised without taking the test session down.
+# - ``TestSettingsUiRestart::test_restart_request_rejects_bad_token`` — the
+#   401 path requires injecting a wrong ``SUPERVISOR_TOKEN`` into the addon
+#   process, which means restarting the addon with a corrupted env. Same
+#   destructive blocker as above; stays mock-only.
+
+
+@pytest.mark.system
+class TestBugReportAddonLogsReal:
+    """Real-Supervisor parallel of ``test_supervisor_mock.TestBugReportAddonLogs``.
+
+    Exercises ``tools_bug_report._fetch_addon_logs()`` through the public
+    ``ha_report_issue`` tool: the tool runs inside the dev addon, where
+    Supervisor sets ``SUPERVISOR_TOKEN``, so the helper hits the real
+    ``/addons/self/logs`` endpoint and returns the addon's actual stdout.
+    """
+
+    async def test_addon_logs_in_report(self, mcp_client) -> None:
+        """``ha_report_issue`` returns non-empty ``addon_logs`` on inaddon.
+
+        The mock tier asserts on a fixed sentinel; here we can only assert
+        shape (non-empty string with reasonable length) since we're reading
+        the live addon's own stdout.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success("ha_report_issue", {})
+
+        # ``ha_report_issue`` always succeeds; the addon_logs field is the
+        # signal we care about. install_method is "addon" inside the dev
+        # addon, so the tool's gate at tools_bug_report.py:506-507 fires
+        # and ``_fetch_addon_logs()`` runs.
+        install_method = result.get("installation_method") or result.get(
+            "data", {}
+        ).get("installation_method")
+        assert install_method == "addon", (
+            f"Expected installation_method='addon' inside dev addon, got "
+            f"{install_method!r} (full keys: {sorted(result)})"
+        )
+        addon_logs = result.get("addon_logs") or result.get("data", {}).get(
+            "addon_logs"
+        )
+        assert isinstance(addon_logs, str) and len(addon_logs) >= 50, (
+            f"Expected non-trivial addon_logs string (>=50 chars) when running "
+            f"as addon with real SUPERVISOR_TOKEN, got {len(addon_logs or '')} "
+            f"chars: {(addon_logs or '')[:200]!r}"
+        )
+
+
+@pytest.mark.system
+class TestSettingsUiRestartReal:
+    """Real-Supervisor parallel of ``test_supervisor_mock.TestSettingsUiRestart``.
+
+    The ``/api/settings/restart`` endpoint accepts a ``slug`` body field
+    so tests can target a non-test-critical addon (the SSH addon, already
+    installed by the inaddon bake) instead of restarting the dev addon
+    out from under ``mcp_client``.
+    """
+
+    async def test_restart_via_slug_succeeds(self, ha_container_with_fresh_config) -> None:
+        """POST /api/settings/restart with slug=<ssh-addon> → 200, addon restarts.
+
+        Exercises the same Supervisor ``/addons/<slug>/restart`` wire
+        contract that the mock test covers, against a real Supervisor,
+        without killing the dev addon.
+        """
+        import httpx
+
+        from haos_runtime import HA_MCP_TEST_SECRET_PATH, SSH_ADDON_SLUG
+
+        container_info = ha_container_with_fresh_config
+        addon_mcp_url = container_info.get("addon_mcp_url")
+        assert addon_mcp_url, "inaddon backend should expose addon_mcp_url"
+        # Strip the trailing MCP path component; the settings UI is mounted
+        # at the secret prefix root.
+        base = addon_mcp_url.split("/mcp", 1)[0]
+        restart_url = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/restart"
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(restart_url, json={"slug": SSH_ADDON_SLUG})
+
+        assert resp.status_code == 200, (
+            f"Expected 200 from settings restart with slug={SSH_ADDON_SLUG!r}, "
+            f"got {resp.status_code}: {resp.text[:300]!r}"
+        )
+        body = resp.json()
+        assert body.get("success") is True, f"Expected success=True, got {body!r}"
 
 
 @pytest.mark.system
