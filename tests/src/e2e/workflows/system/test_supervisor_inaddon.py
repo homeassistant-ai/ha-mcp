@@ -178,17 +178,18 @@ class TestBugReportAddonLogsReal:
         # ``ha_report_issue`` always succeeds; the addon_logs field is the
         # signal we care about. install_method is "addon" inside the dev
         # addon, so the tool's gate at tools_bug_report.py:506-507 fires
-        # and ``_fetch_addon_logs()`` runs.
-        install_method = result.get("installation_method") or result.get(
-            "data", {}
-        ).get("installation_method")
+        # and ``_fetch_addon_logs()`` runs. ``installation_method`` is
+        # nested inside ``diagnostic_info`` (verified by inaddon CI 76759618777
+        # — full keys list confirms the nesting); ``addon_logs`` is a
+        # top-level field.
+        diagnostic_info = result.get("diagnostic_info") or {}
+        install_method = diagnostic_info.get("installation_method")
         assert install_method == "addon", (
             f"Expected installation_method='addon' inside dev addon, got "
-            f"{install_method!r} (full keys: {sorted(result)})"
+            f"{install_method!r} (diagnostic_info keys: "
+            f"{sorted(diagnostic_info)})"
         )
-        addon_logs = result.get("addon_logs") or result.get("data", {}).get(
-            "addon_logs"
-        )
+        addon_logs = result.get("addon_logs")
         assert isinstance(addon_logs, str) and len(addon_logs) >= 50, (
             f"Expected non-trivial addon_logs string (>=50 chars) when running "
             f"as addon with real SUPERVISOR_TOKEN, got {len(addon_logs or '')} "

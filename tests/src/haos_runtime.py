@@ -66,7 +66,7 @@ HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 # be overridden via env vars (matching the ONBOARDING_PASSWORD pattern
 # used by the testcontainer + HAOS auth path) so this constant never
 # carries a deployable credential.
-SSH_ADDON_SLUG = "local_homeassistant_advanced_ssh"
+SSH_ADDON_SLUG = "a0d7b954_ssh"
 SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
 SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 # Path to the ``sshpass`` binary. Make configurable so a future
