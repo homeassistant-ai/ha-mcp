@@ -214,7 +214,6 @@ class TestSettingsUiRestartReal:
         without killing the dev addon.
         """
         import httpx
-
         from haos_runtime import HA_MCP_TEST_SECRET_PATH, SSH_ADDON_SLUG
 
         container_info = ha_container_with_fresh_config
