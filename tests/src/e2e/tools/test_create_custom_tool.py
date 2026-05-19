@@ -1894,19 +1894,28 @@ class TestCodeModeSavePersistenceFailure:
         # filesystem layout makes /data a tmpfs that allows the
         # directory→file flip, this preflight fails loudly rather than
         # the test silently passing.
+        # Probe: try to write TO the path (which is now a directory).
+        # open(saved_tools_path, "w") inside the addon's save logic
+        # would raise IsADirectoryError; the shell equivalent is
+        # ``echo X > /path/to/dir`` which fails with "Is a directory".
+        # NOTE: probe must target the PATH itself, NOT a child file —
+        # writing ``/path/to/dir/probe.json`` succeeds because that's
+        # a normal file inside the directory, not a write to the
+        # directory path. Verified on PR #1375 CI run 26093777356.
         preflight = docker_exec_in_addon(
             HA_MCP_DEV_ADDON_SLUG,
             [
                 "sh",
                 "-c",
-                f"echo probe > {saved_tools_path}/probe.json 2>&1; echo exit=$?",
+                f"echo probe > {saved_tools_path} 2>&1; echo exit=$?",
             ],
         )
         assert "exit=0" not in preflight, (
             f"Filesystem-poisoning precondition failed: writes to "
-            f"{saved_tools_path}/probe.json succeeded, so the addon's save "
-            f"would also succeed and the rollback path would never fire. "
-            f"Probe output: {preflight!r}"
+            f"{saved_tools_path} succeeded after the directory-replace "
+            f"trick, so the addon's open(path, 'w') would also succeed "
+            f"and the rollback path would never fire. Probe output: "
+            f"{preflight!r}"
         )
 
         try:
