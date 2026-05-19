@@ -891,6 +891,14 @@ def register_settings_routes(
         # contract against a non-test-critical addon (the dev addon's
         # session would otherwise drop). The token's hassio_role gates
         # whether the call actually succeeds for non-self targets.
+        #
+        # The slug is interpolated into the Supervisor endpoint URL, so it
+        # must be tightly constrained — Supervisor addon slugs are
+        # ``[a-z0-9_]+`` per the addon-config schema, but defending against
+        # path-traversal (``..``, ``/``, URL-encoded variants) at the edge
+        # is cheaper than relying on Supervisor to reject every bad shape.
+        # Reject anything outside ``[A-Za-z0-9_-]`` and silently fall back
+        # to ``self`` — same outcome as no body.
         target_slug = "self"
         try:
             payload = await request.json()
@@ -898,7 +906,11 @@ def register_settings_routes(
             payload = None
         if isinstance(payload, dict):
             requested = payload.get("slug")
-            if isinstance(requested, str) and requested.strip():
+            if (
+                isinstance(requested, str)
+                and requested.strip()
+                and all(c.isalnum() or c in "_-" for c in requested.strip())
+            ):
                 target_slug = requested.strip()
 
         endpoint = f"/addons/{target_slug}/restart"

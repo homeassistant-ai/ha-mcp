@@ -682,6 +682,19 @@ class TestRestartAddon:
             {"slug": 42},  # non-string
             {"slug": None},  # explicit None
             "not-a-dict",  # body is a string, not a dict
+            # Path-traversal / injection probes — the whitelist must reject
+            # all of these, falling back to "self" rather than building
+            # ``/addons/<malicious>/restart``. Even though Supervisor would
+            # reject most, validating at the edge is cheaper than relying
+            # on downstream rejection (Gemini PR review flagged path
+            # traversal as a security-high concern).
+            {"slug": "../evil"},
+            {"slug": "self/../something"},
+            {"slug": "a/b"},
+            {"slug": "addon;rm -rf"},
+            {"slug": "%2e%2e%2fself"},
+            {"slug": "self?action=delete"},
+            {"slug": "self#frag"},
         ],
     )
     async def test_invalid_slug_in_body_falls_back_to_self(self, monkeypatch, body):
