@@ -308,7 +308,9 @@ class AutomationConfigTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when the registry lookup succeeds, falling back to the input `identifier` otherwise.
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeds, falling back to the input `identifier` otherwise.
 
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")

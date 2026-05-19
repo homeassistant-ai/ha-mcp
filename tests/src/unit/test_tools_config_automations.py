@@ -18,7 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+from ha_mcp.tools.tools_config_automations import (
+    AutomationConfigTools,
+    _strip_redundant_identifier_echo,
+)
 
 
 @pytest.fixture
@@ -351,3 +354,27 @@ class TestDeleteAutomationIdKey:
         assert result["success"] is True
         assert result["automation_id"] == "orphaned_unique_id"
         assert result.get("unique_id") == "abc123unique"
+
+
+class TestStripRedundantIdentifierEcho:
+    """Direct regression armor for the `_strip_redundant_identifier_echo`
+    helper, pinning (a) `unique_id` survives the strip — the load-bearing
+    invariant whose violation broke E2E `test_duplicate_automation_prevention`
+    at 5fe5338 — and (b) `extra_excludes` actually drops the named keys
+    rather than silently ignoring them.
+    """
+
+    def test_strips_identifier_retains_unique_id(self):
+        """Identifier key dropped, unique_id + other keys pass through."""
+        result = {"identifier": "x", "unique_id": "y", "result": "ok"}
+        assert _strip_redundant_identifier_echo(result) == {
+            "unique_id": "y",
+            "result": "ok",
+        }
+
+    def test_extra_excludes_drops_named_keys(self):
+        """extra_excludes=('success',) drops success + identifier together."""
+        result = {"identifier": "x", "success": True, "unique_id": "y"}
+        assert _strip_redundant_identifier_echo(
+            result, extra_excludes=("success",)
+        ) == {"unique_id": "y"}
