@@ -660,6 +660,75 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
     raise TimeoutError(f"{url} did not become ready within {timeout}s (last: {last_err})")
 
 
+DEFAULT_BACKUP_PASSWORD = "e2e-test-backup-password"
+
+
+def set_default_backup_password(
+    base_url: str, token: str, *, password: str = DEFAULT_BACKUP_PASSWORD
+) -> None:
+    """Set HA Core's default backup-create password via WS at session start.
+
+    ``ha_backup_create`` and friends fail with ``SERVICE_CALL_FAILED``
+    ("No default backup password configured in Home Assistant") unless
+    ``create_backup.password`` is set in the backup integration's stored
+    config. On HAOS we can't reliably bake this into ``.storage/backup``
+    (the file is written by HA Core's backup integration on first save —
+    pre-baking the file occasionally races with the integration's own
+    storage migration on a fresh-boot HAOS). Doing it at session start
+    via the WS ``backup/config/update`` command is deterministic.
+
+    Idempotent: HA Core overwrites the stored ``password`` field on
+    each call, so re-running this against a HAOS that already has a
+    password set is harmless.
+    """
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+        first = json.loads(ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(
+                f"WS handshake: expected auth_required, got {first!r}"
+            )
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        ws.send(json.dumps({
+            "id": msg_id,
+            "type": "backup/config/update",
+            "create_backup": {"password": password},
+        }))
+        # Read frames until our id arrives. Short timeout: this is a
+        # storage write, not a Docker rebuild — sub-second under normal
+        # conditions.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"backup/config/update failed: {resp.get('error')}"
+                )
+            LOG.info("Default backup password configured via WS")
+            return
+        raise TimeoutError(
+            "backup/config/update did not complete within 30s"
+        )
+
+
 def login_for_token(base_url: str, username: str, password: str) -> str:
     """Drive HA's login flow against a pre-onboarded image, return access token.
 

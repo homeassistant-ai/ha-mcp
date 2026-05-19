@@ -53,6 +53,7 @@ from haos_runtime import (
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
+    set_default_backup_password,
     trigger_dev_addon_update,
     wait_for_addon_mcp_ready,
 )
@@ -986,6 +987,16 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             refresh_dev_addon_source_in_qcow2(image_path)
         with boot_haos_qemu(image_path) as base_url:
             token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
+            # Set HA Core's default backup-create password via WS at
+            # session start so ha_backup_create tests don't skip. The
+            # static .storage/backup seed in initial_test_state is
+            # unreliable on a fresh HAOS boot (HA Core's backup
+            # integration may overwrite our seed during its own
+            # storage migration). Runtime set via the documented
+            # backup/config/update WS command is deterministic. See
+            # haos_runtime.set_default_backup_password for details.
+            # Idempotent — safe across the inaddon dev-addon update.
+            set_default_backup_password(base_url, token)
             # Mirror the env-var setup the testcontainer path does below at
             # ~line 1077 — feature flags for the in-process MCP server, plus
             # HA URL/token for any code reading from env. The cache reset
