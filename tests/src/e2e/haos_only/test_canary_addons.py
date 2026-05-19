@@ -31,16 +31,17 @@ LOG = logging.getLogger(__name__)
 
 
 # Mirrors build_image.py's ADDONS list — keep both in sync when the
-# v1 addon set changes. Not a shared constant because the build script
+# addon set changes. Not a shared constant because the build script
 # lives outside the pytest rootdir's import paths; the duplication is
-# small (6 strings) and the failure mode of drift is loud (this test
-# fails fast on the missing-name list).
+# small and the failure mode of drift is loud (this test fails fast on
+# the missing-name list).
 INSTALLED_ADDON_NAMES = (
     "Mosquitto broker",
     "Node-RED",
     "ESPHome Device Builder",
-    "Zigbee2MQTT",
-    "Frigate",
+    "Matter Server",
+    "AppDaemon",
+    "MQTT IO",
     "Get HACS",
 )
 

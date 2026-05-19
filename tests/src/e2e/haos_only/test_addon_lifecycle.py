@@ -1,25 +1,21 @@
-"""Addon lifecycle E2E for the HAOS test tier (see #1349 items 1 + 3).
+"""Addon lifecycle E2E for the HAOS test tier (see #1349 items 1 + 3, #1350).
 
 Covers what the testcontainer suite physically can't reach — start/stop/
 restart against a real Supervisor, addon-config round-trips, and
-container-log shape — for the v1 addon set baked by ``build_image.py``.
+container-log shape — for the addon set baked by ``build_image.py``.
 
 Two coverage modes:
 
-1. **Running addons** (Node-RED, ESPHome Device Builder — both flipped to
-   ``start=True`` in the bake): full lifecycle round-trip plus
-   options-get / options-set persistence and a log-shape check. Each
-   test leaves the addon in ``started`` state via an explicit cleanup
-   call so later tests in the same session find it running.
+1. **Running addons** (Node-RED, ESPHome Device Builder, Matter Server,
+   AppDaemon — all ``start=True`` in the bake): full lifecycle round-trip
+   plus options-get / options-set persistence and a log-shape check.
+   Each test leaves the addon in ``started`` state via an explicit
+   cleanup call so later tests in the same session find it running.
 
-2. **Stopped addons** (Frigate, Zigbee2MQTT — stay ``start=False`` because
-   their schemas require feeders/devices that don't exist in the bake):
-   exercise the surface that's reachable *without* the addon running —
-   ``ha_get_addon`` info + options dict + a logs-fetch shape check — and
-   prove that ``hassio.addon_start`` returns a structured failure when the
-   addon can't satisfy its own config schema. No ``pytest.skip()`` calls
-   (per #1349 closeout rule); the tests run and assert the
-   stopped-addon shape directly.
+2. **Stopped addons** (Mosquitto, MQTT IO — stay ``start=False`` because
+   their schemas require config they don't have in the bake): exercise
+   the surface that's reachable *without* the addon running —
+   ``ha_get_addon`` info + options dict + a logs-fetch shape check.
 
 Slugs are repository-hash-derived by Supervisor at install time, so every
 test resolves the slug at runtime by matching against ``ha_get_addon``'s
@@ -57,8 +53,10 @@ pytestmark = [pytest.mark.haos_only]
 # ``build_image.py``'s ADDONS tuple). Slugs are looked up dynamically.
 NODERED_NAME = "Node-RED"
 ESPHOME_NAME = "ESPHome Device Builder"
-FRIGATE_NAME = "Frigate"
-Z2M_NAME = "Zigbee2MQTT"
+MATTER_NAME = "Matter Server"
+APPDAEMON_NAME = "AppDaemon"
+MQTT_IO_NAME = "MQTT IO"
+MOSQUITTO_NAME = "Mosquitto broker"
 
 # Supervisor reports a variety of values for an addon that's installed
 # but not running — exact value depends on whether the last attempted
@@ -458,92 +456,218 @@ async def test_esphome_logs_fetch_shape(mcp_client: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frigate reachable-without-running (stays start=False in bake)
+# Matter Server lifecycle (running; covers ingress_panel=false shape)
 # ---------------------------------------------------------------------------
 
 
-async def test_frigate_info_and_options_reachable(mcp_client: Any) -> None:
-    """Frigate is installed-but-stopped; info / options / logs still reachable.
+async def test_matter_server_start_stop_restart_roundtrip(mcp_client: Any) -> None:
+    """Stop → start → restart cycles Matter Server via real Supervisor.
 
-    The schema for Frigate requires at least one camera config block we
-    can't reasonably stub in the bake, so the addon never reaches the
-    ``started`` state. The Supervisor-managed metadata (info dict, the
-    options stub, the boot-fail log) is still queryable, and tests for
-    those endpoints are the whole point of including Frigate in the v1
-    addon set: they prove the tools handle the not-running case without
-    falling back to "addon must be started" errors.
+    Matter Server is the addon set's representative of the
+    ``ingress_panel=false`` shape (hidden from the HA sidebar even though
+    Ingress is wired up). The lifecycle contract is the same as the other
+    running addons; the shape coverage comes from ``ha_get_addon`` detail.
     """
-    slug = await _resolve_slug(mcp_client, FRIGATE_NAME)
+    slug = await _resolve_slug(mcp_client, MATTER_NAME)
+    try:
+        stop_result = await _addon_action(mcp_client, slug, "stop")
+        assert stop_result.get("success"), (
+            f"hassio.addon_stop({slug}) failed: {stop_result}"
+        )
+        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
 
+        start_result = await _addon_action(mcp_client, slug, "start")
+        assert start_result.get("success"), (
+            f"hassio.addon_start({slug}) failed: {start_result}"
+        )
+        await _wait_for_state(mcp_client, slug, "started")
+
+        restart_result = await _addon_action(mcp_client, slug, "restart")
+        assert restart_result.get("success"), (
+            f"hassio.addon_restart({slug}) failed: {restart_result}"
+        )
+        await _wait_for_state(mcp_client, slug, "started")
+    finally:
+        await _ensure_started(mcp_client, slug)
+
+
+async def test_matter_server_ingress_panel_false_shape(mcp_client: Any) -> None:
+    """`ha_get_addon(slug=...)` reports ``ingress_panel=false`` for Matter Server.
+
+    This is the load-bearing assertion for keeping Matter Server in the
+    addon set: it's the only one whose Ingress route is configured but
+    deliberately hidden from the HA sidebar (``ingress_panel=false``),
+    and ``ha_get_addon`` detail must surface that field. If a future
+    Supervisor version drops the field or renames it, this test catches
+    it before regression hits real users.
+    """
+    slug = await _resolve_slug(mcp_client, MATTER_NAME)
     detail = await _get_addon_detail(mcp_client, slug)
-    assert detail.get("state") in STOPPED_STATES, (
-        f"Frigate should be in a stopped-family state, got "
-        f"{detail.get('state')!r}. Did build_image.py accidentally flip it "
-        f"to start=True?"
+    assert detail.get("ingress") is True, (
+        f"Matter Server should have ingress=True, got {detail.get('ingress')!r}"
+    )
+    assert detail.get("ingress_panel") is False, (
+        f"Matter Server should have ingress_panel=False (hidden sidebar), "
+        f"got {detail.get('ingress_panel')!r}"
     )
 
-    options = detail.get("options")
-    assert isinstance(options, dict), (
-        f"Frigate options should be a dict even when stopped, got "
-        f"{type(options).__name__}: {options!r}"
-    )
 
+async def test_matter_server_options_set_persists(mcp_client: Any) -> None:
+    """`ha_manage_addon(options=...)` round-trips a probe key for Matter Server.
+
+    Matter Server's schema accepts ``beta`` (boolean toggle) — safe to
+    flip between True and False as a probe value.
+    """
+    slug = await _resolve_slug(mcp_client, MATTER_NAME)
+    try:
+        detail = await _get_addon_detail(mcp_client, slug)
+        current_options = detail.get("options") or {}
+        assert isinstance(current_options, dict), (
+            f"Pre-write options must be a dict, got {current_options!r}"
+        )
+        probe_key = "beta"
+        original_value = current_options.get(probe_key, False)
+        probe_value = not bool(original_value)
+        probe_options = dict(current_options)
+        probe_options[probe_key] = probe_value
+
+        try:
+            write_raw = await mcp_client.call_tool(
+                "ha_manage_addon",
+                {"slug": slug, "options": probe_options},
+            )
+            write_payload = parse_mcp_result(write_raw)
+            ok = write_payload.get("success") is True or (
+                write_payload.get("status") == "pending_restart"
+            )
+            assert ok, (
+                f"ha_manage_addon options probe write failed: {write_payload}"
+            )
+
+            detail_after = await _get_addon_detail(mcp_client, slug)
+            options_after = detail_after.get("options") or {}
+            assert options_after.get(probe_key) == probe_value, (
+                f"Probe {probe_key}={probe_value!r} did not persist. "
+                f"After-write options: {options_after}"
+            )
+        finally:
+            try:
+                await mcp_client.call_tool(
+                    "ha_manage_addon",
+                    {"slug": slug, "options": dict(current_options)},
+                )
+            except Exception:
+                LOG.exception("Failed to restore Matter Server options")
+    finally:
+        await _ensure_started(mcp_client, slug)
+
+
+async def test_matter_server_logs_fetch_shape(mcp_client: Any) -> None:
+    """`ha_get_logs(source='supervisor')` returns shaped log text for Matter Server."""
+    slug = await _resolve_slug(mcp_client, MATTER_NAME)
     raw = await mcp_client.call_tool(
         "ha_get_logs", {"source": "supervisor", "slug": slug}
     )
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), (
-        f"ha_get_logs(supervisor, {slug}) should succeed for an installed "
-        f"stopped addon, got: {payload}"
-    )
+    assert payload.get("success"), f"ha_get_logs(supervisor, {slug}) failed: {payload}"
     log_text = payload.get("log", "")
-    assert isinstance(log_text, str), (
-        f"log field must be a string, got {type(log_text).__name__}"
+    assert isinstance(log_text, str) and len(log_text.strip()) >= 50, (
+        f"Supervisor log for running Matter Server should have content "
+        f"(>=50 chars), got {len(log_text)} chars: {log_text[:200]!r}"
     )
-    # A stopped addon's log can legitimately be empty (never started) OR
-    # contain boot-fail output. Accept either; only assert the journald
-    # timestamp shape when there's content to check.
-    # Don't assert content beyond "is a string" — a stopped addon's log
-    # can legitimately be empty or contain only s6-rc startup spam.
-
-
-# NOTE: ``test_frigate_start_fails_with_recognizable_error`` and the
-# corresponding Z2M test (deleted in this commit) were aspirational —
-# they tried to assert that Supervisor rejects ``addon_start`` with a
-# specific error shape when the addon's config is incomplete. In
-# practice Supervisor's wording varies by addon version and by which
-# of (missing-config / missing-device / failed-image-pull) tripped
-# first; the assertion shape (slug + token-list intersection) was
-# brittle against that variance and provided weak coverage anyway —
-# the addon being installed + reachable is already proven by the
-# ``_info_and_options_reachable`` test above. Dropping rather than
-# trying to write a content-tolerant assertion.
 
 
 # ---------------------------------------------------------------------------
-# Zigbee2MQTT reachable-without-running (stays start=False in bake)
+# AppDaemon lifecycle (running; covers ingress=false + webui-set shape)
 # ---------------------------------------------------------------------------
 
 
-async def test_zigbee2mqtt_info_and_options_reachable(mcp_client: Any) -> None:
-    """Zigbee2MQTT is installed-but-stopped; metadata still reachable.
+async def test_appdaemon_start_stop_restart_roundtrip(mcp_client: Any) -> None:
+    """Stop → start → restart cycles AppDaemon via real Supervisor."""
+    slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
+    try:
+        stop_result = await _addon_action(mcp_client, slug, "stop")
+        assert stop_result.get("success"), (
+            f"hassio.addon_stop({slug}) failed: {stop_result}"
+        )
+        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
 
-    Z2M needs a real Zigbee coordinator on a serial port; the bake's QEMU
-    image has none, so the addon never starts. Same shape contract as
-    the Frigate test.
+        start_result = await _addon_action(mcp_client, slug, "start")
+        assert start_result.get("success"), (
+            f"hassio.addon_start({slug}) failed: {start_result}"
+        )
+        await _wait_for_state(mcp_client, slug, "started")
+
+        restart_result = await _addon_action(mcp_client, slug, "restart")
+        assert restart_result.get("success"), (
+            f"hassio.addon_restart({slug}) failed: {restart_result}"
+        )
+        await _wait_for_state(mcp_client, slug, "started")
+    finally:
+        await _ensure_started(mcp_client, slug)
+
+
+async def test_appdaemon_webui_no_ingress_shape(mcp_client: Any) -> None:
+    """`ha_get_addon(slug=...)` reports ``webui`` set + ``ingress=false`` for AppDaemon.
+
+    Load-bearing assertion: AppDaemon is the addon set's representative
+    of the ``webui`` field (a port-based URL that the HA UI renders as
+    an external link) — distinct from Ingress addons. The wire contract
+    for ``ha_get_addon`` reading and surfacing ``webui`` would otherwise
+    be uncovered.
     """
-    slug = await _resolve_slug(mcp_client, Z2M_NAME)
+    slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
+    detail = await _get_addon_detail(mcp_client, slug)
+    assert detail.get("ingress") is False, (
+        f"AppDaemon should have ingress=False, got {detail.get('ingress')!r}"
+    )
+    webui = detail.get("webui")
+    assert isinstance(webui, str) and webui.startswith("http"), (
+        f"AppDaemon should have a webui URL, got {webui!r}"
+    )
+
+
+async def test_appdaemon_logs_fetch_shape(mcp_client: Any) -> None:
+    """`ha_get_logs(source='supervisor')` returns shaped log text for AppDaemon."""
+    slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
+    raw = await mcp_client.call_tool(
+        "ha_get_logs", {"source": "supervisor", "slug": slug}
+    )
+    payload = parse_mcp_result(raw)
+    assert payload.get("success"), f"ha_get_logs(supervisor, {slug}) failed: {payload}"
+    log_text = payload.get("log", "")
+    assert isinstance(log_text, str) and len(log_text.strip()) >= 50, (
+        f"Supervisor log for running AppDaemon should have content "
+        f"(>=50 chars), got {len(log_text)} chars: {log_text[:200]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mosquitto reachable-without-running (stays start=False — replaces #1281
+# Frigate's stopped-addon-shape coverage)
+# ---------------------------------------------------------------------------
+
+
+async def test_mosquitto_info_and_options_reachable(mcp_client: Any) -> None:
+    """Mosquitto is installed-but-stopped; info / options / logs still reachable.
+
+    Mosquitto's default schema rejects empty cert paths when SSL is on,
+    so the bake leaves it ``start=False``. The Supervisor-managed
+    metadata (info dict, options stub, boot-fail log) must still be
+    queryable — that's the contract this test pins.
+    """
+    slug = await _resolve_slug(mcp_client, MOSQUITTO_NAME)
 
     detail = await _get_addon_detail(mcp_client, slug)
     assert detail.get("state") in STOPPED_STATES, (
-        f"Zigbee2MQTT should be in a stopped-family state, got "
+        f"Mosquitto should be in a stopped-family state, got "
         f"{detail.get('state')!r}. Did build_image.py accidentally flip "
         f"it to start=True?"
     )
 
     options = detail.get("options")
     assert isinstance(options, dict), (
-        f"Zigbee2MQTT options should be a dict even when stopped, got "
+        f"Mosquitto options should be a dict even when stopped, got "
         f"{type(options).__name__}: {options!r}"
     )
 
@@ -559,11 +683,54 @@ async def test_zigbee2mqtt_info_and_options_reachable(mcp_client: Any) -> None:
     assert isinstance(log_text, str), (
         f"log field must be a string, got {type(log_text).__name__}"
     )
-    # Don't assert content beyond "is a string" — a stopped addon's log
-    # can legitimately be empty or contain only s6-rc startup spam.
 
 
-# Z2M start-fails counterpart of the Frigate test above was deleted —
+# ---------------------------------------------------------------------------
+# MQTT IO reachable-without-running (stays start=False; replaces Z2M's
+# start-fail + privileged-block coverage at a fraction of the size)
+# ---------------------------------------------------------------------------
+
+
+async def test_mqtt_io_info_and_options_reachable(mcp_client: Any) -> None:
+    """MQTT IO is installed-but-stopped; metadata still reachable.
+
+    MQTT IO needs a configured broker (and Mosquitto in the bake is also
+    ``start=False``), so it doesn't reach the started state. Same shape
+    contract as Mosquitto: info dict, options dict, logs string — all
+    reachable via Supervisor even when the addon hasn't run.
+    """
+    slug = await _resolve_slug(mcp_client, MQTT_IO_NAME)
+
+    detail = await _get_addon_detail(mcp_client, slug)
+    assert detail.get("state") in STOPPED_STATES, (
+        f"MQTT IO should be in a stopped-family state, got "
+        f"{detail.get('state')!r}. Did build_image.py accidentally flip "
+        f"it to start=True?"
+    )
+
+    options = detail.get("options")
+    assert isinstance(options, dict), (
+        f"MQTT IO options should be a dict even when stopped, got "
+        f"{type(options).__name__}: {options!r}"
+    )
+
+    raw = await mcp_client.call_tool(
+        "ha_get_logs", {"source": "supervisor", "slug": slug}
+    )
+    payload = parse_mcp_result(raw)
+    assert payload.get("success"), (
+        f"ha_get_logs(supervisor, {slug}) should succeed for an installed "
+        f"stopped addon, got: {payload}"
+    )
+    log_text = payload.get("log", "")
+    assert isinstance(log_text, str), (
+        f"log field must be a string, got {type(log_text).__name__}"
+    )
+
+
+# Detail-shape coverage anchored to specific addons: keep these tests
+# adjacent to the addon's lifecycle block above so a future drop of an
+# addon from build_image.py also drops its shape assertion.
 # same rationale: Supervisor's reject wording is too variable to assert
 # against without flakiness. The ``_info_and_options_reachable`` test
 # above is enough proof Z2M is installed + reachable.
