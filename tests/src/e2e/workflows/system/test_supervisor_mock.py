@@ -28,6 +28,16 @@ from ...utilities.supervisor_mock import (
     SYSTEM_SERVICES,
 )
 
+# Whole module is external-only: the ``supervisor_mock`` fixture
+# monkeypatches ``SUPERVISOR_TOKEN`` / ``SUPERVISOR_BASE_URL`` in the test
+# process. In inaddon mode ``mcp_client`` is an HTTP transport into the
+# real dev addon — the addon's process has its own real SUPERVISOR_TOKEN
+# and hits real ``http://supervisor`` regardless of the test-side
+# monkeypatch. Inaddon coverage of these Supervisor call sites comes
+# naturally from real Supervisor interactions in other tests; mocking
+# them inside the addon container is out of scope.
+pytestmark = [pytest.mark.external_only]
+
 logger = logging.getLogger(__name__)
 
 

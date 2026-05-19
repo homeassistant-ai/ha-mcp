@@ -45,11 +45,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_run
 
 from fastmcp import Client
 from haos_runtime import (
+    HA_MCP_DEV_ADDON_SLUG,
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
+    is_haos_inaddon_mode,
     login_for_token,
+    refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
+    trigger_dev_addon_update,
+    wait_for_addon_mcp_ready,
 )
 
 from ha_mcp.client import HomeAssistantClient
@@ -100,16 +105,38 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
 
 
 def pytest_collection_modifyitems(config, items):
-    """Enforce haos_only / container_only markers and auto-apply haos_only.
+    """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
-    Tests under ``tests/src/e2e/haos_only/`` get the marker for free so
-    individual files don't have to repeat ``pytestmark = pytest.mark.haos_only``.
-    Tests anywhere with either marker are skipped on the wrong backend.
+    Four mutually-orthogonal backend markers (#1349 item 7 introduces the
+    inaddon split):
+
+    - ``haos_only``: only runs when the HAOS backend is selected
+      (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
+      ``tests/src/e2e/haos_only/``.
+    - ``container_only``: only runs on the testcontainer backend.
+    - ``external_only``: HAOS external mode only (``mcp_client`` is an
+      in-process FastMCP server talking HTTP to HAOS). Skipped on the
+      inaddon tier.
+    - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
+      to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
+      exercised). Skipped on external mode and on testcontainer.
     """
     del config
     haos = is_haos_backend_selected()
-    skip_haos = pytest.mark.skip(reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)")
-    skip_container = pytest.mark.skip(reason="HAOS backend is active; test is container-only")
+    inaddon = haos and is_haos_inaddon_mode()
+    external_haos = haos and not inaddon
+    skip_haos = pytest.mark.skip(
+        reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
+    )
+    skip_container = pytest.mark.skip(
+        reason="HAOS backend is active; test is container-only"
+    )
+    skip_inaddon_only = pytest.mark.skip(
+        reason="inaddon mode required (set HAOS_TEST_MODE=inaddon)"
+    )
+    skip_external_only = pytest.mark.skip(
+        reason="HAOS external mode required (inaddon mode active)"
+    )
     for item in items:
         if "haos_only" in str(item.fspath):
             item.add_marker(pytest.mark.haos_only)
@@ -118,6 +145,10 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_haos)
         elif "container_only" in keywords and haos:
             item.add_marker(skip_container)
+        if "inaddon_only" in keywords and not inaddon:
+            item.add_marker(skip_inaddon_only)
+        elif "external_only" in keywords and not external_haos:
+            item.add_marker(skip_external_only)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -936,12 +967,23 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     # HAOS backend dispatch — short-circuit the testcontainer path entirely.
     if is_haos_backend_selected():
         image_path = Path(os.environ[HAOS_IMAGE_ENV])
-        logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
+        inaddon = is_haos_inaddon_mode()
+        logger.info(
+            "HAOS backend selected (mode=%s) — booting qcow2 at %s",
+            "inaddon" if inaddon else "external",
+            image_path,
+        )
         # Shift the baked recorder timestamps forward so seeded rows fall
         # inside history's 24h window (same intent as the testcontainer
         # path's _refresh_recorder_timestamps). Must run before boot
         # because HA Core takes an exclusive lock on the DB.
         refresh_recorder_in_qcow2(image_path)
+        # Inaddon mode: overwrite the baked addon source with PR's current
+        # source + bump config.yaml version so Supervisor detects an
+        # update-available on next boot. The Supervisor WS API trigger
+        # below applies it via Docker layer cache (#1349 item 7).
+        if inaddon:
+            refresh_dev_addon_source_in_qcow2(image_path)
         with boot_haos_qemu(image_path) as base_url:
             token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
             # Mirror the env-var setup the testcontainer path does below at
@@ -1008,7 +1050,31 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 **_blueprint_http_server,
                 "base_url": f"http://10.0.2.2:{_blueprint_http_server['port']}",
             }
+            # Inaddon mode: refresh_dev_addon_source_in_qcow2 ran above
+            # with a bumped version, so Supervisor now sees an update
+            # available. Trigger it via WS supervisor_api (Docker layer
+            # cache → only the COPY src/ + uv-sync-project layers
+            # re-execute), then wait for the addon's MCP endpoint.
+            addon_mcp_url: str | None = None
+            # Pull setup-time work INTO the try/finally so post-mortem log
+            # dump runs even when trigger_dev_addon_update or
+            # wait_for_addon_mcp_ready raises — those steps own ~all the
+            # inaddon-specific failure surface, and without logs they're
+            # opaque "unknown error" failures.
             try:
+                if inaddon:
+                    logger.info(
+                        "Inaddon mode: triggering Supervisor addon update for PR source"
+                    )
+                    trigger_dev_addon_update(base_url, token, timeout=600.0)
+                    addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
+                    logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
+                    assert addon_mcp_url is not None, (
+                        "Inaddon setup completed without producing an "
+                        "addon_mcp_url — wait_for_addon_mcp_ready contract "
+                        "violation. Downstream mcp_client fixture would fail "
+                        "with an obscure TypeError on transport construction."
+                    )
                 yield {
                     "container": None,
                     "port": None,
@@ -1016,7 +1082,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "config_path": None,
                     "blueprint_server": blueprint_for_haos,
                     "token": token,
-                    "backend": "haos",
+                    # backend marker distinguishes inaddon dispatch (mcp_client
+                    # uses HTTP transport to addon_mcp_url) from external
+                    # (in-process FastMCP server pointing at base_url).
+                    "backend": "haos_inaddon" if inaddon else "haos",
+                    # Only set on inaddon mode; external/container modes use
+                    # the in-process server and don't need this.
+                    "addon_mcp_url": addon_mcp_url,
                 }
             finally:
                 # Pull HA Core's runtime log + Supervisor's own log via the
@@ -1034,10 +1106,26 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # supervisor would stall session teardown forever.
                 log_dest = Path("/tmp/haos-diagnostics")
                 log_dest.mkdir(parents=True, exist_ok=True)
-                for name, url in (
+                log_endpoints = [
                     ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
                     ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
-                ):
+                ]
+                # Inaddon mode: also grab the dev addon container's logs —
+                # often the real "Check Supervisor logs for details" detail
+                # lives in the addon's own container output rather than
+                # Supervisor's. /api/hassio/addons/{slug}/logs IS in
+                # HA Core's REST PATHS_ADMIN allowlist (verified at
+                # hassio/http.py).
+                if inaddon:
+                    log_endpoints.append(
+                        ("ha-mcp-dev-addon.log",
+                         f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000"),
+                    )
+                # Narrow except: any non-network error (NameError, KeyError
+                # from a future refactor) should propagate instead of being
+                # misreported as "Failed to dump". Per-endpoint network
+                # failures are still per-mortem and shouldn't kill teardown.
+                for name, url in log_endpoints:
                     try:
                         req = urllib.request.Request(
                             url, headers={"Authorization": f"Bearer {token}"},
@@ -1045,7 +1133,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             (log_dest / name).write_bytes(resp.read())
                         logger.info("Dumped %s via supervisor", name)
-                    except Exception as exc:
+                    except (OSError, urllib.error.URLError,
+                            urllib.error.HTTPError, TimeoutError) as exc:
                         logger.warning("Failed to dump %s: %s", name, exc)
         return
 
@@ -1563,11 +1652,26 @@ async def ha_client(
 @pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
-) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
-    """Create MCP server instance connected to the container or HAOS QEMU."""
-    logger.info("🚀 Creating MCP server instance...")
+) -> AsyncGenerator[HomeAssistantSmartMCPServer | None]:
+    """Create MCP server instance connected to the container or HAOS QEMU.
 
+    Yields None on the inaddon HAOS backend — the ha-mcp dev addon
+    running inside the booted HAOS IS the server in that mode, so
+    spinning up an in-process FastMCP server here would be wasteful and
+    misleading (it'd connect to HA but tests would never use it).
+    The ``mcp_client`` fixture branches on backend to either use this
+    in-process server or build an HTTP transport pointing at the addon.
+    """
     container_info = ha_container_with_fresh_config
+    if container_info.get("backend") == "haos_inaddon":
+        logger.info(
+            "Inaddon mode: skipping in-process MCP server "
+            "(tests use addon's HTTP MCP endpoint instead)"
+        )
+        yield None
+        return
+
+    logger.info("🚀 Creating MCP server instance...")
     base_url = container_info["base_url"]
     token = container_info.get("token", TEST_TOKEN)
 
@@ -1586,10 +1690,39 @@ async def mcp_server(
 
 
 @pytest.fixture(scope="session")
-async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
-    """Create FastMCP client connected to our server."""
-    client = Client(mcp_server.mcp)
+async def mcp_client(
+    ha_container_with_fresh_config, mcp_server
+) -> AsyncGenerator[Client]:
+    """Create FastMCP client — in-memory for in-process server, HTTP for inaddon.
 
+    On testcontainer + HAOS-external: in-memory transport bound to the
+    ``mcp_server`` fixture (current behavior).
+    On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
+    addon's MCP endpoint (running inside the booted HAOS). The addon
+    is the server in that mode; the local process is just a client.
+    """
+    container_info = ha_container_with_fresh_config
+    if container_info.get("backend") == "haos_inaddon":
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        addon_url = container_info.get("addon_mcp_url")
+        if not addon_url:
+            raise RuntimeError(
+                "Inaddon backend signaled but container_info has no "
+                "addon_mcp_url — wait_for_addon_mcp_ready must run + "
+                "populate this key before mcp_client is requested. "
+                "Check ha_container_with_fresh_config's inaddon branch."
+            )
+        logger.info(f"🔗 FastMCP client connecting (HTTP) to {addon_url}")
+        transport = StreamableHttpTransport(url=addon_url)
+        client = Client(transport)
+        async with client:
+            logger.debug("🔗 FastMCP client connected (HTTP transport, inaddon)")
+            yield client
+        return
+
+    # Default path: in-memory transport.
+    client = Client(mcp_server.mcp)
     async with client:
         logger.debug("🔗 FastMCP client connected (in-memory transport)")
         yield client

@@ -37,7 +37,12 @@ READ_TOOL = "ha_read_file"
 
 @pytest.fixture(scope="module")
 def yaml_config_tools_enabled(ha_container_with_fresh_config):
-    """Enable YAML config editing feature flag for the test module."""
+    """Enable YAML config editing feature flag for the test module.
+
+    In inaddon mode the env-flip applies only to the test process; the
+    addon container has its own env and is started with the flag set at
+    install time (see ``build_image.install_ha_mcp_dev_addon``).
+    """
     os.environ[FEATURE_FLAG] = "true"
     logger.info("YAML config editing feature flag enabled")
     yield
@@ -45,8 +50,35 @@ def yaml_config_tools_enabled(ha_container_with_fresh_config):
 
 
 @pytest.fixture
-async def mcp_client_with_yaml_config(yaml_config_tools_enabled, mcp_server):
-    """Create MCP client with YAML config editing enabled."""
+async def mcp_client_with_yaml_config(
+    yaml_config_tools_enabled,
+    mcp_server,
+    mcp_client,
+    ha_container_with_fresh_config,
+):
+    """Yield an MCP client with YAML-config editing enabled.
+
+    In inaddon mode ``mcp_server`` is None (the addon is the server) and
+    the session ``mcp_client`` already speaks HTTP to the addon —
+    started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options
+    at install time. Yield that client directly.
+    """
+    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        # Fail fast at fixture setup if the addon's install-time options
+        # drifted and the YAML config tool isn't registered.
+        tools = await mcp_client.list_tools()
+        tool_names = {t.name for t in tools}
+        assert TOOL_NAME in tool_names, (
+            f"Inaddon addon is missing {TOOL_NAME}; the addon's install-time "
+            f"options (build_image.install_ha_mcp_dev_addon) must include "
+            f"enable_yaml_config_editing=true."
+        )
+        logger.debug("FastMCP client (inaddon, HTTP) reused for YAML tests")
+        # Session-scope mcp_client owns __aexit__; the per-test fixture
+        # deliberately doesn't wrap in `async with`.
+        yield mcp_client
+        return
+
     from fastmcp import Client
 
     client = Client(mcp_server.mcp)
