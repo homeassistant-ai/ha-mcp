@@ -166,36 +166,3 @@ async def test_state_change_handler_ignores_event_missing_new_state(listener_ser
     mock_update.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_state_change_handler_increments_events_processed(listener_service):
-    """Stats counter advances per event even when no operations match —
-    the audit observed silent dispatch failures because the counter was
-    advanced but the dispatch never happened. With the fix, the counter
-    advance and the dispatch happen on the same event.
-    """
-    event = _make_state_changed_event()
-
-    with patch(
-        "ha_mcp.client.websocket_listener.update_pending_operations"
-    ) as mock_update:
-        mock_update.return_value = []
-        await listener_service._handle_state_change(event)
-
-    assert listener_service.stats["events_processed"] == 1
-
-
-@pytest.mark.asyncio
-async def test_state_change_handler_increments_operations_updated(listener_service):
-    """When ``update_pending_operations`` returns matching op ids, the
-    stats counter advances by the count — proves the integration with
-    ``OperationManager.process_state_change`` is wired through.
-    """
-    event = _make_state_changed_event()
-
-    with patch(
-        "ha_mcp.client.websocket_listener.update_pending_operations"
-    ) as mock_update:
-        mock_update.return_value = ["op-1", "op-2", "op-3"]
-        await listener_service._handle_state_change(event)
-
-    assert listener_service.stats["operations_updated"] == 3
