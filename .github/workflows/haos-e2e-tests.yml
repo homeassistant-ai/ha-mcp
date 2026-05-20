@@ -19,6 +19,12 @@ on:
       - 'tests/**'
       - 'pyproject.toml'
       - 'homeassistant-addon/**'
+      # Bake inputs — see INVARIANT in build-haos-test-image.yml and
+      # the "Compute image cache key" step below. A PR touching only
+      # these would otherwise skip HAOS E2E despite changing what gets
+      # baked into the qcow2 the suite tests against.
+      - 'custom_components/ha_mcp_tools/**'
+      - 'homeassistant-addon-webhook-proxy/mcp_proxy/**'
       - '.github/workflows/haos-e2e-tests.yml'
   workflow_dispatch:
     inputs:

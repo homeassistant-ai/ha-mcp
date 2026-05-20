@@ -43,7 +43,6 @@ import contextlib
 import logging
 import os
 import secrets
-import signal
 import socket
 import subprocess
 import sys
@@ -268,36 +267,52 @@ def maybe_spawn() -> None:
 # --------------------------------------------------------------------------
 
 
+def _atomic_write_0600(path: Path, content: str) -> None:
+    """Create ``path`` with 0o600 perms atomically and write ``content``.
+
+    ``Path.write_text()`` opens the file with default perms (0o644 under
+    a typical 022 umask) and only restricts them on a separate
+    ``os.chmod`` call — a TOCTOU window where the URL (a credential, it
+    embeds the secret path) is briefly world-readable on shared hosts.
+    ``os.open`` with an explicit mode arg sets the permissions on the
+    creating syscall itself, closing the window.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fp:
+        fp.write(content)
+
+
 def _write_pid_url(url: str) -> None:
-    """Persist the sidecar URL and pid for parent / overview consumption."""
+    """Persist the sidecar URL and pid for parent / overview consumption.
+
+    Writes pid BEFORE url so a partial failure can't leave a URL file
+    pointing at a dead port without the matching pid file. If the URL
+    write fails after the pid file lands, both are removed — better to
+    have neither than a URL+missing-pid pair that future
+    ``maybe_spawn()`` calls would misread as "no sidecar".
+    """
     url_path = _url_file()
     pid_path = _pid_file()
     try:
-        url_path.write_text(url + "\n")
-        # 0600 — URL embeds the secret path, treat as a credential.
-        with contextlib.suppress(OSError):
-            os.chmod(url_path, 0o600)
-        pid_path.write_text(f"{os.getpid()}\n")
-        with contextlib.suppress(OSError):
-            os.chmod(pid_path, 0o600)
+        _atomic_write_0600(pid_path, f"{os.getpid()}\n")
     except OSError:
-        logger.exception("Failed to write sidecar pid/url files")
+        logger.exception("Failed to write sidecar pid file at %s", pid_path)
+        return
+    try:
+        _atomic_write_0600(url_path, url + "\n")
+    except OSError:
+        logger.exception("Failed to write sidecar URL file at %s", url_path)
+        # Roll back the pid write so the next maybe_spawn() doesn't think
+        # there's a live sidecar with an unreadable URL.
+        with contextlib.suppress(FileNotFoundError, OSError):
+            pid_path.unlink()
 
 
-def _install_shutdown_handlers(stop: Callable[[], None]) -> None:
-    """Wire SIGTERM / SIGINT to a graceful uvicorn shutdown.
-
-    The uvicorn ``Server.should_exit = True`` toggle is the documented
-    cooperative shutdown signal.
-    """
-
-    def _handler(_signum: int, _frame: Any) -> None:
-        logger.info("Sidecar received shutdown signal")
-        stop()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        with contextlib.suppress(ValueError):
-            signal.signal(sig, _handler)
+# Note: a custom ``_install_shutdown_handlers`` lived here previously.
+# Removed because uvicorn's ``Server.run()`` already installs SIGTERM /
+# SIGINT handlers that set ``should_exit = True`` — the same behavior
+# the custom handler provided. The /shutdown HTTP endpoint reaches the
+# same stop callable via ``app.state.shutdown_state`` and is unaffected.
 
 
 def _build_app(
@@ -319,7 +334,7 @@ def _build_app(
 
     from .settings_ui import build_settings_handlers
 
-    handlers = build_settings_handlers(server=None)
+    handlers = build_settings_handlers(server=None, is_sidecar=True)
 
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
@@ -406,21 +421,40 @@ def _build_app(
     # /shutdown — POST endpoint that drops the disable sentinel and
     # signals uvicorn to exit. The handler is wired in run_main() after
     # the server is constructed because we need a handle to the server
-    # object; see _install_shutdown_handlers + the shutdown_endpoint.
+    # object — the ``shutdown_state`` dict is the indirection layer.
     shutdown_lock = threading.Lock()
     shutdown_state: dict[str, Callable[[], None] | None] = {"stop": None}
 
     async def _shutdown_endpoint(_request: Request) -> JSONResponse:
-        with shutdown_lock:
-            stop = shutdown_state.get("stop")
         # Drop sentinel BEFORE signalling exit so a fast restart cycle
-        # doesn't race past the check in maybe_spawn().
+        # doesn't race past the check in maybe_spawn(). If the sentinel
+        # write fails, surface the failure to the caller AND keep the
+        # sidecar running — silently exiting without the sentinel would
+        # leave the user thinking they'd disabled the sidecar while it
+        # quietly respawns on the next stdio start.
         try:
             _disabled_sentinel().write_text(
                 f"Disabled via /shutdown endpoint at pid {os.getpid()}\n"
             )
-        except OSError:
+        except OSError as e:
             logger.exception("Failed to write disabled sentinel")
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": (
+                            f"Failed to write disable sentinel "
+                            f"({type(e).__name__}: {e}); sidecar not shutting "
+                            "down. Set HA_MCP_DISABLE_SETTINGS_UI=1 and "
+                            "restart your MCP client to disable."
+                        ),
+                    },
+                },
+                status_code=500,
+            )
+        with shutdown_lock:
+            stop = shutdown_state.get("stop")
         if stop is not None:
             stop()
         return JSONResponse(
@@ -491,19 +525,18 @@ def run_main() -> int:
         log_level=log_level.lower(),
         access_log=False,
         # Disable uvicorn's own signal handlers so our shutdown handler
-        # (which writes the sentinel) runs first.
-        # See: https://github.com/encode/uvicorn/issues/1579
     )
     server = uvicorn.Server(config)
 
     def _stop() -> None:
         server.should_exit = True
 
-    # Now that we have a server handle, install it into the app state so
-    # the /shutdown endpoint can reach it, and wire OS signals.
+    # Wire the stop callable into app state so the /shutdown HTTP
+    # endpoint can reach it. OS signals (SIGTERM / SIGINT) are handled
+    # by uvicorn's own ``Server.run()`` installation — see the note
+    # earlier in this module for why we don't install our own.
     with app.state.shutdown_lock:
         app.state.shutdown_state["stop"] = _stop
-    _install_shutdown_handlers(_stop)
 
     _write_pid_url(url)
 

@@ -486,9 +486,11 @@ class HAWebSocket:
                         time.monotonic() - start,
                     )
                 return
-            except RuntimeError as e:
-                msg = str(e)
-                if "unknown_command" not in msg and "Unknown command" not in msg:
+            except WSCommandError as e:
+                if e.code != "unknown_command":
+                    # Different structured error (real Supervisor failure,
+                    # renamed endpoint, etc.) — propagate so a regression
+                    # isn't masked as "still booting".
                     raise
                 elapsed = time.monotonic() - start
                 if elapsed >= timeout:
@@ -497,7 +499,7 @@ class HAWebSocket:
                         f"within {timeout:.0f}s after Core restart "
                         f"(attempts={attempts})"
                     ) from e
-                LOG.info(
+                LOG.debug(
                     "Waiting for hassio supervisor/api handler "
                     "(attempt %d, elapsed %.1fs)",
                     attempts,
@@ -538,8 +540,26 @@ class HAWebSocket:
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success", True):
-                raise RuntimeError(f"supervisor/api {method} {endpoint} failed: {resp.get('error')}")
+                err = resp.get("error") or {}
+                code = err.get("code") if isinstance(err, dict) else None
+                raise WSCommandError(
+                    f"supervisor/api {method} {endpoint} failed: {err}",
+                    code=code,
+                )
             return resp.get("result", {}) or {}
+
+
+class WSCommandError(RuntimeError):
+    """Supervisor/Core WS-level failure with the structured error code.
+
+    Carries the ``error.code`` field from the WS response so callers can
+    branch on it (e.g. retry on ``"unknown_command"`` after a Core
+    restart) without parsing the str() representation of the exception.
+    """
+
+    def __init__(self, message: str, *, code: str | None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:

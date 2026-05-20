@@ -655,19 +655,30 @@ def _maybe_spawn_settings_sidecar() -> None:
     try:
         metadata = asyncio.run(_get_tool_metadata(_get_server()))
         dump_tool_metadata_cache(metadata)
-    except Exception:
+    except Exception as e:
         # Cache dump is best-effort — the sidecar falls back to an empty
-        # tools list rather than blocking stdio startup.
-        logger.warning("Failed to dump tool metadata cache", exc_info=True)
+        # tools list rather than blocking stdio startup. Include the
+        # exception class in the warning so ops can distinguish
+        # server-init failures (Pydantic ValidationError) from cache I/O
+        # (OSError) from event-loop issues (RuntimeError).
+        logger.warning(
+            "Failed to dump tool metadata cache (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
 
     try:
         maybe_spawn()
-    except Exception:
+    except Exception as e:
         # Spawn failures already log inside maybe_spawn(); the bare
         # except here is a defense-in-depth guard for any unexpected
         # path (e.g. import error in the sidecar module). Settings UI
         # is advisory — never let it block MCP startup.
-        logger.warning("Failed to spawn settings UI sidecar", exc_info=True)
+        logger.warning(
+            "Failed to spawn settings UI sidecar (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
 
 
 def main_dev() -> None:

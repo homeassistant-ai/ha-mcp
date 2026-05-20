@@ -194,7 +194,12 @@ def load_tool_metadata_cache() -> list[dict[str, Any]]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning("Tool metadata cache at %s is not valid JSON", path)
+        # exc_info preserves the line / column of the failure so a
+        # truncated-write looks distinguishable from corrupted-mid-file
+        # in the logs.
+        logger.warning(
+            "Tool metadata cache at %s is not valid JSON", path, exc_info=True
+        )
         return []
     if not isinstance(data, list):
         return []
@@ -814,6 +819,8 @@ loadTools();
 
 def build_settings_handlers(
     server: HomeAssistantSmartMCPServer | None,
+    *,
+    is_sidecar: bool = False,
 ) -> dict[str, Any]:
     """Construct the settings UI route handlers.
 
@@ -822,6 +829,17 @@ def build_settings_handlers(
     ``server`` is ``None`` (stdio sidecar process, which has no live MCP
     server), the tools list is read from the on-disk metadata cache and
     the restart handler returns 400 (the sidecar is not an add-on).
+
+    ``is_sidecar`` forces the ``settings_info`` handler to report
+    ``is_addon=False`` regardless of the inherited ``SUPERVISOR_TOKEN``
+    env var. The sidecar process inherits parent env unchanged
+    (``subprocess.Popen`` with default ``env=None``), so if the parent
+    stdio process happens to run under Supervisor (e.g. an interactive
+    debug shell inside the add-on container) the served HTML would
+    otherwise show the "Restart Add-on" button that POSTs to a route
+    the sidecar doesn't expose, surfacing as a broken UI. The sidecar
+    is *by construction* not the add-on entrypoint — pin the flag
+    accordingly.
 
     Returns a dict mapping handler names to async Starlette handlers.
     Both ``register_settings_routes`` (FastMCP mounting) and the stdio
@@ -1011,11 +1029,11 @@ def build_settings_handlers(
         return JSONResponse({"success": True, "message": "Restart initiated"})
 
     async def _settings_info(_: Request) -> JSONResponse:
-        return JSONResponse(
-            {
-                "is_addon": is_running_in_addon(),
-            }
-        )
+        # Sidecar is never the add-on entrypoint regardless of inherited
+        # SUPERVISOR_TOKEN — see docstring above for the broken-button
+        # rationale.
+        addon = False if is_sidecar else is_running_in_addon()
+        return JSONResponse({"is_addon": addon})
 
     return {
         "root_page": _root_page,

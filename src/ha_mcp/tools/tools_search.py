@@ -1033,14 +1033,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
-        # Surface the stdio settings UI sidecar URL when a sidecar is
-        # running (issue #863). The LLM can hand this URL to the user
+        # Surface the stdio settings UI sidecar URL when a URL file is
+        # present (issue #863). The LLM can hand this URL to the user
         # when they ask how to change settings — the sidecar process
         # outlives the stdio MCP subprocess, so the URL stays reachable.
-        # Absent when not running stdio mode (HTTP modes mount the
-        # settings page directly on the FastMCP server) or when the
-        # user has disabled the sidecar via HA_MCP_DISABLE_SETTINGS_UI
-        # / the in-page Stop control.
+        # Surfacing is advisory: a missing or unreadable URL file
+        # MUST NOT fail the overview tool. The file is normally only
+        # present in stdio mode; HTTP modes mount the settings page on
+        # the FastMCP server directly. A leftover URL file from a prior
+        # stdio run on the same machine could in principle be surfaced
+        # by an HTTP-mode process — acceptable because the URL itself
+        # is gated by the random secret path either way.
         from ..stdio_settings_sidecar import read_sidecar_url
 
         sidecar_url = read_sidecar_url()

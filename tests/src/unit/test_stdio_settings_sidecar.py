@@ -310,3 +310,94 @@ class TestSecurityMiddleware:
         assert resp.status_code == 200
         # Sentinel must have been written so the next maybe_spawn skips.
         assert (tmp_data_dir / "settings_ui_disabled").exists()
+
+
+class TestSidecarSettingsInfo:
+    """Sidecar's settings_info MUST report is_addon=False regardless of env.
+
+    The sidecar inherits parent env unchanged (subprocess.Popen with
+    default env=None). If the parent stdio process happens to have
+    SUPERVISOR_TOKEN set (e.g. a debug shell inside the add-on
+    container), the served HTML would otherwise show the "Restart
+    Add-on" button that POSTs to a route the sidecar doesn't expose —
+    surfacing as a broken UI. The is_sidecar=True flag pins the answer.
+    """
+
+    def test_sidecar_settings_info_forces_is_addon_false(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        app = sidecar._build_app(
+            host="127.0.0.1", port=12345, secret_path="/private_xx"
+        )
+        client = TestClient(app)
+        resp = client.get(
+            "/private_xx/api/settings/info",
+            headers={"host": "127.0.0.1:12345"},
+        )
+        assert resp.status_code == 200
+        # Even with SUPERVISOR_TOKEN set, sidecar forces is_addon=False.
+        assert resp.json() == {"is_addon": False}
+
+
+class TestMaybeSpawnStaleCleanup:
+    """``maybe_spawn`` MUST unlink stale pid+url files BEFORE spawning.
+
+    Catches a reordering regression where Popen is called first,
+    leaving the child to inherit and overwrite stale files instead of
+    starting from a clean state — which would mean the next
+    ``read_sidecar_url`` call could briefly return the OLD URL pointing
+    at a dead listener.
+    """
+
+    def test_stale_pid_and_url_unlinked_before_popen(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        stale_pid = tmp_data_dir / "ui.pid"
+        stale_url = tmp_data_dir / "ui.url"
+        # Pre-create stale files with a CLEARLY DEAD pid so the
+        # "_existing_sidecar_alive" guard returns False and we proceed
+        # to the cleanup-then-spawn path.
+        stale_pid.write_text("999999\n")
+        stale_url.write_text("http://127.0.0.1:1/stale\n")
+
+        # Snapshot the files' existence at the moment Popen is called.
+        # The contract is "files gone before Popen runs"; recording the
+        # state via Popen.side_effect lets us assert on it directly.
+        snapshot: dict[str, bool] = {}
+
+        def _record_state(*_args: object, **_kwargs: object) -> MagicMock:
+            snapshot["pid_exists"] = stale_pid.exists()
+            snapshot["url_exists"] = stale_url.exists()
+            proc = MagicMock()
+            proc.pid = 12345
+            return proc
+
+        with patch("subprocess.Popen", side_effect=_record_state):
+            sidecar.maybe_spawn()
+
+        # Both stale files must have been unlinked before Popen ran;
+        # if either is True the cleanup loop was reordered after spawn.
+        assert snapshot.get("pid_exists") is False, (
+            "stale ui.pid still present at Popen call — cleanup regressed"
+        )
+        assert snapshot.get("url_exists") is False, (
+            "stale ui.url still present at Popen call — cleanup regressed"
+        )
+
+
+class TestDumpCacheFailurePath:
+    """``dump_tool_metadata_cache`` documented contract: returns False on OSError."""
+
+    def test_dump_returns_false_on_oserror(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force Path.write_text to raise; the helper must catch + return
+        # False without escaping the exception (callers in __main__.py
+        # rely on this to avoid blocking stdio startup on cache I/O).
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(Path, "write_text", _raise)
+        assert dump_tool_metadata_cache([{"name": "x"}]) is False

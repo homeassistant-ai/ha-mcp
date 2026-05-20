@@ -117,13 +117,23 @@ async def _wait_addon_running(
     flake any strict-shape assertion. Mirrors the
     ``wait_for_entity_registered`` discipline already mandated by
     AGENTS.md for tests that act on freshly created entities.
+
+    Transient ``ToolError`` from ``ha_get_addon`` (e.g. a momentary
+    Supervisor 5xx during boot) is treated as "not ready yet" and the
+    poll continues until the outer timeout. The deadline still fires;
+    transient errors can't mask a wedged addon forever.
     """
+    from fastmcp.exceptions import ToolError
+
     deadline = time.monotonic() + timeout
     last_state: str | None = None
     while True:
-        detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
-        detail = (parse_mcp_result(detail_raw).get("addon") or {})
-        last_state = detail.get("state")
+        try:
+            detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            detail = (parse_mcp_result(detail_raw).get("addon") or {})
+            last_state = detail.get("state")
+        except ToolError as e:
+            last_state = f"<ToolError: {e!s}[:60]>"
         if last_state == "started":
             return
         if time.monotonic() >= deadline:
