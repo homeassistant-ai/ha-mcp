@@ -53,6 +53,7 @@ from haos_runtime import (
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
+    set_default_backup_password,
     trigger_dev_addon_update,
     wait_for_addon_mcp_ready,
 )
@@ -153,7 +154,16 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_container)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
-        elif "external_only" in keywords and not external_haos:
+        # ``external_only`` skips ONLY on the inaddon tier. The name is
+        # historical (from #1361 where the only motivating consumer was
+        # ``test_supervisor_mock.py``, whose monkeypatch-based fixture
+        # works fine on testcontainer + external HAOS but can't reach
+        # the addon's separate process inaddon). Skipping on
+        # testcontainer too was a dispatcher bug — the mock fixture is
+        # in-process and runs cleanly there. Surfaced during PR #1375
+        # final-skip audit; 14 supervisor_mock tests were silently
+        # skipping on every testcontainer e2e-tests.yml run.
+        elif "external_only" in keywords and inaddon:
             item.add_marker(skip_external_only)
 
 
@@ -1147,6 +1157,17 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "tests may race",
                     SUN_WAIT, last_sun_status, last_sun_err,
                 )
+            # Set HA Core's default backup-create password via WS so
+            # ha_backup_create tests pass without a pre-baked seed. Must
+            # run AFTER the sun.sun ready-wait above — sun.sun ready
+            # implies all integrations have finished loading, including
+            # ``backup`` which registers the ``backup/config/update`` WS
+            # command. Calling earlier would hit "Unknown command" before
+            # the integration's WS handlers are registered. The helper
+            # also retries on unknown_command as a belt-and-braces
+            # defence against race conditions on slow CI runners.
+            # Idempotent — safe across the inaddon dev-addon update.
+            set_default_backup_password(base_url, token)
             # The session-scope _blueprint_http_server fixture computes its
             # base_url using host.docker.internal — meaningless from inside
             # the HAOS QEMU guest. Slirp user networking always reaches the

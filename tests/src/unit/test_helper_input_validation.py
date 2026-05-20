@@ -184,6 +184,55 @@ class TestTagAutoGeneratesTagId:
         assert msg is not None
         assert msg["tag_id"] == "custom-tag-id"
 
+    async def test_create_skips_entity_registration_wait(
+        self, register_tools, mock_client
+    ):
+        """Tags don't have entity states — the create branch must not call
+        ``wait_for_entity_registered``.
+
+        The update branch already documents this (line 2949-2981 in
+        tools_config_helpers.py): tags live in their own tag registry and
+        never appear in ``/api/states/<entity_id>``. The create branch was
+        previously calling ``wait_for_entity_registered`` against a
+        synthesized ``tag.<id>`` slug, which 404s for the full timeout on
+        every single tag-create — burning ~10s per tag-create test on
+        every CI run. This test pins the fix.
+        """
+        _wire_default_ws(mock_client, "tag")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as wait_mock:
+            await register_tools["ha_config_set_helper"](
+                helper_type="tag",
+                name="My Tag",
+                tag_id="some-tag",
+            )
+        wait_mock.assert_not_awaited()
+
+    async def test_create_non_tag_still_waits_for_registration(
+        self, register_tools, mock_client
+    ):
+        """Non-tag helper types still wait for entity registration.
+
+        The skip is scoped specifically to ``helper_type == "tag"`` —
+        input_boolean / input_number / etc. continue to use
+        ``wait_for_entity_registered`` to gate ``area_id`` /``labels``
+        registry updates and to surface a queryability warning to callers.
+        """
+        _wire_default_ws(mock_client, "input_boolean")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as wait_mock:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="My Bool",
+            )
+        wait_mock.assert_awaited()
+
 
 # ---------------------------------------------------------------------------
 # Bug 13 — input_number range/step validation

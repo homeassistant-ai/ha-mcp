@@ -60,6 +60,132 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # with the ``local_`` prefix that Supervisor applies to local-store
 # addons.
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+# Advanced SSH Web Terminal addon's installed slug. Bake-installed by
+# build_image.install_advanced_ssh; available on host port
+# SSH_DEBUG_HOST_PORT (22222). User/password are CI-test-only and can
+# be overridden via env vars (matching the ONBOARDING_PASSWORD pattern
+# used by the testcontainer + HAOS auth path) so this constant never
+# carries a deployable credential.
+SSH_ADDON_SLUG = "a0d7b954_ssh"
+SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
+SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
+# Path to the ``sshpass`` binary. Make configurable so a future
+# packaging change (e.g. distro-specific path or a Nix-style absolute
+# path) doesn't break the helper.
+SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
+
+
+def ssh_exec(
+    cmd: list[str], *, timeout: float = 30.0
+) -> subprocess.CompletedProcess[str]:
+    """Run ``cmd`` over SSH against the booted HAOS's Advanced SSH addon.
+
+    Used by inaddon-only tests that need to run a process inside HAOS
+    itself (typically ``docker exec`` into a sibling addon container to
+    poison its filesystem mid-test). The Advanced SSH addon is bake-
+    installed with a known root password; we use ``sshpass`` for
+    non-interactive auth and disable host-key checking because the
+    addon container's key changes whenever it restarts (commit 6's
+    restart-retarget test relies on this leniency).
+
+    The caller passes the COMMAND list (``["docker", "exec", ...]``);
+    this helper assembles the ssh wrapper.
+    """
+    import shlex
+
+    # Pass the password via the SSHPASS env var + ``-e`` flag instead
+    # of ``-p`` on the command line — ``-p`` makes the credential
+    # visible in ``ps`` for every other user on the runner, even
+    # though this is a test-only credential.
+    #
+    # SSH transmits the remote command as a single space-joined string,
+    # NOT as an argv. So
+    # ``["docker", "exec", "addon_x", "sh", "-c", "rm -rf foo && mkdir foo"]``
+    # arrives on the remote side as ``docker exec addon_x sh -c rm -rf
+    # foo && mkdir foo`` — sh sees ``-c rm`` (script body is "rm"), the
+    # rest become positional args, and ``rm`` runs with no operands.
+    # Verified on PR #1375 CI run 26092611982: ``stderr="rm: missing
+    # operand"``. Use ``shlex.join`` to produce a single shell-safe
+    # string that the remote shell will re-tokenize correctly.
+    remote_command = shlex.join(cmd)
+    ssh_cmd = [
+        SSHPASS_BIN, "-e",
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-p", str(SSH_DEBUG_HOST_PORT),
+        f"{SSH_ADDON_USER}@127.0.0.1",
+        remote_command,
+    ]
+    env = {**os.environ, "SSHPASS": SSH_ADDON_PASSWORD}
+
+    # The Advanced SSH addon's sshd takes a beat to start accepting key
+    # exchange after Supervisor reports the addon as "started" — verified
+    # on PR #1375 CI run 287c5ced where the first ssh attempt failed with
+    # ``kex_exchange_identification: read: Connection reset by peer``.
+    # Retry the entire ``subprocess.run`` on that specific stderr token
+    # (and the connection-refused variant) so cold-start races don't
+    # require every caller to embed retry logic.
+    deadline = time.monotonic() + max(timeout, 60.0)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return subprocess.run(
+                ssh_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").lower()
+            transient = (
+                "kex_exchange_identification" in stderr
+                or "connection reset by peer" in stderr
+                or "connection refused" in stderr
+                or "no route to host" in stderr
+            )
+            if transient and time.monotonic() < deadline:
+                LOG.debug(
+                    "ssh_exec transient on attempt %d (stderr=%r); retrying",
+                    attempt,
+                    exc.stderr,
+                )
+                time.sleep(2.0)
+                continue
+            # subprocess.CalledProcessError's default __str__ only includes
+            # the exit code — the actual SSH/docker error lives on stderr
+            # and would otherwise be lost in CI output. Re-raise as
+            # RuntimeError with full stderr+stdout so failures are
+            # actionable.
+            raise RuntimeError(
+                f"ssh_exec failed (exit {exc.returncode}, attempt={attempt}): "
+                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}"
+            ) from exc
+
+
+def docker_exec_in_addon(
+    addon_slug: str, cmd: list[str], *, timeout: float = 30.0
+) -> str:
+    """Run ``cmd`` inside an addon container via SSH + docker exec.
+
+    ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
+    the helper resolves it to the Docker container name (
+    ``addon_<slug>``). Returns stdout of the command. Raises
+    ``RuntimeError`` with stderr+stdout context on non-zero exit
+    (via the wrapping in ``ssh_exec``).
+
+    Used by item 8's filesystem-poisoning E2E to make
+    ``/data/saved_tools.json`` unwriteable inside the dev addon
+    container mid-test, force the save-warning rollback, then chmod
+    back in the test's finally block.
+    """
+    container = f"addon_{addon_slug}"
+    result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
+    return result.stdout
 
 
 def is_haos_inaddon_mode() -> bool:
@@ -480,6 +606,7 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
                     )
             except OSError as e:
                 last_err = e
+                LOG.debug("Inaddon MCP TCP probe failed: %r", e)
                 time.sleep(3.0)
                 continue
 
@@ -596,6 +723,141 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
             last_err = e
         time.sleep(3.0)
     raise TimeoutError(f"{url} did not become ready within {timeout}s (last: {last_err})")
+
+
+DEFAULT_BACKUP_PASSWORD = "e2e-test-backup-password"
+
+
+def set_default_backup_password(
+    base_url: str,
+    token: str,
+    *,
+    password: str = DEFAULT_BACKUP_PASSWORD,
+    overall_timeout: float = 120.0,
+) -> None:
+    """Set HA Core's default backup-create password via WS at session start.
+
+    ``ha_backup_create`` and friends fail with ``SERVICE_CALL_FAILED``
+    ("No default backup password configured in Home Assistant") unless
+    ``create_backup.password`` is set in the backup integration's stored
+    config. On HAOS we can't reliably bake this into ``.storage/backup``
+    (the file is written by HA Core's backup integration on first save —
+    pre-baking the file occasionally races with the integration's own
+    storage migration on a fresh-boot HAOS). Doing it at session start
+    via the WS ``backup/config/update`` command is deterministic — once
+    the backup integration's WS handlers are registered.
+
+    HA Core's frontend serves ``/manifest.json`` (the readiness gate the
+    conftest's ``boot_haos_qemu`` polls) BEFORE all integrations finish
+    loading; the ``backup`` integration may register its WS commands
+    seconds after that gate releases. Calling ``backup/config/update``
+    against an unregistered command returns
+    ``{"code": "unknown_command", "message": "Unknown command."}`` —
+    so we retry the WS call on that specific error until the integration
+    is available, bounded by ``overall_timeout``. Once registered the
+    command itself completes sub-second.
+
+    Idempotent: HA Core overwrites the stored ``password`` field on
+    each call, so re-running this against a HAOS that already has a
+    password set is harmless.
+    """
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    deadline = time.monotonic() + overall_timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        with websockets.sync.client.connect(
+            ws_url, max_size=None, open_timeout=30
+        ) as ws:
+            first = json.loads(ws.recv())
+            if first.get("type") != "auth_required":
+                raise RuntimeError(
+                    f"WS handshake: expected auth_required, got {first!r}"
+                )
+            ws.send(json.dumps({"type": "auth", "access_token": token}))
+            auth_resp = json.loads(ws.recv())
+            if auth_resp.get("type") != "auth_ok":
+                raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+            msg_id = 1
+            ws.send(json.dumps({
+                "id": msg_id,
+                "type": "backup/config/update",
+                "create_backup": {"password": password},
+            }))
+            # Per-call read budget. The actual command is sub-second once
+            # the integration is loaded; the outer ``overall_timeout``
+            # covers the case where backup integration hasn't registered
+            # its WS handlers yet (we retry the whole call below).
+            call_deadline = time.monotonic() + 15
+            resp: dict[str, Any] | None = None
+            while time.monotonic() < call_deadline:
+                try:
+                    raw = ws.recv(
+                        timeout=max(call_deadline - time.monotonic(), 1.0)
+                    )
+                except TimeoutError:
+                    continue
+                try:
+                    if not isinstance(raw, str):
+                        raw = raw.decode()
+                    candidate = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"backup/config/update: malformed WS frame: {exc} "
+                        f"(raw={raw!r})"
+                    ) from exc
+                if candidate.get("id") != msg_id:
+                    continue
+                resp = candidate
+                break
+
+            if resp is None:
+                raise TimeoutError(
+                    "backup/config/update: no matching response within "
+                    "per-call 15s window"
+                )
+            if resp.get("success", False):
+                LOG.info(
+                    "Default backup password configured via WS "
+                    "(attempt=%d)",
+                    attempt,
+                )
+                return
+            err = resp.get("error") or {}
+            err_code = err.get("code") if isinstance(err, dict) else None
+            if err_code == "unknown_command":
+                # Backup integration's WS handlers haven't registered
+                # yet — sleep briefly and retry the whole connect+call.
+                # Reconnecting (rather than reusing the open socket) is
+                # the simplest way to also pick up auth_required state
+                # if HA Core happened to restart the WS server during
+                # initial integration load.
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"backup/config/update still 'unknown_command' "
+                        f"after {overall_timeout}s; backup integration "
+                        f"never registered its WS handlers. Did HA Core "
+                        f"fail to load the integration? Check ha-core "
+                        f"runtime log in the diagnostics artifact."
+                    )
+                LOG.debug(
+                    "backup integration not yet loaded (attempt=%d); "
+                    "retrying in 2s",
+                    attempt,
+                )
+                time.sleep(2.0)
+                continue
+            # Any other failure: include the full frame so a maintainer
+            # can see what HA Core sent.
+            raise RuntimeError(
+                f"backup/config/update failed: {resp.get('error') or resp!r}"
+            )
 
 
 def login_for_token(base_url: str, username: str, password: str) -> str:
@@ -726,14 +988,23 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
                 raw = ws.recv(timeout=remaining)
             except TimeoutError:
                 continue
-            if not isinstance(raw, str):
-                raw = raw.decode()
-            resp = json.loads(raw)
+            try:
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"supervisor/api {op_endpoint}: malformed WS frame: "
+                    f"{exc} (raw={raw!r})"
+                ) from exc
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success", False):
+                # ``error`` may be missing or None — include the full
+                # frame so a maintainer can see what Supervisor sent.
+                err = resp.get("error") or resp
                 raise RuntimeError(
-                    f"supervisor/api {op_endpoint} failed: {resp.get('error')}"
+                    f"supervisor/api {op_endpoint} failed: {err!r}"
                 )
             return
         raise TimeoutError(
@@ -741,7 +1012,7 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
             f"({op_deadline - (op_deadline - timeout):.0f}s after start)"
         )
 
-    with websockets.sync.client.connect(ws_url, max_size=None) as ws:
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
         first_frame = json.loads(ws.recv())
         if first_frame.get("type") != "auth_required":
             raise RuntimeError(
