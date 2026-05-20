@@ -70,25 +70,30 @@ class TestWsEventWaiter:
         cleanup_tracker.track("input_number", entity_id)
 
         warnings = data.get("warnings") or []
-        # The exact warning from tools_config_helpers.py:2828.
-        # Any "not yet queryable" warning means the inline wait timed out.
+        # "not yet queryable" is the exact substring tools_config_helpers
+        # emits when the inline wait_for_entity_registered call timed out
+        # (search the source for "not yet queryable" to find the emit sites).
+        # Its presence here means the WS waiter timed out.
         offending = [w for w in warnings if "not yet queryable" in str(w)]
         assert not offending, (
             f"WS-event waiter regression: helper create surfaced "
             f"soft-failure warnings: {offending} (full response: {data})"
         )
 
-    async def test_multiple_rapid_creates_do_not_leak_subscriptions(
+    async def test_multiple_rapid_creates_succeed_under_sequential_load(
         self, mcp_client, cleanup_tracker
     ):
-        """Each waiter opens its own short-lived state_changed /
-        entity_registry_updated subscription and must release it in
-        ``finally``. If cleanup leaked, the shared WS connection would
-        accumulate handlers and either slow down or drop later events.
-        Five back-to-back creates + a final wait_for_entity_registration
-        is a smoke test that the per-call subscribe/unsubscribe path is
-        sound under sequential load — anything quietly broken in
-        teardown surfaces as a later create's soft-failure warning."""
+        """Smoke test for the per-call subscribe/unsubscribe path under
+        sequential load. Five back-to-back creates exercise the WS waiter
+        five times against the shared pooled connection; each must complete
+        without a soft-failure warning and the final
+        ``wait_for_entity_registration`` probe must find every entity.
+
+        This does NOT directly assert handler/subscription counts on the
+        shared WS client (the MCP layer can't observe those) — a true
+        leak test lives in the unit-test FakeWebSocketClient suite. Here
+        we only verify that whatever cleanup happens is good enough to
+        keep N+1th waits working."""
         created: list[str] = []
         for i in range(5):
             result = await mcp_client.call_tool(

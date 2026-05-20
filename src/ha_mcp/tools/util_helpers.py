@@ -15,6 +15,7 @@ from typing import Any, overload
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
 
@@ -505,8 +506,8 @@ _POLLING_BACKSTOP_INTERVAL = 2.0
 
 Bounded slow-poll backstop so a silent-broken WS subscription still
 resolves within the helper's timeout. A 10s budget with a 2s backstop
-costs at most ~5 REST calls per wait, vs. ~33 calls for the previous
-300ms loop."""
+costs at most ~6 REST calls per wait (one post-subscribe sample plus
+~5 backstop samples), vs. ~33 calls for the previous 300ms loop."""
 
 
 async def _legacy_poll_until(
@@ -553,7 +554,7 @@ async def _get_waiter_ws_client(client: Any) -> Any:
     """
     try:
         from ..client.websocket_client import get_websocket_client
-    except Exception as e:  # pragma: no cover - import-time defence
+    except ImportError as e:  # pragma: no cover - import-time defence
         logger.debug("WS waiter import failed: %s", e)
         return None
 
@@ -564,7 +565,12 @@ async def _get_waiter_ws_client(client: Any) -> Any:
             ws_client = await get_websocket_client(url=base_url, token=token)
         else:
             ws_client = await get_websocket_client()
-    except Exception as e:
+    except HomeAssistantAuthError:
+        # Auth failures must reach the caller — a bad token should surface
+        # as a real error, not as a 10s "timed out" via REST fallback.
+        # silent-failure-hunter #1382.
+        raise
+    except (HomeAssistantConnectionError, OSError, TimeoutError) as e:
         logger.debug("WS waiter could not obtain ws client: %s", e)
         return None
 
@@ -614,9 +620,10 @@ async def _ws_wait_for_condition(
     nudge = asyncio.Event()
 
     async def handler(event: dict[str, Any]) -> None:
-        # HA dispatches state_changed / entity_registry_updated payloads
-        # with entity_id nested under ``data``. Match defensively against
-        # both nesting shapes — older HA forks have surfaced both.
+        # HA nests ``entity_id`` under ``event["data"]`` for both
+        # state_changed and entity_registry_updated. The top-level fallback
+        # is defensive only — it lets a future schema drift degrade to a
+        # missed nudge rather than an AttributeError.
         data = event.get("data") or {}
         evt_entity = data.get("entity_id") or event.get("entity_id")
         if evt_entity == entity_id:
@@ -633,7 +640,15 @@ async def _ws_wait_for_condition(
         for et in event_types:
             try:
                 sub_id = await ws_client.subscribe_events(et)
-            except Exception as e:
+            except HomeAssistantAuthError:
+                # Auth errors must surface — see _get_waiter_ws_client.
+                raise
+            except (
+                HomeAssistantConnectionError,
+                HomeAssistantCommandError,
+                OSError,
+                TimeoutError,
+            ) as e:
                 logger.debug(
                     "subscribe_events(%s) failed during %s for %s: %s — "
                     "falling back to REST polling",
@@ -664,6 +679,28 @@ async def _ws_wait_for_condition(
                 return result
         except (HomeAssistantConnectionError, HomeAssistantAuthError):
             raise
+
+        # If the WS dropped between subscribe and the post-subscribe sample,
+        # skip the wait loop entirely — we'd burn up to one backstop interval
+        # waiting for events that will never arrive. Connection-drop coverage
+        # symmetric with the in-loop check below.
+        if not ws_client.is_connected:
+            logger.debug(
+                "WS connection dropped before wait loop for %s on %s — "
+                "completing via REST polling",
+                description,
+                entity_id,
+            )
+            remaining = timeout - (time.monotonic() - start)
+            if remaining <= 0:
+                return None
+            return await _legacy_poll_until(
+                entity_id,
+                sample,
+                timeout=remaining,
+                poll_interval=poll_interval,
+                description=description,
+            )
 
         while time.monotonic() - start < timeout:
             # Wait for either an event nudge or the polling backstop. The
@@ -720,18 +757,37 @@ async def _ws_wait_for_condition(
         for et in attached_handlers:
             ws_client.remove_event_handler(et, handler)
         for sub_id in sub_ids:
-            # ``unsubscribe_events`` is best-effort — connection errors during
-            # cleanup are swallowed inside the client. We still guard the
-            # await to be sure a teardown bug here doesn't mask the wait
-            # result the caller is about to receive.
+            # ``unsubscribe_events`` narrows internally: OSError → debug,
+            # HomeAssistantCommandError → warning, everything else propagates.
+            # The outer catch here guards against the round-trip's WS-level
+            # failure modes (connection reset by another caller, send_command
+            # timeout) so a cleanup hiccup never masks the wait's real result.
+            # Narrow set — programming bugs (TypeError, AttributeError) must
+            # propagate. ``send_command`` currently raises a bare
+            # ``Exception("Command timeout")`` on timeout, which is matched
+            # by name here until that helper is fixed upstream.
             try:
                 await ws_client.unsubscribe_events(sub_id)
-            except Exception as e:  # pragma: no cover - defensive belt
-                logger.debug(
-                    "unsubscribe_events(%s) raised during cleanup: %s",
+            except (HomeAssistantConnectionError, OSError, TimeoutError) as e:
+                logger.warning(
+                    "unsubscribe_events(%s) cleanup failed (subscription "
+                    "may leak until WS pool reconnects): %s",
                     sub_id,
                     e,
                 )
+            except Exception as e:
+                # ``send_command`` raises bare Exception("Command timeout") on
+                # WS round-trip timeout. Treat that specifically as cleanup
+                # noise; anything else re-raises.
+                if str(e) == "Command timeout":
+                    logger.warning(
+                        "unsubscribe_events(%s) cleanup timed out on WS "
+                        "round-trip; subscription may leak until WS pool "
+                        "reconnects",
+                        sub_id,
+                    )
+                else:
+                    raise
 
 
 async def wait_for_entity_registered(

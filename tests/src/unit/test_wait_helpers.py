@@ -353,7 +353,26 @@ class FakeWebSocketClient:
         self.subscribed: list[str] = []
         self.unsubscribed: list[int] = []
         self._next_sub = 100
-        self._subscribe_should_raise: Exception | None = None
+        self._subscribe_failure: Exception | None = None
+        self._subscribe_fail_after: int | None = None
+        self._unsubscribe_failure: Exception | None = None
+
+    def set_subscribe_failure(
+        self, exc: Exception | None, *, after: int | None = None
+    ) -> None:
+        """Make the next ``subscribe_events`` call raise ``exc``.
+
+        ``after=N`` lets the first N successes through; useful for the
+        partial-subscribe failure path (first event_type subscribes
+        fine, second raises) so the cleanup branch with a non-empty
+        ``sub_ids`` is exercised.
+        """
+        self._subscribe_failure = exc
+        self._subscribe_fail_after = after
+
+    def set_unsubscribe_failure(self, exc: Exception | None) -> None:
+        """Make ``unsubscribe_events`` raise ``exc`` for every sub_id."""
+        self._unsubscribe_failure = exc
 
     def add_event_handler(self, event_type: str, handler) -> None:
         self.handlers.setdefault(event_type, []).append(handler)
@@ -363,14 +382,18 @@ class FakeWebSocketClient:
             self.handlers[event_type].remove(handler)
 
     async def subscribe_events(self, event_type: str) -> int:
-        if self._subscribe_should_raise is not None:
-            raise self._subscribe_should_raise
+        if self._subscribe_failure is not None:
+            if self._subscribe_fail_after is None or self._subscribe_fail_after <= 0:
+                raise self._subscribe_failure
+            self._subscribe_fail_after -= 1
         self.subscribed.append(event_type)
         self._next_sub += 1
         return self._next_sub
 
     async def unsubscribe_events(self, sub_id: int) -> None:
         self.unsubscribed.append(sub_id)
+        if self._unsubscribe_failure is not None:
+            raise self._unsubscribe_failure
 
     async def fire_state_changed(self, entity_id: str) -> None:
         """Dispatch a state_changed event to every registered handler."""
@@ -470,8 +493,9 @@ class TestWsPathRegistered:
         assert result is False  # Timed out — noise event was correctly filtered.
 
     async def test_subscribe_failure_falls_back_to_rest(self, ws_client, mock_client):
-        """If subscribe_events raises, we degrade to the legacy REST poll."""
-        ws_client._subscribe_should_raise = RuntimeError("subscribe down")
+        """If subscribe_events raises a connection/transport error on the
+        first event_type, we degrade to the legacy REST poll."""
+        ws_client.set_subscribe_failure(OSError("subscribe down"))
         mock_client.get_entity_state.return_value = {"state": "on"}
 
         result = await wait_for_entity_registered(
@@ -551,3 +575,195 @@ class TestWsPathStateChange:
         assert result is None
         assert len(ws_client.unsubscribed) == 1
         assert ws_client.handlers.get("state_changed") == []
+
+    async def test_baseline_adopted_under_ws_path(self, ws_client, mock_client):
+        """When the pre-loop initial fetch fails (404), the sample under
+        the WS path must adopt the first observed state as the baseline
+        — not resolve on it. The next event must then resolve to the
+        actual change. Gap #3 from the pr-test-analyzer review (#1382)."""
+        # 1. Initial fetch (before subscribe): 404 → initial_state stays None.
+        # 2. Post-subscribe sample: returns {"state": "off"} → adopts baseline,
+        #    returns None (no change yet).
+        # 3. After first event fires: returns {"state": "off"} again → still
+        #    matches baseline, no resolution.
+        # 4. After second event fires: returns {"state": "on"} → resolved.
+        mock_client.get_entity_state.side_effect = [
+            HomeAssistantAPIError("not found", status_code=404),
+            {"state": "off"},
+            {"state": "off"},
+            {"state": "on"},
+        ]
+
+        async def fire_two():
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed("light.test")
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed("light.test")
+
+        fire_task = asyncio.create_task(fire_two())
+        result = await wait_for_state_change(mock_client, "light.test", timeout=5.0)
+        await fire_task
+
+        assert result is not None
+        assert result["state"] == "on"
+
+
+# ---------------------------------------------------------------------------
+# Connection-drop, polling-backstop, partial-subscribe, and cleanup-error
+# coverage requested by pr-test-analyzer on #1382. Each test maps to a
+# specific gap in that report.
+# ---------------------------------------------------------------------------
+
+
+class TestWsPathConnectionDrop:
+    """Mid-wait connection-drop fallback to REST (pr-test-analyzer gap #1)."""
+
+    async def test_connection_drop_mid_wait_falls_back_to_rest(
+        self, ws_client, mock_client
+    ):
+        """If ``ws_client.is_connected`` flips to False after a noise wake
+        but before resolution, ``_ws_wait_for_condition`` must call
+        ``_legacy_poll_until`` for the remaining budget and still
+        resolve via REST sampling."""
+        # First sample (post-subscribe): not registered.
+        # Sample after first nudge (which fires noise): still not registered.
+        # WS then drops; the REST fallback samples and finds the entity.
+        mock_client.get_entity_state.side_effect = [
+            HomeAssistantAPIError("not found", status_code=404),
+            HomeAssistantAPIError("not found", status_code=404),
+            {"state": "on"},  # REST fallback sees the entity
+        ]
+
+        async def fire_noise_then_drop():
+            # Wake the loop with a noise event, then drop the connection
+            # before the next iteration's is_connected check runs.
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed("light.test")
+            await asyncio.sleep(0.01)
+            ws_client.is_connected = False
+
+        fire_task = asyncio.create_task(fire_noise_then_drop())
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=5.0, poll_interval=0.01
+        )
+        await fire_task
+
+        assert result is True
+        # We sampled at least three times: post-subscribe, post-noise-nudge,
+        # and at least once via the REST fallback after the drop.
+        assert mock_client.get_entity_state.call_count >= 3
+
+    async def test_connection_drop_before_wait_loop_falls_back_to_rest(
+        self, ws_client, mock_client
+    ):
+        """If the WS drops between ``subscribe_events`` returning and the
+        wait loop starting, the helper must skip the loop and go straight
+        to REST polling — no wasted backstop interval on a dead
+        subscription."""
+        # First call (post-subscribe sample) returns 404 AND drops the WS;
+        # subsequent REST-fallback calls find the entity.
+        call_count = {"n": 0}
+
+        async def get_state(_entity_id):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                ws_client.is_connected = False
+                raise HomeAssistantAPIError("not found", status_code=404)
+            return {"state": "on"}
+
+        mock_client.get_entity_state.side_effect = get_state
+
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=2.0, poll_interval=0.01
+        )
+
+        assert result is True
+        # At least one extra REST sample happened after the drop.
+        assert call_count["n"] >= 2
+        # Cleanup of the subscriptions we did establish still ran.
+        assert len(ws_client.unsubscribed) == 2
+
+
+class TestWsPathPollingBackstop:
+    """Polling backstop fires without an event (pr-test-analyzer gap #2)."""
+
+    async def test_backstop_resolves_without_event(
+        self, ws_client, mock_client, monkeypatch
+    ):
+        """With a tight ``_POLLING_BACKSTOP_INTERVAL``, the waiter must
+        resolve via the periodic REST sample even when no event nudge
+        ever arrives — proves the backstop is wired, not vestigial."""
+        monkeypatch.setattr(util_helpers, "_POLLING_BACKSTOP_INTERVAL", 0.05)
+        mock_client.get_entity_state.side_effect = [
+            HomeAssistantAPIError("not found", status_code=404),  # post-subscribe
+            HomeAssistantAPIError("not found", status_code=404),  # backstop #1
+            {"state": "on"},  # backstop #2 finds it
+        ]
+
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=5.0
+        )
+
+        assert result is True
+        # Subscription was opened and torn down even though no event arrived.
+        assert ws_client.subscribed == ["state_changed", "entity_registry_updated"]
+        assert len(ws_client.unsubscribed) == 2
+        # And we did sample more than once — at least the post-subscribe
+        # plus one or more backstop ticks.
+        assert mock_client.get_entity_state.call_count >= 2
+
+
+class TestWsPathPartialSubscribeFailure:
+    """First subscribe succeeds, second raises — cleanup must release the
+    first sub_id before falling back. pr-test-analyzer gap #4."""
+
+    async def test_partial_subscribe_failure_releases_first_subscription(
+        self, ws_client, mock_client
+    ):
+        """``set_subscribe_failure(..., after=1)`` lets the first event
+        type subscribe, then raises on the second. ``_ws_wait_for_condition``
+        falls back to REST and the ``finally`` block must still
+        unsubscribe the first (successful) subscription."""
+        ws_client.set_subscribe_failure(
+            HomeAssistantConnectionError("second sub down"), after=1
+        )
+        mock_client.get_entity_state.return_value = {"state": "on"}
+
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=2.0, poll_interval=0.01
+        )
+
+        assert result is True  # REST fallback succeeds.
+        # Exactly one subscription was established (state_changed),
+        # and the cleanup released it.
+        assert ws_client.subscribed == ["state_changed"]
+        assert ws_client.unsubscribed == [101]
+        # Both handlers were attached and both must be detached even though
+        # only one subscription landed.
+        assert ws_client.handlers.get("state_changed") == []
+        assert ws_client.handlers.get("entity_registry_updated") == []
+
+
+class TestWsPathUnsubscribeFailureTolerance:
+    """``unsubscribe_events`` failing during cleanup must not mask the
+    wait's real result. pr-test-analyzer gap #6."""
+
+    async def test_unsubscribe_connection_error_does_not_mask_result(
+        self, ws_client, mock_client
+    ):
+        """If ``unsubscribe_events`` raises ``HomeAssistantConnectionError``
+        on cleanup, the wait must still return its real result and the
+        second sub_id must still be unsubscribed (loop continues)."""
+        mock_client.get_entity_state.return_value = {"state": "on"}
+        ws_client.set_unsubscribe_failure(
+            HomeAssistantConnectionError("connection lost during cleanup")
+        )
+
+        # Post-subscribe sample resolves immediately.
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=2.0
+        )
+
+        assert result is True
+        # Both sub_ids were attempted even though both raised.
+        assert ws_client.unsubscribed == [101, 102]

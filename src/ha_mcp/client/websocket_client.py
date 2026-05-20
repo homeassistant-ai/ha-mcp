@@ -647,11 +647,22 @@ class HomeAssistantWebSocketClient:
     async def unsubscribe_events(self, subscription_id: int) -> None:
         """Release a subscription previously returned by ``subscribe_events``.
 
-        Best-effort: connection errors during cleanup are swallowed and
-        logged at debug, because the subscription is gone with the
-        connection. Used by short-lived waiters (``util_helpers.wait_for_*``)
-        that need to drop the subscription as soon as their event arrives so
-        the socket doesn't accumulate stale ``state_changed`` listeners.
+        Used by short-lived waiters (``util_helpers.wait_for_*``) that need
+        to drop the subscription as soon as their event arrives so the
+        shared socket doesn't accumulate stale ``state_changed`` listeners.
+
+        Exception policy (narrow, distinct log levels — Gemini #1382):
+
+        - Transport-level loss (``OSError``): subscription is implicitly
+          gone with the connection. Logged at ``debug`` so HA-mid-restart
+          cleanup doesn't spam warnings.
+        - HA-side rejection (``HomeAssistantCommandError``, e.g. "Subscription
+          not found" after a server-side reset): unexpected during normal
+          cleanup. Logged at ``warning`` so a real subscription leak is
+          discoverable.
+        - Everything else: propagates to the caller's ``finally`` so a
+          programming bug (TypeError, AttributeError) fails loudly instead
+          of being buried under a broad ``except``.
         """
         if not self._state.is_ready:
             logger.debug(
@@ -661,12 +672,15 @@ class HomeAssistantWebSocketClient:
             return
         try:
             await self.send_command("unsubscribe_events", subscription=subscription_id)
-        except (HomeAssistantConnectionError, HomeAssistantCommandError, OSError) as e:
-            # HA returns an error if the subscription was already torn down
-            # (e.g. by an HA-side reconnect). Treat all transport-level
-            # failures as best-effort.
+        except OSError as e:
             logger.debug(
-                "unsubscribe_events(%s) ignored transient error: %s",
+                "unsubscribe_events(%s): transport lost during cleanup: %s",
+                subscription_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.warning(
+                "unsubscribe_events(%s) rejected by HA: %s",
                 subscription_id,
                 e,
             )
