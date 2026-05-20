@@ -57,6 +57,11 @@ jobs:
 
     - name: Run ruff format check on changed Python files
       run: |
+        # actions/checkout@v6 sets safe.directory in a temp HOME that this
+        # step doesn't inherit; re-add it here so git operations succeed
+        # when the checkout dir is owned by a different UID than the
+        # container's root.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
         # Changed-files-only gate per the maintainer call on issue #1318:
         # new edits must be formatted; pre-existing format-debt on
         # untouched files stays grandfathered. Avoids the disruption of a
