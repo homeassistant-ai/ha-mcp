@@ -27,8 +27,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from src.e2e.utilities import wait_helpers
-from src.e2e.utilities.wait_helpers import (
+from tests.src.e2e.utilities import wait_helpers
+from tests.src.e2e.utilities.wait_helpers import (
     _WsPathUnavailable,
     wait_for_entity_registration,
     wait_for_entity_state,
