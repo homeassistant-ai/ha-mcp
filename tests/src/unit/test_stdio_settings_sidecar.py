@@ -336,8 +336,83 @@ class TestSidecarSettingsInfo:
             headers={"host": "127.0.0.1:12345"},
         )
         assert resp.status_code == 200
-        # Even with SUPERVISOR_TOKEN set, sidecar forces is_addon=False.
-        assert resp.json() == {"is_addon": False}
+        # Even with SUPERVISOR_TOKEN set, sidecar forces is_addon=False
+        # AND advertises is_sidecar=True (drives the in-page Stop button).
+        assert resp.json() == {"is_addon": False, "is_sidecar": True}
+
+
+class TestRunMainWiring:
+    """``run_main`` glue: port pick → URL build → app build → file writes.
+
+    Mocks ``uvicorn.Server`` so the test doesn't bind a real socket or
+    block on ``server.run()``. The contract verified here is that the
+    URL file lands with the expected shape and the pid file matches
+    the current process — same paths ``ha_get_overview`` and the
+    parent's ``maybe_spawn`` read at runtime.
+    """
+
+    def test_run_main_writes_pid_and_url_with_secret_path(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda: 54321)
+
+        # Mock uvicorn.Server so ``server.run()`` is a no-op and the
+        # test doesn't bind a port or block. The test exercises the
+        # pre-run() wiring; the cleanup block in ``run_main`` would
+        # unlink ui.url/ui.pid on exit, so we snapshot before that
+        # runs by patching server.run to verify the files exist there.
+        snapshot: dict[str, str] = {}
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self) -> None:
+                # Capture state at the moment the listener "starts".
+                snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
+                snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+
+        rc = sidecar.run_main()
+        assert rc == 0
+
+        url = snapshot["url"]
+        assert url.startswith("http://127.0.0.1:54321/private_"), (
+            f"URL missing host/port/secret prefix: {url!r}"
+        )
+        assert url.endswith("/settings"), f"URL missing /settings suffix: {url!r}"
+        assert snapshot["pid"] == str(os.getpid()), (
+            f"pid file must record current process: got {snapshot['pid']!r}"
+        )
+        # Cleanup path runs in run_main's finally; both files must be gone.
+        assert not (tmp_data_dir / "ui.url").exists()
+        assert not (tmp_data_dir / "ui.pid").exists()
+
+    def test_run_main_respects_disable_sentinel(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "settings_ui_disabled").write_text("manual\n")
+        # If uvicorn is imported the disable path wasn't honored. Set
+        # sys.modules["uvicorn"] to a sentinel that raises on attribute
+        # access so any path through the rest of run_main blows up
+        # visibly instead of silently passing.
+        forbidden = MagicMock()
+        forbidden.__getattr__ = MagicMock(
+            side_effect=AssertionError("uvicorn touched despite disable sentinel")
+        )
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", forbidden)
+
+        rc = sidecar.run_main()
+        assert rc == 0
+        # No pid/url files written.
+        assert not (tmp_data_dir / "ui.pid").exists()
+        assert not (tmp_data_dir / "ui.url").exists()
 
 
 class TestMaybeSpawnStaleCleanup:

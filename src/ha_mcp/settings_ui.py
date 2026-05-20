@@ -520,6 +520,11 @@ _SETTINGS_HTML = (
   </span>
   <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
 </div>
+<div id="sidecarStopRow" style="display:none; margin: 12px 0; text-align: right;">
+  <button class="restart-btn" id="stopSidecarBtn"
+          title="Stops this settings UI sidecar process and writes a disable sentinel so it won't respawn on next ha-mcp start. Delete ~/.ha-mcp/settings_ui_disabled to re-enable."
+  >Stop settings server</button>
+</div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
 <div id="groups"></div>
@@ -537,14 +542,50 @@ async function loadTools() {
   render();
   updateStatus('Loaded');
 
-  // Show restart button if running as add-on
+  // Show restart button if running as add-on; show Stop Sidecar
+  // button only when this page is served by the stdio sidecar
+  // (HTTP modes serve the same HTML but is_sidecar=false there, so
+  // clicking Stop wouldn't make sense — it would kill the MCP server).
   try {
     const infoResp = await fetch('./api/settings/info');
     const info = await infoResp.json();
     if (info.is_addon) {
       document.getElementById('restartBtn').style.display = '';
     }
+    if (info.is_sidecar) {
+      document.getElementById('sidecarStopRow').style.display = '';
+    }
   } catch (_e) {}
+}
+
+async function stopSidecar() {
+  const btn = document.getElementById('stopSidecarBtn');
+  if (!confirm(
+    'Stop the settings server?\n\n' +
+    'A "disabled" sentinel file will be written so the server does not ' +
+    'respawn the next time ha-mcp starts. To re-enable, delete the file ' +
+    'at ~/.ha-mcp/settings_ui_disabled (or unset HA_MCP_DISABLE_SETTINGS_UI).'
+  )) return;
+  btn.disabled = true;
+  btn.textContent = 'Stopping...';
+  try {
+    const resp = await fetch('./api/settings/shutdown', {method: 'POST'});
+    if (resp.ok) {
+      btn.textContent = 'Stopped — this page will go offline';
+    } else {
+      let msg = 'Stop failed';
+      try {
+        const err = await resp.json();
+        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
+      } catch (_e) {}
+      btn.textContent = msg;
+      btn.disabled = false;
+      alert(msg);
+    }
+  } catch (_e) {
+    // Connection drop is expected — the sidecar process is exiting.
+    btn.textContent = 'Stopped (connection dropped)';
+  }
 }
 
 async function restartAddon() {
@@ -809,6 +850,7 @@ document.getElementById('search').addEventListener('input', (e) => {
 });
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
+document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
 loadTools();
 </script>
 </body>
@@ -1031,9 +1073,12 @@ def build_settings_handlers(
     async def _settings_info(_: Request) -> JSONResponse:
         # Sidecar is never the add-on entrypoint regardless of inherited
         # SUPERVISOR_TOKEN — see docstring above for the broken-button
-        # rationale.
+        # rationale. ``is_sidecar`` flag drives the in-page Stop Sidecar
+        # button (HTML show/hide); it MUST NOT leak True for HTTP modes
+        # since stopping the FastMCP-mounted route would mean killing
+        # the MCP server itself.
         addon = False if is_sidecar else is_running_in_addon()
-        return JSONResponse({"is_addon": addon})
+        return JSONResponse({"is_addon": addon, "is_sidecar": is_sidecar})
 
     return {
         "root_page": _root_page,

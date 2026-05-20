@@ -643,14 +643,37 @@ def _maybe_spawn_settings_sidecar() -> None:
     dump uses a one-off ``asyncio.run`` because ``_get_tool_metadata``
     is async; this happens before the main stdio loop so there's no
     nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
-    """
-    import asyncio
 
+    Performance: the dump constructs the full FastMCP server, which is
+    heavy. Skip it (and the server build) when there's nothing to spawn
+    for — sidecar disabled or already alive. Warm restarts that already
+    have a sidecar pay zero cold-start tax from this path.
+    """
     from ha_mcp.settings_ui import (
         _get_tool_metadata,
         dump_tool_metadata_cache,
     )
-    from ha_mcp.stdio_settings_sidecar import maybe_spawn
+    from ha_mcp.stdio_settings_sidecar import (
+        _existing_sidecar_alive,
+        _is_disabled,
+        maybe_spawn,
+    )
+
+    # Cheap gates first; skip the heavy metadata dump when the sidecar
+    # would be a no-op anyway. Any condition that makes maybe_spawn()
+    # short-circuit also makes the dump pointless (the running sidecar
+    # already has a cache from a prior parent startup; a disabled
+    # sidecar never reads one).
+    if _is_disabled() or _existing_sidecar_alive():
+        try:
+            maybe_spawn()
+        except Exception as e:
+            logger.warning(
+                "Failed to invoke maybe_spawn no-op path (%s)",
+                type(e).__name__,
+                exc_info=True,
+            )
+        return
 
     try:
         metadata = asyncio.run(_get_tool_metadata(_get_server()))

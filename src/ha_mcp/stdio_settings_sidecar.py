@@ -57,10 +57,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Truthy values for the env-var kill switch. Mirrors the convention
-# used elsewhere in ha_mcp (e.g. coerce_bool_param) but inlined here
-# because this module is imported during early startup before the
-# tools subpackage is touched.
+# Truthy values for the env-var kill switch. Inlined rather than
+# importing from the tools subpackage because this module is loaded
+# during early stdio startup, before any tool code is touched.
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
@@ -222,14 +221,19 @@ def maybe_spawn() -> None:
     if sys.platform == "win32":
         # Detach from the parent console so closing the parent doesn't
         # take the child down with it. CREATE_NEW_PROCESS_GROUP also
-        # blocks the parent's CTRL_C_EVENT from propagating.
+        # prevents the parent's CTRL_C_EVENT (issued by the console
+        # window) from reaching the child process group.
         popen_kwargs["creationflags"] = (
             subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
             | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         )
     else:
         # New session leader → parent SIGTERM / shell exit doesn't
-        # cascade. Equivalent to a double-fork without the boilerplate.
+        # cascade. Detaches from the parent's session so SIGHUP /
+        # terminal close doesn't follow into the child. The full
+        # daemonize sequence (double-fork to drop the controlling TTY)
+        # isn't needed here since the parent stdio process already has
+        # no TTY to inherit.
         popen_kwargs["start_new_session"] = True
 
     cmd = [sys.executable, "-m", "ha_mcp.stdio_settings_sidecar"]
@@ -524,7 +528,6 @@ def run_main() -> int:
         port=port,
         log_level=log_level.lower(),
         access_log=False,
-        # Disable uvicorn's own signal handlers so our shutdown handler
     )
     server = uvicorn.Server(config)
 
