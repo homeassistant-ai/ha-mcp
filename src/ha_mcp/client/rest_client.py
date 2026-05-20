@@ -922,11 +922,18 @@ class HomeAssistantClient:
                 ) from e
             raise
 
+    # Cadence preserves the prior 3-attempt × 6s upper-bound budget while
+    # tightening the first poll to 0.1s. HA Core typically publishes a new
+    # automation entity to the state machine well under 1s, so the prior
+    # 1s/2s/3s shape spent most of its first-iteration budget waiting on the
+    # common case. Failure-path cost is unchanged (still 3 get_states() calls).
+    _POLL_CADENCE: tuple[float, ...] = (0.1, 1.0, 4.9)
+
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Poll HA state to find the entity_id assigned to a newly created automation."""
         try:
-            for attempt in range(3):
-                await asyncio.sleep(1 * (attempt + 1))
+            for sleep_time in self._POLL_CADENCE:
+                await asyncio.sleep(sleep_time)
                 states = await self.get_states()
                 for state in states:
                     if not state.get("entity_id", "").startswith("automation."):

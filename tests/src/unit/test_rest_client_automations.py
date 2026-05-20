@@ -137,3 +137,135 @@ class TestDeleteAutomationConfig:
         assert result["identifier"] == "direct_unique_id"
         assert result["unique_id"] == "direct_unique_id"
         assert result["operation"] == "deleted"
+
+
+class TestPollForAutomationEntity:
+    """Tests for the poll cadence in _poll_for_automation_entity (issue #1380)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock HomeAssistantClient for testing."""
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+            client.base_url = "http://test.local:8123"
+            client.token = "test-token"
+            client.timeout = 30
+            client.httpx_client = MagicMock()
+            return client
+
+    def test_poll_cadence_shape(self):
+        """Pin the cadence tuple. Mutation test: changing the tuple in
+        rest_client.py without updating this assertion fails CI."""
+        assert HomeAssistantClient._POLL_CADENCE == (0.1, 1.0, 4.9)
+        # 3 attempts preserves the original failure-path get_states() load.
+        assert len(HomeAssistantClient._POLL_CADENCE) == 3
+        # 6.0s upper bound preserves the original 1+2+3s budget on slow HA.
+        assert sum(HomeAssistantClient._POLL_CADENCE) == pytest.approx(6.0)
+        # First poll is sub-200ms so the happy path returns before the
+        # original 1.0s first-iteration burn.
+        assert HomeAssistantClient._POLL_CADENCE[0] <= 0.2
+
+    @pytest.mark.asyncio
+    async def test_poll_returns_entity_id_on_first_attempt(self, mock_client):
+        """When HA publishes the entity within the first 0.1s window, the
+        poll returns on iteration 1 and only sleeps once."""
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "automation.test_target",
+                    "attributes": {"id": "unique_42"},
+                }
+            ]
+        )
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(duration: float) -> None:
+            sleep_calls.append(duration)
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_42")
+
+        assert result == "automation.test_target"
+        assert sleep_calls == [0.1]
+        assert mock_client.get_states.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_poll_returns_none_on_full_miss(self, mock_client):
+        """When the entity never appears, the poll exhausts the cadence,
+        sleeps for the full 6s budget across 3 attempts, and returns None."""
+        mock_client.get_states = AsyncMock(return_value=[])
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(duration: float) -> None:
+            sleep_calls.append(duration)
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_42")
+
+        assert result is None
+        assert sleep_calls == [0.1, 1.0, 4.9]
+        assert mock_client.get_states.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_poll_returns_entity_id_on_later_attempt(self, mock_client):
+        """When HA publishes after the first poll, later iterations succeed
+        without sleeping for the full cadence."""
+        # First call returns no match, second call returns the match.
+        mock_client.get_states = AsyncMock(
+            side_effect=[
+                [],
+                [
+                    {
+                        "entity_id": "automation.slow_target",
+                        "attributes": {"id": "unique_99"},
+                    }
+                ],
+            ]
+        )
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(duration: float) -> None:
+            sleep_calls.append(duration)
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_99")
+
+        assert result == "automation.slow_target"
+        assert sleep_calls == [0.1, 1.0]
+        assert mock_client.get_states.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_poll_ignores_non_automation_entities(self, mock_client):
+        """States not starting with `automation.` are skipped so we don't
+        match a script/scene that happens to carry the same id attribute."""
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {"entity_id": "script.distractor", "attributes": {"id": "unique_42"}},
+                {
+                    "entity_id": "automation.actual",
+                    "attributes": {"id": "unique_42"},
+                },
+            ]
+        )
+
+        async def fake_sleep(duration: float) -> None:
+            return None
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_42")
+
+        assert result == "automation.actual"
+
+    @pytest.mark.asyncio
+    async def test_poll_swallows_get_states_exception(self, mock_client):
+        """A transient `get_states` failure must not propagate; the caller
+        gets None and the upsert path surfaces entity_not_verified=True."""
+        mock_client.get_states = AsyncMock(side_effect=RuntimeError("transient"))
+
+        async def fake_sleep(duration: float) -> None:
+            return None
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_42")
+
+        assert result is None
