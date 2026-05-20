@@ -1059,16 +1059,19 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ device_id('light.bedroom') }}               # Get device ID for entity
         ```
 
-        **Common Use Cases:**
+        **When NOT to use this for automation/script logic:**
+        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
+        debugging existing templates), but `condition:` / `trigger:` / action service
+        names are better expressed as native HA constructs — they validate at config
+        load, fail loudly, and avoid silent runtime failures. Prefer:
+        - `condition: numeric_state` over `{{ states('x') | float > N }}`
+        - `condition: state` over `{{ is_state(...) }}`
+        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
+        - Native `for:` field on state/numeric_state triggers and conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math
+        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
 
-        **Automation Conditions:**
-        ```jinja2
-        # Check if it's a workday and after 7 AM
-        {{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 }}
-
-        # Temperature-based condition
-        {{ states('sensor.outdoor_temp') | float < 0 }}
-        ```
+        **Common Use Cases (legitimate template positions):**
 
         **Dynamic Service Data:**
         ```jinja2
@@ -1086,7 +1089,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ha_eval_template("{{ states('light.living_room') }}")
         ```
 
-        **Test conditional logic:**
+        **Test a string expression (e.g. for a notification body):**
         ```python
         ha_eval_template("{{ 'Day' if now().hour < 18 else 'Night' }}")
         ```
@@ -1094,11 +1097,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Test mathematical operations:**
         ```python
         ha_eval_template("{{ (states('sensor.temperature') | float + 5) | round(1) }}")
-        ```
-
-        **Test complex automation condition:**
-        ```python
-        ha_eval_template("{{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 and states('sensor.temperature') | float > 20 }}")
         ```
 
         **Test entity counting:**
