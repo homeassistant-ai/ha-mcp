@@ -1,3 +1,4 @@
 [submodule "src/ha_mcp/resources/skills-vendor"]
 	path = src/ha_mcp/resources/skills-vendor
 	url = https://github.com/homeassistant-ai/skills.git
+	branch = main
