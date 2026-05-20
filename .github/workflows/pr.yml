@@ -52,6 +52,28 @@ jobs:
     - name: Run ruff check
       run: uv run ruff check src/ tests/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
 
+    - name: Run ruff format check on changed Python files
+      run: |
+        # Changed-files-only gate per the maintainer call on issue #1318:
+        # new edits must be formatted; pre-existing format-debt on
+        # untouched files stays grandfathered. Avoids the disruption of a
+        # repo-wide sweep while still preventing fresh debt from landing.
+        if [ -z "${GITHUB_BASE_REF}" ]; then
+          echo "No PR base ref (workflow_dispatch); skipping format check."
+          exit 0
+        fi
+        git fetch --depth=1 origin "${GITHUB_BASE_REF}"
+        base_sha=$(git rev-parse "origin/${GITHUB_BASE_REF}")
+        changed_py=$(git diff --name-only --diff-filter=ACMR "${base_sha}" -- '*.py')
+        if [ -z "$changed_py" ]; then
+          echo "No Python files changed; skipping ruff format check."
+          exit 0
+        fi
+        count=$(echo "$changed_py" | wc -l)
+        echo "Checking ruff format on $count changed Python files:"
+        echo "$changed_py" | sed 's/^/  /'
+        echo "$changed_py" | xargs uv run ruff format --check
+
   ast-grep:
     name: AST Lint
     runs-on: ubuntu-latest
