@@ -96,15 +96,24 @@ async def wait_for_entity_state(
         )
         return False
     except _WsPathUnavailable as e:
-        # WS unavailable — fall through to REST poll for the full timeout.
-        # The WS path didn't burn any of the budget on the failure path
-        # (raises immediately on handshake/subscribe failure).
-        logger.debug(
-            f"WS waiter unavailable for {entity_id}: {e!r}; using REST polling"
+        # WS unavailable — fall through to REST poll for the REMAINING
+        # budget. ``e.elapsed`` is the wall-clock the WS path already
+        # consumed; subtract it so total wait is bounded by ``timeout``.
+        # Logs the original cause's type so the debug trail distinguishes
+        # OSError (connection refused) from WebSocketException (mid-wait
+        # drop). Silent-failure-hunter, pr-test-analyzer findings (#1382).
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
         )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} after {e.elapsed:.2f}s "
+            f"({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0.0, float(timeout) - e.elapsed)
 
     rest_start = time.monotonic()
-    while time.monotonic() - rest_start < timeout:
+    while time.monotonic() - rest_start < rest_budget:
         try:
             result = await sample()
             if result is True:
@@ -292,12 +301,18 @@ async def wait_for_state_change(
         )
         return None
     except _WsPathUnavailable as e:
-        logger.debug(
-            f"WS waiter unavailable for {entity_id}: {e!r}; using REST polling"
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
         )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} after {e.elapsed:.2f}s "
+            f"({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0.0, float(timeout) - e.elapsed)
 
     rest_start = time.monotonic()
-    while time.monotonic() - rest_start < timeout:
+    while time.monotonic() - rest_start < rest_budget:
         try:
             current = await sample()
             if current is not None:
@@ -460,17 +475,24 @@ async def wait_for_entity_registration(
         )
         return False
     except _WsPathUnavailable as e:
-        logger.debug(
-            f"WS waiter unavailable for {entity_id} registration: {e!r}; "
-            "using REST polling"
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
         )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} registration after "
+            f"{e.elapsed:.2f}s ({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0, int(timeout - e.elapsed))
 
     # Fall back to the existing condition-based REST poll. Reset attempt
-    # counter so the legacy log lines start from 1 again.
+    # counter so the legacy log lines start from 1 again. ``rest_budget``
+    # is the REMAINING budget after the WS path's elapsed time, so total
+    # wall-clock stays bounded by the original ``timeout``.
     attempt_box["n"] = 0
     return await wait_for_condition(
         entity_exists,
-        timeout=timeout,
+        timeout=rest_budget,
         condition_name=f"{entity_id} registration",
     )
 
@@ -514,10 +536,39 @@ async def _open_ha_ws(ha_url: str | None = None, token: str | None = None):
 
 class _WsPathUnavailable(Exception):
     """Signal from ``_ws_wait_for_predicate`` that the WS path can't be set
-    up (handshake/auth/subscribe failed). Callers catch this and fall back
-    to REST polling without burning the full timeout on a known-broken WS
-    path. Pure timeouts return ``None`` instead — those did consume the
-    budget on the WS side, so the caller treats them as terminal."""
+    up (handshake/subscribe failed) OR died mid-wait. Callers catch this
+    and fall back to REST polling. Pure timeouts return ``None`` instead —
+    those did consume the budget on the WS side, so the caller treats them
+    as terminal.
+
+    ``elapsed`` carries the seconds already spent on the WS path before
+    the failure, so the caller can deduct it from the REST timeout and
+    cap the total wall-clock at the original ``timeout``. Without this,
+    a mid-wait WS drop after N seconds would let the REST fallback run
+    for another full ``timeout`` — silent-failure-hunter / pr-test-analyzer
+    finding (#1382 final review).
+    """
+
+    def __init__(self, message: str, *, elapsed: float = 0.0):
+        super().__init__(message)
+        self.elapsed = elapsed
+
+
+# Narrower sample-callable catch tuple — same shape as
+# ``_POLLING_TRANSIENT_ERRORS`` minus ``RuntimeError``. ``RuntimeError`` is
+# the one Python exception codebases routinely overload for both transport
+# and logic failures; swallowing it in a polling loop hides legitimate
+# sample-callable bugs. Used INSIDE ``_ws_wait_for_predicate`` around
+# ``sample()`` invocations only; the broader tuple still applies to the
+# REST-fallback polling loops in the public helpers (pre-existing
+# behaviour preserved there).
+_SAMPLE_TRANSIENT_ERRORS = (
+    McpError,
+    FastMCPError,
+    ClientError,
+    OSError,
+    TimeoutError,
+)
 
 
 async def _ws_wait_for_predicate(
@@ -557,19 +608,32 @@ async def _ws_wait_for_predicate(
         ``sample``'s truthy return on success, ``None`` on timeout.
 
     Raises:
-        _WsPathUnavailable: WS handshake / auth / subscribe failed. Caller
-            should fall back to REST polling.
+        _WsPathUnavailable: WS handshake / subscribe failed, or transport
+            died mid-wait. Caller should fall back to REST polling, using
+            ``e.elapsed`` to deduct WS-side time spent.
+
+        Pre-existing ``RuntimeError`` from ``_open_ha_ws`` (missing URL /
+        token / bad auth / malformed handshake) PROPAGATES — those are
+        config-level failures the test rig should see as a loud
+        traceback, not a silent REST fallback against the same broken
+        creds (silent-failure-hunter finding, #1382 final review).
     """
+    start = time.monotonic()
+    # ``_open_ha_ws`` raises ``RuntimeError`` on auth/config issues —
+    # intentionally NOT caught here so a misconfigured test rig fails
+    # loudly. Only transport-level exceptions degrade to REST.
     try:
         ws = await _open_ha_ws(ha_url=ha_url, token=token)
     except (
         websockets.exceptions.WebSocketException,
         OSError,
-        RuntimeError,
         json.JSONDecodeError,
     ) as e:
-        logger.debug(f"WS waiter handshake unavailable for {entity_id}: {e!r}")
-        raise _WsPathUnavailable(str(e)) from e
+        logger.debug(
+            f"WS waiter handshake unavailable for {entity_id}: "
+            f"{type(e).__name__}: {e!r}"
+        )
+        raise _WsPathUnavailable(str(e), elapsed=0.0) from e
 
     try:
         # Subscribe to every requested event_type BEFORE sampling. This
@@ -587,14 +651,17 @@ async def _ws_wait_for_predicate(
                 logger.debug(
                     f"subscribe_events({et!r}) failed for {entity_id}: {sub_result!r}"
                 )
-                raise _WsPathUnavailable(f"subscribe_events({et}) failed")
+                raise _WsPathUnavailable(
+                    f"subscribe_events({et}) failed",
+                    elapsed=time.monotonic() - start,
+                )
 
         # Sample-after-subscribe: most happy-path waits resolve here.
         try:
             result = await sample()
             if result is not None:
                 return result
-        except _POLLING_TRANSIENT_ERRORS as e:
+        except _SAMPLE_TRANSIENT_ERRORS as e:
             logger.debug(f"sample raised transient for {entity_id}: {e!r}")
 
         deadline = time.monotonic() + timeout
@@ -612,7 +679,7 @@ async def _ws_wait_for_predicate(
                     result = await sample()
                     if result is not None:
                         return result
-                except _POLLING_TRANSIENT_ERRORS as e:
+                except _SAMPLE_TRANSIENT_ERRORS as e:
                     logger.debug(
                         f"backstop sample raised transient for {entity_id}: {e!r}"
                     )
@@ -637,7 +704,7 @@ async def _ws_wait_for_predicate(
                 result = await sample()
                 if result is not None:
                     return result
-            except _POLLING_TRANSIENT_ERRORS as e:
+            except _SAMPLE_TRANSIENT_ERRORS as e:
                 logger.debug(
                     f"post-event sample raised transient for {entity_id}: {e!r}"
                 )
@@ -647,9 +714,14 @@ async def _ws_wait_for_predicate(
         # Transport died mid-wait. Signal unavailable so the caller can
         # complete via REST. ``json.JSONDecodeError`` on a single frame
         # is handled per-iteration above; we only reach here on connection
-        # failure.
-        logger.debug(f"WS waiter transport error mid-wait for {entity_id}: {e!r}")
-        raise _WsPathUnavailable(str(e)) from e
+        # failure. Include elapsed so the REST fallback gets a budget
+        # deduction (caps total wall-clock at the original ``timeout``).
+        elapsed = time.monotonic() - start
+        logger.debug(
+            f"WS waiter transport error mid-wait for {entity_id} "
+            f"after {elapsed:.2f}s: {type(e).__name__}: {e!r}"
+        )
+        raise _WsPathUnavailable(str(e), elapsed=elapsed) from e
     finally:
         try:
             await ws.close()
