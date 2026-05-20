@@ -255,7 +255,9 @@ class TestSecurityMiddleware:
             headers={"host": "127.0.0.1:12345"},
         )
         assert resp.status_code == 200
-        assert resp.json() == {"is_addon": False}
+        # is_sidecar=True because _build_app passes is_sidecar=True to
+        # build_settings_handlers; covered separately in TestSidecarSettingsInfo.
+        assert resp.json() == {"is_addon": False, "is_sidecar": True}
 
     def test_post_origin_rejected(self, tmp_data_dir: Path) -> None:
         app = sidecar._build_app(
@@ -398,18 +400,26 @@ class TestRunMainWiring:
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "settings_ui_disabled").write_text("manual\n")
-        # If uvicorn is imported the disable path wasn't honored. Set
-        # sys.modules["uvicorn"] to a sentinel that raises on attribute
-        # access so any path through the rest of run_main blows up
-        # visibly instead of silently passing.
-        forbidden = MagicMock()
-        forbidden.__getattr__ = MagicMock(
-            side_effect=AssertionError("uvicorn touched despite disable sentinel")
-        )
-        monkeypatch.setitem(__import__("sys").modules, "uvicorn", forbidden)
+        # Track whether uvicorn was touched — the disable check happens
+        # BEFORE the ``import uvicorn`` line inside run_main, so a
+        # honored sentinel must return cleanly without any uvicorn
+        # attribute access. Use a tracking proxy rather than MagicMock's
+        # restricted __getattr__ override (Python forbids setting magic
+        # methods on a MagicMock instance).
+        class _TrackingProxy:
+            touched = False
+
+            def __getattr__(self, name: str) -> object:
+                _TrackingProxy.touched = True
+                raise AssertionError(
+                    f"uvicorn.{name} accessed despite disable sentinel"
+                )
+
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", _TrackingProxy())
 
         rc = sidecar.run_main()
         assert rc == 0
+        assert _TrackingProxy.touched is False
         # No pid/url files written.
         assert not (tmp_data_dir / "ui.pid").exists()
         assert not (tmp_data_dir / "ui.url").exists()
