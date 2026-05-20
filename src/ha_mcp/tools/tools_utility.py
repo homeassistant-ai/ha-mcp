@@ -1026,13 +1026,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ now().weekday() }}                          # Day of week (0=Monday)
         ```
 
-        **Conditional Logic:**
+        **Conditional Logic (for display strings — not for `condition:` positions):**
         ```jinja2
         {{ 'Day' if now().hour < 18 else 'Night' }}    # Ternary operator
-        {% if is_state('sun.sun', 'above_horizon') %}
-          It's daytime
+        {% if is_state('alarm_control_panel.home', 'armed_away') %}
+          Alarm is armed
         {% else %}
-          It's nighttime
+          Alarm is disarmed
         {% endif %}
         ```
 
@@ -1061,14 +1061,16 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **When NOT to use this for automation/script logic:**
         Templates have legitimate uses (notification bodies, dynamic `data.*` values,
-        debugging existing templates), but `condition:` / `trigger:` / action service
-        names are better expressed as native HA constructs — they validate at config
-        load, fail loudly, and avoid silent runtime failures. Prefer:
+        debugging existing templates), but `condition:` / `trigger:` positions and
+        action service names are better expressed as native HA constructs — they
+        validate at config load, fail loudly, and avoid silent runtime failures.
+        Prefer:
         - `condition: numeric_state` over `{{ states('x') | float > N }}`
         - `condition: state` over `{{ is_state(...) }}`
         - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
         - Native `for:` field on state/numeric_state triggers and conditions over
           `{{ now() - X.last_changed > timedelta(...) }}` duration math
+        - `choose` action over templated `service:` / `action:` strings
         See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
 
         **Common Use Cases (legitimate template positions):**
