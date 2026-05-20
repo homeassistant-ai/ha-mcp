@@ -1127,6 +1127,72 @@ class HomeAssistantClient:
             "DELETE", f"/config/config_entries/options/flow/{flow_id}"
         )
 
+    async def start_config_subentry_flow(
+        self,
+        entry_id: str,
+        subentry_type: str,
+        *,
+        subentry_id: str | None = None,
+        show_advanced_options: bool | None = None,
+    ) -> dict[str, Any]:
+        """Start a config subentry create or reconfigure flow."""
+        payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
+        if subentry_id is not None:
+            payload["subentry_id"] = subentry_id
+        if show_advanced_options is not None:
+            payload["show_advanced_options"] = show_advanced_options
+
+        logger.debug(
+            "Starting config subentry flow for entry %s and type %s",
+            entry_id,
+            subentry_type,
+        )
+        return await self._request(
+            "POST",
+            "/config/config_entries/subentries/flow",
+            json=payload,
+        )
+
+    async def submit_config_subentry_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Submit data for a config subentry flow step."""
+        logger.debug("Submitting config subentry flow step for flow_id: %s", flow_id)
+        return await self._request(
+            "POST",
+            f"/config/config_entries/subentries/flow/{flow_id}",
+            json=user_input,
+        )
+
+    async def abort_config_subentry_flow(self, flow_id: str) -> dict[str, Any]:
+        """Abort an in-progress config subentry flow."""
+        logger.debug("Aborting config subentry flow: %s", flow_id)
+        return await self._request(
+            "DELETE", f"/config/config_entries/subentries/flow/{flow_id}"
+        )
+
+    async def list_config_subentries(self, entry_id: str) -> dict[str, Any]:
+        """List subentries for a config entry."""
+        logger.debug("Listing config subentries for entry: %s", entry_id)
+        return await self.send_websocket_message(
+            {"type": "config_entries/subentries/list", "entry_id": entry_id}
+        )
+
+    async def delete_config_subentry(
+        self,
+        entry_id: str,
+        subentry_id: str,
+    ) -> dict[str, Any]:
+        """Delete a config subentry."""
+        logger.debug("Deleting config subentry %s for entry %s", subentry_id, entry_id)
+        return await self.send_websocket_message(
+            {
+                "type": "config_entries/subentries/delete",
+                "entry_id": entry_id,
+                "subentry_id": subentry_id,
+            }
+        )
+
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
         Get config entry details.

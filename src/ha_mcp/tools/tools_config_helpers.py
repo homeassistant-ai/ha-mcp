@@ -27,6 +27,7 @@ from .tools_config_entry_flow import (
     create_flow_helper,
     fetch_helper_flow_info,
     get_user_step_field_names,
+    set_config_subentry,
     update_flow_helper,
 )
 from .util_helpers import (
@@ -1978,6 +1979,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         helper_type: Annotated[
             Literal[
                 "counter",
+                "config_subentry",
                 "derivative",
                 "filter",
                 "generic_hygrostat",
@@ -2028,6 +2030,46 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Parent config entry ID when helper_type='config_subentry'. "
+                    "Use ha_get_integration() to find entry IDs."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Integration-defined subentry type when "
+                    "helper_type='config_subentry'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Existing config subentry ID to reconfigure when "
+                    "helper_type='config_subentry'. Omit to create."
+                ),
+                default=None,
+            ),
+        ] = None,
+        show_advanced_options: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "When helper_type='config_subentry', ask Home Assistant "
+                    "to expose advanced flow options."
+                ),
+                default=False,
+            ),
+        ] = False,
         icon: Annotated[
             str | None,
             Field(
@@ -2334,6 +2376,84 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         with worked examples and a decision matrix.
         """
         try:
+            if helper_type == "config_subentry":
+                if action is not None:
+                    if action == "create" and subentry_id is not None:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                "action='create' was passed with subentry_id. "
+                                "Omit subentry_id to create a new subentry.",
+                                context={
+                                    "helper_type": helper_type,
+                                    "action": action,
+                                    "subentry_id": subentry_id,
+                                },
+                            )
+                        )
+                    if action == "update" and subentry_id is None:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                "action='update' requires subentry_id.",
+                                context={
+                                    "helper_type": helper_type,
+                                    "action": action,
+                                },
+                            )
+                        )
+                else:
+                    action = "update" if subentry_id else "create"
+
+                entry_id = validate_identifier_not_empty(
+                    entry_id,
+                    "entry_id",
+                    suggestions=[
+                        "Use ha_get_integration() to find the parent config entry ID",
+                    ],
+                    context={"helper_type": helper_type, "action": action},
+                )
+                subentry_type = validate_identifier_not_empty(
+                    subentry_type,
+                    "subentry_type",
+                    suggestions=[
+                        "Use ha_get_integration(entry_id=..., "
+                        "include_subentries=True, include_subentry_schema=True) "
+                        "to inspect available subentry metadata.",
+                    ],
+                    context={"helper_type": helper_type, "action": action},
+                )
+                if subentry_id is not None:
+                    subentry_id = validate_identifier_not_empty(
+                        subentry_id,
+                        "subentry_id",
+                        context={"helper_type": helper_type, "action": action},
+                    )
+                if not isinstance(config, dict):
+                    config_dict = parse_json_param(config, "config") if config else {}
+                else:
+                    config_dict = config
+                if not isinstance(config_dict, dict):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "config must be an object for config_subentry",
+                            context={"helper_type": helper_type, "action": action},
+                        )
+                    )
+                return await set_config_subentry(
+                    client,
+                    entry_id,
+                    subentry_type,
+                    config_dict,
+                    subentry_id=subentry_id,
+                    show_advanced_options=coerce_bool_param(
+                        show_advanced_options,
+                        "show_advanced_options",
+                        default=False,
+                    ),
+                )
+
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
             # if an exception bubbles out of the flow-helper branch below.
