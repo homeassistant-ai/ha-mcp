@@ -308,6 +308,37 @@ class TestYamlConfigOperations:
             assert inner.get("action") == "add"
             logger.info("Successfully added template to new package file")
 
+    async def test_add_knx_to_package_file(self, mcp_client_with_yaml_config):
+        """knx is in ALLOWED_YAML_KEYS and can be edited in package files (issue #1367)."""
+
+        # Minimal valid knx YAML — a sensor reading from a group address.
+        content = (
+            "sensor:\n"
+            "  - name: E2E KNX Test Sensor\n"
+            "    state_address: '1/2/3'\n"
+            "    type: temperature\n"
+        )
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "knx",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_test_knx.yaml",
+                    "backup": False,
+                },
+            )
+            inner = data
+            assert inner.get("success") is True, f"knx add should succeed: {data}"
+            assert inner.get("action") == "add"
+            # knx is not in YAML_KEY_POST_ACTIONS, so it defaults to restart_required.
+            assert inner.get("post_action") == "restart_required", (
+                f"knx should default to post_action=restart_required: {data}"
+            )
+            logger.info("Successfully added knx to package file")
+
     async def test_replace_key(self, mcp_client_with_yaml_config):
         """Replace overwrites the key content."""
 

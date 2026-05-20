@@ -452,7 +452,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         ),
         "ha_config_set_yaml": (
             "edit yaml configuration.yaml packages template sensor "
-            "binary_sensor command_line rest mqtt platform yaml-only "
+            "binary_sensor command_line rest mqtt knx platform yaml-only "
             "config file modify add remove replace"
         ),
         "ha_manage_addon": (
@@ -608,7 +608,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "ha_config_set_script, ha_config_set_scene, "
             "ha_config_set_helper) cover almost every use case and "
             "should be preferred. Use this only for YAML-only "
-            "integrations (command_line, rest, shell_command, notify) "
+            "integrations (command_line, rest, shell_command, notify), "
+            "YAML-heavy integrations like knx (in packages/*.yaml), "
             "or registering YAML-mode dashboards via "
             "`lovelace.dashboards.<url_path>`. Most edits require a "
             "full HA restart; template, mqtt, and group support "

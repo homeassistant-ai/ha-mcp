@@ -26,7 +26,7 @@ configuration:
       Beta feature — disabled by default. Allows AI assistants to add,
       replace, or remove top-level keys in configuration.yaml and
       packages/*.yaml. Only whitelisted keys are allowed (e.g., template,
-      sensor, command_line, mqtt); core keys like homeassistant, http,
+      sensor, command_line, mqtt, knx); core keys like homeassistant, http,
       and recorder are blocked. Each edit validates YAML syntax, runs a
       config check, and creates an automatic backup. Changes to most keys
       require a full HA restart to take effect. See docs/beta.md for known

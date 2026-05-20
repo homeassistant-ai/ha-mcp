@@ -92,34 +92,59 @@ class Addon:
     start: bool = True
 
 
-# v1 addon set — see #1281 comment thread for rationale. Configuring each
-# addon with real options (certs, serial coordinators, camera streams,
-# etc.) is deferred to follow-up commits; v1 just bakes them into the image
-# so tests can install + start with custom configs at runtime.
+# HAOS addon set — chosen for minimum image size while covering every
+# ``ha_manage_addon`` access shape exercised by the E2E tier (closes
+# #1350). Each entry below names the unique shape it contributes; if a
+# new addon doesn't add a shape that no other entry covers, it does not
+# belong here.
 #
-# Frigate stays in: it's the only one of the v1 set with the
-# ingress + ingress_panel=false + webui-set + full_access shape that
-# ha_manage_addon needs coverage for. Cost is real (~2 GB qcow2 footprint,
-# ~80s install, extra Docker registry dependency), but the testing surface
-# it covers isn't available from the other addons.
+# Shape coverage matrix:
+#   ┌──────────────────────┬────────────────────────────────────────────────┐
+#   │ Addon                │ Unique shape contribution                       │
+#   ├──────────────────────┼────────────────────────────────────────────────┤
+#   │ Mosquitto broker     │ core repo, ingress=false service, start-fail   │
+#   │ Node-RED             │ ingress=true + ingress_panel=true + manager    │
+#   │                      │ role + nested schema + /flows array-patch      │
+#   │ ESPHome Device       │ ingress=true + UART + discovery hint +         │
+#   │   Builder            │ WebSocket proxy (/compile, /validate)          │
+#   │ Matter Server        │ ingress=true + ingress_panel=false (hidden     │
+#   │                      │ sidebar) + host_dbus — core repo, ~50 MB,      │
+#   │                      │ replaces Frigate's ~2 GB hidden-panel coverage │
+#   │ AppDaemon            │ ingress=false + webui set (port-based UI       │
+#   │                      │ without Ingress)                               │
+#   │ MQTT IO              │ privileged block + start-fail (no broker       │
+#   │                      │ configured) — replaces Z2M's start-fail        │
+#   │                      │ coverage at a fraction of the size             │
+#   └──────────────────────┴────────────────────────────────────────────────┘
+#
+# Dropped vs the original #1281 set: Frigate (~2 GB) and Zigbee2MQTT (~220
+# MB compressed). Their shapes are covered by Matter Server, AppDaemon,
+# and MQTT IO at ~120 MB total — net savings ~2 GB after extraction.
 #
 # start=False addons fail to start without config and would block the build:
 #   - Mosquitto: schema requires require_certificate + cert paths
-#   - Z2M: needs a real or mocked serial coordinator
-#   - Frigate: needs at least one camera defined
+#   - MQTT IO: needs a configured MQTT broker connection
 ADDONS: tuple[Addon, ...] = (
     Addon(repo=None, name="Mosquitto broker", start=False),
     Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
     # Official ESPHome repo addon is named "ESPHome Device Builder"; match by
     # the unique part of the name so dev/beta variants don't shadow stable.
     Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome Device Builder"),
-    Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt",
-          name="Zigbee2MQTT", start=False),
-    # Frigate repo ships "Frigate", "Frigate (Full Access)", "Frigate Beta",
-    # "Frigate (Full Access) Beta" — plain "Frigate" is enough for the canary;
-    # full-access variant only needed if tests need to mount camera devices.
-    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons",
-          name="Frigate", start=False),
+    # Matter Server is in the official ``core`` repo (no repo URL needed) and
+    # is one of the very few addons that ship with ``ingress_panel=false``,
+    # which is the canonical "hidden sidebar" shape that ``ha_get_addon``
+    # detail needs coverage for.
+    Addon(repo=None, name="Matter Server"),
+    # AppDaemon contributes the ``ingress=false`` + ``webui`` shape: a port-
+    # based UI advertised through the Supervisor ``webui`` field rather than
+    # Ingress. The wire contract for ``ha_get_addon`` reading ``webui`` and
+    # rendering it as a clickable URL is otherwise uncovered.
+    Addon(repo="https://github.com/hassio-addons/repository", name="AppDaemon"),
+    # MQTT IO replaces Zigbee2MQTT for start-fail coverage. Its schema
+    # requires a configured MQTT broker; with no broker the addon refuses
+    # to start, exercising the same Supervisor reject path Z2M used to.
+    Addon(repo="https://github.com/hassio-addons/repository",
+          name="MQTT IO", start=False),
 )
 
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
