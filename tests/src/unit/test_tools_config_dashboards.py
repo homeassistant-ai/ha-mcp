@@ -8,16 +8,19 @@ the right HA-version axis; these unit tests pin the contract independent
 of HA wording stability.
 """
 
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import (
     _LAZY_RESOLVE_TRIGGER,
     _lazy_resolve_and_retry,
     _resolve_dashboard,
     _should_lazy_resolve,
+    register_config_dashboard_tools,
 )
 
 # -----------------------------------------------------------------------------
@@ -265,3 +268,82 @@ class TestLazyResolveAndRetry:
         retry_call = fake_client.send_websocket_message.call_args_list[1]
         assert retry_call.args[0]["url_path"] == "my-dash"
         assert retry_call.args[0]["type"] == "lovelace/config"
+
+
+class TestDeleteDashboardNotFoundShape:
+    """Pin the 404 response shape from ``ha_config_delete_dashboard`` when
+    ``_resolve_dashboard`` returns None (issue #1300).
+
+    The four config tool families (automations / scripts / scenes / dashboards)
+    had divergent top-level keys on 404 responses. Dashboards was the last
+    file still routing through ``create_resource_not_found_error``, which
+    hard-codes ``resource_type`` + ``identifier``. The fix routes through
+    ``create_error_response(RESOURCE_NOT_FOUND, …)`` directly with
+    ``context={"action": "delete", "url_path": url_path}``, matching the
+    sibling shape on this function's own success path (which already returns
+    ``action`` + ``url_path`` on the idempotent already-deleted branch).
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def delete_tool(self, mock_mcp, mock_client):
+        register_config_dashboard_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_delete_dashboard"]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_url_path_raises_resource_not_found(
+        self, delete_tool, mock_client
+    ):
+        """When _resolve_dashboard finds no match (empty registry), the tool
+        raises a ToolError carrying the canonical RESOURCE_NOT_FOUND shape
+        with top-level ``action`` and ``url_path`` matching the success
+        path on the same function (lines 1564-1569 in tools_config_dashboards.py).
+        """
+        # Empty dashboards list → _resolve_dashboard returns None.
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="ghost-dash")
+
+        body = json.loads(str(exc_info.value))
+
+        # Error code lives at error.code (canonical builder shape).
+        assert body["success"] is False
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "ghost-dash" in body["error"]["message"]
+
+        # Top-level shape mirrors the idempotent already-deleted success
+        # branch at L1564-1569: action="delete" + url_path=<input>.
+        assert body["action"] == "delete"
+        assert body["url_path"] == "ghost-dash"
+
+        # The pre-#1300 hard-coded resource_type / identifier from
+        # create_resource_not_found_error are intentionally dropped — those
+        # keys were the source of the cross-family shape divergence. Drop
+        # this assertion if a future PR re-introduces them via a context-aware
+        # builder helper (the issue body's Option C path).
+        assert "resource_type" not in body
+        assert "identifier" not in body

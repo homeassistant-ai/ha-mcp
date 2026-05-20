@@ -12,7 +12,7 @@ from typing import Annotated, Any, cast, overload
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
+from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
@@ -1533,13 +1533,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             resolved, _ = await _resolve_dashboard(client, url_path)
             if resolved is None:
                 raise_tool_error(
-                    create_resource_not_found_error(
-                        "Dashboard",
-                        url_path,
-                        details=(
-                            f"No dashboard found with URL path or internal ID '{url_path}'. "
-                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards."
-                        ),
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Dashboard '{url_path}' not found",
+                        details=f"No dashboard found with URL path or internal ID '{url_path}'.",
+                        suggestions=[
+                            "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
+                        ],
+                        context={"action": "delete", "url_path": url_path},
                     )
                 )
             resolved_id = resolved["id"]
