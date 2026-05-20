@@ -114,17 +114,13 @@ class TestUnknownConfigSpecifiedClassification:
 
 
 class TestClassifyByMessageBranches:
-    """One regression test per branch in ``_classify_by_message`` that wasn't
-    already pinned by ``TestUnknownConfigSpecifiedClassification`` above,
-    ``test_tool_error_signaling.py::TestErrorCodeMapping`` (timeout/connection
-    typed-dispatch), or
-    ``test_tool_error_signaling.py::TestSchemaAndAuthClassification``
-    (schema markers + auth phrases). Closes the branch-coverage gap so that
-    a future reordering, substring rename, or missed elif case is caught
-    against the classifier directly, not via whichever tool happens to
-    exercise it.
+    """Mutation-test coverage for every elif branch of ``_classify_by_message``
+    (``src/ha_mcp/tools/helpers.py:258-327``). Each test exercises exactly
+    one branch so reordering arms, renaming a substring, or dropping an elif
+    is caught against the classifier directly — not via whichever tool
+    happens to surface the branch through an integration path.
 
-    Six branches covered here (helpers.py:258-327 at HEAD):
+    Seven branches covered here:
 
     1. Plain ``"not found"`` substring without ``unknown config specified``
        and without ``entity_id`` context → ``RESOURCE_NOT_FOUND``
@@ -132,12 +128,24 @@ class TestClassifyByMessageBranches:
     3. Plain ``"not found"`` WITH ``entity_id`` context → ``ENTITY_NOT_FOUND``
        (symmetric case to
        ``test_unknown_config_specified_with_entity_id_context_promotes_to_entity_not_found``)
-    4. ``"timeout" in error_str`` message-substring path → ``TIMEOUT_OPERATION``
+    4. ``"timeout"`` message-substring path → ``TIMEOUT_OPERATION``
        (separately from the typed ``TimeoutError`` dispatch in
        ``_classify_exception``)
-    5. ``command failed:`` SERVICE_CALL_FAILED fallback (no schema markers,
+    5. ``"connection"``/``"connect"`` message-substring path →
+       ``CONNECTION_FAILED`` (separately from the typed
+       ``HomeAssistantConnectionError`` dispatch). Also indirectly pinned
+       at ``test_tool_error_signaling.py:229`` via plain
+       ``Exception("Connection refused")`` falling through to
+       ``_classify_by_message`` — duplicate-covered here for self-contained
+       mutation coverage in this class.
+    6. ``command failed:`` SERVICE_CALL_FAILED fallback (no schema markers,
        no ``expected <type>`` regex hit)
-    6. Final ``else`` → ``INTERNAL_ERROR``
+    7. Final ``else`` → ``INTERNAL_ERROR``
+
+    Schema markers + auth phrases (the two remaining branches of
+    ``_classify_by_message``) are mutation-grade covered in
+    ``test_tool_error_signaling.py::TestSchemaAndAuthClassification`` —
+    not duplicated here.
     """
 
     @pytest.mark.parametrize(
@@ -152,12 +160,16 @@ class TestClassifyByMessageBranches:
             #    the typed TimeoutError case in _classify_exception is
             #    bypassed and routing falls into _classify_by_message.
             ("request timeout after 30s", "TIMEOUT_OPERATION"),
-            # 5. command failed: fallback (no schema markers, no
+            # 5. Message-substring connection path. Plain Exception again
+            #    so the typed HomeAssistantConnectionError dispatch in
+            #    _classify_exception is bypassed.
+            ("connection refused", "CONNECTION_FAILED"),
+            # 6. command failed: fallback (no schema markers, no
             #    "expected <type>" regex, not auth, not 404) →
             #    SERVICE_CALL_FAILED. Mirrors the 4xx fallback in
             #    _classify_api_status.
             ("command failed: websocket dispatch error", "SERVICE_CALL_FAILED"),
-            # 6. Final else: an unmapped message reaches the catch-all
+            # 7. Final else: an unmapped message reaches the catch-all
             #    INTERNAL_ERROR sink, not a different bucket via accidental
             #    substring overlap.
             ("totally unexpected gibberish", "INTERNAL_ERROR"),
@@ -166,6 +178,7 @@ class TestClassifyByMessageBranches:
             "plain_not_found",
             "plain_404",
             "timeout_substring",
+            "connection_substring",
             "command_failed_fallback",
             "else_internal_error",
         ],
