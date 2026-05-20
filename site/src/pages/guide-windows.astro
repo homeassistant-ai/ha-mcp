@@ -175,6 +175,19 @@ const withBase = (path: string) => {
         </div>
       </section>
 
+      <!-- Tip -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">💡</span>
+          <h2 class="text-xl font-semibold text-white">Tip: Changing Which MCP Tools Are Enabled</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">ha-mcp ships a small localhost settings page where you can enable, disable, and pin individual MCP tools (handy if you find Claude reaching for tools you'd rather it didn't, or want to surface a niche tool you use often).</p>
+          <p class="text-slate-300 mb-2">The easiest way to find the URL: ask Claude something like <em>"how do I change which MCP tools are enabled?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>.</p>
+          <p class="text-slate-400 text-sm">The page is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path. See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for how to disable the settings server if you don't want it.</p>
+        </div>
+      </section>
+
       <!-- Step 7 -->
       <section class="guide-step">
         <div class="step-header">
