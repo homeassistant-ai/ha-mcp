@@ -66,6 +66,13 @@ jobs:
         # the bake stages into /config. git ls-tree uses object IDs so the
         # hash is reproducible across runs (no mtime noise like `find`
         # would have).
+        #
+        # INVARIANT — these paths MUST be mirrored by the master-push trigger
+        # in build-haos-test-image.yml. If a path is hashed here but missing
+        # there, a master commit changing it can leave GHCR stale, and every
+        # subsequent PR that doesn't itself touch a bake input pulls the
+        # outdated image. (Regression history: #1374 knx merge broke every
+        # open PR's HAOS E2E run until a manual dispatch.)
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
