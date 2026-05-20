@@ -27,6 +27,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from tests.src.e2e.utilities import wait_helpers
 from tests.src.e2e.utilities.wait_helpers import (
     _WsPathUnavailable,
