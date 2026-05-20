@@ -265,7 +265,14 @@ class TestPollForAutomationEntity:
         failure class for a polling-side ``get_states`` blip is an API error
         from the REST client, not a bare ``RuntimeError``. Matches the
         established sibling pattern in ``test_wait_helpers.py:54`` and
-        ``:88``."""
+        ``:88``.
+
+        Pins ``call_count == 1`` to lock in the early-exit semantics: the
+        ``try`` at ``rest_client.py:934`` wraps the entire ``for`` loop, so a
+        transient on iteration 1 hits the ``except HomeAssistantError`` clause
+        and exits without re-entering the cadence. A future refactor moving
+        the ``try`` inside the loop (so transients retry until cadence
+        exhaustion) would fail this assertion loudly."""
         mock_client.get_states = AsyncMock(
             side_effect=HomeAssistantAPIError("transient")
         )
@@ -277,3 +284,4 @@ class TestPollForAutomationEntity:
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result is None
+        assert mock_client.get_states.call_count == 1
