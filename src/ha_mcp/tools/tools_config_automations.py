@@ -457,6 +457,8 @@ class AutomationConfigTools:
           `{{ states(x) in [...] }}`
         - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
         - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
+        - Native `for:` field on `state`/`numeric_state` triggers and conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
         - `wait_for_trigger` instead of `wait_template`
         - `choose` action instead of template-based service names
         - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a
@@ -518,17 +520,25 @@ class AutomationConfigTools:
             "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
 
-        Motion-activated lighting with condition:
+        Motion-activated lighting — `for:` on the off-transition replaces action-delay:
         ha_config_set_automation(config={
             "alias": "Motion Light",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
-            "condition": [{"condition": "sun", "after": "sunset"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
-                {"delay": {"minutes": 5}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "off",
+                 "for": {"minutes": 5}, "id": "motion_off"}
             ],
-            "mode": "restart"
+            "action": [
+                {"choose": [
+                    {"conditions": [
+                        {"condition": "trigger", "id": "motion_on"},
+                        {"condition": "sun", "after": "sunset"}
+                    ],
+                     "sequence": [{"service": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
+                    {"conditions": [{"condition": "trigger", "id": "motion_off"}],
+                     "sequence": [{"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
+                ]}
+            ]
         })
 
         Update existing automation:
