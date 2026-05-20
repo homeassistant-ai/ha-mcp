@@ -31,21 +31,52 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
-# Ports the host uses to reach the booted HAOS. The base URL we build from
-# these (http://127.0.0.1:<HA_HOST_PORT>) must equal the URL registered as
-# /auth/token's client_id at onboarding time — otherwise the token exchange
-# rejects with "invalid_request".
-HA_HOST_PORT = int(os.environ.get("HAOS_TEST_HA_PORT", "18123"))
-SSH_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_PORT", "12222"))
-# Inaddon MCP-tier port forward — addon's HTTP MCP endpoint runs at 9583
-# inside HAOS (host_network: true → host port = addon port). Hostfwd to a
-# unique outer port so external-tier 18123 and inaddon-tier 19583 can
-# coexist if both run on the same runner.
-HA_MCP_ADDON_HOST_PORT = int(os.environ.get("HAOS_TEST_ADDON_PORT", "19583"))
-# Advanced SSH addon (bake-installed for inaddon CI tier debugging — see
-# build_image.install_advanced_ssh). Listens inside HAOS on 22222. The
-# user/password ("root"/"haosdebug") are CI-test-only.
-SSH_DEBUG_HOST_PORT = int(os.environ.get("HAOS_TEST_SSH_DEBUG_PORT", "22222"))
+# Ports the host uses to reach the booted HAOS. Read at call-time (via
+# the ``_*_port()`` accessors below) rather than at module import so
+# pytest-xdist workers can each set their own port offset *after*
+# importing this module — see ``tests/src/e2e/conftest.py``'s HAOS
+# worker-port allocation in the parallel-HAOS path (#1350).
+#
+# The base URL we build from these (http://127.0.0.1:<HA_HOST_PORT>) must
+# equal the URL registered as /auth/token's client_id at onboarding time —
+# otherwise the token exchange rejects with "invalid_request".
+_BASE_HA_HOST_PORT = 18123
+_BASE_SSH_HOST_PORT = 12222
+_BASE_HA_MCP_ADDON_HOST_PORT = 19583
+_BASE_SSH_DEBUG_HOST_PORT = 22222
+
+
+def _ha_host_port() -> int:
+    return int(os.environ.get("HAOS_TEST_HA_PORT", str(_BASE_HA_HOST_PORT)))
+
+
+def _ssh_host_port() -> int:
+    return int(os.environ.get("HAOS_TEST_SSH_PORT", str(_BASE_SSH_HOST_PORT)))
+
+
+def _ha_mcp_addon_host_port() -> int:
+    """Inaddon MCP-tier host port (addon's 9583 inside HAOS)."""
+    return int(
+        os.environ.get("HAOS_TEST_ADDON_PORT", str(_BASE_HA_MCP_ADDON_HOST_PORT))
+    )
+
+
+def _ssh_debug_host_port() -> int:
+    """Advanced SSH addon's host port (22222 inside HAOS)."""
+    return int(
+        os.environ.get("HAOS_TEST_SSH_DEBUG_PORT", str(_BASE_SSH_DEBUG_HOST_PORT))
+    )
+
+
+# Module-level aliases preserved for backwards compatibility with any
+# external callers that referenced the old constants — they resolve to
+# whatever the env-var is set to at *import* time. In-module callers
+# use the accessor functions above so they pick up worker-specific env
+# overrides set after import.
+HA_HOST_PORT = _ha_host_port()
+SSH_HOST_PORT = _ssh_host_port()
+HA_MCP_ADDON_HOST_PORT = _ha_mcp_addon_host_port()
+SSH_DEBUG_HOST_PORT = _ssh_debug_host_port()
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 
@@ -109,12 +140,17 @@ def ssh_exec(
     # string that the remote shell will re-tokenize correctly.
     remote_command = shlex.join(cmd)
     ssh_cmd = [
-        SSHPASS_BIN, "-e",
+        SSHPASS_BIN,
+        "-e",
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "LogLevel=ERROR",
-        "-p", str(SSH_DEBUG_HOST_PORT),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(_ssh_debug_host_port()),
         f"{SSH_ADDON_USER}@127.0.0.1",
         remote_command,
     ]
@@ -232,10 +268,13 @@ def refresh_recorder_in_qcow2(
             [
                 "guestfish",
                 "--ro",
-                "-a", str(image_path),
+                "-a",
+                str(image_path),
                 "run",
                 ":",
-                "mount", "/dev/sda8", "/",
+                "mount",
+                "/dev/sda8",
+                "/",
                 ":",
                 "copy-out",
                 "/supervisor/homeassistant/home-assistant_v2.db",
@@ -299,9 +338,7 @@ def refresh_recorder_in_qcow2(
             for table, cols in TIMESTAMP_COLUMNS.items():
                 for col in cols:
                     try:
-                        row = conn.execute(
-                            f"SELECT MAX({col}) FROM {table}"
-                        ).fetchone()
+                        row = conn.execute(f"SELECT MAX({col}) FROM {table}").fetchone()
                     except sqlite3.OperationalError as exc:
                         msg = str(exc).lower()
                         if "no such table" in msg or "no such column" in msg:
@@ -337,7 +374,9 @@ def refresh_recorder_in_qcow2(
             if offset <= 0:
                 LOG.info(
                     "Recorder timestamps already recent (newest=%.0f, "
-                    "target=%.0f); no shift needed", newest, target,
+                    "target=%.0f); no shift needed",
+                    newest,
+                    target,
                 )
                 return
 
@@ -388,10 +427,13 @@ def refresh_recorder_in_qcow2(
                 [
                     "guestfish",
                     "--rw",
-                    "-a", str(image_path),
+                    "-a",
+                    str(image_path),
                     "run",
                     ":",
-                    "mount", "/dev/sda8", "/",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
                     ":",
                     "copy-in",
                     str(db_local),
@@ -426,6 +468,7 @@ def refresh_recorder_in_qcow2(
         LOG.info("Refreshed recorder DB in %s", image_path)
     finally:
         import shutil
+
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -485,10 +528,12 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
         # Dockerfile shape fixup (same as bake).
         dockerfile = staging / "Dockerfile"
-        dockerfile.write_text(dockerfile.read_text().replace(
-            "COPY homeassistant-addon/start.py /",
-            "COPY start.py /",
-        ))
+        dockerfile.write_text(
+            dockerfile.read_text().replace(
+                "COPY homeassistant-addon/start.py /",
+                "COPY start.py /",
+            )
+        )
 
         # Strip image: from config.yaml — Supervisor pulls from GHCR when
         # image: is set, but the per-PR version we bump to below doesn't
@@ -497,7 +542,8 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
         config_path_pre = staging / "config.yaml"
         config_path_pre.write_text(
             "".join(
-                ln for ln in config_path_pre.read_text().splitlines(keepends=True)
+                ln
+                for ln in config_path_pre.read_text().splitlines(keepends=True)
                 if not ln.startswith("image:")
             )
         )
@@ -537,8 +583,15 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
         seed_tar = workdir / "ha_mcp_dev.tar"
         subprocess.run(
             [
-                "tar", "--numeric-owner", "--owner=0", "--group=0",
-                "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
+                "tar",
+                "--numeric-owner",
+                "--owner=0",
+                "--group=0",
+                "-C",
+                str(workdir),
+                "-cf",
+                str(seed_tar),
+                "ha_mcp_dev",
             ],
             check=True,
             capture_output=True,
@@ -549,14 +602,20 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             [
                 "guestfish",
                 "--rw",
-                "-a", str(image_path),
+                "-a",
+                str(image_path),
                 "run",
                 ":",
-                "mount", "/dev/sda8", "/",
+                "mount",
+                "/dev/sda8",
+                "/",
                 ":",
-                "rm-rf", "/supervisor/addons/local/ha_mcp_dev",
+                "rm-rf",
+                "/supervisor/addons/local/ha_mcp_dev",
                 ":",
-                "tar-in", str(seed_tar), "/supervisor/addons/local",
+                "tar-in",
+                str(seed_tar),
+                "/supervisor/addons/local",
             ],
             check=True,
             capture_output=True,
@@ -586,7 +645,8 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
        when MCP's handler RSTs GET. 405-not-allowed is a perfectly
        good "listener is HTTP-ready" signal.
     """
-    base_url = f"http://127.0.0.1:{HA_MCP_ADDON_HOST_PORT}{HA_MCP_TEST_SECRET_PATH}"
+    mcp_port = _ha_mcp_addon_host_port()
+    base_url = f"http://127.0.0.1:{mcp_port}{HA_MCP_TEST_SECRET_PATH}"
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
     last_status: int | None = None
@@ -595,13 +655,11 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
         # Stage 1: TCP probe.
         if tcp_ready_at is None:
             try:
-                with socket.create_connection(
-                    ("127.0.0.1", HA_MCP_ADDON_HOST_PORT), timeout=5.0
-                ):
+                with socket.create_connection(("127.0.0.1", mcp_port), timeout=5.0):
                     tcp_ready_at = time.monotonic()
                     LOG.info(
                         "Inaddon MCP TCP port %d open at %.1fs into wait",
-                        HA_MCP_ADDON_HOST_PORT,
+                        mcp_port,
                         tcp_ready_at - (deadline - timeout),
                     )
             except OSError as e:
@@ -628,7 +686,8 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
                 last_status = resp.status
                 LOG.info(
                     "Inaddon MCP HTTP ready at %s (OPTIONS → %d)",
-                    base_url, resp.status,
+                    base_url,
+                    resp.status,
                 )
                 return base_url
         except urllib.error.HTTPError as e:
@@ -650,7 +709,8 @@ def wait_for_addon_mcp_ready(*, timeout: float = 300.0) -> str:
             # 2xx/3xx/401/403/405 — route exists, listener is HTTP-ready.
             LOG.info(
                 "Inaddon MCP HTTP ready at %s (OPTIONS → %d, expected)",
-                base_url, e.code,
+                base_url,
+                e.code,
             )
             return base_url
         except (urllib.error.URLError, OSError) as e:
@@ -722,7 +782,9 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
             last_err = e
         time.sleep(3.0)
-    raise TimeoutError(f"{url} did not become ready within {timeout}s (last: {last_err})")
+    raise TimeoutError(
+        f"{url} did not become ready within {timeout}s (last: {last_err})"
+    )
 
 
 DEFAULT_BACKUP_PASSWORD = "e2e-test-backup-password"
@@ -785,11 +847,15 @@ def set_default_backup_password(
                 raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
             msg_id = 1
-            ws.send(json.dumps({
-                "id": msg_id,
-                "type": "backup/config/update",
-                "create_backup": {"password": password},
-            }))
+            ws.send(
+                json.dumps(
+                    {
+                        "id": msg_id,
+                        "type": "backup/config/update",
+                        "create_backup": {"password": password},
+                    }
+                )
+            )
             # Per-call read budget. The actual command is sub-second once
             # the integration is loaded; the outer ``overall_timeout``
             # covers the case where backup integration hasn't registered
@@ -798,9 +864,7 @@ def set_default_backup_password(
             resp: dict[str, Any] | None = None
             while time.monotonic() < call_deadline:
                 try:
-                    raw = ws.recv(
-                        timeout=max(call_deadline - time.monotonic(), 1.0)
-                    )
+                    raw = ws.recv(timeout=max(call_deadline - time.monotonic(), 1.0))
                 except TimeoutError:
                     continue
                 try:
@@ -809,8 +873,7 @@ def set_default_backup_password(
                     candidate = json.loads(raw)
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                     raise RuntimeError(
-                        f"backup/config/update: malformed WS frame: {exc} "
-                        f"(raw={raw!r})"
+                        f"backup/config/update: malformed WS frame: {exc} (raw={raw!r})"
                     ) from exc
                 if candidate.get("id") != msg_id:
                     continue
@@ -824,8 +887,7 @@ def set_default_backup_password(
                 )
             if resp.get("success", False):
                 LOG.info(
-                    "Default backup password configured via WS "
-                    "(attempt=%d)",
+                    "Default backup password configured via WS (attempt=%d)",
                     attempt,
                 )
                 return
@@ -847,8 +909,7 @@ def set_default_backup_password(
                         f"runtime log in the diagnostics artifact."
                     )
                 LOG.debug(
-                    "backup integration not yet loaded (attempt=%d); "
-                    "retrying in 2s",
+                    "backup integration not yet loaded (attempt=%d); retrying in 2s",
                     attempt,
                 )
                 time.sleep(2.0)
@@ -909,31 +970,46 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
     then SIGKILL after 60s if still alive).
     """
     if not Path("/dev/kvm").exists():
-        raise RuntimeError("/dev/kvm not available — HAOS tests require KVM acceleration")
+        raise RuntimeError(
+            "/dev/kvm not available — HAOS tests require KVM acceleration"
+        )
 
     serial = serial_log or Path("/tmp/haos-e2e-serial.log")
+    ha_port = _ha_host_port()
+    ssh_port = _ssh_host_port()
+    addon_port = _ha_mcp_addon_host_port()
+    ssh_debug_port = _ssh_debug_host_port()
     cmd = [
         "qemu-system-x86_64",
-        "-machine", "q35,accel=kvm",
-        "-cpu", "host",
-        "-smp", "2",
-        "-m", "4096",
-        "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE_PATH}",
-        "-drive", f"if=virtio,file={image_path},format=qcow2",
+        "-machine",
+        "q35,accel=kvm",
+        "-cpu",
+        "host",
+        "-smp",
+        "2",
+        "-m",
+        "4096",
+        "-drive",
+        f"if=pflash,format=raw,readonly=on,file={OVMF_CODE_PATH}",
+        "-drive",
+        f"if=virtio,file={image_path},format=qcow2",
         "-netdev",
-        f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
-        f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22,"
-        f"hostfwd=tcp:127.0.0.1:{HA_MCP_ADDON_HOST_PORT}-:9583,"
-        f"hostfwd=tcp:127.0.0.1:{SSH_DEBUG_HOST_PORT}-:22222",
-        "-device", "virtio-net-pci,netdev=net0",
-        "-display", "none",
-        "-serial", f"file:{serial}",
+        f"user,id=net0,hostfwd=tcp:127.0.0.1:{ha_port}-:8123,"
+        f"hostfwd=tcp:127.0.0.1:{ssh_port}-:22,"
+        f"hostfwd=tcp:127.0.0.1:{addon_port}-:9583,"
+        f"hostfwd=tcp:127.0.0.1:{ssh_debug_port}-:22222",
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-display",
+        "none",
+        "-serial",
+        f"file:{serial}",
     ]
     LOG.info("Booting HAOS (serial log: %s)", serial)
     proc = subprocess.Popen(cmd)
-    base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
+    base_url = f"http://127.0.0.1:{ha_port}"
     try:
-        _wait_port(HA_HOST_PORT, timeout=180)
+        _wait_port(ha_port, timeout=180)
         _wait_http_ok(f"{base_url}/manifest.json", timeout=600)
         LOG.info("HAOS frontend ready at %s", base_url)
         yield base_url
@@ -949,7 +1025,9 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
-def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.0) -> None:
+def trigger_dev_addon_update(
+    base_url: str, token: str, *, timeout: float = 600.0
+) -> None:
     """Trigger Supervisor's ``addons/{slug}/update`` then start the dev addon.
 
     The cached qcow2 ships with the addon installed at the bake-time
@@ -971,10 +1049,15 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
     """
     import websockets.sync.client
 
-    ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
     LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
 
-    def _await_supervisor_result(msg_id: int, op_endpoint: str, op_deadline: float) -> None:
+    def _await_supervisor_result(
+        msg_id: int, op_endpoint: str, op_deadline: float
+    ) -> None:
         """Read WS frames until the response for ``msg_id`` arrives or deadline hits.
 
         Supervisor stays silent during slow Docker rebuilds (worst case
@@ -1003,9 +1086,7 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
                 # ``error`` may be missing or None — include the full
                 # frame so a maintainer can see what Supervisor sent.
                 err = resp.get("error") or resp
-                raise RuntimeError(
-                    f"supervisor/api {op_endpoint} failed: {err!r}"
-                )
+                raise RuntimeError(f"supervisor/api {op_endpoint} failed: {err!r}")
             return
         raise TimeoutError(
             f"supervisor/api {op_endpoint} did not complete within deadline "
@@ -1028,14 +1109,18 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
         # snapshot (saves ~30s, irrelevant for CI).
         msg_id = 1
         update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
-        ws.send(json.dumps({
-            "id": msg_id,
-            "type": "supervisor/api",
-            "endpoint": update_endpoint,
-            "method": "post",
-            "timeout": timeout,
-            "data": {"backup": False},
-        }))
+        ws.send(
+            json.dumps(
+                {
+                    "id": msg_id,
+                    "type": "supervisor/api",
+                    "endpoint": update_endpoint,
+                    "method": "post",
+                    "timeout": timeout,
+                    "data": {"backup": False},
+                }
+            )
+        )
         _await_supervisor_result(msg_id, update_endpoint, time.monotonic() + timeout)
         LOG.info("Dev addon update completed via Supervisor WS; starting addon")
 
@@ -1044,12 +1129,16 @@ def trigger_dev_addon_update(base_url: str, token: str, *, timeout: float = 600.
         # running container. See docstring for the CI log evidence.
         msg_id = 2
         start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
-        ws.send(json.dumps({
-            "id": msg_id,
-            "type": "supervisor/api",
-            "endpoint": start_endpoint,
-            "method": "post",
-            "timeout": 120,
-        }))
+        ws.send(
+            json.dumps(
+                {
+                    "id": msg_id,
+                    "type": "supervisor/api",
+                    "endpoint": start_endpoint,
+                    "method": "post",
+                    "timeout": 120,
+                }
+            )
+        )
         _await_supervisor_result(msg_id, start_endpoint, time.monotonic() + 120)
         LOG.info("Dev addon started via Supervisor WS")

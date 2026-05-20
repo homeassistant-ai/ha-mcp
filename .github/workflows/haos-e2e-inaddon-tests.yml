@@ -149,10 +149,15 @@ jobs:
         # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
         # workflow_dispatch pytest_paths input once the inaddon plumbing
         # is stable. external_only-marked tests skip automatically.
+        #
+        # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
+        # each booting its own QEMU (per-worker port offset + qcow2 overlay
+        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
+        # rationale as the external HAOS workflow (#1350).
         run: |
           cd tests
           uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
-            -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+            -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
