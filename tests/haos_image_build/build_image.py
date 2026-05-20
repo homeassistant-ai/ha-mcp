@@ -413,6 +413,19 @@ class HAWebSocket:
         Used after /core/restart: HA Core kicks every WS connection on
         restart, so any subsequent supervisor_api call needs a fresh
         connection (the access_token survives the restart).
+
+        ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
+        is up before we get here, but Core's WS layer can be accepting
+        connections while the ``hassio`` integration is still loading —
+        and the ``supervisor/api`` WS command is registered by that
+        integration's ``async_load_websocket_api`` (homeassistant/
+        components/hassio/websocket_api.py). Any supervisor_api call
+        that lands in that window comes back as
+        ``{"code": "unknown_command", "message": "Unknown command."}``
+        from Core's WS dispatcher, which the build then mis-blames on
+        the Supervisor itself. Block here until the handler is actually
+        registered, so callers can fire-and-trust their next
+        supervisor_api call.
         """
         if self._ws is not None:
             try:
@@ -422,6 +435,51 @@ class HAWebSocket:
             self._ws = None
         self._next_id = 0
         self.__enter__()
+        self._wait_supervisor_api_ready()
+
+    def _wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
+        """Poll ``supervisor/api`` until Core's dispatcher accepts it.
+
+        Probe with the cheapest read-only Supervisor endpoint
+        (``/supervisor/info``). The expected transient is the WS-layer
+        ``unknown_command`` response described in ``reconnect`` above;
+        anything else propagates immediately so a real failure isn't
+        masked as "still booting". Backoff caps at 5s; outer timeout
+        keeps a wedged restart from hanging the whole build.
+        """
+        start = time.monotonic()
+        delay = 1.0
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                self.supervisor_api("/supervisor/info", method="get", timeout=10.0)
+                if attempts > 1:
+                    LOG.info(
+                        "supervisor/api ready after %d attempts (%.1fs)",
+                        attempts,
+                        time.monotonic() - start,
+                    )
+                return
+            except RuntimeError as e:
+                msg = str(e)
+                if "unknown_command" not in msg and "Unknown command" not in msg:
+                    raise
+                elapsed = time.monotonic() - start
+                if elapsed >= timeout:
+                    raise RuntimeError(
+                        f"hassio supervisor/api WS handler did not register "
+                        f"within {timeout:.0f}s after Core restart "
+                        f"(attempts={attempts})"
+                    ) from e
+                LOG.info(
+                    "Waiting for hassio supervisor/api handler "
+                    "(attempt %d, elapsed %.1fs)",
+                    attempts,
+                    elapsed,
+                )
+                time.sleep(delay)
+                delay = min(delay * 1.5, 5.0)
 
     def supervisor_api(
         self,
