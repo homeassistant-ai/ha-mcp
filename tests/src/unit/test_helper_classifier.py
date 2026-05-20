@@ -16,6 +16,8 @@ not-found branch, and falls into the ``command failed:`` SERVICE_CALL_FAILED
 fallback — losing the not-found signal the agent retry path branches on.
 """
 
+import pytest
+
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools.helpers import exception_to_structured_error
 
@@ -108,4 +110,100 @@ class TestUnknownConfigSpecifiedClassification:
         assert result["error"]["code"] == "ENTITY_NOT_FOUND", (
             f"Expected ENTITY_NOT_FOUND under entity_id context, got: "
             f"{result['error'].get('code')}"
+        )
+
+
+class TestClassifyByMessageBranches:
+    """One regression test per branch in ``_classify_by_message`` that wasn't
+    already pinned by ``TestUnknownConfigSpecifiedClassification`` above,
+    ``test_tool_error_signaling.py::TestErrorCodeMapping`` (timeout/connection
+    typed-dispatch), or
+    ``test_tool_error_signaling.py::TestSchemaAndAuthClassification``
+    (schema markers + auth phrases). Closes the branch-coverage gap so that
+    a future reordering, substring rename, or missed elif case is caught
+    against the classifier directly, not via whichever tool happens to
+    exercise it.
+
+    Six branches covered here (helpers.py:258-327 at HEAD):
+
+    1. Plain ``"not found"`` substring without ``unknown config specified``
+       and without ``entity_id`` context → ``RESOURCE_NOT_FOUND``
+    2. Plain ``"404"`` substring → ``RESOURCE_NOT_FOUND``
+    3. Plain ``"not found"`` WITH ``entity_id`` context → ``ENTITY_NOT_FOUND``
+       (symmetric case to
+       ``test_unknown_config_specified_with_entity_id_context_promotes_to_entity_not_found``)
+    4. ``"timeout" in error_str`` message-substring path → ``TIMEOUT_OPERATION``
+       (separately from the typed ``TimeoutError`` dispatch in
+       ``_classify_exception``)
+    5. ``command failed:`` SERVICE_CALL_FAILED fallback (no schema markers,
+       no ``expected <type>`` regex hit)
+    6. Final ``else`` → ``INTERNAL_ERROR``
+    """
+
+    @pytest.mark.parametrize(
+        "error_str,expected_code",
+        [
+            # 1. Plain "not found" substring (no "unknown config specified"
+            #    marker, no entity_id context → bare RESOURCE_NOT_FOUND).
+            ("entity not found: light.foo", "RESOURCE_NOT_FOUND"),
+            # 2. Plain "404" substring.
+            ("HTTP 404", "RESOURCE_NOT_FOUND"),
+            # 4. Message-substring timeout path. Uses a plain Exception so
+            #    the typed TimeoutError case in _classify_exception is
+            #    bypassed and routing falls into _classify_by_message.
+            ("request timeout after 30s", "TIMEOUT_OPERATION"),
+            # 5. command failed: fallback (no schema markers, no
+            #    "expected <type>" regex, not auth, not 404) →
+            #    SERVICE_CALL_FAILED. Mirrors the 4xx fallback in
+            #    _classify_api_status.
+            ("command failed: websocket dispatch error", "SERVICE_CALL_FAILED"),
+            # 6. Final else: an unmapped message reaches the catch-all
+            #    INTERNAL_ERROR sink, not a different bucket via accidental
+            #    substring overlap.
+            ("totally unexpected gibberish", "INTERNAL_ERROR"),
+        ],
+        ids=[
+            "plain_not_found",
+            "plain_404",
+            "timeout_substring",
+            "command_failed_fallback",
+            "else_internal_error",
+        ],
+    )
+    def test_classify_by_message_routes_to_expected_code(
+        self, error_str, expected_code
+    ):
+        """Each test message exercises exactly one elif branch in
+        ``_classify_by_message`` that has no other direct pin."""
+        result = exception_to_structured_error(Exception(error_str), raise_error=False)
+        assert result["error"]["code"] == expected_code, (
+            f"input {error_str!r} routed to {result['error'].get('code')!r}, "
+            f"expected {expected_code!r}"
+        )
+
+    # 3. Plain "not found" WITH entity_id context: the symmetric case to
+    #    ``test_unknown_config_specified_with_entity_id_context_promotes_to_entity_not_found``.
+    #    The new ``unknown config specified`` substring lands on the same
+    #    context-promotion code path; this test pins that the OLDER ``not
+    #    found`` substring still promotes — a regression here would mean
+    #    the promotion got tied to the new substring alone.
+    def test_plain_not_found_with_entity_id_context_promotes_to_entity_not_found(
+        self,
+    ):
+        """Plain ``not found`` + entity_id context → ENTITY_NOT_FOUND.
+
+        Pins the context-promotion path for the pre-#1345 substring.
+        Drop the ``or "not found" in error_str`` clause from the elif and
+        this test fails (RESOURCE_NOT_FOUND on a missing entity instead of
+        ENTITY_NOT_FOUND).
+        """
+        result = exception_to_structured_error(
+            Exception("entity light.living_room not found"),
+            context={"entity_id": "light.living_room"},
+            raise_error=False,
+        )
+
+        assert result["error"]["code"] == "ENTITY_NOT_FOUND", (
+            f"Expected ENTITY_NOT_FOUND under entity_id context with "
+            f"plain 'not found' substring, got: {result['error'].get('code')}"
         )
