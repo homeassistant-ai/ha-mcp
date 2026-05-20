@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, overload
 
 from ..client.rest_client import (
@@ -64,9 +65,7 @@ def public_fields(d: dict[str, Any]) -> dict[str, Any]:
     later mutation of those values would propagate.
     """
     return {
-        k: v
-        for k, v in d.items()
-        if not (isinstance(k, str) and k.startswith("_"))
+        k: v for k, v in d.items() if not (isinstance(k, str) and k.startswith("_"))
     }
 
 
@@ -432,7 +431,9 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
             continue
         levels[domain] = {
             "name": name,
-            "raw": raw_level if isinstance(raw_level, int) and not isinstance(raw_level, bool) else None,
+            "raw": raw_level
+            if isinstance(raw_level, int) and not isinstance(raw_level, bool)
+            else None,
         }
     return levels
 
@@ -463,6 +464,276 @@ async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, 
         }
 
 
+# --- WS-event-driven wait helpers (#1152) -----------------------------------
+#
+# Background: every config write tool (`ha_config_set_helper`, set_automation,
+# set_script, …) calls one of these three helpers after the API write returns,
+# to confirm the operation reached the entity registry / state machine before
+# the tool itself returns. Until #1152, those checks polled REST every 300ms
+# up to a 10s budget. On a slow HA instance the poll could time out before
+# the entity hydrated, surfacing a "Helper created but … not yet queryable"
+# soft-failure warning even though the write succeeded — see #1152 for the
+# agent-misattribution failure mode.
+#
+# The new pattern is WS-event-driven with a REST sample after subscribe and a
+# slow REST backstop, falling back to pure REST polling when the WebSocket is
+# unavailable:
+#
+#   1. Open a `state_changed` (and, for registry-add/remove waits, an
+#      `entity_registry_updated`) subscription via `subscribe_events`. The
+#      subscription must be live BEFORE we look at the world so we don't miss
+#      the event the write triggered.
+#   2. Take a single REST sample. This closes the "the event fired between
+#      the write returning and our subscribe landing" window — if the entity
+#      is already in the desired shape, we return immediately and never
+#      touch the event loop.
+#   3. Await events for our entity_id, then re-sample. A
+#      ``_POLLING_BACKSTOP_INTERVAL`` REST sample also runs every few seconds
+#      independently of events, so a silent-broken subscription degrades to
+#      a slow-polling REST loop rather than a 10s hang.
+#   4. Drop the subscription and event handler in `finally`.
+#
+# Connection-drop awareness: if `get_websocket_client()` or `subscribe_events`
+# fails, we fall through to ``_legacy_poll_until`` (the pre-#1152 REST loop)
+# transparently, so the helpers still work on REST-only deployments and during
+# HA-mid-restart windows. The legacy loop is also what we call when the WS
+# subscription itself fails to set up — the helpers' contract (return bool or
+# state dict, never raise on the happy path) is identical to before.
+
+_POLLING_BACKSTOP_INTERVAL = 2.0
+"""Seconds between independent REST samples while a WS subscription is open.
+
+Bounded slow-poll backstop so a silent-broken WS subscription still
+resolves within the helper's timeout. A 10s budget with a 2s backstop
+costs at most ~5 REST calls per wait, vs. ~33 calls for the previous
+300ms loop."""
+
+
+async def _legacy_poll_until(
+    entity_id: str,
+    sample: Callable[[], Awaitable[Any]],
+    *,
+    timeout: float,
+    poll_interval: float,
+    description: str,
+) -> Any:
+    """REST-polling waiter used as the WS-subscription fallback path.
+
+    ``sample`` is the same callable the WS path runs after each event /
+    backstop tick — it returns a truthy value when the wait should
+    succeed, ``None`` otherwise. Connection / auth errors propagate
+    (callers care about those); other transient errors raised inside
+    ``sample`` are swallowed there.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            result = await sample()
+            if result is not None:
+                logger.debug(
+                    f"REST waiter: {description} for {entity_id} resolved "
+                    f"after {time.monotonic() - start:.2f}s"
+                )
+                return result
+        except (HomeAssistantConnectionError, HomeAssistantAuthError):
+            raise
+        await asyncio.sleep(poll_interval)
+    logger.warning(
+        f"REST fallback: {description} for {entity_id} timed out after {timeout}s"
+    )
+    return None
+
+
+async def _get_waiter_ws_client(client: Any) -> Any:
+    """Return a connected WS client to use for waiter subscriptions, or None.
+
+    Returning ``None`` triggers REST-only fallback in
+    ``_ws_wait_for_condition``. Localised import avoids a top-level cycle
+    (websocket_client → rest_client → util_helpers → websocket_client).
+    """
+    try:
+        from ..client.websocket_client import get_websocket_client
+    except Exception as e:  # pragma: no cover - import-time defence
+        logger.debug("WS waiter import failed: %s", e)
+        return None
+
+    base_url = getattr(client, "base_url", None)
+    token = getattr(client, "token", None)
+    try:
+        if base_url and token:
+            ws_client = await get_websocket_client(url=base_url, token=token)
+        else:
+            ws_client = await get_websocket_client()
+    except Exception as e:
+        logger.debug("WS waiter could not obtain ws client: %s", e)
+        return None
+
+    if not getattr(ws_client, "is_connected", False):
+        return None
+    return ws_client
+
+
+async def _ws_wait_for_condition(
+    client: Any,
+    entity_id: str,
+    sample: Callable[[], Awaitable[Any]],
+    *,
+    event_types: tuple[str, ...],
+    timeout: float,
+    poll_interval: float,
+    description: str,
+) -> Any:
+    """Subscribe to ``event_types``, sample after subscribe, wait on event.
+
+    Implements the standard "subscribe → sample → wait" pattern from #1152:
+
+    - The handler nudges a single ``asyncio.Event`` whenever HA pushes an
+      event for our ``entity_id``. The main loop wakes on that nudge or on
+      the polling-backstop timeout, then re-runs ``sample`` (the REST
+      source-of-truth check) to decide whether the wait succeeded.
+    - Sample-after-subscribe (not before) closes the gap between the
+      caller's write returning and our subscription landing on the HA
+      side. The event for the write may have already fired by the time we
+      subscribe; the post-subscribe sample catches that.
+    - If the WS path fails to set up (no WS client, no subscription, …)
+      we fall back to ``_legacy_poll_until``. The helpers' contract is
+      identical to the pre-#1152 REST loop in that case.
+
+    Returns ``sample``'s truthy return value, or ``None`` on timeout.
+    """
+    ws_client = await _get_waiter_ws_client(client)
+    if ws_client is None:
+        return await _legacy_poll_until(
+            entity_id,
+            sample,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            description=description,
+        )
+
+    nudge = asyncio.Event()
+
+    async def handler(event: dict[str, Any]) -> None:
+        # HA dispatches state_changed / entity_registry_updated payloads
+        # with entity_id nested under ``data``. Match defensively against
+        # both nesting shapes — older HA forks have surfaced both.
+        data = event.get("data") or {}
+        evt_entity = data.get("entity_id") or event.get("entity_id")
+        if evt_entity == entity_id:
+            nudge.set()
+
+    # Track which handlers / subscriptions we actually attached so cleanup
+    # is exact even if subscribe_events raises partway through.
+    attached_handlers: list[str] = []
+    sub_ids: list[int] = []
+    try:
+        for et in event_types:
+            ws_client.add_event_handler(et, handler)
+            attached_handlers.append(et)
+        for et in event_types:
+            try:
+                sub_id = await ws_client.subscribe_events(et)
+            except Exception as e:
+                logger.debug(
+                    "subscribe_events(%s) failed during %s for %s: %s — "
+                    "falling back to REST polling",
+                    et,
+                    description,
+                    entity_id,
+                    e,
+                )
+                return await _legacy_poll_until(
+                    entity_id,
+                    sample,
+                    timeout=timeout,
+                    poll_interval=poll_interval,
+                    description=description,
+                )
+            sub_ids.append(sub_id)
+
+        start = time.monotonic()
+        # Sample-after-subscribe: covers the "event fired before subscribe
+        # landed" race. This is where most happy-path waits resolve.
+        try:
+            result = await sample()
+            if result is not None:
+                logger.debug(
+                    f"WS waiter: {description} for {entity_id} resolved by "
+                    f"post-subscribe sample after {time.monotonic() - start:.2f}s"
+                )
+                return result
+        except (HomeAssistantConnectionError, HomeAssistantAuthError):
+            raise
+
+        while time.monotonic() - start < timeout:
+            # Wait for either an event nudge or the polling backstop. The
+            # backstop guards against silently-broken subscriptions and
+            # late-binding state hydration the event stream doesn't
+            # advertise.
+            remaining = timeout - (time.monotonic() - start)
+            wait_budget = min(remaining, _POLLING_BACKSTOP_INTERVAL)
+            try:
+                await asyncio.wait_for(nudge.wait(), timeout=wait_budget)
+                nudge.clear()
+            except TimeoutError:
+                pass
+
+            # Connection-drop awareness: if the WS dropped while we were
+            # waiting, the OperationManager / pool will reconnect lazily
+            # but our subscription is gone. Fall back to REST polling for
+            # the remaining budget rather than wait silently for events
+            # that will never arrive.
+            if not ws_client.is_connected:
+                logger.debug(
+                    "WS connection dropped during %s for %s — completing "
+                    "wait via REST polling",
+                    description,
+                    entity_id,
+                )
+                remaining = timeout - (time.monotonic() - start)
+                if remaining <= 0:
+                    return None
+                return await _legacy_poll_until(
+                    entity_id,
+                    sample,
+                    timeout=remaining,
+                    poll_interval=poll_interval,
+                    description=description,
+                )
+
+            try:
+                result = await sample()
+                if result is not None:
+                    logger.debug(
+                        f"WS waiter: {description} for {entity_id} resolved "
+                        f"after {time.monotonic() - start:.2f}s"
+                    )
+                    return result
+            except (HomeAssistantConnectionError, HomeAssistantAuthError):
+                raise
+
+        logger.warning(
+            f"WS waiter: {description} for {entity_id} timed out after {timeout}s"
+        )
+        return None
+    finally:
+        for et in attached_handlers:
+            ws_client.remove_event_handler(et, handler)
+        for sub_id in sub_ids:
+            # ``unsubscribe_events`` is best-effort — connection errors during
+            # cleanup are swallowed inside the client. We still guard the
+            # await to be sure a teardown bug here doesn't mask the wait
+            # result the caller is about to receive.
+            try:
+                await ws_client.unsubscribe_events(sub_id)
+            except Exception as e:  # pragma: no cover - defensive belt
+                logger.debug(
+                    "unsubscribe_events(%s) raised during cleanup: %s",
+                    sub_id,
+                    e,
+                )
+
+
 async def wait_for_entity_registered(
     client: Any,
     entity_id: str,
@@ -470,37 +741,48 @@ async def wait_for_entity_registered(
     poll_interval: float = 0.3,
 ) -> bool:
     """
-    Poll until an entity is registered and accessible via the state API.
+    Wait until an entity is registered and accessible via the state API.
 
     Used after config create/update operations to confirm the entity is queryable.
+    Listens to ``state_changed`` and ``entity_registry_updated`` events on the
+    WebSocket and falls back to REST polling (every ``poll_interval`` seconds)
+    when the WebSocket is unavailable. See the module-level note above for the
+    subscribe→sample→wait pattern and the failure mode it addresses (#1152).
 
     Args:
         client: HomeAssistantClient instance
         entity_id: Entity ID to wait for (e.g., 'automation.morning_routine')
         timeout: Maximum time to wait in seconds
-        poll_interval: Time between polls in seconds
+        poll_interval: REST poll interval used for the WS-unavailable fallback
 
     Returns:
         True if entity became accessible, False if timed out
     """
-    start = time.monotonic()
-    while time.monotonic() - start < timeout:
+
+    async def sample() -> bool | None:
         try:
             state = await client.get_entity_state(entity_id)
-            if state:
-                logger.debug(
-                    f"Entity {entity_id} registered after {time.monotonic() - start:.1f}s"
-                )
-                return True
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                pass  # Expected: entity not registered yet
-            else:
-                logger.warning(f"Unexpected API error polling {entity_id}: {e}")
-        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-            logger.warning(f"Connection/auth error polling {entity_id}: {e}")
-            raise
-        await asyncio.sleep(poll_interval)
+                return None
+            logger.warning(f"Unexpected API error sampling {entity_id}: {e}")
+            return None
+        return True if state else None
+
+    result = await _ws_wait_for_condition(
+        client,
+        entity_id,
+        sample,
+        # entity_registry_updated fires when the registry row is added,
+        # state_changed when the state machine row hydrates. We watch both
+        # so the post-event sample lands as soon as either side completes.
+        event_types=("state_changed", "entity_registry_updated"),
+        timeout=timeout,
+        poll_interval=poll_interval,
+        description="entity registration",
+    )
+    if result is True:
+        return True
     logger.warning(f"Entity {entity_id} not registered within {timeout}s")
     return False
 
@@ -512,39 +794,45 @@ async def wait_for_entity_removed(
     poll_interval: float = 0.3,
 ) -> bool:
     """
-    Poll until an entity is no longer accessible via the state API.
+    Wait until an entity is no longer accessible via the state API.
 
-    Used after config delete operations to confirm the entity is gone.
+    Used after config delete operations to confirm the entity is gone. Listens
+    to ``state_changed`` and ``entity_registry_updated`` removal events on the
+    WebSocket and falls back to REST polling (every ``poll_interval`` seconds)
+    when the WebSocket is unavailable. See #1152 for context.
 
     Args:
         client: HomeAssistantClient instance
         entity_id: Entity ID to wait for removal
         timeout: Maximum time to wait in seconds
-        poll_interval: Time between polls in seconds
+        poll_interval: REST poll interval used for the WS-unavailable fallback
 
     Returns:
         True if entity was removed, False if timed out (entity still exists)
     """
-    start = time.monotonic()
-    while time.monotonic() - start < timeout:
+
+    async def sample() -> bool | None:
         try:
             state = await client.get_entity_state(entity_id)
-            if not state:
-                logger.debug(
-                    f"Entity {entity_id} removed after {time.monotonic() - start:.1f}s"
-                )
-                return True
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                logger.debug(
-                    f"Entity {entity_id} removed (404) after {time.monotonic() - start:.1f}s"
-                )
                 return True
-            logger.warning(f"Unexpected API error polling {entity_id} removal: {e}")
-        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-            logger.warning(f"Connection/auth error polling {entity_id} removal: {e}")
-            raise
-        await asyncio.sleep(poll_interval)
+            logger.warning(f"Unexpected API error sampling {entity_id} removal: {e}")
+            return None
+        # Falsy state == entity is gone from the state machine.
+        return True if not state else None
+
+    result = await _ws_wait_for_condition(
+        client,
+        entity_id,
+        sample,
+        event_types=("state_changed", "entity_registry_updated"),
+        timeout=timeout,
+        poll_interval=poll_interval,
+        description="entity removal",
+    )
+    if result is True:
+        return True
     logger.warning(f"Entity {entity_id} still exists after {timeout}s")
     return False
 
@@ -558,9 +846,12 @@ async def wait_for_state_change(
     initial_state: str | None = None,
 ) -> dict[str, Any] | None:
     """
-    Poll until an entity's state changes (optionally to a specific value).
+    Wait until an entity's state changes (optionally to a specific value).
 
-    Used after service calls to verify the operation took effect.
+    Used after service calls to verify the operation took effect. Listens to
+    ``state_changed`` events on the WebSocket and falls back to REST polling
+    (every ``poll_interval`` seconds) when the WebSocket is unavailable. See
+    #1152 for context.
 
     Args:
         client: HomeAssistantClient instance
@@ -568,14 +859,13 @@ async def wait_for_state_change(
         expected_state: If set, wait for this specific state value.
                         If None, wait for any change from initial_state.
         timeout: Maximum time to wait in seconds
-        poll_interval: Time between polls in seconds
+        poll_interval: REST poll interval used for the WS-unavailable fallback
         initial_state: The state before the operation. If None, it will be
                        fetched automatically.
 
     Returns:
         The entity state dict if the change was detected, None if timed out
     """
-    # Capture initial state if not provided
     if initial_state is None:
         try:
             raw_initial = await client.get_entity_state(entity_id)
@@ -591,43 +881,43 @@ async def wait_for_state_change(
             )
             raise
 
-    start = time.monotonic()
-    while time.monotonic() - start < timeout:
+    # Mutable closure cell so the sampler can adopt the first observed state
+    # as the baseline when the initial fetch failed — matches the original
+    # REST-loop semantics.
+    baseline: dict[str, str | None] = {"state": initial_state}
+
+    async def sample() -> dict[str, Any] | None:
         try:
             raw = await client.get_entity_state(entity_id)
-            state_data: dict[str, Any] | None = raw if isinstance(raw, dict) else None
-            if state_data:
-                current = state_data.get("state")
-                if expected_state is not None and current == expected_state:
-                    logger.debug(
-                        f"Entity {entity_id} reached state '{expected_state}' "
-                        f"after {time.monotonic() - start:.1f}s"
-                    )
-                    return state_data
-                if (
-                    expected_state is None
-                    and initial_state is not None
-                    and current != initial_state
-                ):
-                    logger.debug(
-                        f"Entity {entity_id} changed from '{initial_state}' to '{current}' "
-                        f"after {time.monotonic() - start:.1f}s"
-                    )
-                    return state_data
-                # If initial state fetch failed, use first successful poll as baseline
-                if (
-                    expected_state is None
-                    and initial_state is None
-                    and current is not None
-                ):
-                    initial_state = current
         except HomeAssistantAPIError as e:
-            logger.debug(f"API error polling {entity_id} state: {e}")
-        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-            logger.warning(f"Connection/auth error polling {entity_id} state: {e}")
-            raise
-        await asyncio.sleep(poll_interval)
+            logger.debug(f"API error sampling {entity_id} state: {e}")
+            return None
+        if not isinstance(raw, dict):
+            return None
+        current = raw.get("state")
+        if expected_state is not None and current == expected_state:
+            return raw
+        if (
+            expected_state is None
+            and baseline["state"] is not None
+            and current != baseline["state"]
+        ):
+            return raw
+        if expected_state is None and baseline["state"] is None and current is not None:
+            baseline["state"] = current
+        return None
 
+    result = await _ws_wait_for_condition(
+        client,
+        entity_id,
+        sample,
+        event_types=("state_changed",),
+        timeout=timeout,
+        poll_interval=poll_interval,
+        description="state change",
+    )
+    if isinstance(result, dict):
+        return result
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
     return None
 
@@ -901,7 +1191,9 @@ async def fetch_integration_diagnostics(
             )
             logger.warning("Diagnostics fetch refused (403): %s", e)
         else:
-            result["error"] = f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
+            result["error"] = (
+                f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
+            )
             logger.warning("Diagnostics fetch API error: %s", e)
     except HomeAssistantConnectionError as e:
         msg = str(e)
@@ -1005,9 +1297,7 @@ def _project_cap_and_paginate_diagnostics(
                 # is set without ``data_limit`` (no window to slice). Surface
                 # a structured warning rather than silently dropping the kwarg.
                 if data_limit is not None:
-                    type_name = (
-                        "null" if resolved is None else type(resolved).__name__
-                    )
+                    type_name = "null" if resolved is None else type(resolved).__name__
                     result["data_pagination_warning"] = (
                         f"data_limit ignored: resolved value at '{data_path}' "
                         f"is {type_name}, not a list"
@@ -1027,8 +1317,7 @@ def _project_cap_and_paginate_diagnostics(
         # land together (the whitespace input nulled ``data_path``, dropping
         # us into this elif; the earlier warning takes precedence).
         result["data_pagination_warning"] = (
-            "data_offset ignored: data_path not set "
-            "(no resolved sub-tree to paginate)"
+            "data_offset ignored: data_path not set (no resolved sub-tree to paginate)"
         )
 
     if truncate_at_bytes is not None and data is not None:
@@ -1058,9 +1347,7 @@ def _project_cap_and_paginate_diagnostics(
                 del result["data"]
 
 
-def _resolve_data_path(
-    data: Any, path: str
-) -> tuple[Any, str | None]:
+def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
     """Walk ``data`` along the dotted ``path`` and return ``(value, error)``.
 
     Returns ``(value, None)`` on success or ``(None, error_message)`` when
@@ -1084,8 +1371,7 @@ def _resolve_data_path(
     for seg in segments:
         if not seg:
             return None, (
-                f"data_path '{path}' has an empty segment "
-                f"(after '{'.'.join(walked)}')"
+                f"data_path '{path}' has an empty segment (after '{'.'.join(walked)}')"
             )
         if current is None:
             return None, (
