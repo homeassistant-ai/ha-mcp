@@ -259,8 +259,16 @@ class TestPollForAutomationEntity:
     @pytest.mark.asyncio
     async def test_poll_swallows_get_states_exception(self, mock_client):
         """A transient `get_states` failure must not propagate; the caller
-        gets None and the upsert path surfaces entity_not_verified=True."""
-        mock_client.get_states = AsyncMock(side_effect=RuntimeError("transient"))
+        gets None and the upsert path surfaces entity_not_verified=True.
+
+        Uses ``HomeAssistantAPIError`` for the transient mock — the realistic
+        failure class for a polling-side ``get_states`` blip is an API error
+        from the REST client, not a bare ``RuntimeError``. Matches the
+        established sibling pattern in ``test_wait_helpers.py:54`` and
+        ``:88``."""
+        mock_client.get_states = AsyncMock(
+            side_effect=HomeAssistantAPIError("transient")
+        )
 
         async def fake_sleep(duration: float) -> None:
             return None
