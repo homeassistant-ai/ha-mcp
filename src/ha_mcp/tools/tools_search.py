@@ -736,7 +736,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Add warning and partial flag if fallback was used
             if warning:
-                result["warning"] = warning
+                result.setdefault("warnings", []).append(warning)
                 result["partial"] = True
 
             return await add_timezone_metadata(client, result)

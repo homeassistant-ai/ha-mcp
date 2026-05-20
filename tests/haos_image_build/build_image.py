@@ -159,6 +159,13 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 # in homeassistant-addon/start.py).
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+# Advanced SSH addon user/password set at install time so the runtime
+# helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
+# CI-test-only credential — overridable via env so the value never has
+# to live in source for a deployable image. Must stay in sync with
+# ``haos_runtime.SSH_ADDON_USER`` / ``SSH_ADDON_PASSWORD``.
+SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
+SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +513,60 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     return candidates[0]["slug"]
 
 
+# Per-addon post-install option overrides. Two situations need the bake
+# to set options (rather than letting Supervisor use config.yaml defaults):
+#
+# 1. ``start=True`` addons whose default options would refuse to start —
+#    e.g. Node-RED's addon defaults to ``ssl: true`` (verified live:
+#    hassio-addons/addon-node-red/node-red/config.yaml) but ships no
+#    cert, so a default-options install crashes the addon in a death
+#    loop. Lifecycle tests against such an addon would see only s6-rc
+#    startup spam instead of real runtime logs. Set ``ssl: false`` so
+#    the addon boots cleanly.
+#
+# 2. ``start=False`` addons that we want to STAY stopped. Without
+#    ``boot: manual`` + ``watchdog: false`` Supervisor's watchdog
+#    auto-restarts them after the initial crash, racing the test
+#    runner's "addon should be stopped" assertions. Explicitly setting
+#    these makes the bake's start-state stable across boots.
+_ADDON_OPTION_OVERRIDES: dict[str, dict[str, Any]] = {
+    "Node-RED": {
+        "options": {
+            # ``ssl: true`` is the addon's upstream default but ships
+            # no cert, crashing the addon's init-nginx on boot
+            # (verified by curling
+            # https://raw.githubusercontent.com/hassio-addons/addon-node-red/main/node-red/config.yaml ).
+            "ssl": False,
+            # ``leave_front_door_open: true`` is required for
+            # ``ha_manage_addon``'s proxy mode to work against this
+            # addon. The proxy path goes Supervisor →
+            # ``/addons/{slug}/api/...`` → the addon's DIRECT port,
+            # which is fronted by nginx with an ``auth_request``
+            # directive that demands HA Supervisor authentication.
+            # The default (false) blocks ha_manage_addon's calls with
+            # 401; ``true`` removes the auth_request and lets the
+            # proxy path through. Aligning the bake's options with
+            # what real users hit when they reach for ha_manage_addon
+            # — see node-red/rootfs/etc/nginx/templates/direct.gtpl
+            # for the ``{{ if not .leave_front_door_open }}`` block.
+            "leave_front_door_open": True,
+        },
+    },
+    "Mosquitto broker": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Zigbee2MQTT": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Frigate": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+}
+
+
 def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     """Install (and optionally start) a single addon. Returns slug.
 
@@ -514,14 +575,17 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
       - POST /store/reload                            refresh
       - GET  /store                                   list store contents
       - POST /store/addons/{slug}/install             install an addon
+      - POST /addons/{slug}/options                   set addon options
       - POST /addons/{slug}/start                     start it
-    Note the asymmetry: install lives under /store/addons/, start is on
-    the installed-addon path /addons/.
+    Note the asymmetry: install lives under /store/addons/, options +
+    start are on the installed-addon path /addons/.
 
-    Options are deliberately not set here in v1 (#1281 comment thread). Many
-    addon schemas have required fields (Mosquitto's require_certificate,
-    Z2M's serial config, Frigate's cameras) that need realistic values; the
-    test runner configures them per-test with mock streams/devices.
+    Per-addon option overrides live in ``_ADDON_OPTION_OVERRIDES`` —
+    they fix addons whose config.yaml defaults are incompatible with
+    starting fresh (Node-RED's ssl=true), or whose default ``boot``/
+    ``watchdog`` settings would have Supervisor auto-restart a
+    ``start=False`` addon (Mosquitto, Z2M, Frigate). Other addons get
+    Supervisor's schema-default options.
     """
     if addon.repo:
         _add_repository(ws, addon.repo)
@@ -529,6 +593,49 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
+    if overrides:
+        # Supervisor's POST /addons/{slug}/options behaviour:
+        #
+        # - ``options`` is a FULL-REPLACE field; the value must satisfy
+        #   the addon's config schema in its entirety. Sending a partial
+        #   options payload drops every other required field and
+        #   Supervisor rejects with e.g. "Missing option 'http_static'
+        #   in root" (verified on PR #1375 CI run 29357350 for Node-RED).
+        # - Top-level fields like ``boot``, ``watchdog``,
+        #   ``auto_update`` are PARTIAL updates — only the keys present
+        #   in the POST are touched. So a ``boot:manual /
+        #   watchdog:false`` override doesn't need to include
+        #   ``options`` in the same POST.
+        #
+        # Strategy: when overrides include an ``options`` block, GET
+        # the addon's current options, merge our override on top, and
+        # send the merged whole. When overrides only touch top-level
+        # fields, skip the GET and POST just those fields.
+        merged: dict[str, Any] = {
+            k: v for k, v in overrides.items() if k != "options"
+        }
+        if "options" in overrides:
+            current = ws.supervisor_api(
+                f"/addons/{slug}/info", method="get", timeout=30.0
+            )
+            current_options = current.get("options") or {}
+            merged["options"] = {**current_options, **overrides["options"]}
+
+        LOG.info(
+            "Applying option overrides to %s (slug=%s): %s",
+            addon.name,
+            slug,
+            overrides,
+        )
+        ws.supervisor_api(
+            f"/addons/{slug}/options",
+            method="post",
+            data=merged,
+            timeout=60.0,
+        )
+
     if addon.start:
         ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     return slug
@@ -683,9 +790,16 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
     """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
 
     Sets a known root password ("haosdebug") so the CI workflow can
-    SSH in unattended. Configures listen port 22222 (avoids HAOS host
-    SSHD on 22) — the QEMU hostfwd in haos_runtime.py exposes this on
-    127.0.0.1:22222 on the runner.
+    SSH in unattended. **Remaps the container's port 22 to HAOS port
+    22222** via Supervisor's ``network`` option, because the addon's
+    upstream default (verified at
+    https://raw.githubusercontent.com/hassio-addons/addon-ssh/main/ssh/config.yaml :
+    ``ports: 22/tcp: 22``) collides with HAOS's host sshd on port 22
+    under ``host_network: true``. The collision causes the addon's
+    sshd to silently fail to bind, which surfaces downstream as
+    ``kex_exchange_identification: read: Connection reset by peer``
+    (verified on PR #1375 CI run 26090534093). The QEMU hostfwd in
+    ``haos_runtime.boot_haos_qemu`` exposes guest:22222 on host:22222.
     """
     slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
     LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
@@ -699,11 +813,15 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
         data={
             "options": {
                 "ssh": {
-                    "username": "root",
-                    "password": "haosdebug",
+                    "username": SSH_ADDON_USER,
+                    "password": SSH_ADDON_PASSWORD,
                     "authorized_keys": [],
                     "sftp": False,
-                    "compatibility_mode": False,
+                    # Without ``compatibility_mode: true`` modern OpenSSH
+                    # in this addon refuses root-with-password auth from
+                    # the CI runner's older ssh client. Enable it so
+                    # sshpass succeeds against the bake-set password.
+                    "compatibility_mode": True,
                     "allow_agent_forwarding": False,
                     "allow_remote_port_forwarding": False,
                     "allow_tcp_forwarding": False,
@@ -713,12 +831,35 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
                 "packages": [],
                 "init_commands": [],
             },
+            # Remap container port 22 → HAOS port 22222 so the addon's
+            # sshd doesn't collide with HAOS's host sshd. Key is the
+            # internal port spec; value is the HAOS-side port.
+            "network": {"22/tcp": 22222},
             "boot": "auto",
         },
         timeout=60.0,
     )
+    # Disable Supervisor's per-addon "protection mode" so the SSH
+    # addon can ``docker exec`` into sibling addon containers (the
+    # filesystem-poisoning E2E in ``test_create_custom_tool.py`` needs
+    # this). With protection mode ON (Supervisor's default), the addon
+    # is denied Docker socket access and ``docker exec`` returns
+    # ``PROTECTION MODE ENABLED!`` instead of executing the command
+    # (verified on PR #1375 CI run 26091787525). The /security
+    # endpoint is Supervisor's documented way to flip this — see
+    # https://developers.home-assistant.io/docs/api/supervisor/endpoints#addon
+    # under "POST /addons/{slug}/security".
+    ws.supervisor_api(
+        f"/addons/{slug}/security",
+        method="post",
+        data={"protected": False},
+        timeout=30.0,
+    )
     ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
-    LOG.info("Advanced SSH installed + started on port 22222 (user=root)")
+    LOG.info(
+        "Advanced SSH installed + started on port 22222 "
+        "(user=root, protected=false)"
+    )
     return slug
 
 

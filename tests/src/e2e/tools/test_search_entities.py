@@ -325,7 +325,7 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"
     # Normal fuzzy search should NOT have warning or partial flag
-    assert "warning" not in data or data.get("warning") is None
+    assert not data.get("warnings"), f"Unexpected warnings: {data.get('warnings')}"
     assert "partial" not in data or data.get("partial") is not True
     # Strong matches should not include suggestions
     assert "suggestions" not in data, "Strong matches should not include suggestions"
@@ -392,10 +392,13 @@ async def test_search_entities_fallback_fields_when_present(mcp_client):
     raw_data = assert_mcp_success(result, "Fallback field types")
     data = raw_data.get("data", raw_data)
 
-    # If warning is present, it should be a string
-    if "warning" in data and data["warning"] is not None:
-        assert isinstance(data["warning"], str), "warning must be a string"
-        logger.info(f"Warning present: {data['warning']}")
+    # If warnings are present, they should be a list of strings
+    if data.get("warnings"):
+        assert isinstance(data["warnings"], list), "warnings must be a list"
+        assert all(isinstance(w, str) for w in data["warnings"]), (
+            "every warning must be a string"
+        )
+        logger.info(f"Warnings present: {data['warnings']}")
 
     # If partial is present, it should be a boolean
     if "partial" in data and data["partial"] is not None:

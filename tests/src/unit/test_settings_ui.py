@@ -472,6 +472,44 @@ class TestRestartAddon:
         register_settings_routes(mcp, server, secret_path="/x")
         return captured["restart"]
 
+    def _make_request(self, *, body: Any = None) -> MagicMock:
+        """Build a request mock whose ``.json()`` returns ``body``.
+
+        ``body=None`` simulates an empty/missing body — the JSONDecodeError
+        path inside ``_restart_addon`` — so the slug defaults to "self".
+        Pass a dict to simulate a JSON-bodied POST (the inaddon E2E uses
+        ``{"slug": "<addon>"}`` to target a non-self addon).
+        """
+        request = MagicMock()
+        if body is None:
+            request.json = AsyncMock(side_effect=json.JSONDecodeError("empty", "", 0))
+        else:
+            request.json = AsyncMock(return_value=body)
+        return request
+
+    def _patch_supervisor_client(
+        self, *, post_side_effect=None, post_return=None
+    ) -> tuple[Any, Any]:
+        """Patch ``make_supervisor_httpx_client`` and return ``(patcher, mock_client)``.
+
+        The factory's own contract (base_url, Authorization header) is
+        pinned by ``test_supervisor_client.py``; these tests only check
+        what URL ``_restart_addon`` posts to and how it handles responses.
+        """
+        mock_client = MagicMock()
+        if post_side_effect is not None:
+            mock_client.post = AsyncMock(side_effect=post_side_effect)
+        else:
+            mock_client.post = AsyncMock(return_value=post_return)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        factory = MagicMock(return_value=cm)
+        patcher = patch(
+            "ha_mcp.settings_ui.make_supervisor_httpx_client", factory
+        )
+        return patcher, mock_client
+
     @pytest.mark.asyncio
     async def test_returns_400_without_supervisor_token(self, monkeypatch):
         """No-token branch (the `if not token:` guard at the top of
@@ -480,7 +518,7 @@ class TestRestartAddon:
         ever reaching the Supervisor URL.
         """
         restart = self._capture_handler(monkeypatch, with_token=False)
-        request = MagicMock()
+        request = self._make_request()
 
         resp = await restart(request)
 
@@ -505,17 +543,10 @@ class TestRestartAddon:
         restart was initiated.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
-        # Patch the AsyncClient at the module level so the restart's
-        # `httpx.AsyncClient(...)` block resolves to a controllable mock.
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(side_effect=exc_cls("kill"))
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=mock_client)
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+        patcher, _ = self._patch_supervisor_client(post_side_effect=exc_cls("kill"))
+        with patcher:
             resp = await restart(request)
 
         assert resp.status_code == 200
@@ -531,15 +562,12 @@ class TestRestartAddon:
         which returns 502 with `CONNECTION_FAILED`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("no route"))
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=mock_client)
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+        patcher, _ = self._patch_supervisor_client(
+            post_side_effect=httpx.ConnectError("no route")
+        )
+        with patcher:
             resp = await restart(request)
 
         assert resp.status_code == 502
@@ -554,17 +582,14 @@ class TestRestartAddon:
         last unconvered transport-error path in `_restart_addon`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
-        mock_client = MagicMock()
         # PoolTimeout subclasses httpx.HTTPError but is NOT in the
         # drop-as-success tuple — exercises the fall-through.
-        mock_client.post = AsyncMock(side_effect=httpx.PoolTimeout("pool full"))
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=mock_client)
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+        patcher, _ = self._patch_supervisor_client(
+            post_side_effect=httpx.PoolTimeout("pool full")
+        )
+        with patcher:
             resp = await restart(request)
 
         assert resp.status_code == 502
@@ -579,18 +604,13 @@ class TestRestartAddon:
         initiated. Pins the `status_code >= 400` branch in `_restart_addon`.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request()
 
         response = MagicMock()
         response.status_code = 401
         response.text = "Unauthorized"
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=response)
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=mock_client)
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+        patcher, _ = self._patch_supervisor_client(post_return=response)
+        with patcher:
             resp = await restart(request)
 
         assert resp.status_code == 502
@@ -598,16 +618,31 @@ class TestRestartAddon:
         assert body["success"] is False
 
     @pytest.mark.asyncio
-    async def test_posts_relative_url_with_ctor_authorization(self, monkeypatch):
-        """Post-refactor wire shape: relative path on ``.post()``, with
-        ``Authorization`` assembled in the constructor kwargs rather than
-        per-call. Mirrors the parallel assertions in
-        ``test_tools_utility_supervisor_logs.py`` so a regression that
-        hard-codes the absolute URL or moves the Bearer header back to
-        per-call kwargs is caught on the restart-handler branch too.
+    async def test_posts_relative_url_for_self_restart(self, monkeypatch):
+        """No-body request POSTs ``/addons/self/restart`` — the UI button's path."""
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = self._make_request()
+
+        response = MagicMock()
+        response.status_code = 200
+        patcher, mock_client = self._patch_supervisor_client(post_return=response)
+        with patcher:
+            await restart(request)
+
+        mock_client.post.assert_awaited_once_with("/addons/self/restart")
+
+    @pytest.mark.asyncio
+    async def test_slug_in_body_targets_named_addon(self, monkeypatch):
+        """Body ``{"slug": "<other>"}`` → POSTs to ``/addons/<other>/restart``.
+
+        Lets the inaddon E2E suite exercise the real Supervisor restart
+        wire contract against a non-test-critical addon without taking
+        the dev addon (and the running ``mcp_client``) down. The historical
+        body-less behavior (slug defaults to "self") is pinned by
+        ``test_posts_relative_url_with_ctor_authorization``.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = MagicMock()
+        request = self._make_request(body={"slug": "core_ssh"})
 
         response = MagicMock()
         response.status_code = 200
@@ -617,15 +652,58 @@ class TestRestartAddon:
         cm.__aenter__ = AsyncMock(return_value=mock_client)
         cm.__aexit__ = AsyncMock(return_value=None)
 
-        client_class = MagicMock(return_value=cm)
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", client_class):
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+            resp = await restart(request)
+
+        assert resp.status_code == 200
+        mock_client.post.assert_awaited_once_with("/addons/core_ssh/restart")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},  # no slug key
+            {"slug": ""},  # empty string
+            {"slug": "   "},  # whitespace only
+            {"slug": 42},  # non-string
+            {"slug": None},  # explicit None
+            "not-a-dict",  # body is a string, not a dict
+            # Path-traversal / injection probes — the whitelist must reject
+            # all of these, falling back to "self" rather than building
+            # ``/addons/<malicious>/restart``. Even though Supervisor would
+            # reject most, validating at the edge is cheaper than relying
+            # on downstream rejection (Gemini PR review flagged path
+            # traversal as a security-high concern).
+            {"slug": "../evil"},
+            {"slug": "self/../something"},
+            {"slug": "a/b"},
+            {"slug": "addon;rm -rf"},
+            {"slug": "%2e%2e%2fself"},
+            {"slug": "self?action=delete"},
+            {"slug": "self#frag"},
+        ],
+    )
+    async def test_invalid_slug_in_body_falls_back_to_self(self, monkeypatch, body):
+        """Malformed/missing ``slug`` field → restart targets ``self``.
+
+        Preserves the historical self-restart behavior when callers post a
+        body that doesn't carry a usable slug. The settings-UI restart
+        button posts no body at all; the explicit slug paths exist purely
+        for the E2E test surface and should never accidentally redirect
+        a self-restart to ``/addons//restart`` or similar.
+        """
+        restart = self._capture_handler(monkeypatch, with_token=True)
+        request = self._make_request(body=body)
+
+        response = MagicMock()
+        response.status_code = 200
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
             await restart(request)
 
-        mock_client.post.assert_awaited_once()
-        args, kwargs = mock_client.post.call_args
-        assert args[0] == "/addons/self/restart"
-        assert "Authorization" not in kwargs.get("headers", {})
-
-        ctor_kwargs = client_class.call_args.kwargs
-        assert ctor_kwargs["base_url"] == "http://supervisor"
-        assert ctor_kwargs["headers"]["Authorization"] == "Bearer fake-supervisor-token"
+        mock_client.post.assert_awaited_once_with("/addons/self/restart")
