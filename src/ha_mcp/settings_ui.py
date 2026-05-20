@@ -147,6 +147,60 @@ def _get_config_path() -> Path:
     return get_data_dir() / "tool_config.json"
 
 
+def _get_tool_metadata_cache_path() -> Path:
+    """Return the path to the cached tool metadata JSON file.
+
+    The stdio settings sidecar (a separate process spawned by stdio mode)
+    reads this cache instead of constructing a full FastMCP server, so it
+    stays lightweight. Refreshed by ``dump_tool_metadata_cache()`` on
+    every parent stdio startup.
+    """
+    return get_data_dir() / "tool_metadata.json"
+
+
+def dump_tool_metadata_cache(metadata: list[dict[str, Any]]) -> bool:
+    """Persist tool metadata to disk for the sidecar to consume.
+
+    Returns True on success, False on any OSError. Failures are logged
+    but non-fatal — the sidecar will fall back to an empty list and the
+    UI will show "no tools" rather than blocking startup of the MCP
+    server itself.
+    """
+    path = _get_tool_metadata_cache_path()
+    try:
+        path.write_text(json.dumps(metadata))
+    except OSError:
+        logger.warning("Failed to dump tool metadata cache to %s", path, exc_info=True)
+        return False
+    return True
+
+
+def load_tool_metadata_cache() -> list[dict[str, Any]]:
+    """Read cached tool metadata from disk.
+
+    Returns an empty list if the cache is missing, unreadable, or
+    malformed — the sidecar must still serve the settings page (even
+    with no tools listed) so the user can disable the sidecar itself
+    via the ``HA_MCP_DISABLE_SETTINGS_UI`` toggle.
+    """
+    path = _get_tool_metadata_cache_path()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        logger.warning("Cannot read tool metadata cache at %s", path, exc_info=True)
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Tool metadata cache at %s is not valid JSON", path)
+        return []
+    if not isinstance(data, list):
+        return []
+    return data
+
+
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
@@ -758,30 +812,21 @@ loadTools();
 )
 
 
-def register_settings_routes(
-    mcp: FastMCP,
-    server: HomeAssistantSmartMCPServer,
-    secret_path: str = "",
-) -> None:
-    """Register the settings UI HTTP routes.
+def build_settings_handlers(
+    server: HomeAssistantSmartMCPServer | None,
+) -> dict[str, Any]:
+    """Construct the settings UI route handlers.
 
-    The routes are mounted under ``secret_path`` so HTTP clients (Docker
-    / standalone) need the same secret to reach the UI as they do to
-    reach the MCP endpoint itself — there's no native auth on FastMCP
-    custom routes (they bypass ``RequireAuthMiddleware``), so this
-    matches the auth-by-obscurity model the rest of the server uses for
-    those modes. In add-on mode (``SUPERVISOR_TOKEN`` set) the routes
-    are *also* mounted at root so HA ingress can proxy to ``localhost:9583/``
-    and serve the "Open Web UI" button. Stdio transports never call this
-    function.
+    When ``server`` is provided (HTTP modes), the tools list and restart
+    handler use the live FastMCP server / Supervisor client. When
+    ``server`` is ``None`` (stdio sidecar process, which has no live MCP
+    server), the tools list is read from the on-disk metadata cache and
+    the restart handler returns 400 (the sidecar is not an add-on).
 
-    Args:
-        mcp: The FastMCP instance to register routes on.
-        server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
-        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
-            ``/mcp``). Required for non-add-on HTTP modes; if empty in
-            non-add-on mode, the function logs a warning and registers
-            nothing rather than expose the routes publicly.
+    Returns a dict mapping handler names to async Starlette handlers.
+    Both ``register_settings_routes`` (FastMCP mounting) and the stdio
+    sidecar's standalone Starlette app consume the same set of handlers
+    so the served page is identical regardless of transport.
     """
 
     async def _root_page(_: Request) -> HTMLResponse:
@@ -791,7 +836,10 @@ def register_settings_routes(
         return HTMLResponse(_SETTINGS_HTML)
 
     async def _get_tools(_: Request) -> JSONResponse:
-        tools = await _get_tool_metadata(server)
+        if server is not None:
+            tools = await _get_tool_metadata(server)
+        else:
+            tools = load_tool_metadata_cache()
         config = load_tool_config()
         states = config.get("tools", {})
         for name in DEFAULT_PINNED_TOOLS:
@@ -875,7 +923,11 @@ def register_settings_routes(
         )
 
     async def _restart_addon(request: Request) -> JSONResponse:
-        if not os.environ.get("SUPERVISOR_TOKEN"):
+        # The sidecar process (server is None) has no Supervisor context
+        # and no live server settings — refuse cleanly. The HTTP modes
+        # that do pass a server still go through the SUPERVISOR_TOKEN
+        # check below, preserving the original behavior.
+        if server is None or not os.environ.get("SUPERVISOR_TOKEN"):
             return JSONResponse(
                 create_error_response(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
@@ -965,6 +1017,42 @@ def register_settings_routes(
             }
         )
 
+    return {
+        "root_page": _root_page,
+        "settings_page": _settings_page,
+        "get_tools": _get_tools,
+        "save_tools": _save_tools,
+        "restart_addon": _restart_addon,
+        "settings_info": _settings_info,
+    }
+
+
+def register_settings_routes(
+    mcp: FastMCP,
+    server: HomeAssistantSmartMCPServer,
+    secret_path: str = "",
+) -> None:
+    """Register the settings UI HTTP routes on the FastMCP Starlette app.
+
+    The routes are mounted under ``secret_path`` so HTTP clients (Docker
+    / standalone) need the same secret to reach the UI as they do to
+    reach the MCP endpoint itself — there's no native auth on FastMCP
+    custom routes (they bypass ``RequireAuthMiddleware``), so this
+    matches the auth-by-obscurity model the rest of the server uses for
+    those modes. In add-on mode (``SUPERVISOR_TOKEN`` set) the routes
+    are *also* mounted at root so HA ingress can proxy to ``localhost:9583/``
+    and serve the "Open Web UI" button. Stdio transports use a separate
+    side-process sidecar instead — see :mod:`ha_mcp.stdio_settings_sidecar`.
+
+    Args:
+        mcp: The FastMCP instance to register routes on.
+        server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
+        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
+            ``/mcp``). Required for non-add-on HTTP modes; if empty in
+            non-add-on mode, the function logs a warning and registers
+            nothing rather than expose the routes publicly.
+    """
+    handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
@@ -982,28 +1070,28 @@ def register_settings_routes(
         # respect they share the existing add-on networking model where
         # port 9583 is exposed via host_network and the secret path is
         # the auth for direct access. Document this in DOCS.md.
-        mcp.custom_route("/", methods=["GET"])(_root_page)
-        mcp.custom_route("/settings", methods=["GET"])(_settings_page)
-        mcp.custom_route("/api/settings/tools", methods=["GET"])(_get_tools)
-        mcp.custom_route("/api/settings/tools", methods=["POST"])(_save_tools)
-        mcp.custom_route("/api/settings/restart", methods=["POST"])(_restart_addon)
-        mcp.custom_route("/api/settings/info", methods=["GET"])(_settings_info)
+        mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
+        mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
+        mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
+        mcp.custom_route("/api/settings/tools", methods=["POST"])(handlers["save_tools"])
+        mcp.custom_route("/api/settings/restart", methods=["POST"])(handlers["restart_addon"])
+        mcp.custom_route("/api/settings/info", methods=["GET"])(handlers["settings_info"])
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
         # need the same secret to reach the UI as they do for the MCP
         # endpoint. The frontend uses relative fetches (./api/settings/...)
         # so the JS works at either prefix unchanged.
-        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(_settings_page)
+        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(handlers["settings_page"])
         mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
-            _get_tools
+            handlers["get_tools"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(
-            _save_tools
+            handlers["save_tools"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(
-            _restart_addon
+            handlers["restart_addon"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
-            _settings_info
+            handlers["settings_info"]
         )

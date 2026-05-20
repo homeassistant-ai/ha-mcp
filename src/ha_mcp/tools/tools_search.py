@@ -1033,6 +1033,20 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
+        # Surface the stdio settings UI sidecar URL when a sidecar is
+        # running (issue #863). The LLM can hand this URL to the user
+        # when they ask how to change settings — the sidecar process
+        # outlives the stdio MCP subprocess, so the URL stays reachable.
+        # Absent when not running stdio mode (HTTP modes mount the
+        # settings page directly on the FastMCP server) or when the
+        # user has disabled the sidecar via HA_MCP_DISABLE_SETTINGS_UI
+        # / the in-page Stop control.
+        from ..stdio_settings_sidecar import read_sidecar_url
+
+        sidecar_url = read_sidecar_url()
+        if sidecar_url:
+            result["settings_url"] = sidecar_url
+
         return result
 
     @mcp.tool(

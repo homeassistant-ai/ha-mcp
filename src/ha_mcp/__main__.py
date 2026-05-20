@@ -627,7 +627,47 @@ def main() -> None:
     _setup_logging(settings.log_level)
     _log_startup_version()
 
+    # Spawn the persistent settings UI sidecar (issue #863). The sidecar
+    # is a detached subprocess so the settings page stays reachable even
+    # when this stdio process is SIGTERM'd or idle-killed by the client.
+    # Best-effort: failure logs a warning but doesn't block MCP startup.
+    _maybe_spawn_settings_sidecar()
+
     _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+
+
+def _maybe_spawn_settings_sidecar() -> None:
+    """Dump tool metadata cache + spawn the stdio settings UI sidecar.
+
+    Split out of ``main()`` to keep the entrypoint readable. The cache
+    dump uses a one-off ``asyncio.run`` because ``_get_tool_metadata``
+    is async; this happens before the main stdio loop so there's no
+    nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
+    """
+    import asyncio
+
+    from ha_mcp.settings_ui import (
+        _get_tool_metadata,
+        dump_tool_metadata_cache,
+    )
+    from ha_mcp.stdio_settings_sidecar import maybe_spawn
+
+    try:
+        metadata = asyncio.run(_get_tool_metadata(_get_server()))
+        dump_tool_metadata_cache(metadata)
+    except Exception:
+        # Cache dump is best-effort — the sidecar falls back to an empty
+        # tools list rather than blocking stdio startup.
+        logger.warning("Failed to dump tool metadata cache", exc_info=True)
+
+    try:
+        maybe_spawn()
+    except Exception:
+        # Spawn failures already log inside maybe_spawn(); the bare
+        # except here is a defense-in-depth guard for any unexpected
+        # path (e.g. import error in the sidecar module). Settings UI
+        # is advisory — never let it block MCP startup.
+        logger.warning("Failed to spawn settings UI sidecar", exc_info=True)
 
 
 def main_dev() -> None:
