@@ -944,7 +944,15 @@ class HomeAssistantClient:
                             f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
                         )
                         return entity_id
-        except Exception as e:
+        except HomeAssistantError as e:
+            # Polling-loop discipline (.gemini/styleguide.md HIGH-severity rule
+            # "Polling-loop exception handling"): narrow to expected transient
+            # classes. HomeAssistantError is the base of the four typed REST
+            # exceptions raised by get_states() (Connection / Auth / API /
+            # Command). Programming bugs (TypeError, KeyError, AttributeError,
+            # AssertionError) propagate so they fail loud with a stack trace
+            # instead of being swallowed and surfacing as entity_not_verified.
+            # Mirrors the wait_helpers.py::_POLLING_TRANSIENT_ERRORS pattern.
             logger.warning(
                 f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
             )
