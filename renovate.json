@@ -9,7 +9,8 @@
   ],
   "enabledManagers": [
     "custom.regex",
-    "dockerfile"
+    "dockerfile",
+    "git-submodules"
   ],
   "ignorePaths": [],
   "customManagers": [
