@@ -560,11 +560,17 @@ async def _get_waiter_ws_client(client: Any) -> Any:
 
     base_url = getattr(client, "base_url", None)
     token = getattr(client, "token", None)
+    # Per-client credentials are only meaningful when both are strings.
+    # If the caller is a test rig passing a ``MagicMock`` client (which
+    # returns ``MagicMock`` for any attribute), forwarding those into the
+    # WS pool trips URL-parsing TypeErrors deep inside ``WebSocketManager``.
+    # Treat any non-string credential as "no WS available" and fall
+    # through to REST polling — production callers always have a real
+    # string ``base_url`` and ``token``, so this only matters for tests.
+    if not (isinstance(base_url, str) and isinstance(token, str)):
+        return None
     try:
-        if base_url and token:
-            ws_client = await get_websocket_client(url=base_url, token=token)
-        else:
-            ws_client = await get_websocket_client()
+        ws_client = await get_websocket_client(url=base_url, token=token)
     except HomeAssistantAuthError:
         # Auth failures must reach the caller — a bad token should surface
         # as a real error, not as a 10s "timed out" via REST fallback.
