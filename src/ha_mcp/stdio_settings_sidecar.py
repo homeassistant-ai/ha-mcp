@@ -496,11 +496,11 @@ def run_main() -> int:
     Picks a port, generates a secret path, writes pid+url files, and
     runs uvicorn until killed. Returns the exit code.
     """
-    import uvicorn
-
     # Honor the disable sentinel on direct invocation too, so a user
     # who disabled via /shutdown but later tried to start the sidecar
-    # manually still gets the configured behavior.
+    # manually still gets the configured behavior. Checked before any
+    # heavy import (e.g. uvicorn) so the disable path is fast and
+    # doesn't pay the uvicorn-import cost.
     if _is_disabled():
         print(
             "Settings UI sidecar disabled (env var or sentinel). "
@@ -508,6 +508,8 @@ def run_main() -> int:
             file=sys.stderr,
         )
         return 0
+
+    import uvicorn
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
