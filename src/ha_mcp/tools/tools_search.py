@@ -47,6 +47,47 @@ def _build_pagination_metadata(
     return meta
 
 
+def _project_records(
+    records: list[dict[str, Any]], fields: list[str] | None
+) -> list[dict[str, Any]]:
+    """Project each record dict to only the specified keys.
+
+    Returns *records* unchanged when *fields* is ``None``.  Unknown keys are
+    silently dropped from each record.  Call :func:`_result_fields_warning`
+    on the original and projected lists if you want a diagnostic when all keys
+    were unknown (typo guard).
+    """
+    if fields is None:
+        return records
+    keep = set(fields)
+    return [{k: v for k, v in r.items() if k in keep} for r in records]
+
+
+def _result_fields_warning(
+    original: list[dict[str, Any]],
+    projected: list[dict[str, Any]],
+    fields: list[str],
+) -> str | None:
+    """Return a diagnostic string when all projected records are empty dicts.
+
+    Fires only when *original* is non-empty and every projected record is
+    ``{}`` — the typical cause is specifying only unknown field names
+    (e.g. a typo in ``result_fields``).  The caller should append the
+    returned string to the response ``warnings`` list.
+    """
+    if not original or not projected:
+        return None
+    if all(not r for r in projected):
+        # Sample up to 3 records for the available-keys hint so we don't
+        # iterate the whole (potentially large) list.
+        available = sorted({k for r in original[:3] for k in r})
+        return (
+            f"result_fields {sorted(fields)!r} matched no record keys — "
+            f"records came out empty. Available keys: {available!r}"
+        )
+    return None
+
+
 async def _exact_match_search(
     client: Any,
     query: str,
@@ -298,6 +339,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "When group_by_domain=True, cap results per domain to this number. "
                     "Applied after the global limit — use a high limit (e.g. limit=200) "
                     "with per_domain_limit=5 to get up to 5 entities from each domain. "
+                    "Ignored when group_by_domain=False. "
                     "None = no per-domain cap (default)."
                 ),
             ),
@@ -342,7 +384,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Available keys: success, query, results, total_matches, count, "
                     "offset, limit, has_more, next_offset, search_type, "
                     "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warning, partial, message, note, state_filter."
+                    "by_domain, warnings, partial, message, note, state_filter, "
+                    "state_filter_note."
                 ),
             ),
         ] = None,
@@ -426,6 +469,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if per_domain_limit is not None
                 else None
             )
+
+            # Normalize state_filter — strip surrounding whitespace so
+            # "on " and " on" match HA's canonical lowercase state values.
+            # HA states are typically lowercase; we don't lowercase here
+            # to keep the filter transparent (callers see what they sent),
+            # but agents that pass "ON" or "Off" will see 0 results and
+            # should use lowercase values.
+            if state_filter is not None:
+                state_filter = state_filter.strip()
+                # Collapse whitespace-only strings to None (no filter)
+                if not state_filter:
+                    state_filter = None
 
             # If area_filter is provided, use area-based search
             if area_filter:
@@ -552,13 +607,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                     if domain_filter:
                         search_data["domain_filter"] = domain_filter
-                    if state_filter:
+                    if state_filter is not None:
                         search_data["state_filter"] = state_filter
                         # Area+query uses fuzzy pagination internally; state_filter
                         # is applied to the returned page, not the full dataset.
                         search_data["state_filter_note"] = (
                             "state_filter applied to this page only; "
-                            "total_matches reflects the unfiltered fuzzy-search count"
+                            "total_matches and has_more reflect the unfiltered "
+                            "fuzzy-search dataset and may yield empty pages"
                         )
 
                     if group_by_domain_bool:
@@ -575,20 +631,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             }
                         if parsed_result_fields is not None:
                             by_domain = {
-                                d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                                d: _project_records(entities, parsed_result_fields)
                                 for d, entities in by_domain.items()
                             }
                         search_data["by_domain"] = by_domain
 
                     if parsed_result_fields is not None and "results" in search_data:
-                        search_data["results"] = [
-                            {k: v for k, v in r.items() if k in parsed_result_fields}
-                            for r in search_data["results"]
-                        ]
+                        _orig = search_data["results"]
+                        search_data["results"] = _project_records(_orig, parsed_result_fields)
+                        _warn = _result_fields_warning(_orig, search_data["results"], parsed_result_fields)
+                        if _warn:
+                            search_data.setdefault("warnings", []).append(_warn)
 
                     _r = await add_timezone_metadata(client, search_data)
                     if parsed_fields is not None:
+                        _sfn = _r["data"].get("state_filter_note")
                         _r["data"] = project_fields(_r["data"], parsed_fields)
+                        if _sfn is not None:
+                            _r["data"]["state_filter_note"] = _sfn
                     return _r
                 else:
                     # Just area filter, return area results with enhanced format
@@ -674,7 +734,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
-                        if state_filter:
+                        if state_filter is not None:
                             area_search_data["state_filter"] = state_filter
                         # Mirror the empty-area branch's message when
                         # the area resolved but a domain_filter wiped
@@ -701,18 +761,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 }
                             if parsed_result_fields is not None:
                                 paginated_by_domain = {
-                                    d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                                    d: _project_records(entities, parsed_result_fields)
                                     for d, entities in paginated_by_domain.items()
                                 }
                             area_search_data["by_domain"] = paginated_by_domain
                         if parsed_result_fields is not None and "results" in area_search_data:
-                            area_search_data["results"] = [
-                                {k: v for k, v in r.items() if k in parsed_result_fields}
-                                for r in area_search_data["results"]
-                            ]
+                            _orig = area_search_data["results"]
+                            area_search_data["results"] = _project_records(_orig, parsed_result_fields)
+                            _warn = _result_fields_warning(_orig, area_search_data["results"], parsed_result_fields)
+                            if _warn:
+                                area_search_data.setdefault("warnings", []).append(_warn)
                         _r = await add_timezone_metadata(client, area_search_data)
                         if parsed_fields is not None:
+                            _sfn = _r["data"].get("state_filter_note")
                             _r["data"] = project_fields(_r["data"], parsed_fields)
+                            if _sfn is not None:
+                                _r["data"]["state_filter_note"] = _sfn
                         return _r
                     else:
                         # Empty match: still emit `area_names: []` so
@@ -730,7 +794,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             empty_area_data["domain_filter"] = domain_filter
-                        if state_filter:
+                        if state_filter is not None:
                             empty_area_data["state_filter"] = state_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
@@ -831,20 +895,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
-                if state_filter:
+                if state_filter is not None:
                     domain_list_data["state_filter"] = state_filter
                 if parsed_result_fields is not None:
-                    domain_list_data["results"] = [
-                        {k: v for k, v in r.items() if k in parsed_result_fields}
-                        for r in results
-                    ]
+                    _orig = results
+                    domain_list_data["results"] = _project_records(_orig, parsed_result_fields)
+                    _warn = _result_fields_warning(_orig, domain_list_data["results"], parsed_result_fields)
+                    if _warn:
+                        domain_list_data.setdefault("warnings", []).append(_warn)
                 if group_by_domain_bool:
                     domain_list_results = results[:per_domain_limit_int] if per_domain_limit_int is not None else results
                     if parsed_result_fields is not None:
-                        domain_list_results = [
-                            {k: v for k, v in r.items() if k in parsed_result_fields}
-                            for r in domain_list_results
-                        ]
+                        domain_list_results = _project_records(domain_list_results, parsed_result_fields)
                     domain_list_data["by_domain"] = {domain_filter: domain_list_results}
                 _r = await add_timezone_metadata(client, domain_list_data)
                 if parsed_fields is not None:
@@ -945,10 +1007,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 filtered = [r for r in result["results"] if r.get("state") == state_filter]
                 result["results"] = filtered
                 result["count"] = len(filtered)
-                # Signal that state_filter is page-only for fuzzy mode
+                # Signal that state_filter is page-only for fuzzy mode.
+                # total_matches and has_more/next_offset reflect the unfiltered
+                # fuzzy dataset — subsequent pages may also come back empty if
+                # no entities on that page match the state filter.
                 result["state_filter_note"] = (
                     "state_filter applied to this page only; "
-                    "total_matches reflects the unfiltered fuzzy-search count"
+                    "total_matches and has_more reflect the unfiltered "
+                    "fuzzy-search dataset and may yield empty pages"
                 )
 
             # Group by domain if requested (built from already-filtered results)
@@ -968,8 +1034,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             result["search_type"] = search_type
 
-            # Echo state_filter in response so callers can see what filter was applied
-            if state_filter:
+            # Echo state_filter in response so callers can see what filter was applied.
+            # Gate on ``is not None`` (not truthy) so an empty-string or
+            # falsy-but-intentional value is still reflected in the response.
+            # (state_filter=None means no filter was requested — omit in that case.)
+            if state_filter is not None:
                 result["state_filter"] = state_filter
 
             # Add warning and partial flag if fallback was used
@@ -979,19 +1048,26 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Apply per-record projection to results and by_domain
             if parsed_result_fields is not None and "results" in result:
-                result["results"] = [
-                    {k: v for k, v in r.items() if k in parsed_result_fields}
-                    for r in result["results"]
-                ]
+                _orig = result["results"]
+                result["results"] = _project_records(_orig, parsed_result_fields)
+                _warn = _result_fields_warning(_orig, result["results"], parsed_result_fields)
+                if _warn:
+                    result.setdefault("warnings", []).append(_warn)
             if parsed_result_fields is not None and "by_domain" in result:
                 result["by_domain"] = {
-                    d: [{k: v for k, v in r.items() if k in parsed_result_fields} for r in entities]
+                    d: _project_records(entities, parsed_result_fields)
                     for d, entities in result["by_domain"].items()
                 }
 
             _r = await add_timezone_metadata(client, result)
             if parsed_fields is not None:
+                # Force-retain state_filter_note alongside success — it
+                # explains has_more/total_matches semantics for fuzzy+state_filter
+                # and should survive a fields= projection so the caller isn't misled.
+                _sfn = _r["data"].get("state_filter_note")
                 _r["data"] = project_fields(_r["data"], parsed_fields)
+                if _sfn is not None:
+                    _r["data"]["state_filter_note"] = _sfn
             return _r
 
         except ToolError:
@@ -1227,11 +1303,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                 )
             result["system_info"] = system_info
-            # Enrich system_summary with HA version (config already fetched above)
+            # Enrich system_summary with HA version (config already fetched above).
+            # Use `or "unknown"` so a None version (HA omitting the key) still
+            # surfaces a sentinel value rather than null.
             if "system_summary" in result:
-                result["system_summary"]["version"] = config.get("version")
+                result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
             logger.warning(f"Failed to fetch system info for overview: {e}")
+            # Config fetch failed — populate version sentinel so system_summary
+            # always has a "version" key regardless of connection state.
+            if "system_summary" in result:
+                result["system_summary"].setdefault("version", "unknown")
 
         # Include active persistent notifications
         if include_notifications_bool:

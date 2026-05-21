@@ -12,6 +12,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.util_helpers import (
     DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS,
     _resolve_data_path,
+    add_timezone_metadata,
     apply_entity_category,
     build_pagination_metadata,
     coerce_int_param,
@@ -1363,3 +1364,52 @@ class TestApplyEntityCategoryWriter:
         assert "earlier note" in warnings
         assert any("failed to set category" in w for w in warnings)
         assert "category_warning" not in result
+
+
+class TestAddTimezoneMetadata:
+    """Behavioral assertions for add_timezone_metadata (issue #1199).
+
+    Pins the ``include_metadata=False`` short-circuit and the config-fetch
+    fallback so regressions fail loudly.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "America/New_York"})
+        return client
+
+    @pytest.mark.asyncio
+    async def test_default_wraps_in_data_metadata_envelope(self, mock_client):
+        """include_metadata=True (default) wraps data in {data, metadata}."""
+        data = {"success": True, "results": []}
+        result = await add_timezone_metadata(mock_client, data)
+        assert "data" in result
+        assert "metadata" in result
+        assert result["data"] is data
+
+    @pytest.mark.asyncio
+    async def test_include_metadata_false_returns_data_unchanged(self, mock_client):
+        """include_metadata=False bypasses wrapping — returns data object identity."""
+        data = {"success": True, "results": []}
+        result = await add_timezone_metadata(mock_client, data, include_metadata=False)
+        # Same object; no wrapping
+        assert result is data
+        assert "metadata" not in result
+        assert "data" not in result
+
+    @pytest.mark.asyncio
+    async def test_metadata_contains_ha_timezone(self, mock_client):
+        """metadata.home_assistant_timezone is populated from HA config."""
+        result = await add_timezone_metadata(mock_client, {"success": True})
+        assert result["metadata"]["home_assistant_timezone"] == "America/New_York"
+
+    @pytest.mark.asyncio
+    async def test_config_failure_falls_back_to_unknown_timezone(self):
+        """On config fetch exception the wrapper still returns with 'Unknown' timezone."""
+        client = MagicMock()
+        client.get_config = AsyncMock(side_effect=RuntimeError("unreachable"))
+        result = await add_timezone_metadata(client, {"success": True})
+        # Wrapper is still present; timezone is the fallback sentinel
+        assert "data" in result
+        assert result["metadata"]["home_assistant_timezone"] == "Unknown"

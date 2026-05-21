@@ -324,3 +324,205 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert "search_type" in data
         assert data["search_type"] == "domain_listing"
         assert "note" in data
+
+
+# ---------------------------------------------------------------------------
+# New test classes for feature #1199 review items
+# ---------------------------------------------------------------------------
+
+_MULTI_ENTITY_STATES = [
+    {
+        "entity_id": "light.kitchen",
+        "state": "on",
+        "attributes": {"friendly_name": "Kitchen Light"},
+    },
+    {
+        "entity_id": "light.bedroom",
+        "state": "off",
+        "attributes": {"friendly_name": "Bedroom Light"},
+    },
+    {
+        "entity_id": "switch.fan",
+        "state": "on",
+        "attributes": {"friendly_name": "Fan Switch"},
+    },
+    {
+        "entity_id": "switch.pump",
+        "state": "off",
+        "attributes": {"friendly_name": "Pump Switch"},
+    },
+]
+
+
+class _SearchToolFixture:
+    """Shared fixture mixin for ha_search_entities tests."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_search_entities"]
+
+
+class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
+    """Tests for per_domain_limit= cap on group_by_domain results (issue #1199)."""
+
+    @pytest.mark.asyncio
+    async def test_per_domain_limit_caps_by_domain_entries(self, search_tool):
+        """per_domain_limit=1 with group_by_domain=True caps each domain to 1 entity."""
+        result = await search_tool(
+            query="light",
+            group_by_domain=True,
+            per_domain_limit=1,
+            limit=20,
+        )
+        by_domain = result["data"].get("by_domain", {})
+        assert "light" in by_domain
+        assert len(by_domain["light"]) <= 1, (
+            "per_domain_limit=1 should cap each domain bucket to at most 1 entity"
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_domain_limit_no_cap_without_group_by_domain(self, search_tool):
+        """per_domain_limit is ignored when group_by_domain=False (no by_domain key)."""
+        result = await search_tool(
+            query="light",
+            group_by_domain=False,
+            per_domain_limit=1,
+        )
+        data = result["data"]
+        # Results still present; no by_domain grouping
+        assert "results" in data
+        assert "by_domain" not in data
+
+    @pytest.mark.asyncio
+    async def test_per_domain_limit_domain_listing_branch(self, search_tool):
+        """per_domain_limit=1 with group_by_domain=True works in domain_listing branch."""
+        result = await search_tool(
+            domain_filter="light",
+            group_by_domain=True,
+            per_domain_limit=1,
+            limit=20,
+        )
+        by_domain = result["data"].get("by_domain", {})
+        assert "light" in by_domain
+        assert len(by_domain["light"]) <= 1
+
+
+class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
+    """Tests for state_filter= normalization and per-branch behavior (issue #1199)."""
+
+    @pytest.mark.asyncio
+    async def test_state_filter_exact_match_keeps_matching_entities(self, search_tool):
+        """state_filter='on' in exact_match mode keeps only 'on' entities."""
+        result = await search_tool(query="light", state_filter="on")
+        data = result["data"]
+        for entity in data["results"]:
+            assert entity["state"] == "on", (
+                "state_filter='on' should remove non-'on' entities from results"
+            )
+
+    @pytest.mark.asyncio
+    async def test_state_filter_strips_surrounding_whitespace(self, search_tool):
+        """state_filter with whitespace padding is normalized before matching."""
+        result_padded = await search_tool(query="light", state_filter="  on  ")
+        result_plain = await search_tool(query="light", state_filter="on")
+        # Both should return the same set of entities
+        padded_ids = {e["entity_id"] for e in result_padded["data"]["results"]}
+        plain_ids = {e["entity_id"] for e in result_plain["data"]["results"]}
+        assert padded_ids == plain_ids
+
+    @pytest.mark.asyncio
+    async def test_state_filter_echoed_in_response(self, search_tool):
+        """state_filter value (after strip) is echoed back in the data dict."""
+        result = await search_tool(query="light", state_filter="on")
+        assert result["data"]["state_filter"] == "on"
+
+    @pytest.mark.asyncio
+    async def test_state_filter_domain_listing_branch(self, search_tool):
+        """state_filter works in the domain_listing branch (empty query + domain_filter)."""
+        result = await search_tool(domain_filter="light", state_filter="on")
+        data = result["data"]
+        for entity in data["results"]:
+            assert entity["state"] == "on"
+        assert data.get("state_filter") == "on"
+
+    @pytest.mark.asyncio
+    async def test_state_filter_whitespace_only_treated_as_no_filter(self, search_tool):
+        """state_filter='   ' (whitespace only) is treated as no filter (None)."""
+        result_no_filter = await search_tool(query="light")
+        result_ws_filter = await search_tool(query="light", state_filter="   ")
+        no_filter_count = result_no_filter["data"]["count"]
+        ws_filter_count = result_ws_filter["data"]["count"]
+        # Both should return the same number of results (no filtering applied)
+        assert ws_filter_count == no_filter_count
+
+
+class TestHaSearchEntitiesResultFields(_SearchToolFixture):
+    """Tests for result_fields= per-record projection (issue #1199)."""
+
+    @pytest.mark.asyncio
+    async def test_result_fields_projects_entity_records(self, search_tool):
+        """result_fields=['entity_id','state'] limits each record to those keys."""
+        result = await search_tool(query="light", result_fields=["entity_id", "state"])
+        data = result["data"]
+        for entity in data["results"]:
+            assert set(entity.keys()) == {"entity_id", "state"}
+
+    @pytest.mark.asyncio
+    async def test_result_fields_outer_response_keys_preserved(self, search_tool):
+        """result_fields only projects inside results[]; top-level keys are unchanged."""
+        result = await search_tool(query="light", result_fields=["entity_id"])
+        data = result["data"]
+        assert "success" in data
+        assert "total_matches" in data
+        assert "count" in data
+
+    @pytest.mark.asyncio
+    async def test_result_fields_unknown_key_emits_warning(self, search_tool):
+        """result_fields with only unknown keys emits a diagnostic warning."""
+        result = await search_tool(query="light", result_fields=["nonexistent_key"])
+        data = result["data"]
+        # Each entity record is projected to {} since the key doesn't exist
+        for entity in data["results"]:
+            assert entity == {}
+        # A diagnostic warning should be present
+        assert "warnings" in data
+        assert any("nonexistent_key" in w for w in data["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_result_fields_domain_listing_branch(self, search_tool):
+        """result_fields works in the domain_listing branch."""
+        result = await search_tool(domain_filter="light", result_fields=["entity_id"])
+        data = result["data"]
+        for entity in data["results"]:
+            assert set(entity.keys()) == {"entity_id"}

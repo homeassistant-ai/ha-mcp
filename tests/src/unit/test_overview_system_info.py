@@ -211,3 +211,81 @@ class TestHaGetOverviewFieldsProjection:
 
         with pytest.raises(ToolError):
             await overview_tool(fields='["')
+
+
+class TestHaGetOverviewSystemSummaryVersion:
+    """Tests for system_summary["version"] enrichment from HA config (issue #1199)."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_smart_tools_with_summary(self):
+        """smart_tools returns a result that includes a system_summary sub-dict."""
+        smart = MagicMock()
+        smart.get_system_overview = AsyncMock(
+            return_value={
+                "success": True,
+                "system_summary": {"entity_count": 10},
+            }
+        )
+        return smart
+
+    @pytest.fixture
+    def overview_tool_with_version(self, mock_mcp, mock_smart_tools_with_summary):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"version": "2026.5.3"})
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.fixture
+    def overview_tool_config_fails(self, mock_mcp, mock_smart_tools_with_summary):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(side_effect=RuntimeError("connection refused"))
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.fixture
+    def overview_tool_version_none(self, mock_mcp, mock_smart_tools_with_summary):
+        """Config returns successfully but version key is absent."""
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})  # version key missing
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.mark.asyncio
+    async def test_version_populated_from_config(self, overview_tool_with_version):
+        """system_summary["version"] reflects the HA version from config."""
+        result = await overview_tool_with_version()
+        assert result["system_summary"]["version"] == "2026.5.3"
+
+    @pytest.mark.asyncio
+    async def test_version_unknown_on_config_failure(self, overview_tool_config_fails):
+        """system_summary["version"] is "unknown" when config fetch raises."""
+        result = await overview_tool_config_fails()
+        assert "system_summary" in result
+        assert result["system_summary"]["version"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_version_unknown_when_config_omits_key(self, overview_tool_version_none):
+        """system_summary["version"] is "unknown" when config has no version key."""
+        result = await overview_tool_version_none()
+        assert result["system_summary"]["version"] == "unknown"

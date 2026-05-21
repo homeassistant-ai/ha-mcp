@@ -485,8 +485,12 @@ async def add_timezone_metadata(
                 "note": f"All timestamps are in UTC. Home Assistant timezone is {ha_timezone}.",
             },
         }
-    except Exception:
-        # Fallback if config fetch fails
+    except Exception as _tz_exc:
+        logger.warning(
+            "add_timezone_metadata: failed to fetch HA timezone config — "
+            "falling back to 'Unknown': %s",
+            _tz_exc,
+        )
         return {
             "data": data,
             "metadata": {

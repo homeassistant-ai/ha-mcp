@@ -275,3 +275,92 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     async def test_bad_json_fields_raises_tool_error(self, history_tool):
         with pytest.raises(ToolError):
             await history_tool(entity_ids="sensor.energy", source="statistics", fields='["')
+
+
+class TestHaGetHistoryOrder:
+    """Tests for the order= parameter (issue #1199).
+
+    Verifies that the order parameter is threaded through to _fetch_history
+    (which is responsible for the actual reversal).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://homeassistant.local"
+        client.token = "test_token"
+        client.verify_ssl = True
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def history_tool(self, mock_client):
+        return HistoryTools(mock_client).ha_get_history
+
+    _INNER_STUB = {
+        "success": True,
+        "source": "history",
+        "entities": [{"entity_id": "sensor.temp", "states": []}],
+        "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+        "query_params": {
+            "minimal_response": True,
+            "significant_changes_only": True,
+            "limit": 100,
+            "offset": 0,
+            "order": "desc",
+        },
+    }
+
+    def _ws_patch(self):
+        ws = AsyncMock()
+        ws.disconnect = AsyncMock()
+        return patch(
+            "ha_mcp.tools.tools_history.get_connected_ws_client",
+            new_callable=AsyncMock,
+            return_value=(ws, None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_order_desc_default_passed_to_fetch_history(self, history_tool):
+        """Default order='desc' is threaded through to _fetch_history."""
+        with self._ws_patch(), patch(
+            "ha_mcp.tools.tools_history._fetch_history",
+            new_callable=AsyncMock,
+            return_value=dict(self._INNER_STUB),
+        ) as mock_fetch:
+            await history_tool(entity_ids="sensor.temp")
+        _args, _kwargs = mock_fetch.call_args
+        assert _kwargs.get("order") == "desc" or "desc" in _args
+
+    @pytest.mark.asyncio
+    async def test_order_asc_passed_to_fetch_history(self, history_tool):
+        """order='asc' is passed through to _fetch_history unchanged."""
+        with self._ws_patch(), patch(
+            "ha_mcp.tools.tools_history._fetch_history",
+            new_callable=AsyncMock,
+            return_value=dict(self._INNER_STUB),
+        ) as mock_fetch:
+            await history_tool(entity_ids="sensor.temp", order="asc")
+        _args, _kwargs = mock_fetch.call_args
+        assert _kwargs.get("order") == "asc" or "asc" in _args
+
+    @pytest.mark.asyncio
+    async def test_order_ignored_for_statistics_source(self, history_tool):
+        """order= is not passed to _fetch_statistics (statistics has no ordering param)."""
+        _stats_stub = {
+            "success": True,
+            "source": "statistics",
+            "entities": [],
+            "period_type": "day",
+            "time_range": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+            "statistic_types": ["mean"],
+            "query_params": {"limit": 100, "offset": 0},
+        }
+        with self._ws_patch(), patch(
+            "ha_mcp.tools.tools_history._fetch_statistics",
+            new_callable=AsyncMock,
+            return_value=_stats_stub,
+        ) as mock_stats:
+            await history_tool(entity_ids="sensor.energy", source="statistics", order="asc")
+        # _fetch_statistics should be called, not _fetch_history
+        mock_stats.assert_called_once()
