@@ -120,6 +120,41 @@ class TestCategoryGetMissingReturnsResourceNotFound:
         assert error_data["scope"] == "automation"
 
 
+class TestZoneGetMissingReturnsResourceNotFound:
+    """Regression: ha_get_zone(zone_id=missing) must surface
+    ``RESOURCE_NOT_FOUND``. Same pattern as labels/categories: registry-
+    internal ``zone_id`` lookup (not entity_id), with an explicit
+    ``ha_get_zone()`` recovery suggestion that the auto-injected entity-
+    search hint would have overridden.
+    """
+
+    @pytest.fixture
+    def tools(self, mock_ws_client):
+        from ha_mcp.tools.tools_zones import ZoneTools
+
+        return ZoneTools(mock_ws_client)
+
+    async def test_missing_zone_id_surfaces_resource_not_found(
+        self, tools, mock_ws_client
+    ):
+        mock_ws_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [{"id": "existing_zone", "name": "Existing"}],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_zone(zone_id="missing_zone")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["success"] is False
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            "Zones are addressed by registry-internal zone_id here, not by "
+            "entity_id — RESOURCE_NOT_FOUND is the correct category."
+        )
+        assert any("ha_get_zone" in s for s in _all_suggestions(error_data["error"]))
+        assert "available_zone_ids" in error_data
+
+
 def _register_registry_tools_and_capture(mock_client):
     """Closure-pattern capture for tools_registry (same shape as tools_config_dashboards)."""
     from ha_mcp.tools.tools_registry import register_registry_tools
