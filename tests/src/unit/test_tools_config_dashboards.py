@@ -8,16 +8,19 @@ the right HA-version axis; these unit tests pin the contract independent
 of HA wording stability.
 """
 
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import (
     _LAZY_RESOLVE_TRIGGER,
     _lazy_resolve_and_retry,
     _resolve_dashboard,
     _should_lazy_resolve,
+    register_config_dashboard_tools,
 )
 
 # -----------------------------------------------------------------------------
@@ -265,3 +268,101 @@ class TestLazyResolveAndRetry:
         retry_call = fake_client.send_websocket_message.call_args_list[1]
         assert retry_call.args[0]["url_path"] == "my-dash"
         assert retry_call.args[0]["type"] == "lovelace/config"
+
+
+class TestDeleteDashboardNotFoundShape:
+    """Pin the 404 and idempotent-success shapes on ``ha_config_delete_dashboard``
+    (issue #1300): ``RESOURCE_NOT_FOUND`` with top-level ``action`` + ``url_path``,
+    no ``resource_type`` / ``identifier``, and the success path's matching key
+    set on the WS-not-found idempotent branch.
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def delete_tool(self, mock_mcp, mock_client):
+        register_config_dashboard_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_delete_dashboard"]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_url_path_raises_resource_not_found(
+        self, delete_tool, mock_client
+    ):
+        """When _resolve_dashboard finds no match (empty registry), the tool
+        raises a ToolError carrying the canonical RESOURCE_NOT_FOUND shape
+        with top-level ``action`` and ``url_path`` matching the idempotent
+        already-deleted success branch on the same function.
+        """
+        # Empty dashboards list → _resolve_dashboard returns None.
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="ghost-dash")
+
+        body = json.loads(str(exc_info.value))
+
+        # Error code lives at error.code (canonical builder shape).
+        assert body["success"] is False
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "ghost-dash" in body["error"]["message"]
+
+        # Top-level shape mirrors the idempotent already-deleted success branch:
+        # action="delete" + url_path=<input>.
+        assert body["action"] == "delete"
+        assert body["url_path"] == "ghost-dash"
+
+        # The pre-#1300 hard-coded resource_type / identifier from the
+        # previous helper path are intentionally dropped — those keys were
+        # the source of the cross-family shape divergence.
+        assert "resource_type" not in body
+        assert "identifier" not in body
+
+    @pytest.mark.asyncio
+    async def test_already_deleted_returns_idempotent_success_shape(
+        self, delete_tool, mock_client
+    ):
+        """When _resolve_dashboard succeeds but the WS delete call replies with
+        a ``not found`` error, the tool returns the idempotent success shape
+        — locking the ``action`` + ``url_path`` keys that the failure-path
+        404 mirrors. Drift between the two top-level shapes would surface
+        as a test break here.
+        """
+        # First call: registry lookup → returns a real dashboard so
+        # _resolve_dashboard succeeds. Second call: delete → server reports
+        # the dashboard is already gone, triggering the idempotent branch.
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
+            {"success": False, "error": {"message": "Dashboard not found"}},
+        ]
+
+        result = await delete_tool(url_path="stale-dash")
+
+        assert result["success"] is True
+        assert result["action"] == "delete"
+        assert result["url_path"] == "stale-dash"
+        # Symmetric absence to the 404-path: success branch must also not
+        # leak the dropped resource_type / identifier keys.
+        assert "resource_type" not in result
+        assert "identifier" not in result

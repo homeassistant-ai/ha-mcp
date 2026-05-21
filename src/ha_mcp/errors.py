@@ -383,20 +383,6 @@ def create_timeout_error(
     )
 
 
-def create_resource_not_found_error(
-    resource_type: str,
-    identifier: str,
-    details: str | None = None,
-) -> dict[str, Any]:
-    """Create a resource not found error response."""
-    return create_error_response(
-        ErrorCode.RESOURCE_NOT_FOUND,
-        f"{resource_type} '{identifier}' not found",
-        details=details,
-        context={"resource_type": resource_type, "identifier": identifier},
-    )
-
-
 def is_error_response(response: dict[str, Any]) -> bool:
     """Check if a response is an error response."""
     return response.get("success") is False and "error" in response
