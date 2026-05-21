@@ -717,8 +717,14 @@ def register_backup_tools(
         mgr = get_backup_manager(client, settings)
 
         if action == "list":
-            entries = mgr.list_snapshots(
-                domain=domain, entity_id=entity_id, limit=limit
+            # list_snapshots does sync directory globbing + per-file stat;
+            # offload to the executor so it doesn't block the event loop
+            # when the backup dir holds many files.
+            entries = await asyncio.to_thread(
+                mgr.list_snapshots,
+                domain=domain,
+                entity_id=entity_id,
+                limit=limit,
             )
             return {
                 "success": True,
@@ -735,7 +741,7 @@ def register_backup_tools(
         if action == "view":
             bname = _require("backup_name", backup_name, scope, action)
             try:
-                data = mgr.read_snapshot(bname)
+                data = await asyncio.to_thread(mgr.read_snapshot, bname)
             except FileNotFoundError:
                 raise_tool_error(
                     create_error_response(
@@ -787,7 +793,7 @@ def register_backup_tools(
         # action == "delete"
         if backup_name:
             try:
-                mgr.delete_snapshot(backup_name)
+                await asyncio.to_thread(mgr.delete_snapshot, backup_name)
             except FileNotFoundError:
                 raise_tool_error(
                     create_error_response(
@@ -818,7 +824,10 @@ def register_backup_tools(
                     ],
                 )
             )
-        deleted = mgr.delete_bulk(
-            domain=domain, entity_id=entity_id, older_than_days=older_than_days
+        deleted = await asyncio.to_thread(
+            mgr.delete_bulk,
+            domain=domain,
+            entity_id=entity_id,
+            older_than_days=older_than_days,
         )
         return {"success": True, "data": {"deleted": deleted, "count": len(deleted)}}

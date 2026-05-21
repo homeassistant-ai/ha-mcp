@@ -9,6 +9,7 @@ Works across all installation methods (add-on, Docker, standalone).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -1224,7 +1225,9 @@ def register_settings_routes(
             limit = int(params.get("limit", "500"))
         except ValueError:
             return _bad_request("'limit' must be an integer")
-        entries = mgr.list_snapshots(
+        # Offload sync directory I/O to keep the request handler async-clean.
+        entries = await asyncio.to_thread(
+            mgr.list_snapshots,
             domain=params.get("domain") or None,
             entity_id=params.get("entity_id") or None,
             limit=max(1, min(10_000, limit)),
@@ -1248,7 +1251,7 @@ def register_settings_routes(
             return _bad_request("Backup manager unavailable")
         name = request.path_params.get("name", "")
         try:
-            data = mgr.read_snapshot(name)
+            data = await asyncio.to_thread(mgr.read_snapshot, name)
         except FileNotFoundError:
             return _not_found(name)
         except ValueError as err:
@@ -1265,7 +1268,7 @@ def register_settings_routes(
             return _bad_request("Backup manager unavailable")
         name = request.path_params.get("name", "")
         try:
-            snapshot = mgr.read_snapshot(name)
+            snapshot = await asyncio.to_thread(mgr.read_snapshot, name)
         except FileNotFoundError:
             return _not_found(name)
         except ValueError as err:
@@ -1325,7 +1328,7 @@ def register_settings_routes(
             return _bad_request("Backup manager unavailable")
         name = request.path_params.get("name", "")
         try:
-            mgr.delete_snapshot(name)
+            await asyncio.to_thread(mgr.delete_snapshot, name)
         except FileNotFoundError:
             return _not_found(name)
         except ValueError as err:
@@ -1352,7 +1355,8 @@ def register_settings_routes(
                 "(domain, entity_id, older_than_days)"
             )
         try:
-            deleted = mgr.delete_bulk(
+            deleted = await asyncio.to_thread(
+                mgr.delete_bulk,
                 domain=params.get("domain") or None,
                 entity_id=params.get("entity_id") or None,
                 older_than_days=older_int,

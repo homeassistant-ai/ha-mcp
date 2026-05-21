@@ -51,10 +51,31 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from .client.rest_client import HomeAssistantError
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+# Expected failure modes for the capture pipeline. Anything outside this
+# tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
+# propagate to the wrapped tool's caller, not be silently swallowed.
+_CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    HomeAssistantError,
+    OSError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    ConnectionError,
+    yaml.YAMLError,
+)
+
+# Soft cap on per-entity throttle/lock tracker size. Auto-pruning kicks
+# in once exceeded; protects long-running servers from unbounded growth
+# while staying well above any realistic HA install (typical: dozens to
+# hundreds of entities edited per session).
+_TRACKER_SOFT_CAP = 10_000
+_TRACKER_PRUNE_BATCH = 1_000
 
 # Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>.yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
@@ -127,7 +148,16 @@ class BackupManager:
         self._settings = settings
         self._client = client
         self._handlers: dict[str, DomainHandler] = {}
+        # Throttle tracker: maps "domain:entity_id" -> monotonic-time of
+        # the last successful capture. Auto-pruned past _TRACKER_SOFT_CAP
+        # so a long-running server editing many distinct entities cannot
+        # leak memory through this dict.
         self._last_snapshot: dict[str, float] = {}
+        # Per-key locks serialize fetch+write for the same entity, so
+        # two concurrent writes to the same automation can't race and
+        # produce duplicate snapshots within the throttle window. Kept
+        # for the manager's lifetime — each lock is tiny (~64 bytes);
+        # removing a lock while another task is awaiting it would race.
         self._locks: dict[str, asyncio.Lock] = {}
         self._init_dir_error: str | None = None
         self._dir = self._resolve_dir()
@@ -221,7 +251,7 @@ class BackupManager:
                 return None
             try:
                 config = await handler.fetch(self._client, entity_id)
-            except Exception as err:
+            except _CAPTURE_TRANSIENT_ERRORS as err:
                 logger.warning(
                     "Auto-backup: fetch failed for %s — %s: %s",
                     key,
@@ -237,7 +267,7 @@ class BackupManager:
                 path = await asyncio.to_thread(
                     self._write_snapshot, domain, entity_id, config, tool_name
                 )
-            except Exception as err:
+            except (OSError, yaml.YAMLError) as err:
                 logger.warning(
                     "Auto-backup: write failed for %s — %s: %s",
                     key,
@@ -246,9 +276,10 @@ class BackupManager:
                 )
                 return None
             self._last_snapshot[key] = now
+            self._maybe_prune_trackers()
             try:
                 await asyncio.to_thread(self._rotate, domain, entity_id)
-            except Exception as err:
+            except OSError as err:
                 logger.warning(
                     "Auto-backup: rotation failed for %s — %s: %s",
                     key,
@@ -256,6 +287,30 @@ class BackupManager:
                     err,
                 )
             return path
+
+    def _maybe_prune_trackers(self) -> None:
+        """Cap per-entity tracker growth.
+
+        Once ``_last_snapshot`` exceeds ``_TRACKER_SOFT_CAP``, drop the
+        oldest ``_TRACKER_PRUNE_BATCH`` entries. The lock map is left
+        alone — removing a lock that another task is awaiting would race;
+        each lock is small (~64 bytes) and HA installs never reach the
+        cap in practice.
+        """
+        if len(self._last_snapshot) <= _TRACKER_SOFT_CAP:
+            return
+        # Drop the oldest entries by monotonic timestamp.
+        oldest = sorted(self._last_snapshot.items(), key=lambda kv: kv[1])[
+            :_TRACKER_PRUNE_BATCH
+        ]
+        for key, _ in oldest:
+            self._last_snapshot.pop(key, None)
+        logger.info(
+            "Auto-backup: pruned %d oldest tracker entries (cap=%d, now=%d entries)",
+            len(oldest),
+            _TRACKER_SOFT_CAP,
+            len(self._last_snapshot),
+        )
 
     def _write_snapshot(
         self, domain: str, entity_id: str, config: Any, tool_name: str | None
@@ -468,13 +523,14 @@ async def _rest_get_or_none(client: Any, path: str) -> Any:
     The client doesn't expose a public ``get(path)`` — the convention is
     to call the typed wrappers (``get_automation_config``,
     ``get_states``, etc.) which internally call ``_request``. Domains
-    without a typed wrapper use this helper.
+    without a typed wrapper use this helper. Narrow exception handling
+    catches expected REST/transport failures; programming errors (e.g.
+    ``AttributeError`` from a typo in the path) propagate.
     """
     try:
         return await client._request("GET", path)
-    except Exception as err:
-        status = getattr(err, "status_code", None)
-        if status == 404:
+    except HomeAssistantError as err:
+        if getattr(err, "status_code", None) == 404:
             return None
         raise
 
@@ -506,11 +562,17 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         cmd_type = message.pop("type")
         result = await ws_client.send_command(cmd_type, **message)
     finally:
-        # Best-effort close; never raise from cleanup.
+        # Best-effort close: narrow to transport/network errors; let
+        # other exceptions propagate so they show up in logs rather
+        # than getting silently swallowed during cleanup.
         try:
             await ws_client.disconnect()
-        except Exception:
-            pass
+        except (TimeoutError, OSError, ConnectionError) as err:
+            logger.debug(
+                "Auto-backup: ws disconnect failed (transport-level): %s: %s",
+                type(err).__name__,
+                err,
+            )
     return result
 
 
@@ -525,7 +587,7 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
     try:
         return await client.get_automation_config(entity_id)
-    except Exception as err:
+    except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
@@ -538,7 +600,7 @@ async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
 async def _fetch_script(client: Any, entity_id: str) -> Any:
     try:
         result = await client.get_script_config(entity_id)
-    except Exception as err:
+    except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
@@ -554,7 +616,7 @@ async def _restore_script(client: Any, entity_id: str, config: Any) -> Any:
 async def _fetch_scene(client: Any, entity_id: str) -> Any:
     try:
         result = await client.get_scene_config(entity_id)
-    except Exception as err:
+    except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
@@ -573,7 +635,10 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
         return await _ws_send(
             client, {"type": "lovelace/config", "url_path": entity_id, "force": True}
         )
-    except Exception as err:
+    except HomeAssistantError as err:
+        # HA returns a command error for missing dashboards; the message
+        # contains "not_found" / "config_not_found" — surface as None so
+        # the capture pipeline treats it as "entity doesn't exist yet".
         if "not_found" in str(err).lower() or "config_not_found" in str(err).lower():
             return None
         raise
@@ -694,7 +759,19 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     cal, _, uid = entity_id.partition("::")
     if not cal or not uid:
         return None
-    # 7-day lookahead window is wide enough to catch most edits.
+    # Configurable lookahead window. Default 7 days catches typical edits;
+    # set HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS to widen for far-future
+    # events or narrow to skip noise. Bounded so a typo can't query
+    # decades of history.
+    try:
+        from .config import get_global_settings
+
+        days = int(
+            getattr(get_global_settings(), "auto_backup_calendar_lookahead_days", 7)
+        )
+    except Exception:
+        days = 7
+    days = max(1, min(365, days))
     start = datetime.now(UTC).isoformat()
     payload = {
         "type": "execute_script",
@@ -702,7 +779,7 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
             {
                 "service": "calendar.get_events",
                 "target": {"entity_id": cal},
-                "data": {"duration": {"days": 7}, "start_date_time": start},
+                "data": {"duration": {"days": days}, "start_date_time": start},
                 "response_variable": "events",
             },
             {"stop": "", "response_variable": "events"},
@@ -710,7 +787,7 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     }
     try:
         result = await _ws_send(client, payload)
-    except Exception:
+    except HomeAssistantError:
         return None
     if not isinstance(result, dict):
         return None
@@ -813,7 +890,7 @@ async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
     }
     try:
         result = await _ws_send(client, payload)
-    except Exception:
+    except HomeAssistantError:
         return None
     if not isinstance(result, dict):
         return None

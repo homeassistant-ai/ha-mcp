@@ -176,6 +176,13 @@ class Settings(BaseSettings):
     # otherwise ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``.
     auto_backup_dir: str = Field("", alias="HAMCP_BACKUP_DIR")
 
+    # Calendar event backups query an ahead-of-now window to locate the
+    # event by uid. Default 7 days catches typical edits; widen for
+    # far-future events. Range 1-365 days.
+    auto_backup_calendar_lookahead_days: int = Field(
+        7, ge=1, le=365, alias="HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS"
+    )
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""
