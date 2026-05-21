@@ -1136,6 +1136,7 @@ class HomeAssistantClient:
         show_advanced_options: bool | None = None,
     ) -> dict[str, Any]:
         """Start a config subentry create or reconfigure flow."""
+        # HA requires the handler as [parent_entry_id, subentry_type].
         payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
         if subentry_id is not None:
             payload["subentry_id"] = subentry_id

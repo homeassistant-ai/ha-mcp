@@ -217,9 +217,10 @@ class IntegrationTools:
             bool | str,
             Field(
                 description=(
-                    "When entry_id is set, start and abort a config subentry "
-                    "flow to expose its first form schema or menu. Pair with "
-                    "subentry_type, and optionally subentry_id for reconfigure."
+                    "When entry_id is set, return introspection-only config "
+                    "subentry schema information; no subentry is created. "
+                    "Pair with subentry_type, and optionally subentry_id for "
+                    "reconfigure schema."
                 ),
                 default=False,
             ),
@@ -402,6 +403,9 @@ class IntegrationTools:
         - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
         - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
         - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
+        - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
+        - Inspect subentry create schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation")
+        - Inspect subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - List template entries: ha_get_integration(domain="template")
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
@@ -531,25 +535,34 @@ class IntegrationTools:
             result = await self._list_entries(
                 domain, query, include_opts, exact_match_bool, limit_int, offset_int
             )
-            if (
-                include_diagnostics_bool
-                or device_id is not None
-                or fields_list is not None
-                or truncate_bytes is not None
-                or diagnostics_data_path is not None
-                or data_limit_int is not None
-                or data_offset_int > 0
-                or include_subentries_bool
-                or include_subentry_schema_bool
-                or subentry_type is not None
-                or subentry_id is not None
-            ):
+            ignored_detail_params = []
+            if include_diagnostics_bool:
+                ignored_detail_params.append("include_diagnostics")
+            if device_id is not None:
+                ignored_detail_params.append("device_id")
+            if fields_list is not None:
+                ignored_detail_params.append("diagnostics_fields")
+            if truncate_bytes is not None:
+                ignored_detail_params.append("diagnostics_truncate_at_bytes")
+            if diagnostics_data_path is not None:
+                ignored_detail_params.append("diagnostics_data_path")
+            if data_offset_int > 0:
+                ignored_detail_params.append("diagnostics_data_offset")
+            if data_limit_int is not None:
+                ignored_detail_params.append("diagnostics_data_limit")
+            if include_subentries_bool:
+                ignored_detail_params.append("include_subentries")
+            if include_subentry_schema_bool:
+                ignored_detail_params.append("include_subentry_schema")
+            if subentry_type is not None:
+                ignored_detail_params.append("subentry_type")
+            if subentry_id is not None:
+                ignored_detail_params.append("subentry_id")
+            if show_advanced_options_bool:
+                ignored_detail_params.append("show_advanced_options")
+            if ignored_detail_params:
                 result.setdefault("warnings", []).append(
-                    "include_diagnostics, device_id, diagnostics_fields, "
-                    "diagnostics_truncate_at_bytes, diagnostics_data_path, "
-                    "diagnostics_data_offset, diagnostics_data_limit, "
-                    "include_subentries, include_subentry_schema, "
-                    "subentry_type, and/or subentry_id were provided but "
+                    f"{', '.join(ignored_detail_params)} "
                     "ignored because entry_id was not set (list mode)"
                 )
             return result
@@ -1141,8 +1154,9 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a Home Assistant helper or integration config entry.
 
-        Combines simple-helper websocket deletion and config-entry deletion
-        under one entry point with three routing paths driven by helper_type.
+        Combines simple-helper websocket deletion, config-entry deletion, and
+        config-subentry deletion under one entry point with four routing paths
+        driven by helper_type.
 
         WHEN NOT TO USE:
         - Removing only an entity (without deleting its underlying helper or
@@ -1183,6 +1197,11 @@ class IntegrationTools:
         - Delete any integration by entry_id:
           ha_delete_helpers_integrations(
               target="01HXYZ...", confirm=True
+          )
+        - Delete a config subentry:
+          ha_delete_helpers_integrations(
+              target="01HXYZ...", helper_type="config_subentry",
+              subentry_id="subentry-123", confirm=True
           )
 
         **WARNING:** Deleting a helper or integration that is referenced by

@@ -62,7 +62,10 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset({
 
 # Keys used to specify a menu selection — stripped before submitting form data.
 _MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
-_RECONFIGURE_SUCCESS_REASONS = frozenset({"reconfigure_successful"})
+_RECONFIGURE_SUCCESS_REASONS = frozenset({
+    "reauth_successful",
+    "reconfigure_successful",
+})
 
 
 class _FlowType(StrEnum):
@@ -663,7 +666,11 @@ async def set_config_subentry(
     subentry_id: str | None = None,
     show_advanced_options: bool | None = None,
 ) -> dict[str, Any]:
-    """Create or reconfigure a config subentry via its flow."""
+    """Create or reconfigure a config subentry via its flow.
+
+    Presence of ``subentry_id`` is the discriminator: omitted creates a new
+    subentry, provided reconfigures that existing subentry.
+    """
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
