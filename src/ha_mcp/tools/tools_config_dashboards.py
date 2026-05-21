@@ -1539,6 +1539,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         details=f"No dashboard found with URL path or internal ID '{url_path}'.",
                         suggestions=[
                             "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
+                            "YAML-mode and default dashboards are not deletable via this tool",
                         ],
                         context={"action": "delete", "url_path": url_path},
                     )
