@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import ssl
+import time
 from typing import Any
 
 import httpx
@@ -969,6 +970,9 @@ class HomeAssistantClient:
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Poll HA state to find the entity_id assigned to a newly created automation."""
+        # Measure cumulative elapsed from function entry to first successful match.
+        # Feeds the #1389 p50/p99 validation of `_POLL_CADENCE`.
+        start_monotonic = time.monotonic()
         try:
             for sleep_time in self._POLL_CADENCE:
                 await asyncio.sleep(sleep_time)
@@ -978,8 +982,13 @@ class HomeAssistantClient:
                         continue
                     if state.get("attributes", {}).get("id") == unique_id:
                         entity_id = state.get("entity_id")
+                        elapsed_ms = (time.monotonic() - start_monotonic) * 1000.0
                         logger.debug(
-                            f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
+                            "entity-registration-elapsed: %.1fms "
+                            "(unique_id=%s, entity_id=%s)",
+                            elapsed_ms,
+                            unique_id,
+                            entity_id,
                         )
                         return entity_id
         except HomeAssistantError as e:
