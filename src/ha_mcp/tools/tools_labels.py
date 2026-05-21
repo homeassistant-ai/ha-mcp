@@ -113,7 +113,7 @@ class LabelTools:
             else:
                 available_ids = [lbl.get("label_id") for lbl in labels[:10]]
                 raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
+                    ErrorCode.RESOURCE_NOT_FOUND,
                     f"Label not found: {label_id}",
                     context={"label_id": label_id, "available_label_ids": available_ids},
                     suggestions=["Use ha_config_get_label() without label_id to see all labels"],

@@ -133,7 +133,7 @@ class CategoryTools:
                 available_ids = [cat.get("category_id") for cat in categories[:10]]
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Category not found: {category_id}",
                         context={
                             "category_id": category_id,

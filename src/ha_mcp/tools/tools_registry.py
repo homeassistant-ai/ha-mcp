@@ -376,7 +376,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if not device:
                     raise_tool_error(
                         create_error_response(
-                            ErrorCode.ENTITY_NOT_FOUND,
+                            ErrorCode.RESOURCE_NOT_FOUND,
                             f"Device not found: {device_id}",
                             suggestions=[
                                 "Use ha_get_device() to find valid device IDs",
@@ -743,7 +743,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not device:
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Device not found: {device_id}",
                         suggestions=[
                             "Use ha_get_device() to find valid device IDs",
