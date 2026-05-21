@@ -782,6 +782,9 @@ class HomeAssistantClient:
             else:
                 return False, "Invalid response from Home Assistant"
         except Exception as e:
+            # Intentional broad-catch: is_connected() contract maps any failure
+            # to (False, error_msg); styleguide § "broad except at top-level
+            # setup/teardown handlers" applies (connection probe is the analog).
             logger.error(f"Failed to connect to Home Assistant: {e}")
             return False, str(e)
 
@@ -823,7 +826,7 @@ class HomeAssistantClient:
                     f"Converted entity_id {identifier} to unique_id {unique_id}"
                 )
                 return str(unique_id)
-            except Exception as e:
+            except HomeAssistantError as e:
                 raise HomeAssistantAPIError(
                     f"Failed to resolve automation {identifier}: {str(e)}",
                     status_code=404,
@@ -853,8 +856,8 @@ class HomeAssistantClient:
                 "GET", f"/config/automation/config/{unique_id}"
             )
             return response
-        except Exception as e:
-            if "404" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -915,18 +918,15 @@ class HomeAssistantClient:
             if entity_not_verified:
                 result["entity_not_verified"] = True
             return result
-        except Exception as e:
-            if "400" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 400:
                 raise HomeAssistantAPIError(
                     f"Invalid automation configuration: {str(e)}", status_code=400
                 ) from e
             raise
 
-    # Cadence preserves the prior 3-attempt × 6s upper-bound budget while
-    # tightening the first poll to 0.1s. HA Core typically publishes a new
-    # automation entity to the state machine well under 1s, so the prior
-    # 1s/2s/3s shape spent most of its first-iteration budget waiting on the
-    # common case. Failure-path cost is unchanged (still 3 get_states() calls).
+    # 3-attempt × 6s upper-bound budget; first poll 0.1s catches the
+    # typical sub-1s entity-publish window.
     _POLL_CADENCE: tuple[float, ...] = (0.1, 1.0, 4.9)
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
@@ -945,18 +945,13 @@ class HomeAssistantClient:
                         )
                         return entity_id
         except HomeAssistantError as e:
-            # Narrow to expected transient classes: HomeAssistantError is the
-            # base of the four typed REST exceptions raised by get_states()
-            # (Connection / Auth / API / Command). Programming bugs (TypeError,
-            # KeyError, AttributeError, AssertionError) propagate so they fail
-            # loud with a stack trace instead of being swallowed and surfacing
-            # as entity_not_verified. The convention is codified for tests at
-            # .gemini/styleguide.md:43-46 (section "Exception Handling in Test
-            # Polling Loops") and implemented by
-            # tests/src/e2e/utilities/wait_helpers.py::_POLLING_TRANSIENT_ERRORS
-            # — the same principle applies to this production polling loop.
+            # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
+            # Mirrors test-side _POLLING_TRANSIENT_ERRORS in
+            # tests/src/e2e/utilities/wait_helpers.py and styleguide §
+            # "Exception Handling in Test Polling Loops".
             logger.warning(
-                f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
+                f"Failed to query actual entity_id for unique_id {unique_id}: {e}",
+                exc_info=True,
             )
             return None
 

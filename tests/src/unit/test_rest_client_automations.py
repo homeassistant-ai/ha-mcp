@@ -140,7 +140,15 @@ class TestDeleteAutomationConfig:
 
 
 class TestPollForAutomationEntity:
-    """Tests for the poll cadence in _poll_for_automation_entity (issue #1380)."""
+    """Tests for the poll cadence in _poll_for_automation_entity (issue #1380).
+
+    Patch-path note: tests patch ``ha_mcp.client.rest_client.asyncio.sleep``
+    by attribute access. A refactor to ``from asyncio import sleep`` in the
+    production module would silently let real sleeps run — the full-miss
+    test would hang for ~6s instead of completing instantly. If that
+    refactor lands, update the patch target to
+    ``ha_mcp.client.rest_client.sleep``.
+    """
 
     @pytest.fixture
     def mock_client(self):
@@ -154,15 +162,10 @@ class TestPollForAutomationEntity:
             return client
 
     def test_poll_cadence_shape(self):
-        """Pin the cadence tuple. Mutation test: changing the tuple in
-        rest_client.py without updating this assertion fails CI."""
+        """Pin the cadence tuple plus the sub-200ms first-poll bound — length
+        and sum are derivable from the tuple and would fail redundantly on a
+        mutation."""
         assert HomeAssistantClient._POLL_CADENCE == (0.1, 1.0, 4.9)
-        # 3 attempts preserves the original failure-path get_states() load.
-        assert len(HomeAssistantClient._POLL_CADENCE) == 3
-        # 6.0s upper bound preserves the original 1+2+3s budget on slow HA.
-        assert sum(HomeAssistantClient._POLL_CADENCE) == pytest.approx(6.0)
-        # First poll is sub-200ms so the happy path returns before the
-        # original 1.0s first-iteration burn.
         assert HomeAssistantClient._POLL_CADENCE[0] <= 0.2
 
     @pytest.mark.asyncio
@@ -258,21 +261,12 @@ class TestPollForAutomationEntity:
 
     @pytest.mark.asyncio
     async def test_poll_swallows_get_states_exception(self, mock_client):
-        """A transient `get_states` failure must not propagate; the caller
-        gets None and the upsert path surfaces entity_not_verified=True.
-
-        Uses ``HomeAssistantAPIError`` for the transient mock — the realistic
-        failure class for a polling-side ``get_states`` blip is an API error
-        from the REST client, not a bare ``RuntimeError``. Matches the
-        established sibling pattern in ``test_wait_helpers.py:54`` and
-        ``:88``.
-
-        Pins ``call_count == 1`` to lock in the early-exit semantics: the
-        ``try`` at ``rest_client.py:934`` wraps the entire ``for`` loop, so a
-        transient on iteration 1 hits the ``except HomeAssistantError`` clause
-        and exits without re-entering the cadence. A future refactor moving
-        the ``try`` inside the loop (so transients retry until cadence
-        exhaustion) would fail this assertion loudly."""
+        """Transient ``get_states`` failures yield None (and
+        ``entity_not_verified=True`` upstream), not a propagated exception.
+        Uses ``HomeAssistantAPIError`` — the realistic transient class,
+        mirrors ``_POLLING_TRANSIENT_ERRORS`` in ``wait_helpers.py``.
+        ``call_count == 1`` locks the wrap-scope: the ``try`` covers the
+        entire ``for``, so iteration-1 transients exit immediately."""
         mock_client.get_states = AsyncMock(
             side_effect=HomeAssistantAPIError("transient")
         )
@@ -285,3 +279,44 @@ class TestPollForAutomationEntity:
 
         assert result is None
         assert mock_client.get_states.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_poll_swallows_get_states_exception_on_iteration_2(
+        self, mock_client
+    ):
+        """Mid-loop transient also exits early — locks the wrap-scope: the
+        ``try`` covers the entire ``for`` (not the loop body), so a transient
+        on iteration 2 hits the ``except HomeAssistantError`` clause and
+        returns immediately. ``call_count == 2`` would fail if a future
+        refactor moved the ``try`` inside the loop (which would retry
+        transients until cadence exhaustion)."""
+        mock_client.get_states = AsyncMock(
+            side_effect=[[], HomeAssistantAPIError("transient on iteration 2")]
+        )
+
+        async def fake_sleep(duration: float) -> None:
+            return None
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            result = await mock_client._poll_for_automation_entity("unique_42")
+
+        assert result is None
+        assert mock_client.get_states.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_poll_propagates_typeerror_for_unexpected_errors(
+        self, mock_client
+    ):
+        """Programming bugs (TypeError, KeyError, AttributeError, …) must
+        propagate — they are not transient, and swallowing them would mask
+        the bug as ``entity_not_verified=True``. Locks the narrowed
+        ``except HomeAssistantError`` clause: a future widen-back to
+        ``except Exception`` would fail this test."""
+        mock_client.get_states = AsyncMock(side_effect=TypeError("bug"))
+
+        async def fake_sleep(duration: float) -> None:
+            return None
+
+        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+            with pytest.raises(TypeError, match="bug"):
+                await mock_client._poll_for_automation_entity("unique_42")
