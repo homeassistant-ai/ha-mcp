@@ -46,6 +46,7 @@ and the prefix is not stable across bakes.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -53,6 +54,8 @@ import pytest
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
+
+logger = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.haos_only]
 
@@ -135,6 +138,7 @@ async def _wait_addon_running(
             detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
         except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"⚠️ Transient error polling addon {slug!r}: {e}")
             last_state = f"<transient: {str(e)[:60]}>"
         if last_state == "started":
             return
