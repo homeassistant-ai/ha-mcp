@@ -24,6 +24,7 @@ import statistics
 import pytest
 
 from ...utilities.assertions import safe_call_tool
+from .conftest import record_poll_cadence_measurement
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,28 @@ class TestPollCadenceMeasurement1389:
         no_misses = not_verified_count == 0
         verdict = "VALIDATED" if (p50_ok and p99_ok and no_misses) else "RETUNE NEEDED"
 
-        # INFO surfaces in CI logs (default log_cli_level=INFO).
+        # ``logger.info`` from a test method is captured by pytest-xdist's
+        # per-worker buffer and only surfaces on FAILURE — PASSED tests
+        # silently drop the INFO output. Route through the conftest
+        # recorder so ``pytest_terminal_summary`` renders the table on
+        # the master, outside the capture buffer. Logger calls below
+        # remain for local ad-hoc runs (where xdist is off and INFO
+        # streams to the terminal directly).
+        record_poll_cadence_measurement(
+            {
+                "n": n,
+                "attempts": self.N_SAMPLES,
+                "p50": p50,
+                "p90": p90,
+                "p99": p99,
+                "min": s_min,
+                "max": s_max,
+                "not_verified": not_verified_count,
+                "verdict": verdict,
+                "samples": [round(s, 1) for s in samples],
+            }
+        )
+
         sep = "=" * 70
         logger.info(sep)
         logger.info(
