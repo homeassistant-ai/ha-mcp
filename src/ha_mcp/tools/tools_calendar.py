@@ -178,7 +178,13 @@ class CalendarTools:
     )
     @with_auto_backup(
         domain="calendar_event",
-        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('uid', '') or ''}",
+        # Skip on missing entity_id or uid; falsy "" beats the truthy
+        # "::" shape that would hit the fetch with no record to find.
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['uid']}"
+            if kw.get("entity_id") and kw.get("uid")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_set_calendar_event(
@@ -314,7 +320,13 @@ class CalendarTools:
     )
     @with_auto_backup(
         domain="calendar_event",
-        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('uid', '') or ''}",
+        # Skip on missing entity_id or uid; falsy "" beats the truthy
+        # "::" shape that would hit the fetch with no record to find.
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['uid']}"
+            if kw.get("entity_id") and kw.get("uid")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_remove_calendar_event(

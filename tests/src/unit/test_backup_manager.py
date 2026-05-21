@@ -126,12 +126,24 @@ class TestCapture:
         assert path is None
         assert not any(tmp_path.iterdir())
 
-    async def test_fetch_exception_does_not_raise(self, tmp_path: Path) -> None:
+    async def test_fetch_transient_exception_does_not_raise(
+        self, tmp_path: Path
+    ) -> None:
         mgr = _mk_manager(tmp_path)
-        mgr.register(_mk_handler(raise_on_fetch=RuntimeError("boom")))
-        # Must not raise — best-effort capture.
+        # Transient/expected exceptions (HA / network / FS / yaml errors) are
+        # swallowed — capture is best-effort, the wrapped write must still run.
+        mgr.register(_mk_handler(raise_on_fetch=OSError("disk gone")))
         path = await mgr.maybe_snapshot("automation", "x", tool_name="t")
         assert path is None
+
+    async def test_fetch_programming_error_propagates(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        # Programming errors (AttributeError/TypeError/KeyError/RuntimeError)
+        # propagate so they surface as a real test failure rather than being
+        # silently masked by the best-effort capture path.
+        mgr.register(_mk_handler(raise_on_fetch=AttributeError("typo")))
+        with pytest.raises(AttributeError):
+            await mgr.maybe_snapshot("automation", "x", tool_name="t")
 
     async def test_successful_capture_writes_file(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
@@ -281,17 +293,18 @@ class TestListReadDelete:
         await asyncio.sleep(1.1)
         recent = await mgr.maybe_snapshot("automation", "x")
         assert recent is not None
-        deleted = mgr.delete_bulk(older_than_days=30)
-        assert path.name in deleted
-        assert recent.name not in deleted
+        bulk = mgr.delete_bulk(older_than_days=30)
+        assert path.name in bulk["deleted"]
+        assert recent.name not in bulk["deleted"]
+        assert bulk["failed"] == []
 
     def test_delete_bulk_requires_filter(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
-        # Bulk delete with no filter should still work but return an empty
-        # list; the route layer enforces "at least one filter" — the
-        # manager itself is permissive so MCP tool callers can pass
+        # Bulk delete with no filter still returns an empty result rather
+        # than erroring; the route layer enforces "at least one filter".
+        # The manager is permissive so MCP tool callers can pass
         # already-validated filters through.
-        assert mgr.delete_bulk() == []
+        assert mgr.delete_bulk() == {"deleted": [], "failed": []}
 
 
 # ---------------------------------------------------------------- restore
@@ -389,3 +402,83 @@ class TestFactory:
             "helper_timer",
         ]:
             assert mgr.handler_for(d) is not None, f"missing handler: {d}"
+
+    def test_helper_flow_types_have_no_handler(self, tmp_path: Path) -> None:
+        # Flow-helper types (template, group, utility_meter, ...) live in
+        # config entries with a separate update API — registering them
+        # would produce unrestorable snapshots (entity-state stubs).
+        # They must NOT be registered as backup domains.
+        settings = _StubSettings(auto_backup_dir=str(tmp_path))
+        mgr = get_backup_manager(_StubClient(), settings)
+        for d in [
+            "helper_template",
+            "helper_group",
+            "helper_utility_meter",
+            "helper_threshold",
+            "helper_derivative",
+        ]:
+            assert mgr.handler_for(d) is None, (
+                f"flow-helper domain {d!r} should NOT be registered (unrestorable)"
+            )
+
+
+# ---------------------------------------------------------------- bookkeeping
+
+
+class TestTrackerPrune:
+    def test_prune_triggers_above_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Patch the cap to a small number so we can exercise the prune
+        # path without needing 10_000 entries.
+        import ha_mcp.backup_manager as bm
+
+        monkeypatch.setattr(bm, "_TRACKER_SOFT_CAP", 5)
+        monkeypatch.setattr(bm, "_TRACKER_PRUNE_BATCH", 2)
+        mgr = BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), _StubClient())
+        # Fill the tracker past the patched cap.
+        for i in range(7):
+            mgr._last_snapshot[f"automation:e{i}"] = float(i)
+        mgr._maybe_prune_trackers()
+        # 7 - 2 = 5 remaining; the two smallest timestamps drop out.
+        assert len(mgr._last_snapshot) == 5
+        assert "automation:e0" not in mgr._last_snapshot
+        assert "automation:e1" not in mgr._last_snapshot
+        assert "automation:e6" in mgr._last_snapshot
+
+    def test_prune_noop_under_cap(self, tmp_path: Path) -> None:
+        mgr = BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), _StubClient())
+        mgr._last_snapshot["automation:x"] = 1.0
+        mgr._maybe_prune_trackers()
+        assert mgr._last_snapshot == {"automation:x": 1.0}
+
+
+class TestConcurrentCapture:
+    async def test_concurrent_same_key_serializes(self, tmp_path: Path) -> None:
+        # Two captures racing on the same (domain, entity_id) must
+        # serialize via the per-key lock. With throttle_minutes=10, the
+        # second call inside the same window MUST be skipped — without
+        # the lock both could see "no prior snapshot" and write twice.
+        mgr = _mk_manager(tmp_path, auto_backup_throttle_minutes=10)
+        mgr.register(_mk_handler(fetched={"v": 1}))
+        results = await asyncio.gather(
+            mgr.maybe_snapshot("automation", "x"),
+            mgr.maybe_snapshot("automation", "x"),
+        )
+        non_null = [r for r in results if r is not None]
+        assert len(non_null) == 1
+        assert len(list(tmp_path.glob("automation.x.*.yaml"))) == 1
+
+
+class TestEnabledRespectsDirError:
+    def test_enabled_false_when_dir_init_failed(self, tmp_path: Path) -> None:
+        # Simulate a backup dir that can't be created. ``enabled`` must
+        # report False so listing/status surfaces don't lie about
+        # backup health.
+        mgr = BackupManager(
+            _StubSettings(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
+            _StubClient(),
+        )
+        mgr._init_dir_error = "OSError: read-only filesystem"
+        assert mgr.enabled is False
+        assert mgr.init_dir_error == "OSError: read-only filesystem"

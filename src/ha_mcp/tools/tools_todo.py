@@ -529,7 +529,11 @@ class TodoTools:
     )
     @with_auto_backup(
         domain="todo_item",
-        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('item', '') or ''}",
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['item']}"
+            if kw.get("entity_id") and kw.get("item")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_remove_todo_item(

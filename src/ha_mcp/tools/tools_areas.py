@@ -456,7 +456,12 @@ class AreaTools:
     )
     @with_auto_backup(
         domain="area_or_floor",
-        id_fn=lambda kw: f"{kw.get('kind', '')}:{kw.get('id', '') or ''}",
+        # Return "" when either discriminator is missing so the capture
+        # pipeline skips cleanly. ``f"{a}:{b}"`` would otherwise produce
+        # a truthy literal `":"` and trigger a useless lookup.
+        id_fn=lambda kw: (
+            f"{kw['kind']}:{kw['id']}" if kw.get("kind") and kw.get("id") else ""
+        ),
     )
     @log_tool_usage
     async def ha_set_area_or_floor(
@@ -699,7 +704,9 @@ class AreaTools:
     )
     @with_auto_backup(
         domain="area_or_floor",
-        id_fn=lambda kw: f"{kw.get('kind', '')}:{kw.get('id', '') or ''}",
+        id_fn=lambda kw: (
+            f"{kw['kind']}:{kw['id']}" if kw.get("kind") and kw.get("id") else ""
+        ),
     )
     @log_tool_usage
     async def ha_remove_area_or_floor(

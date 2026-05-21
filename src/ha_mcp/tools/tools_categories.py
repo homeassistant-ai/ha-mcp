@@ -172,7 +172,14 @@ class CategoryTools:
     )
     @with_auto_backup(
         domain="category",
-        id_fn=lambda kw: f"{kw.get('scope', '')}:{kw.get('category_id', '') or ''}",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_set_category(
@@ -293,7 +300,14 @@ class CategoryTools:
     )
     @with_auto_backup(
         domain="category",
-        id_fn=lambda kw: f"{kw.get('scope', '')}:{kw.get('category_id', '') or ''}",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_remove_category(

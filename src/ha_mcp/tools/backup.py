@@ -61,7 +61,7 @@ def _get_backup_hint_text() -> str:
         "strong": "Run this backup before the FIRST modification of the day/session. This is usually not required since most operations can be rolled back (the model fetches definitions before modifying). Users with daily backups configured should use 'normal' or 'weak' instead.",
         "normal": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
         "weak": "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
-        "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",  # Same as normal for now, will auto-detect in future
+        "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
     }
     return hints.get(hint, hints["normal"])
 
@@ -349,12 +349,17 @@ async def create_backup(
             suggestions=["Check Home Assistant connection and backup configuration"],
         )
     finally:
-        # Always disconnect WebSocket
+        # Always disconnect WebSocket — narrow to transport errors; a
+        # programming error during cleanup should still surface.
         if ws_client:
             try:
                 await ws_client.disconnect()
-            except Exception:
-                pass  # Ignore errors during cleanup
+            except (TimeoutError, OSError, ConnectionError) as err:
+                logger.debug(
+                    "ws disconnect (cleanup) transport error: %s: %s",
+                    type(err).__name__,
+                    err,
+                )
 
 
 async def _create_safety_backup(
@@ -455,7 +460,10 @@ async def restore_backup(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     f"Backup '{backup_id}' not found",
-                    suggestions=["Use ha_backup_list() to see available backups"],
+                    suggestions=[
+                        "Inspect available snapshots in Home Assistant's "
+                        "backup panel before retrying"
+                    ],
                 )
             )
 
@@ -518,12 +526,17 @@ async def restore_backup(
             suggestions=["Check Home Assistant connection and backup availability"],
         )
     finally:
-        # Always disconnect WebSocket
+        # Always disconnect WebSocket — narrow to transport errors; a
+        # programming error during cleanup should still surface.
         if ws_client:
             try:
                 await ws_client.disconnect()
-            except Exception:
-                pass  # Ignore errors during cleanup
+            except (TimeoutError, OSError, ConnectionError) as err:
+                logger.debug(
+                    "ws disconnect (cleanup) transport error: %s: %s",
+                    type(err).__name__,
+                    err,
+                )
 
 
 # Valid (scope, action) combinations. Anything outside this set is
@@ -824,10 +837,25 @@ def register_backup_tools(
                     ],
                 )
             )
-        deleted = await asyncio.to_thread(
+        bulk = await asyncio.to_thread(
             mgr.delete_bulk,
             domain=domain,
             entity_id=entity_id,
             older_than_days=older_than_days,
         )
-        return {"success": True, "data": {"deleted": deleted, "count": len(deleted)}}
+        deleted = bulk["deleted"]
+        failed = bulk["failed"]
+        return {
+            "success": True,
+            "data": {
+                "deleted": deleted,
+                "failed": failed,
+                "count": len(deleted),
+                "failed_count": len(failed),
+            },
+            "warnings": (
+                [f"Failed to delete {len(failed)} backup(s); see server log"]
+                if failed
+                else []
+            ),
+        }

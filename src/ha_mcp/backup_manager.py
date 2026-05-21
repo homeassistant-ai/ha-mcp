@@ -185,7 +185,18 @@ class BackupManager:
 
     @property
     def enabled(self) -> bool:
+        # An unreachable backup dir effectively disables the feature —
+        # surface that through ``enabled`` so callers (the list endpoint,
+        # the settings UI status panel) report the truth instead of
+        # advertising "enabled" while every capture silently no-ops.
+        if self._init_dir_error is not None:
+            return False
         return bool(getattr(self._settings, "enable_auto_backup", False))
+
+    @property
+    def init_dir_error(self) -> str | None:
+        """The reason the backup dir could not be created, or None."""
+        return self._init_dir_error
 
     @property
     def throttle_seconds(self) -> int:
@@ -418,8 +429,16 @@ class BackupManager:
         domain: str | None = None,
         entity_id: str | None = None,
         older_than_days: int | None = None,
-    ) -> list[str]:
+    ) -> dict[str, list[str]]:
+        """Delete snapshots matching ``domain`` / ``entity_id`` / age.
+
+        Returns a dict ``{"deleted": [...], "failed": [...]}`` so callers
+        can surface partial failures to the user rather than logging
+        them silently. Each failure also gets a WARNING in the server
+        log so the underlying OS error is preserved.
+        """
         deleted: list[str] = []
+        failed: list[str] = []
         cutoff: float | None = None
         if older_than_days is not None:
             if older_than_days < 0:
@@ -432,10 +451,11 @@ class BackupManager:
                 (self._dir / meta["name"]).unlink()
                 deleted.append(meta["name"])
             except OSError as err:
+                failed.append(meta["name"])
                 logger.warning(
                     "Auto-backup: bulk-delete failed for %s: %s", meta["name"], err
                 )
-        return deleted
+        return {"deleted": deleted, "failed": failed}
 
     def _resolve_snapshot_path(self, name: str) -> Path:
         """Validate a snapshot name and return its absolute Path.
@@ -555,9 +575,17 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         client.base_url, client.token, verify_ssl=client.verify_ssl
     )
     if error or ws_client is None:
-        raise RuntimeError(
-            (error or {}).get("error", {}).get("message", "WS connect failed")
-        )
+        # ``error`` is a structured-error envelope; the message can live
+        # under either error.error.message (nested) or error.message
+        # (flat, as ``create_error_response`` actually produces).
+        if isinstance(error, dict):
+            err_obj = error.get("error", error)
+            msg = (
+                err_obj.get("message") if isinstance(err_obj, dict) else None
+            ) or error.get("message", "WS connect failed")
+        else:
+            msg = "WS connect failed"
+        raise RuntimeError(msg)
     try:
         cmd_type = message.pop("type")
         result = await ws_client.send_command(cmd_type, **message)
@@ -973,15 +1001,25 @@ _HELPER_LIST_TYPES = {
 
 
 async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
-    if helper_type not in _HELPER_LIST_TYPES:
-        # Other helper types (template, group, utility_meter, ...) live in
-        # config entries; fall back to entity state.
-        state = await _rest_get_or_none(client, f"/api/states/{entity_id}")
-        if state is None:
-            return None
-        attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
-        return {"object_id": entity_id.split(".", 1)[-1], **attrs}
+    """Fetch a helper's full config from its collection list.
 
+    Only the storage-backed (``<helper_type>/list``) types are supported;
+    flow-helper types (template, group, utility_meter, ...) live in
+    config entries with a totally different shape and a separate
+    update API. Returning a partial entity-state stub for those types
+    would make restore re-POST it to ``/api/states/<id>``, which sets a
+    state attribute rather than the helper's config — silently wrong.
+    For unsupported types we return None so the capture-pipeline treats
+    it as "entity didn't exist" rather than writing a bogus snapshot.
+    """
+    if helper_type not in _HELPER_LIST_TYPES:
+        logger.debug(
+            "Auto-backup: helper_type %r is config-entry-backed; "
+            "snapshot/restore via /<type>/list is not supported. "
+            "Capture skipped to avoid producing an unrestorable backup.",
+            helper_type,
+        )
+        return None
     items = await _ws_send(client, {"type": f"{helper_type}/list"})
     if not isinstance(items, list):
         return None
@@ -995,9 +1033,19 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
 async def _restore_helper(
     client: Any, entity_id: str, config: Any, helper_type: str
 ) -> Any:
+    """Restore a storage-backed helper via ``<helper_type>/update``.
+
+    Symmetric with ``_fetch_helper``: only list-backed types are
+    supported. Unsupported types raise ``LookupError`` so the restore
+    surface fails-loud rather than silently re-applying an
+    entity-state stub that doesn't reflect the original helper config.
+    """
     if helper_type not in _HELPER_LIST_TYPES:
-        # Best-effort: try restoring entity state.
-        return await _restore_entity_state(client, entity_id, config)
+        raise LookupError(
+            f"Helper type {helper_type!r} is config-entry-backed and cannot "
+            "be restored via the auto-backup snapshot path. Use the helper's "
+            "native edit tool (``ha_config_set_helper``) instead."
+        )
     payload = {k: v for k, v in config.items() if k != "id"}
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
@@ -1016,35 +1064,15 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # --------------------------- registry assembly ------------------------------
 
-# Helper types the registry knows about. Add to this list to extend
-# helper-domain coverage; the decorator's ``domain_fn`` builds the
-# matching key at runtime.
-_KNOWN_HELPER_TYPES = [
-    "input_boolean",
-    "input_text",
-    "input_number",
-    "input_select",
-    "input_datetime",
-    "input_button",
-    "counter",
-    "timer",
-    "schedule",
-    "template",
-    "group",
-    "utility_meter",
-    "min_max",
-    "threshold",
-    "derivative",
-    "integration",
-    "statistics",
-    "filter",
-    "generic_thermostat",
-    "trend",
-    "history_stats",
-    "tod",
-    "combine_sensors",
-    "random",
-]
+# Helper types we register backup handlers for. Only list-backed types
+# (those served by ``<helper_type>/list`` WebSocket commands) have
+# round-trippable snapshot/restore — flow-helper types (template, group,
+# utility_meter, ...) live in config entries with a separate API and
+# would silently produce unrestorable backups if included here. The
+# decorator's ``domain_fn`` builds ``helper_<type>`` keys; if the user
+# edits a flow-helper, ``handler_for`` returns None and the capture
+# logs a single WARNING — neutral failure, not a silent corruption.
+_KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
 def register_default_handlers(mgr: BackupManager, _client: Any) -> None:

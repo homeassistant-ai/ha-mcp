@@ -1109,7 +1109,20 @@ class IntegrationTools:
             "title": "Delete Helper or Integration",
         },
     )
-    @with_auto_backup(domain="integration", id_param="target")
+    @with_auto_backup(
+        # ``target`` is one of three shapes: a flow-helper entity_id like
+        # ``sensor.my_meter`` (routes through the matching ``helper_<type>``
+        # domain when ``helper_type`` is also passed), a bare config-entry
+        # id, or a parent.subentry pair. Dispatch to ``helper_<type>``
+        # when the kw is supplied so storage-backed helpers (input_*,
+        # counter, timer, ...) get a snapshot via the same handler the
+        # ``ha_config_set_helper`` decorator uses; otherwise fall back to
+        # the integration domain.
+        domain_fn=lambda kw: (
+            f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
+        ),
+        id_param="target",
+    )
     @log_tool_usage
     async def ha_delete_helpers_integrations(
         self,

@@ -28,10 +28,17 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..backup_manager import get_backup_manager
+from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
 from ..config import get_global_settings
 
 logger = logging.getLogger(__name__)
+
+# Decorator-layer expected failures. Settings lookup / get_backup_manager
+# may surface AttributeError on a malformed Settings instance during
+# tests; otherwise the inner pipeline already raises its own transient
+# tuple. Programming errors (TypeError on a bad ``id_fn`` lambda,
+# KeyError on a missing kwarg) propagate to surface the bug.
+_DECORATOR_TRANSIENT_ERRORS = _CAPTURE_TRANSIENT_ERRORS
 
 
 def _resolve_str(value: Any) -> str:
@@ -96,7 +103,7 @@ def with_auto_backup(
                             await mgr.maybe_snapshot(
                                 snap_domain, entity_id, tool_name=func.__name__
                             )
-            except Exception as err:
+            except _DECORATOR_TRANSIENT_ERRORS as err:
                 logger.warning(
                     "Auto-backup: pre-write hook raised %s: %s — write proceeding",
                     type(err).__name__,

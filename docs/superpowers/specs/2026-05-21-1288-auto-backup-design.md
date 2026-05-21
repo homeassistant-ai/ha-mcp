@@ -38,7 +38,7 @@ write/destructive tool  →  @with_auto_backup  →  BackupManager.maybe_snapsho
                                                        ├── DomainHandler.fetch (HA REST/WS)
                                                        └── write yaml, rotate, return path
 
-ha_manage_auto_backup tool  ─┐
+ha_manage_backup tool  ─┐
 /api/settings/backups        ├──→  BackupManager  (list/read/diff/restore/delete)
 Settings UI Backups tab      ─┘
 ```
@@ -55,8 +55,8 @@ Settings UI Backups tab      ─┘
 @dataclass(frozen=True)
 class DomainHandler:
     domain: str                                              # "automation", "helper_input_boolean", "dashboard", ...
-    fetch: Callable[[Client, str, dict], Awaitable[Any]]    # (client, entity_id, tool_kwargs) -> current config
-    restore: Callable[[Client, str, Any, dict], Awaitable[Any]]  # (client, entity_id, config, restore_kwargs) -> result
+    fetch: Callable[[Any, str], Awaitable[Any]]              # (client, entity_id) -> current config (dict | None)
+    restore: Callable[[Any, str, Any], Awaitable[Any]]       # (client, entity_id, config) -> result envelope
 ```
 
 One handler per backed-up domain; helper types each get their own handler keyed `helper_<type>` so each helper type lists/restores independently.
@@ -109,15 +109,15 @@ dir is flat (no per-domain subdirs) so glob retention is simple.
 ## Restore flow
 
 User-facing entry points (both call `BackupManager.restore`):
-- LLM: `ha_manage_auto_backup(action="restore", name=...)`
+- LLM: `ha_manage_backup(action="restore", name=...)`
 - UI: `POST /api/settings/backups/<name>/restore`
 
-`BackupManager.restore(name)`:
+`BackupManager.restore_snapshot(name)`:
 1. Load file, parse YAML, validate schema (version, required keys).
-2. Resolve `DomainHandler` from `domain` field; if missing → return RESTORE_FAILED with suggestions.
-3. Take a fresh *safety backup* of the entity's CURRENT state via the same path as the decorator (`maybe_snapshot` with throttle disabled). The safety backup is recorded so the user can undo the restore.
+2. Resolve `DomainHandler` from `domain` field; raises `LookupError` if no handler registered for that domain (surfaced as `VALIDATION_INVALID_PARAMETER` by the tool / UI route).
+3. Take a fresh *safety backup* of the entity's CURRENT state via `maybe_snapshot` (best-effort — if the toggle is off or the fetch fails, `safety_backup` is `None`).
 4. Call `handler.restore(client, entity_id, config)` (which under the hood calls the same HA REST/WS endpoint the original `set_*` tool uses).
-5. Return `{success, entity_key, safety_backup, restored_from}`.
+5. Return `{restored_from, domain, entity_id, safety_backup, result}`.
 
 Restore is upsert: re-creates entities that were deleted between backup and restore. If HA rejects (validation error, etc.), error propagates with structured suggestions.
 
@@ -259,9 +259,9 @@ One test file per backed-up domain (`test_automation.py`, `test_script.py`, ...,
 2. Create/exist entity
 3. Edit via the wrapped tool → backup file appears
 4. Edit again → another backup file appears (with throttle off) OR no new file (with throttle on, within window)
-5. Restore first backup via `ha_manage_auto_backup(action="restore", ...)` — entity returns to original state
+5. Restore first backup via `ha_manage_backup(action="restore", ...)` — entity returns to original state
 6. Verify a safety backup was created
-7. Delete via `ha_manage_auto_backup(action="delete", ...)` — file removed
+7. Delete via `ha_manage_backup(action="delete", ...)` — file removed
 8. Toggle off → next edit produces no backup
 
 ## Files

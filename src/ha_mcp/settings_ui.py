@@ -964,9 +964,9 @@ function showModal(title, html) {
 }
 function closeModal() { document.getElementById('modalBackdrop').classList.remove('show'); }
 
-// Minimal YAML stringify for view modal. Server already serializes the
-// snapshot file as YAML, but the JSON we get back wraps it; just dump as
-// indented JSON for readability — closer to YAML than the raw object.
+// Pretty-print the snapshot envelope for the view modal. The server
+// returns the parsed YAML as JSON; indented JSON is the simplest
+// readable form for the modal without pulling in a JS YAML library.
 function yamlStringify(obj) { return JSON.stringify(obj, null, 2); }
 
 document.getElementById('backupRefresh').addEventListener('click', loadBackups);
@@ -1281,9 +1281,14 @@ def register_settings_routes(
                 status=404,
             )
         client = getattr(server, "client", None) or getattr(server, "_client", None)
+        # Narrow to transport / HA-API / FS errors so programming bugs
+        # propagate to the request handler instead of decorating the diff
+        # output with a "_error" sentinel masquerading as entity state.
+        from .backup_manager import _CAPTURE_TRANSIENT_ERRORS
+
         try:
             current = await handler.fetch(client, snapshot["entity_id"])
-        except Exception as err:
+        except _CAPTURE_TRANSIENT_ERRORS as err:
             current = {"_error": f"{type(err).__name__}: {err}"}
         backup_yaml = yaml.safe_dump(
             snapshot.get("config"), default_flow_style=False, sort_keys=True
@@ -1355,7 +1360,7 @@ def register_settings_routes(
                 "(domain, entity_id, older_than_days)"
             )
         try:
-            deleted = await asyncio.to_thread(
+            bulk = await asyncio.to_thread(
                 mgr.delete_bulk,
                 domain=params.get("domain") or None,
                 entity_id=params.get("entity_id") or None,
@@ -1364,7 +1369,13 @@ def register_settings_routes(
         except ValueError as err:
             return _bad_request(str(err))
         return JSONResponse(
-            {"success": True, "deleted": deleted, "count": len(deleted)}
+            {
+                "success": True,
+                "deleted": bulk["deleted"],
+                "failed": bulk["failed"],
+                "count": len(bulk["deleted"]),
+                "failed_count": len(bulk["failed"]),
+            }
         )
 
     secret_prefix = secret_path.rstrip("/") if secret_path else ""

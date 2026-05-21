@@ -558,9 +558,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @with_auto_backup(
         domain="entity",
+        # Bulk calls (entity_id is a list) intentionally skip the
+        # decorator path: we'd otherwise snapshot only the first entity
+        # and silently leave the rest of the list un-protected. The
+        # capture pipeline treats "" as "no entity" and no-ops.
         id_fn=lambda kw: (
-            str(kw["entity_id"][0])
-            if isinstance(kw.get("entity_id"), list) and kw["entity_id"]
+            ""
+            if isinstance(kw.get("entity_id"), list)
             else str(kw.get("entity_id") or "")
         ),
         client=client,
