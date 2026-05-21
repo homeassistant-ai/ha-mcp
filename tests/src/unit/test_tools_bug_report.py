@@ -884,7 +884,12 @@ class TestDetectMcpTransport:
     @pytest.fixture(autouse=True)
     def _clear_transport_env(self, monkeypatch):
         """Drop any env vars that could otherwise leak between tests."""
-        for var in ("FASTMCP_TRANSPORT", "MCP_HTTP_PORT", "FASTMCP_PORT"):
+        for var in (
+            "FASTMCP_TRANSPORT",
+            "MCP_HTTP_PORT",
+            "FASTMCP_PORT",
+            "SUPERVISOR_TOKEN",
+        ):
             monkeypatch.delenv(var, raising=False)
 
     def test_http_argv0(self, monkeypatch):
@@ -953,6 +958,18 @@ class TestDetectMcpTransport:
 
         monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=boom))
         assert _detect_mcp_transport() == "unknown"
+
+    def test_addon_short_circuits_to_http(self, monkeypatch):
+        # Regression for #1322: addon launches via `python start.py` (no -web
+        # argv0, no FASTMCP_TRANSPORT env) inside a TTY-less Supervisor
+        # container, so the stdin-isatty fallback used to mislabel addon
+        # installs as "stdio". The addon entrypoint always invokes
+        # mcp.run(transport="http", ...), so short-circuit on SUPERVISOR_TOKEN.
+        monkeypatch.setattr("sys.argv", ["/usr/bin/python", "start.py"])
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        fake_stdin = SimpleNamespace(isatty=lambda: False)
+        monkeypatch.setattr("sys.stdin", fake_stdin)
+        assert _detect_mcp_transport() == "http"
 
 
 class TestFormatConfigTogglesForTemplate:

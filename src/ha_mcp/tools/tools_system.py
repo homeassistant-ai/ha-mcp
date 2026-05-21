@@ -7,7 +7,9 @@ This module provides tools for Home Assistant system administration including:
 - System health monitoring
 """
 
+import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -21,7 +23,13 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param
+from .util_helpers import (
+    coerce_bool_param,
+    coerce_int_param,
+    fetch_integration_diagnostics,
+    filter_active_repairs,
+    parse_diagnostics_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +186,10 @@ class SystemTools:
                     "Home Assistant restart initiated. "
                     "The system will be unavailable for 1-5 minutes."
                 ),
-                "warning": (
+                "warnings": [
                     "Connection will be lost during restart. "
                     "Wait for Home Assistant to become available again."
-                ),
+                ],
             }
 
         except ToolError:
@@ -200,7 +208,7 @@ class SystemTools:
                         "Home Assistant restart initiated. "
                         "Connection was closed as expected during restart."
                     ),
-                    "warning": "Wait 1-5 minutes for Home Assistant to restart.",
+                    "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
                 }
 
             exception_to_structured_error(e)
@@ -291,12 +299,14 @@ class SystemTools:
                         if "not found" not in error_msg.lower():
                             errors.append(f"{reload_target}: {error_msg}")
 
-                return {
+                response: dict[str, Any] = {
                     "success": True,
                     "message": f"Reloaded {len(results)} components",
                     "reloaded": results,
-                    "warnings": errors if errors else None,
                 }
+                if errors:
+                    response["warnings"] = errors
+                return response
 
             else:
                 # Reload specific component
@@ -332,29 +342,87 @@ class SystemTools:
 
     @tool(
         name="ha_get_system_health",
-        tags={"System", "Zigbee", "Z-Wave"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave diagnostics)"},
+        tags={"System", "Zigbee", "Z-Wave", "Integrations"},
+        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)"},
     )
     @log_tool_usage
     async def ha_get_system_health(
         self,
         include: str | None = None,
+        include_dismissed_repairs: bool | str | None = False,
+        config_entry_id: str | None = None,
+        device_id: str | None = None,
+        diagnostics_fields: list[str] | str | None = None,
+        diagnostics_truncate_at_bytes: int | str | None = None,
+        diagnostics_data_path: str | None = None,
+        diagnostics_data_offset: int | str | None = 0,
+        diagnostics_data_limit: int | str | None = None,
     ) -> dict[str, Any]:
         """
-        Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
+        Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 
         Returns health check results from integrations, system resources, and connectivity.
         Available information varies by installation type and loaded integrations.
 
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.
-          - "repairs": Repair items from Settings > System > Repairs
+          - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
+          - "diagnostics": Per-integration diagnostics dump — integration-defined JSON
+            (commonly includes redacted config, device list, state snapshots; exact
+            top-level keys vary by integration). REQUIRES ``config_entry_id``. The
+            canonical artifact users grab via Settings → Devices & Services →
+            [integration] → ⋯ → Download diagnostics. Use this when triaging integration
+            bugs or filing ``ha_report_issue`` for a specific integration. Payloads can
+            be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with
+            ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM
+            context budget.
           - Example: include="repairs,zha_network,zwave_network"
+          - Example: include="diagnostics", config_entry_id="abc123..."
+        - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
+        - config_entry_id: Required when ``include`` contains ``diagnostics``. The config
+          entry ID of the integration (find via ``ha_get_integration``).
+        - device_id: Optional. When set with ``include=diagnostics``, returns the
+          device-scoped diagnostics dump for that specific device under the integration
+          (rather than the full integration dump). Some integrations only expose
+          config-entry-level dumps; others expose both.
+        - diagnostics_fields: Optional list of top-level keys to keep from the
+          diagnostics ``data`` payload (e.g. ``["home_assistant", "issues"]``). Accepts
+          a JSON list or comma-separated string. Only applies with ``include=diagnostics``.
+        - diagnostics_truncate_at_bytes: Optional byte cap on the serialized
+          diagnostics payload (post-projection / post-data_path). On hit,
+          drops ``data`` and emits ``truncated=true``, ``bytes_total``,
+          ``byte_cap``, plus ``available_fields`` (when the capped value
+          is a dict). Only applies when ``include`` contains ``diagnostics``.
+          Recommended starting point: 20000 bytes.
+        - diagnostics_data_path: Optional dotted path into the diagnostics
+          ``data`` sub-tree (e.g. ``"data.devices"`` for ZHA per-device records).
+          Walks into the post-fields payload. Resolution failures replace
+          ``data`` with ``null`` and surface ``data_path_error``. Only applies
+          when ``include`` contains ``diagnostics``.
+        - diagnostics_data_offset / diagnostics_data_limit: Pagination on
+          list-valued ``diagnostics_data_path`` results. When ``data_limit``
+          is set and the resolved path is a list, ``data`` becomes
+          ``{"path", "items", "offset", "limit", "total", "has_more"}``. Only
+          applies when ``include`` contains ``diagnostics``.
+
+          Example workflow (walk a list-valued sub-tree one page at a time;
+          the exact ``data_path`` varies by integration version):
+          ``ha_get_system_health(include="diagnostics", config_entry_id="abc",
+          diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10)``
+          → inspect the page envelope's ``total`` / ``has_more`` → repeat
+          with ``diagnostics_data_offset=10`` for the next slice.
         """
         includes = self._parse_includes(include)
+        include_dismissed_repairs_bool = bool(
+            coerce_bool_param(
+                include_dismissed_repairs,
+                "include_dismissed_repairs",
+                default=False,
+            )
+        )
 
         ws_client = None
 
@@ -362,24 +430,177 @@ class SystemTools:
             ws_client, result = await self._fetch_health_info()
 
             # Warn about unrecognized include values
-            VALID_INCLUDES = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
+            VALID_INCLUDES = {
+                "repairs",
+                "zha_network",
+                "zha_network_full",
+                "zwave_network",
+                "diagnostics",
+            }
             unknown = includes - VALID_INCLUDES
             if unknown:
-                result["warning"] = f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
-
-            # Fetch optional sections
-            if "repairs" in includes:
-                result["repairs"] = await self._fetch_repairs(ws_client)
-
-            zha_full = "zha_network_full" in includes
-            zha_summary = "zha_network" in includes
-            if zha_full or zha_summary:
-                result["zha_network"] = await self._fetch_zha_network(
-                    ws_client, full=zha_full
+                result.setdefault("warnings", []).append(
+                    f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
                 )
 
-            if "zwave_network" in includes:
-                result["zwave_network"] = await self._fetch_zwave_network(ws_client)
+            # Fetch optional sections concurrently. The ws_client serialises
+            # outgoing writes via its internal `_send_lock`, but per-message
+            # futures keyed by message_id let response waits overlap — so this
+            # gives request pipelining instead of head-of-line blocking.
+            #
+            # Each ``_fetch_*`` helper already returns an embeddable sub-dict
+            # with an ``error`` field on backend failure (it never raises);
+            # ``return_exceptions=True`` is belt-and-suspenders against a future
+            # helper edit that lets an exception escape.
+            zha_full = "zha_network_full" in includes
+            zha_summary = "zha_network" in includes
+            want_repairs = "repairs" in includes
+            want_zha = zha_full or zha_summary
+            want_zwave = "zwave_network" in includes
+
+            sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
+            if want_repairs:
+                sections.append(
+                    (
+                        "repairs",
+                        self._fetch_repairs(
+                            ws_client,
+                            include_dismissed=include_dismissed_repairs_bool,
+                        ),
+                    )
+                )
+            if want_zha:
+                sections.append(
+                    ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
+                )
+            if want_zwave:
+                sections.append(
+                    ("zwave_network", self._fetch_zwave_network(ws_client))
+                )
+
+            if sections:
+                gathered = await asyncio.gather(
+                    *[coro for _, coro in sections], return_exceptions=True
+                )
+                # Pre-pass: re-raise anything that must unwind the request
+                # rather than land as an embedded section error. ``gather``
+                # with ``return_exceptions=True`` returns ``CancelledError``
+                # (and any other ``BaseException``) as a result element
+                # instead of propagating, and a ``ToolError`` raised from
+                # inside a helper would otherwise be silently demoted to
+                # ``{"error": "ToolError: …"}`` and break the MCP
+                # ``isError=true`` contract for the whole tool.
+                for section_result in gathered:
+                    if isinstance(section_result, asyncio.CancelledError):
+                        raise section_result
+                    if isinstance(section_result, ToolError):
+                        raise section_result
+                    if isinstance(section_result, BaseException) and not isinstance(
+                        section_result, Exception
+                    ):
+                        # ``KeyboardInterrupt`` / ``SystemExit`` — never demote
+                        # these to a section-level error string.
+                        raise section_result
+                for (section_name, _), section_result in zip(
+                    sections, gathered, strict=True
+                ):
+                    if isinstance(section_result, Exception):
+                        # Last-resort fallback: emit a minimal ``{error: ...}``
+                        # dict so an unexpected exception attributes to its
+                        # section instead of bubbling out and dropping siblings.
+                        # The helpers themselves return richer
+                        # ``{<key>: <baseline>, ..., error: ...}`` shapes on
+                        # their own (caught) failures; this branch is the
+                        # belt-and-suspenders path that fires only on a
+                        # helper-edit regression that lets an exception escape.
+                        logger.warning(
+                            "Concurrent fetch for section %r raised: %s: %s",
+                            section_name,
+                            type(section_result).__name__,
+                            section_result,
+                        )
+                        result[section_name] = {
+                            "error": (
+                                f"{type(section_result).__name__}: {section_result}"
+                            )
+                        }
+                    else:
+                        result[section_name] = section_result
+
+            # Diagnostics-related coercions live outside the includes branch
+            # so the orphan-args warning at the ``elif`` after the
+            # ``if "diagnostics" in includes`` block (see below) can see
+            # canonicalised values — passing ``diagnostics_data_offset=20``
+            # without ``include=diagnostics`` would otherwise slip past the gate.
+            fields_list = parse_diagnostics_fields(diagnostics_fields)
+            truncate_bytes = coerce_int_param(
+                diagnostics_truncate_at_bytes,
+                "diagnostics_truncate_at_bytes",
+                default=None,
+                min_value=1,
+            )
+            data_offset_int = coerce_int_param(
+                diagnostics_data_offset,
+                "diagnostics_data_offset",
+                default=0,
+                min_value=0,
+            )
+            data_limit_int = coerce_int_param(
+                diagnostics_data_limit,
+                "diagnostics_data_limit",
+                default=None,
+                min_value=1,
+            )
+            # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
+            # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
+            # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
+            # downstream. Mirrors the coerce_int_param guards above.
+            if diagnostics_data_path is not None and not isinstance(
+                diagnostics_data_path, str
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "diagnostics_data_path must be a string, got "
+                        f"{type(diagnostics_data_path).__name__}",
+                        context={"parameter": "diagnostics_data_path"},
+                    )
+                )
+
+            if "diagnostics" in includes:
+                # ``fetch_integration_diagnostics`` carries the empty-id guard
+                # (returns {"config_entry_id": ..., "error": ...}); calling it
+                # unconditionally keeps the missing-id error shape consistent
+                # with the populated path instead of returning a bare
+                # ``{"error": ...}`` sub-dict on the inline branch. Forward
+                # ``config_entry_id`` as-is (None / "") so the helper's echo
+                # field reflects what the caller actually passed.
+                result["diagnostics"] = await fetch_integration_diagnostics(
+                    self._client,
+                    config_entry_id,
+                    device_id,
+                    fields=fields_list,
+                    truncate_at_bytes=truncate_bytes,
+                    data_path=diagnostics_data_path,
+                    data_offset=data_offset_int,
+                    data_limit=data_limit_int,
+                )
+            elif (
+                config_entry_id
+                or device_id
+                or diagnostics_fields is not None
+                or diagnostics_truncate_at_bytes is not None
+                or diagnostics_data_path is not None
+                or diagnostics_data_limit is not None
+                or data_offset_int > 0
+            ):
+                result.setdefault("warnings", []).append(
+                    "config_entry_id, device_id, diagnostics_fields, "
+                    "diagnostics_truncate_at_bytes, diagnostics_data_path, "
+                    "diagnostics_data_offset, and/or diagnostics_data_limit "
+                    "were provided but ignored because 'diagnostics' is not "
+                    "in include"
+                )
 
             return result
 
@@ -454,17 +675,42 @@ class SystemTools:
 
 
     @staticmethod
-    async def _fetch_repairs(ws_client: Any) -> dict[str, Any]:
-        """Fetch repair issues from Home Assistant."""
+    async def _fetch_repairs(
+        ws_client: Any, *, include_dismissed: bool = False
+    ) -> dict[str, Any]:
+        """Fetch repair issues from Home Assistant.
+
+        Filters out user-dismissed ("ignored") repairs by default to match the
+        HA Repairs UI. Pass ``include_dismissed=True`` to return all issues
+        and report the dismissed count alongside the active count.
+        """
         repairs: dict[str, Any] = {"issues": [], "count": 0}
         try:
             repairs_result = await ws_client.send_command("repairs/list_issues")
             if repairs_result.get("success"):
-                repairs_list = repairs_result.get("result", {}).get("issues", [])
+                all_issues = repairs_result.get("result", {}).get("issues", [])
+                visible_issues = filter_active_repairs(
+                    all_issues, include_dismissed=include_dismissed
+                )
                 repairs = {
-                    "issues": repairs_list,
-                    "count": len(repairs_list),
+                    "issues": visible_issues,
+                    "count": len(visible_issues),
                 }
+                if not include_dismissed:
+                    dismissed_count = len(all_issues) - len(visible_issues)
+                    if dismissed_count:
+                        repairs["dismissed_count"] = dismissed_count
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message")
+                    if isinstance(err, dict)
+                    else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"

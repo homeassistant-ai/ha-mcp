@@ -21,6 +21,19 @@ http:
 
 demo:
 
+# Helper used by the pagination tests in test_history.py and test_logbook.py.
+# Defined here so the entity always exists at HA boot; the recorder DB ships
+# with pre-baked state-change rows for it (see scripts/bake_pagination_seed.py
+# and the timestamp-refresh hook in conftest.py).
+input_number:
+  e2e_pagination_seed:
+    name: E2E Pagination Seed
+    min: 0
+    max: 1000
+    step: 1
+    initial: 0
+    mode: box
+
 # YAML-configured template sensors providing the `sensor.demo_temperature`
 # and `sensor.demo_outside_temperature` names that several existing e2e
 # tests reference (test_helper_crud.py, test_config_entry_flow.py). The

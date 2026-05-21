@@ -1,7 +1,7 @@
 name: "🚀 Startup/Installation Bug"
 description: "Report a bug preventing ha-mcp from starting, installing, or connecting"
 title: "[BUG] "
-labels: ["bug", "startup"]
+labels: ["bug", "startup-bug"]
 body:
   - type: markdown
     attributes:

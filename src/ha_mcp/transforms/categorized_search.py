@@ -47,6 +47,10 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     "ha_config_get_automation",
     "ha_config_set_automation",
     "ha_config_set_yaml",
+    # Skill guide must stay visible when tool search hides the catalog —
+    # its description carries the bundled best-practices trigger
+    # conditions that the LLM needs to see before writing config.
+    "ha_get_skill_guide",
 )
 
 # Tool name patterns that indicate delete/remove operations
@@ -97,6 +101,7 @@ class SearchKeywordsTransform(Transform):
         tool = await call_next(name, version=version)
         return self._enrich(tool) if tool else None
 
+
 # Proxy description suffix (shared across all proxies)
 _PROXY_PARAMS_SUFFIX = (
     "Params: name (str) = tool name, arguments (dict) = tool parameters. "
@@ -137,8 +142,10 @@ def _categorize_tool(tool: Tool) -> str:
     if annotations and annotations.readOnlyHint:
         return "read"
     # A tool is 'delete' only if it's destructive AND its name suggests deletion
-    if annotations and annotations.destructiveHint and any(
-        pattern in tool.name for pattern in _DELETE_PATTERNS
+    if (
+        annotations
+        and annotations.destructiveHint
+        and any(pattern in tool.name for pattern in _DELETE_PATTERNS)
     ):
         return "delete"
     return "write"
@@ -205,9 +212,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
     @staticmethod
     def _catalog_hash(tools: Sequence[Tool]) -> str:
         """Hash tool names + categories for staleness detection."""
-        key = "|".join(
-            sorted(f"{t.name}:{_categorize_tool(t)}" for t in tools)
-        )
+        key = "|".join(sorted(f"{t.name}:{_categorize_tool(t)}" for t in tools))
         return hashlib.sha256(key.encode()).hexdigest()
 
     async def _rebuild_category_cache(self, ctx: Any) -> None:
@@ -294,26 +299,34 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 try:
                     parsed = json.loads(arguments)
                 except json.JSONDecodeError as e:
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_JSON,
-                        message=f"'arguments' is a string but not valid JSON: {e}",
-                        suggestions=[
-                            "Pass 'arguments' as an object, not a JSON string.",
-                        ],
-                        context={"proxy_used": proxy_name, "tool_name": name},
-                    ))) from e
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.VALIDATION_INVALID_JSON,
+                                message=f"'arguments' is a string but not valid JSON: {e}",
+                                suggestions=[
+                                    "Pass 'arguments' as an object, not a JSON string.",
+                                ],
+                                context={"proxy_used": proxy_name, "tool_name": name},
+                            )
+                        )
+                    ) from e
                 if not isinstance(parsed, dict):
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message=(
-                            "'arguments' must be a JSON object "
-                            f"(got {type(parsed).__name__})."
-                        ),
-                        suggestions=[
-                            "Pass 'arguments' as an object (dict), not a list or scalar.",
-                        ],
-                        context={"proxy_used": proxy_name, "tool_name": name},
-                    )))
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                message=(
+                                    "'arguments' must be a JSON object "
+                                    f"(got {type(parsed).__name__})."
+                                ),
+                                suggestions=[
+                                    "Pass 'arguments' as an object (dict), not a list or scalar.",
+                                ],
+                                context={"proxy_used": proxy_name, "tool_name": name},
+                            )
+                        )
+                    )
                 logger.warning(
                     "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
                     proxy_name,
@@ -340,7 +353,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 arguments
                 and isinstance(arguments.get("name"), str)
                 and "arguments" in arguments
-                and name in (
+                and name
+                in (
                     transform._call_read_name,
                     transform._call_write_name,
                     transform._call_delete_name,
@@ -369,17 +383,31 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     actual_category = "delete"
                     correct_proxy = transform._call_delete_name
                 else:
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.RESOURCE_NOT_FOUND,
-                        message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
-                        context={"tool_name": name},
-                    )))
-                raise ToolError(json.dumps(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
-                    suggestions=[f"Use '{correct_proxy}' for {actual_category} operations."],
-                    context={"tool_name": name, "proxy_used": proxy_name, "correct_proxy": correct_proxy},
-                )))
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.RESOURCE_NOT_FOUND,
+                                message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
+                                context={"tool_name": name},
+                            )
+                        )
+                    )
+                raise ToolError(
+                    json.dumps(
+                        create_error_response(
+                            code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
+                            suggestions=[
+                                f"Use '{correct_proxy}' for {actual_category} operations."
+                            ],
+                            context={
+                                "tool_name": name,
+                                "proxy_used": proxy_name,
+                                "correct_proxy": correct_proxy,
+                            },
+                        )
+                    )
+                )
 
             return await ctx.fastmcp.call_tool(name, arguments)
 
@@ -396,10 +424,12 @@ class CategorizedSearchTransform(BM25SearchTransform):
 
         search_tool = self._make_search_tool()
         # Always set readOnlyHint and override description if provided
-        search_tool = search_tool.model_copy(update={
-            "description": self._search_tool_description or search_tool.description,
-            "annotations": ToolAnnotations(readOnlyHint=True),
-        })
+        search_tool = search_tool.model_copy(
+            update={
+                "description": self._search_tool_description or search_tool.description,
+                "annotations": ToolAnnotations(readOnlyHint=True),
+            }
+        )
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
@@ -435,19 +465,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
         """
         if name == self._call_read_name:
             return self._make_categorized_proxy(
-                self._call_read_name, "read",
+                self._call_read_name,
+                "read",
                 ToolAnnotations(readOnlyHint=True),
                 self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
-                self._call_write_name, "write",
+                self._call_write_name,
+                "write",
                 ToolAnnotations(destructiveHint=True),
                 self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
-                self._call_delete_name, "delete",
+                self._call_delete_name,
+                "delete",
                 ToolAnnotations(destructiveHint=True),
                 self._proxy_descs["delete"],
             )

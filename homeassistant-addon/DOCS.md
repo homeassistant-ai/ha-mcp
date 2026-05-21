@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 89+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -256,7 +256,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~89 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -366,7 +366,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 88+ MCP tools for controlling Home Assistant:
+The add-on provides 89+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -382,6 +382,9 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 - `ha_remove_area_or_floor` — Remove a Home Assistant area or floor.
 - `ha_set_area_or_floor` — Create or update a Home Assistant area or floor.
+
+### Assist
+- `ha_manage_pipeline` — Manage Home Assistant Assist pipelines.
 
 ### Automations
 - `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
@@ -443,7 +446,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
 - `ha_config_set_helper` — Create or update Home Assistant helper entities (27 types, unified interface).
 - `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
-- `ha_get_helper_schema` — Get configuration schema for a helper type.
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
@@ -452,6 +454,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
+- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 - `ha_set_integration_enabled` — Enable/disable integration (config entry).
 
 ### Labels & Categories
@@ -480,6 +483,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### Service & Device Control
 - `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
+- `ha_call_event` — Execute a custom event on the Home Assistant event bus.
 - `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
 - `ha_get_operation_status` — Check status of one or more device operations with real-time WebSocket verification.
 - `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
@@ -489,7 +493,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
 - `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
-- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
@@ -512,7 +515,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 <!-- ADDON_TOOLS_END -->
 
-For domain-specific Home Assistant documentation, use the `ha_get_skill_home_assistant_best_practices` resource.
+For domain-specific Home Assistant documentation, use the `ha_get_skill_guide` tool (or read the `skill://` resources directly if your MCP client supports resources).
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 

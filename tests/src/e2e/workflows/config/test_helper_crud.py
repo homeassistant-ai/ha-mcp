@@ -11,58 +11,30 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
-from ...utilities.wait_helpers import wait_for_condition, wait_for_entity_state
+from ...utilities.assertions import (
+    assert_mcp_success,
+    extract_error_message,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ...utilities.wait_helpers import (
+    wait_for_condition,
+    wait_for_entity_registration,
+    wait_for_entity_state,
+)
 
 logger = logging.getLogger(__name__)
-
-
-async def wait_for_entity_registration(mcp_client, entity_id: str, timeout: int = 20) -> bool:
-    """
-    Wait for entity to be registered and queryable via API.
-    Does not check for specific state, only that entity exists.
-    """
-    import time
-    start_time = time.time()
-    attempt = 0
-
-    async def entity_exists():
-        nonlocal attempt
-        attempt += 1
-        data = await safe_call_tool(mcp_client, "ha_get_state", {"entity_id": entity_id})
-        # Check if 'data' key exists (not 'success' key)
-        success = 'data' in data and data['data'] is not None
-
-        # Log every attempt with full details
-        elapsed = time.time() - start_time
-        logger.info(
-            f"[Attempt {attempt} @ {elapsed:.1f}s] Checking {entity_id}: "
-            f"success={success}, data keys={list(data.keys())}"
-        )
-
-        if success:
-            state = data.get("data", {}).get("state", "N/A")
-            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
-        else:
-            error = data.get("error", "No error message")
-            logger.warning(f"❌ Entity {entity_id} check failed: {error}")
-
-        return success
-
-    return await wait_for_condition(
-        entity_exists, timeout=timeout, condition_name=f"{entity_id} registration"
-    )
 
 
 def get_entity_id_from_response(data: dict, helper_type: str) -> str | None:
     """Extract entity_id from helper create response.
 
     The API may return entity_id directly or we may need to construct it
-    from helper_data.id.
+    from data.id (issue #1293 renamed the wrapper key from helper_data).
     """
     entity_id = data.get("entity_id")
     if not entity_id:
-        helper_id = data.get("helper_data", {}).get("id")
+        helper_id = data.get("data", {}).get("id")
         if helper_id:
             entity_id = f"{helper_type}.{helper_id}"
     return entity_id
@@ -708,7 +680,7 @@ class TestInputButtonCRUD:
         assert get_data.get("success", True) is False, (
             f"Entity still present in registry after delete: {get_data}"
         )
-        err_msg = (get_data.get("error", {}).get("message") or "").lower()
+        err_msg = extract_error_message(get_data).lower()
         assert "not found" in err_msg, (
             f"Expected 'not found' in error message, got: {get_data}"
         )
@@ -1070,8 +1042,8 @@ class TestScheduleCRUD:
         cleanup_tracker.track("schedule", entity_id)
         logger.info(f"Created schedule with data: {entity_id}")
 
-        # Verify the helper_data includes the data field in time blocks
-        helper_data = create_data.get("helper_data", {})
+        # Verify the response data includes the schedule day blocks
+        helper_data = create_data.get("data", {})
         monday_blocks = helper_data.get("monday", [])
         assert len(monday_blocks) == 2, f"Expected 2 Monday blocks, got {len(monday_blocks)}"
 
@@ -1465,8 +1437,8 @@ class TestPersonCRUD:
         logger.info(f"Person updated: {update_data.get('message')}")
 
         # VERIFY the update succeeded and returned person config (not entity registry entry)
-        updated = update_data.get("updated_data", {})
-        assert updated, f"No updated_data in response: {update_data}"
+        updated = update_data.get("data", {})
+        assert updated, f"No data field in response: {update_data}"
         # person/update response includes the person config with 'name' and 'id'
         assert updated.get("name") == "E2E Person Update Test Renamed", (
             f"Name not updated in config store response — got: {updated.get('name')}. "
@@ -1522,7 +1494,7 @@ class TestTagCRUD:
         create_data = assert_mcp_success(create_result, "Create tag")
         entity_id = get_entity_id_from_response(create_data, "tag")
         # Tag may not return entity_id in same format
-        tag_id = create_data.get("helper_data", {}).get("id") or test_tag_id
+        tag_id = create_data.get("data", {}).get("id") or test_tag_id
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 
@@ -1564,7 +1536,7 @@ class TestTagCRUD:
             },
         )
         create_data = assert_mcp_success(create_result, "Create tag for update test")
-        tag_id = create_data.get("helper_data", {}).get("id") or test_tag_id
+        tag_id = create_data.get("data", {}).get("id") or test_tag_id
         cleanup_tracker.track("tag", tag_id)
         logger.info(f"Created tag: {tag_id}")
 

@@ -123,12 +123,16 @@ async def test_logbook_pagination_with_offset(mcp_client):
     )
     first_data = get_logbook_data(first_raw)
 
-    # Skip test if no entries or not enough for pagination
-    if not first_data.get("success") or first_data.get("total_entries", 0) <= 5:
-        logger.info(
-            f"Skipping pagination test - only {first_data.get('total_entries', 0)} entries"
-        )
-        pytest.skip("Not enough logbook entries to test pagination")
+    # The recorder seed ships with >5 logbook-visible events (see
+    # scripts/bake_pagination_seed.py + conftest._refresh_recorder_timestamps);
+    # assert rather than skip so a regression in the seed or refresh fails
+    # loudly instead of silently passing.
+    assert first_data.get("success"), f"ha_get_logs failed: {first_data!r}"
+    assert first_data.get("total_entries", 0) > 5, (
+        f"Expected >5 logbook entries from seed, got "
+        f"{first_data.get('total_entries', 0)} — recorder seed or timestamp "
+        f"refresh may be broken."
+    )
 
     # Get second page
     second_raw = await safe_call_tool(
@@ -362,7 +366,14 @@ async def test_logs_system_source_with_level_filter(mcp_client):
 
 @pytest.mark.asyncio
 async def test_logs_error_log_source(mcp_client):
-    """Test raw error log retrieval via source='error_log'."""
+    """Test raw error log retrieval via source='error_log'.
+
+    Exercises ``get_error_log``: on Container HA hits ``/api/error_log``,
+    on Supervised/HAOS external client uses the ``/api/hassio/core/logs``
+    proxy (#1349 item 4 fix), inside the addon goes directly to
+    Supervisor REST. The test only asserts shape — all three branches
+    converge on the same response envelope.
+    """
     logger.info("Testing error_log source")
 
     result = await mcp_client.call_tool(
@@ -516,7 +527,12 @@ async def test_logs_system_source_with_search(mcp_client):
 
 @pytest.mark.asyncio
 async def test_logs_error_log_with_level_filter(mcp_client):
-    """Test error log filtering by level."""
+    """Test error log filtering by level.
+
+    Same backend path as ``test_logs_error_log_source`` — the level
+    filter happens client-side after ``get_error_log`` fetches the raw
+    text, so all three deployment branches produce the same shape here.
+    """
     logger.info("Testing error_log with level filter")
 
     result = await mcp_client.call_tool(

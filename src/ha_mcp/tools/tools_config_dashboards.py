@@ -16,14 +16,72 @@ from ..errors import ErrorCode, create_error_response, create_resource_not_found
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
     PythonSandboxError,
+    PythonSandboxExecutionError,
     format_sandbox_error,
     get_security_documentation,
     safe_execute,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    extract_tool_error_message,
+    log_tool_usage,
+    raise_tool_error,
+    validate_identifier_not_empty,
+)
 from .util_helpers import parse_json_param
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_dashboard_config_internal(
+    client: Any, url_path: str | None
+) -> tuple[dict[str, Any], str]:
+    """Fetch dashboard config from HA and compute its hash.
+
+    Returns ``(config, config_hash)`` tuple where ``config`` is the
+    authoritative Lovelace config dict returned by HA's ``lovelace/config``
+    WebSocket call (with ``force=True`` to bypass any cache) and
+    ``config_hash`` is computed from that config via ``compute_config_hash``.
+
+    Used internally to obtain the authoritative post-save hash and as the
+    fetch+hash building block for the optimistic-locking pre-read paths.
+    Mirrors the ``_get_<entity>_config_internal`` helpers in the sibling
+    files (``tools_config_scripts.py``, ``tools_config_automations.py``,
+    ``tools_config_scenes.py``).
+
+    Raises ``ToolError`` with ``ErrorCode.SERVICE_CALL_FAILED`` if the
+    WebSocket call reports failure or the response is not a dict; callers
+    can rely on the returned tuple being populated.
+    """
+    get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
+    if url_path:
+        get_data["url_path"] = url_path
+
+    response = await client.send_websocket_message(get_data)
+
+    if isinstance(response, dict) and not response.get("success", True):
+        error_msg = response.get("error", {})
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Dashboard fetch failed: {error_msg}",
+                context={"url_path": url_path},
+            )
+        )
+
+    config = response.get("result") if isinstance(response, dict) else response
+    if not isinstance(config, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Dashboard config response was not a dict",
+                context={"url_path": url_path},
+            )
+        )
+
+    return cast(dict[str, Any], config), compute_config_hash(config)
 
 
 async def _verify_config_unchanged(
@@ -265,6 +323,32 @@ def _should_lazy_resolve(error_msg: str) -> bool:
     return _LAZY_RESOLVE_TRIGGER in error_msg
 
 
+async def fetch_dashboards_list(
+    client: Any,
+) -> list[dict[str, Any]] | None:
+    """Fetch and normalise the lovelace/dashboards/list WebSocket response.
+
+    Returns the list of dashboard registry entries on success, or ``None``
+    when the response shape is unrecognised.  A warning is logged on
+    unexpected shapes so that future HA response-format changes surface at
+    every fetch site rather than silently degrading.
+
+    Callers decide how to handle ``None`` (e.g. fall through to ``[]`` or
+    propagate the failure).
+    """
+    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+    if isinstance(result, dict) and isinstance(result.get("result"), list):
+        return cast(list[dict[str, Any]], result["result"])
+    if isinstance(result, list):
+        return cast(list[dict[str, Any]], result)
+    logger.warning(
+        "lovelace/dashboards/list returned an unexpected shape (type=%s); "
+        "treating as no-match",
+        type(result).__name__,
+    )
+    return None
+
+
 async def _resolve_dashboard(
     client: Any, identifier: str
 ) -> tuple[dict[str, str] | None, list[dict[str, Any]] | None]:
@@ -297,21 +381,8 @@ async def _resolve_dashboard(
       to the registry id before issuing the delete. Discards
       ``dashboards``.
     """
-    result = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
-    if isinstance(result, dict) and "result" in result:
-        dashboards = result["result"]
-    elif isinstance(result, list):
-        dashboards = result
-    else:
-        # Neither dict-with-result nor list — either HA returned an error
-        # envelope (unknown shape) or the response format changed.
-        # Surface a warning so the next response-shape change isn't a
-        # silent "always no match" regression.
-        logger.warning(
-            "lovelace/dashboards/list returned an unexpected shape (type=%s); "
-            "treating as no-match",
-            type(result).__name__,
-        )
+    dashboards = await fetch_dashboards_list(client)
+    if dashboards is None:
         return None, None
 
     for d in dashboards:
@@ -527,22 +598,32 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         try:
             # List mode
             if list_only:
-                result = await client.send_websocket_message(
-                    {"type": "lovelace/dashboards/list"}
-                )
-                if isinstance(result, dict) and "result" in result:
-                    dashboards = result["result"]
-                elif isinstance(result, list):
-                    dashboards = result
-                else:
-                    dashboards = []
-
+                dashboards = await fetch_dashboards_list(client) or []
                 return {
                     "success": True,
                     "action": "list",
                     "dashboards": dashboards,
                     "count": len(dashboards),
                 }
+
+            # ``url_path`` is optional in this tool (omitted with
+            # ``list_only=True`` lists all dashboards — handled above; omitted
+            # without ``list_only`` falls back to the default dashboard via
+            # the resolver below). When provided, reject empty/whitespace
+            # up-front so the caller gets a structured parameter error
+            # instead of a misleading ``RESOURCE_NOT_FOUND``. Extension of
+            # the #1312 validate_identifier_not_empty pattern to the
+            # dashboards family per #1313.
+            if url_path is not None:
+                validate_identifier_not_empty(
+                    url_path,
+                    "url_path",
+                    suggestions=[
+                        "Pass a dashboard URL path (e.g. 'lovelace-home')",
+                        "Omit url_path and pass list_only=True to list dashboards",
+                        "Use 'default' to target the default dashboard",
+                    ],
+                )
 
             # Search mode — find cards, badges, or header cards
             if search_mode:
@@ -722,12 +803,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             raise
         except Exception as e:
             if search_mode:
-                logger.error(
-                    f"Error finding card in dashboard: url_path={url_path}, "
-                    f"entity_id={entity_id}, card_type={card_type}, heading={heading}, "
-                    f"error={e}",
-                    exc_info=True,
-                )
                 suggestions = [
                     "Check HA connection",
                     "Verify dashboard with ha_config_get_dashboard(list_only=True)",
@@ -740,7 +815,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "heading": heading,
                 }
             else:
-                logger.error(f"Error getting dashboard: {e}", exc_info=True)
                 suggestions = [
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Check if you have permission to access this dashboard",
@@ -871,7 +945,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         DASHBOARD DOCUMENTATION (via MCP skills):
         - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
         - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
-        - ha_get_skill_home_assistant_best_practices — guidance on card types and configuration
+        - ha_get_skill_guide — guidance on card types and configuration
 
         EXAMPLES:
 
@@ -935,6 +1009,22 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         are also updated if explicitly provided alongside (or instead of) a config change.
         """
         try:
+            # ``url_path`` is required (always non-None). Reject empty/
+            # whitespace up-front so the caller gets a structured parameter
+            # error instead of a misleading downstream failure (the
+            # subsequent "default" alias, pre-resolver, and hyphen check
+            # all assume a usable string). Extension of the #1312
+            # validate_identifier_not_empty pattern to the dashboards
+            # family per #1313.
+            validate_identifier_not_empty(
+                url_path,
+                "url_path",
+                suggestions=[
+                    "Pass a dashboard URL path (e.g. 'my-dashboard')",
+                    "Use 'default' or 'lovelace' for the default dashboard",
+                ],
+                context={"action": "set"},
+            )
             # Handle "default" as alias for the default dashboard
             # (matches ha_config_get_dashboard behavior)
             if url_path == "default":
@@ -1024,21 +1114,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                # Fetch current dashboard config
-                get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
-                if url_path:
-                    get_data["url_path"] = url_path
-
-                response = await client.send_websocket_message(get_data)
-
-                if isinstance(response, dict) and not response.get("success", True):
-                    error_msg = response.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
+                # Fetch current dashboard config + hash via the shared helper.
+                # Re-wrap helper's generic fetch error with python_transform-
+                # specific UX suggestions so the caller learns this branch
+                # requires an existing dashboard.
+                try:
+                    current_config, current_hash = await _get_dashboard_config_internal(
+                        client, url_path
+                    )
+                except ToolError as e:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
-                            f"Dashboard not found or inaccessible: {error_msg}",
+                            f"Dashboard not found or inaccessible: {extract_tool_error_message(e)}",
                             suggestions=[
                                 "python_transform requires an existing dashboard",
                                 "Use 'config' parameter to create a new dashboard",
@@ -1051,26 +1139,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                current_config = (
-                    response.get("result") if isinstance(response, dict) else response
-                )
-                if not isinstance(current_config, dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            "Current dashboard config is invalid",
-                            suggestions=[
-                                "Initialize dashboard with 'config' parameter first"
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "url_path": url_path,
-                            },
-                        )
-                    )
-
                 # Validate config_hash for optimistic locking
-                current_hash = compute_config_hash(current_config)
                 if current_hash != config_hash:
                     raise_tool_error(
                         create_error_response(
@@ -1092,6 +1161,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     transformed_config = safe_execute(python_transform, current_config)
                 except PythonSandboxError as e:
                     message, suggestions = format_sandbox_error(e, python_transform)
+                    # A path-shape mismatch (IndexError/KeyError) is almost always
+                    # a hallucinated path; steer the retry toward search mode so
+                    # the next transform is built from a verified jq_path.
+                    if isinstance(e, PythonSandboxExecutionError) and isinstance(
+                        e.__cause__, (IndexError, KeyError)
+                    ):
+                        suggestions = [
+                            "Call ha_config_get_dashboard with card_type=..., "
+                            "entity_id=..., or heading=... to get the verified "
+                            "jq_path for the target card, then build "
+                            "python_transform from that path",
+                            *suggestions,
+                        ]
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
@@ -1135,8 +1217,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                # Compute new hash for potential chaining
-                new_config_hash = compute_config_hash(transformed_config)
+                # Re-fetch to get authoritative hash (HA may normalize after save)
+                _, new_config_hash = await _get_dashboard_config_internal(
+                    client, url_path
+                )
 
                 transform_result: dict[str, Any] = {
                     "success": True,
@@ -1158,24 +1242,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             if pre_fetched_dashboards is not None:
                 existing_dashboards = pre_fetched_dashboards
             else:
-                result = await client.send_websocket_message(
-                    {"type": "lovelace/dashboards/list"}
-                )
-                if isinstance(result, dict) and "result" in result:
-                    existing_dashboards = result["result"]
-                elif isinstance(result, list):
-                    existing_dashboards = result
-                else:
-                    # Mirror the warning emitted by ``_resolve_dashboard`` on
-                    # the same response-shape failure, so a future HA shape
-                    # change shows up at every fetch site rather than going
-                    # silent on this one.
-                    logger.warning(
-                        "lovelace/dashboards/list returned an unexpected shape "
-                        "(type=%s); treating as no-match",
-                        type(result).__name__,
-                    )
-                    existing_dashboards = []
+                existing_dashboards = await fetch_dashboards_list(client) or []
             dashboard_exists = any(
                 d.get("url_path") == url_path for d in existing_dashboards
             )
@@ -1306,38 +1373,44 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
                 # For existing dashboards, optionally validate config_hash and warn on large replacement
                 if dashboard_exists:
-                    # Fetch current config for validation/comparison
-                    get_data = {
-                        "type": "lovelace/config",
-                        "force": True,
-                    }
-                    if url_path:
-                        get_data["url_path"] = url_path
-                    current_response = await client.send_websocket_message(get_data)
-                    current_config = (
-                        current_response.get("result")
-                        if isinstance(current_response, dict)
-                        else current_response
-                    )
+                    # Fetch current config + hash via the shared helper.
+                    # Tolerate fetch failures here — full-config replacement
+                    # should still proceed even if the pre-read can't load
+                    # the current state (force-replace path). The strict
+                    # ``ToolError`` raised by the helper is downgraded to a
+                    # skip of both the optimistic-locking check and the
+                    # large-config soft warning, matching the prior
+                    # silently-fall-through behaviour.
+                    # Distinct names from the python_transform branch's
+                    # ``current_config``/``current_hash`` so the optional
+                    # type here doesn't redefine the non-optional binding
+                    # mypy infers there.
+                    existing_config: dict[str, Any] | None = None
+                    existing_hash: str | None = None
+                    try:
+                        (
+                            existing_config,
+                            existing_hash,
+                        ) = await _get_dashboard_config_internal(client, url_path)
+                    except ToolError:
+                        pass
 
-                    if isinstance(current_config, dict):
-                        existing_config_size = len(json.dumps(current_config))
+                    if isinstance(existing_config, dict):
+                        existing_config_size = len(json.dumps(existing_config))
 
                         # Optional config_hash validation for full replacement
-                        if config_hash is not None:
-                            current_hash = compute_config_hash(current_config)
-                            if current_hash != config_hash:
-                                raise_tool_error(
-                                    create_error_response(
-                                        ErrorCode.SERVICE_CALL_FAILED,
-                                        "Dashboard modified since last read (conflict)",
-                                        suggestions=[
-                                            "Call ha_config_get_dashboard() again",
-                                            "Use the fresh config_hash, or omit config_hash to force replace",
-                                        ],
-                                        context={"action": "set", "url_path": url_path},
-                                    )
+                        if config_hash is not None and existing_hash != config_hash:
+                            raise_tool_error(
+                                create_error_response(
+                                    ErrorCode.SERVICE_CALL_FAILED,
+                                    "Dashboard modified since last read (conflict)",
+                                    suggestions=[
+                                        "Call ha_config_get_dashboard() again",
+                                        "Use the fresh config_hash, or omit config_hash to force replace",
+                                    ],
+                                    context={"action": "set", "url_path": url_path},
                                 )
+                            )
 
                         # Soft warning for large config full replacement (10KB ≈ 2-3k tokens)
                         if existing_config_size >= 10000:
@@ -1402,7 +1475,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error setting dashboard: {e}")
             exception_to_structured_error(
                 e,
                 context={"action": "set", "url_path": url_path},
@@ -1444,6 +1516,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         Note: The default dashboard cannot be deleted via this method.
         """
         try:
+            # ``url_path`` is required. Reject empty/whitespace up-front so
+            # the caller gets a structured parameter error instead of a
+            # misleading "no dashboard found" from the resolver below.
+            # Extension of the #1312 validate_identifier_not_empty pattern
+            # to the dashboards family per #1313.
+            validate_identifier_not_empty(
+                url_path,
+                "url_path",
+                suggestions=[
+                    "Pass a dashboard URL path or internal ID (e.g. 'my-dashboard')",
+                    "Use ha_config_get_dashboard(list_only=True) to list dashboards",
+                ],
+                context={"action": "delete"},
+            )
             resolved, _ = await _resolve_dashboard(client, url_path)
             if resolved is None:
                 raise_tool_error(
@@ -1469,8 +1555,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     error_str = error_msg.get("message", str(error_msg))
                 else:
                     error_str = str(error_msg)
-
-                logger.error(f"Error deleting dashboard: {error_str}")
 
                 # If the error is "not found" / "doesn't exist", treat as success (idempotent)
                 if (
@@ -1512,7 +1596,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error deleting dashboard: {e}")
             exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},

@@ -20,6 +20,7 @@ from ...utilities.assertions import (
 )
 from ...utilities.wait_helpers import (
     wait_for_entity_state,
+    wait_for_ha_event,
     wait_for_logbook_entry,
     wait_for_tool_result,
 )
@@ -172,34 +173,60 @@ class TestAutomationLifecycle:
 
         logger.info("✅ Automation configuration verified")
 
-        # 4. TRIGGER: Manually trigger the automation
-        logger.info("🚀 Triggering automation...")
-        trigger_result = await mcp_client.call_tool(
-            "ha_call_service",
-            {
-                "domain": "automation",
-                "service": "trigger",
-                "entity_id": automation_entity,
-            },
+        # 4. TRIGGER + VERIFY: subscribe to ``automation_triggered`` via
+        # HA WS BEFORE invoking the trigger, then fire the trigger from
+        # inside the subscription window. HA's ``automation_triggered``
+        # event fires within milliseconds of the trigger reaching the
+        # automation engine — much faster than the 10s logbook poll the
+        # previous flow used, which was the largest single chunk of
+        # this test's runtime (~10s of the ~16s total on regular e2e).
+        logger.info("🚀 Triggering automation + waiting for automation_triggered event...")
+
+        async def _fire_trigger():
+            trigger_result = await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "automation",
+                    "service": "trigger",
+                    "entity_id": automation_entity,
+                },
+            )
+            assert_mcp_success(trigger_result, "automation trigger")
+
+        triggered_event = await wait_for_ha_event(
+            "automation_triggered",
+            _fire_trigger,
+            predicate=lambda ev: (ev.get("data") or {}).get("entity_id")
+            == automation_entity,
+            timeout=5.0,
         )
 
-        trigger_data = assert_mcp_success(trigger_result, "automation trigger")
-        logger.info("✅ Automation triggered successfully")
-
-        # 5. VERIFY: Check that automation ran (via logbook)
-        logger.info("📋 Checking automation execution in logbook...")
-        try:
-            automation_logged = await wait_for_logbook_entry(
-                mcp_client, automation_name, timeout=10, poll_interval=1.0
+        if triggered_event:
+            logger.info(f"✅ automation_triggered event observed for {automation_entity}")
+        else:
+            # Belt-and-suspenders fallback: even though the WS event
+            # missed, the trigger service call succeeded. Try the
+            # logbook path with a SHORT timeout so we don't burn the
+            # full 10s the previous flow did. Failure here is logged
+            # but doesn't fail the test — matches the original
+            # informational-only intent.
+            logger.warning(
+                "⚠️ automation_triggered event not observed within 5s — "
+                "falling back to logbook poll (2s budget)"
             )
-            if automation_logged:
-                logger.info("📋 Automation execution verified in logbook")
-            else:
-                logger.info(
-                    "📋 Logbook verification timeout - automation trigger was successful"
+            try:
+                automation_logged = await wait_for_logbook_entry(
+                    mcp_client, automation_name, timeout=2, poll_interval=0.5
                 )
-        except Exception as e:
-            logger.warning(f"Logbook verification failed: {e} - continuing with test")
+                if automation_logged:
+                    logger.info("📋 Automation execution verified via logbook fallback")
+                else:
+                    logger.info(
+                        "📋 Logbook fallback also timed out — trigger service call "
+                        "succeeded, treating as informational"
+                    )
+            except Exception as e:
+                logger.warning(f"Logbook fallback failed: {e} - continuing with test")
 
         # 6. UPDATE: Modify automation to add delay and different time
         logger.info("📝 Updating automation configuration...")

@@ -20,6 +20,7 @@ from pydantic import Field
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
@@ -45,25 +46,11 @@ async def _check_storage_mode_dashboard_collision(
         return
     url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
     try:
-        result = await client.send_websocket_message(
-            {"type": "lovelace/dashboards/list"}
-        )
+        dashboards = await fetch_dashboards_list(client)
     except Exception as exc:
         logger.warning(
             "lovelace/dashboards/list WS query failed (%s); skipping collision check",
             exc,
-        )
-        return
-
-    if isinstance(result, dict) and "result" in result:
-        dashboards = result["result"]
-    elif isinstance(result, list):
-        dashboards = result
-    else:
-        logger.warning(
-            "lovelace/dashboards/list returned unexpected shape (%s); "
-            "skipping collision check",
-            type(result).__name__,
         )
         return
 
@@ -120,8 +107,9 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "Top-level YAML key to modify. Only a narrow allowlist of "
-                    "YAML-only integration keys is accepted (e.g., 'command_line', "
-                    "'rest', 'shell_command', 'notify'). For YAML-mode dashboards, "
+                    "YAML-only or YAML-heavy integration keys is accepted (e.g., "
+                    "'command_line', 'rest', 'shell_command', 'notify', 'knx'). "
+                    "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
                     "route. No other dotted paths are supported. Not for template "
@@ -187,14 +175,15 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms),
-        and for registering YAML-mode dashboards via
+        for integrations with significant YAML-only configuration (knx
+        entities in package files), and for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
         Check ``post_action`` in the response: most keys need a full HA
         restart; template, mqtt, and group support reload. Preserves YAML
         comments and HA tags (``!include``, ``!secret``) on round-trip;
         ``replace`` swaps the subtree as-is.
 
-        For detailed routing guidance, use ha_get_skill_home_assistant_best_practices.
+        For detailed routing guidance, use ha_get_skill_guide.
         """
         try:
             # Validate action

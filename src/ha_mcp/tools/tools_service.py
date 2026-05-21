@@ -82,7 +82,7 @@ def _build_service_suggestions(
         f"Verify {entity_id} exists using ha_get_state()"
         if entity_id
         else "Specify an entity_id for targeted service calls",
-        f"Check available services for {domain} domain using ha_get_skill_home_assistant_best_practices",
+        f"Check available services for {domain} domain using ha_get_skill_guide",
         "Use ha_search_entities() to find correct entity IDs",
     ]
 
@@ -145,14 +145,14 @@ class ServiceTools:
                 f"did not respond within the timeout period. The operation is likely "
                 f"still running in the background."
             ),
-            "warning": (
+            "warnings": [
                 "Response timed out. This is normal for long-running services "
                 f"like updates or firmware installs. Use ha_get_state('{entity_id}') "
                 "to check the current status."
                 if entity_id
                 else "Response timed out. This is normal for long-running services. "
                 "The service was dispatched and may still be executing."
-            ),
+            ],
         }
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
@@ -186,11 +186,11 @@ class ServiceTools:
             if new_state:
                 response["verified_state"] = new_state.get("state")
             else:
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     "Service executed but state change could not be verified within timeout."
                 )
         except Exception as e:
-            response["warning"] = (
+            response.setdefault("warnings", []).append(
                 f"Service executed but state verification failed: {e}"
             )
 
@@ -237,7 +237,7 @@ class ServiceTools:
           Only applies to state-changing services on a single entity. Set to False for
           fire-and-forget calls, bulk operations, or services without observable state changes.
 
-        **For detailed service documentation, use ha_get_skill_home_assistant_best_practices.**
+        **For detailed service documentation, use ha_get_skill_guide.**
 
         Common patterns: Use ha_get_state() to check current values before making changes.
         Use ha_search_entities() to find correct entity IDs.
@@ -430,6 +430,115 @@ class ServiceTools:
             operations=operations_list, parallel=parallel_bool, ctx=ctx
         )
         return cast(dict[str, Any], result)
+
+    @tool(
+        name="ha_call_event",
+        tags={"Service & Device Control"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "title": "Call Event",
+        },
+    )
+    @log_tool_usage
+    async def ha_call_event(
+        self,
+        event_type: str,
+        data: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute a custom event on the Home Assistant event bus.
+
+        When NOT to use: for controlling entities (lights, switches, climate) — use
+        ha_call_service instead. For triggering automations by name, use
+        ha_call_service("automation", "trigger").
+
+        Use this to publish custom event types consumed by event-triggered automations,
+        Node-RED flows, or custom integrations that subscribe to specific event types.
+
+        Caveats: Events are fire-and-forget; this tool confirms the event was accepted
+        by the bus but does not verify whether any automation or subscriber acted on it.
+        """
+        # Validate event_type before hitting the wire — empty strings or path separators
+        # produce malformed URLs at POST /api/events/{event_type}.
+        if not event_type or not event_type.strip():
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot be empty or whitespace",
+                    parameter="event_type",
+                )
+            )
+        if "/" in event_type or "\\" in event_type:
+            raise_tool_error(
+                create_validation_error(
+                    "event_type cannot contain path separators",
+                    parameter="event_type",
+                    details=f"Received: {event_type!r}",
+                )
+            )
+
+        parsed_data: dict[str, Any] | None = None
+        if data is not None:
+            raw: Any = None
+            try:
+                raw = parse_json_param(data, "data")
+            except ValueError as e:
+                raise_tool_error(
+                    create_validation_error(
+                        f"Invalid data parameter: {e}",
+                        parameter="data",
+                        invalid_json=True,
+                    )
+                )
+            if raw is not None:
+                if not isinstance(raw, dict):
+                    raise_tool_error(
+                        create_validation_error(
+                            "Event data must be a JSON object (dict)",
+                            parameter="data",
+                            details=f"Received type: {type(raw).__name__}",
+                        )
+                    )
+                parsed_data = raw
+
+        try:
+            response = await self._client.fire_event(event_type, parsed_data)
+        except HomeAssistantConnectionError as error:
+            if isinstance(error.__cause__, httpx.TimeoutException):
+                return {
+                    "success": True,
+                    "partial": True,
+                    "event_type": event_type,
+                    "message": (
+                        f"Event {event_type} was dispatched but Home Assistant "
+                        "did not respond within the timeout period."
+                    ),
+                    "warnings": [
+                        "Response timed out. The event was dispatched and may still "
+                        "have been delivered to subscribers."
+                    ],
+                }
+            exception_to_structured_error(
+                error,
+                context={"event_type": event_type},
+                suggestions=["Check Home Assistant connection"],
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            exception_to_structured_error(
+                e,
+                context={"event_type": event_type},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify event_type is a valid identifier",
+                ],
+            )
+
+        return {
+            "success": True,
+            "event_type": event_type,
+            "message": response.get("message", f"Event {event_type} fired."),
+        }
 
 
 def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

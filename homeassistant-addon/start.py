@@ -217,6 +217,7 @@ def main() -> int:
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
+    enable_lite_docstrings = False  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -239,6 +240,8 @@ def main() -> int:
             enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
             raw_code_mode = config.get("enable_code_mode", False)
             enable_code_mode = raw_code_mode if isinstance(raw_code_mode, bool) else False
+            raw_lite_docstrings = config.get("enable_lite_docstrings", False)
+            enable_lite_docstrings = raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
             raw_disabled = config.get("disabled_tools", "")
@@ -278,6 +281,7 @@ def main() -> int:
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
+    os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy

@@ -16,11 +16,16 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    validate_identifier_not_empty,
+)
 from .tools_config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
-    fetch_helper_data_schema,
+    fetch_helper_flow_info,
     get_user_step_field_names,
     update_flow_helper,
 )
@@ -141,11 +146,9 @@ class _HelperFieldSpec(_HelperFieldSpecBase, total=False):
 
 # Per-simple-type field schemas — list-of-dicts shape mirroring HA's flow
 # ``data_schema`` so callers can iterate one shape regardless of helper kind.
-# Consumed by:
-#   - ``ha_get_helper_schema`` (returned verbatim for simple types).
-#   - ``ha_config_set_helper`` validation errors (relevant entry attached to
-#     ``context["data_schema"]`` so the LLM sees field shape inline with the
-#     4xx that just blocked it).
+# Consumed by ``ha_config_set_helper`` validation errors (relevant entry
+# attached to ``context["data_schema"]`` so the LLM sees field shape inline
+# with the 4xx that just blocked it).
 #
 # Each field-spec dict carries:
 #   - ``name``        : argument key on ``ha_config_set_helper``.
@@ -541,7 +544,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``_fetch_data_schema_for_error_context`` in ``tools_config_entry_flow``).
+    ``fetch_helper_flow_info`` in ``tools_config_entry_flow``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -568,13 +571,14 @@ def _simple_helper_error_context(
 
 
 # Flow helper types whose top-level config-flow step is a MENU rather than a
-# FORM — for these, ``fetch_helper_data_schema`` cannot return a ``data_schema``
+# FORM — for these, ``fetch_helper_flow_info`` cannot return a ``data_schema``
 # without a menu choice (``next_step_id`` / ``group_type`` / ``menu_option``).
 # The pre-flow gates in ``_handle_flow_helper`` use this set to surface a
-# ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker so
-# the LLM gets a non-silent signal to call
-# ``ha_get_helper_schema(<type>, menu_option=...)``. Hint set — extending it
-# only sharpens the signal, missing entries fall back to silent ``None``.
+# ``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
+# alongside the legal sub-types under ``menu_options`` so the LLM can pick
+# a branch on the next try without a separate discovery round-trip. Hint
+# set — extending it only sharpens the signal, missing entries fall back
+# to silent ``None``.
 _MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
@@ -625,13 +629,13 @@ async def _flow_helper_error_context(
     For menu-rooted helpers (``template``, ``group``) without a derivable
     ``menu_choice``, the schema can't be fetched without picking a branch;
     a ``data_schema_unavailable_reason: "menu_helper_requires_branch"``
-    marker is added instead so the LLM gets a non-silent signal to call
-    ``ha_get_helper_schema(<type>, menu_option=...)`` rather than reading
-    the absence of ``data_schema`` as "no schema exists".
+    marker is added instead, along with the legal sub-types under
+    ``menu_options`` (issue #1186), so the caller can pick a branch on
+    the next try without a separate discovery round-trip.
     """
     context: dict[str, Any] = {"helper_type": helper_type}
     try:
-        schema = await fetch_helper_data_schema(
+        info = await fetch_helper_flow_info(
             client, helper_type, menu_choice=menu_choice
         )
     except Exception as e:
@@ -640,17 +644,19 @@ async def _flow_helper_error_context(
         # disappear silently — this PR raises the call rate by 5 sites
         # and the swallow needs an audit-trail entry.
         logger.debug(
-            "_flow_helper_error_context: schema fetch failed for "
+            "_flow_helper_error_context: flow-info fetch failed for "
             "helper_type=%r menu_choice=%r: %s",
             helper_type,
             menu_choice,
             e,
         )
-        schema = None
-    if schema is not None:
-        context["data_schema"] = schema
+        info = {}
+    if "schema" in info:
+        context["data_schema"] = info["schema"]
     elif helper_type in _MENU_ROOTED_FLOW_HELPER_TYPES and not menu_choice:
         context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
+        if "menu_options" in info:
+            context["menu_options"] = info["menu_options"]
     context.update(extra)
     return context
 
@@ -723,7 +729,7 @@ def _validate_applicable_params(
     inapplicable.sort()
     if helper_type in FLOW_HELPER_TYPES:
         applicable_msg = (
-            "config (use ha_get_helper_schema to see fields), "
+            "config (see data_schema on a validation error for the field set), "
             "name, helper_id, area_id, labels, category, wait"
         )
     else:
@@ -747,8 +753,8 @@ def _validate_applicable_params(
     if helper_type in FLOW_HELPER_TYPES:
         suggestions.append(
             f"For flow-based helpers like {helper_type!r}, type-specific config "
-            "goes inside the `config` dict; the per-type fields are discoverable "
-            f"via ha_get_helper_schema(helper_type='{helper_type}')."
+            "goes inside the `config` dict; submit with the wrong shape once "
+            "and the validation error returns the `data_schema` for that helper."
         )
 
     raise_tool_error(
@@ -865,6 +871,69 @@ def _validate_numeric_range(
                     ),
                 )
             )
+
+
+def _validate_initial_in_options(
+    options: Any, initial: Any, helper_type: str = "input_select"
+) -> None:
+    """Reject ``initial`` values not in ``options``.
+
+    Called from both create and update branches with the resolved values —
+    caller-supplied on create, merged with the existing config on update.
+    ``initial=None`` is the unset case and passes through. The
+    ``isinstance(options, list)`` early-return mirrors the defensive shape
+    check in ``_validate_input_select_options`` below — both validators are
+    invariant gates, not type contracts; a future non-list caller is
+    silently skipped rather than raising a confusing ``TypeError`` on
+    ``initial not in options``.
+    """
+    if not isinstance(options, list) or initial is None:
+        return
+    if initial not in options:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"initial={initial!r} must be one of options "
+                f"{options!r} for {helper_type}.",
+                context=_simple_helper_error_context(
+                    helper_type,
+                    initial=initial,
+                    options=options,
+                ),
+                suggestions=[
+                    "Pick an `initial` value that's in `options`.",
+                    "Or omit `initial` to use the default or existing value.",
+                ],
+            )
+        )
+
+
+def _validate_datetime_has_date_or_time(
+    has_date: bool | None, has_time: bool | None
+) -> None:
+    """Reject ``input_datetime`` payloads where both components are False.
+
+    Treats ``None`` as "not constrained" — only the explicit (False, False)
+    case is flagged, since that's what reaches HA as the broken-entity
+    payload. Both the create and update branches call this with the
+    resolved-after-merge ``has_date`` / ``has_time`` pair.
+    """
+    if has_date is False and has_time is False:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "At least one of has_date or has_time must be True for input_datetime",
+                context=_simple_helper_error_context(
+                    "input_datetime",
+                    has_date=has_date,
+                    has_time=has_time,
+                ),
+                suggestions=[
+                    "Set has_date=True to keep the date component.",
+                    "Set has_time=True to keep the time component.",
+                ],
+            )
+        )
 
 
 def _validate_input_select_options(options: Any) -> None:
@@ -1159,11 +1228,12 @@ async def _check_name_collision(
     duplicate entity instead of updating the original. Detect and reject before
     we send the create message, pointing the caller at the existing helper_id.
 
-    Empty / missing `name` is left to the existing name-required check downstream
-    so the user sees the standard "name is required" error rather than a
-    spurious collision miss.
+    Empty / missing / whitespace-only `name` is left to the existing
+    name-required check downstream so the user sees the standard "name is
+    required" error rather than a spurious collision miss (or a wasted WS
+    round-trip on a name the validator is about to reject anyway).
     """
-    if not name:
+    if not name or not name.strip():
         return
 
     target_slug = _slugify_helper_name(name)
@@ -1403,10 +1473,73 @@ async def _apply_registry_updates_to_entity(
     elif cat_result is not None:
         if "category" in cat_result:
             applied["category"] = cat_result["category"]
-        elif "category_warning" in cat_result:
-            warnings.append(f"{entity_id}: {cat_result['category_warning']}")
+        elif cat_result.get("warnings"):
+            warnings.extend(f"{entity_id}: {w}" for w in cat_result["warnings"])
 
     return applied
+
+
+class HelperResponse(TypedDict, total=False):
+    """Uniform response contract for ``ha_config_set_helper`` (issue #1293).
+
+    Documents the legal key set across all three branches (create, update,
+    flow). ``total=False`` because per-branch fields (entity_id, flow extras,
+    warnings) are conditional. Consumed by ``_helper_response`` below — all
+    return literals in this module funnel through that builder so the shape
+    has a single point of construction.
+    """
+
+    success: bool
+    action: str  # "create" | "update"
+    helper_type: str
+    data: dict[str, Any]
+    entity_id: str  # absent on flow branch (use entity_ids[] for multi-entity)
+    message: str | None
+    warnings: list[str]  # omitted when empty
+    # Flow-helper convenience accessors (only set on the flow branch).
+    method: str
+    entry_id: str | None
+    title: str | None
+    updated: bool
+    entity_ids: list[str]
+    area_id: str | None
+    labels: list[str]
+    category: str
+    applied: list[dict[str, Any]]
+
+
+def _helper_response(
+    action: str,
+    helper_type: str,
+    *,
+    data: dict[str, Any],
+    entity_id: str | None = None,
+    message: str | None = None,
+    warnings: list[str] | None = None,
+    **extras: Any,
+) -> dict[str, Any]:
+    """Single construction point for the ``ha_config_set_helper`` response.
+
+    Enforces the uniform shape from issue #1293: ``success`` → ``action`` →
+    ``helper_type`` → ``data`` → ``entity_id`` (when present) → ``message`` →
+    flow-helper extras → ``warnings`` (only when non-empty). Returning
+    ``dict[str, Any]`` rather than ``HelperResponse`` keeps the call sites
+    free of mypy gymnastics around the dynamic ``**extras`` keys; the
+    TypedDict serves as the readable contract anchor instead.
+    """
+    resp: dict[str, Any] = {
+        "success": True,
+        "action": action,
+        "helper_type": helper_type,
+        "data": data,
+    }
+    if entity_id is not None:
+        resp["entity_id"] = entity_id
+    resp["message"] = message
+    resp.update(extras)
+    if warnings:
+        resp["warnings"] = warnings
+    return resp
 
 
 async def _handle_flow_helper(
@@ -1436,6 +1569,22 @@ async def _handle_flow_helper(
     is consistent has already happened upstream in ha_config_set_helper.
     """
     if action is None:
+        # Defence in depth: when reached via the legacy implicit-action
+        # path, an empty/whitespace ``helper_id`` would otherwise be falsy
+        # and silently route to ``create`` — same destructive intent-loss
+        # class as the registry-metadata twins. ``None`` stays the
+        # documented "create-new" sentinel.
+        if helper_id is not None:
+            validate_identifier_not_empty(
+                helper_id,
+                "helper_id",
+                suggestions=[
+                    "Omit helper_id entirely to create a new flow helper",
+                    "Pass a valid helper_id to update an existing one",
+                    "Or pass action='create' / action='update' explicitly",
+                ],
+                context={"helper_type": helper_type},
+            )
         action = "update" if helper_id else "create"
 
     # Normalize empty string to None, matching ha_config_set_helper's treatment
@@ -1491,7 +1640,7 @@ async def _handle_flow_helper(
     # caller-supplied `name` (you cannot rename a flow helper through its
     # options flow). Strip `name` from config_dict and emit a warning so the
     # caller learns their attempted rename was a no-op.
-    if action == "create" and name and "name" not in config_dict:
+    if action == "create" and name and name.strip() and "name" not in config_dict:
         schema_fields = await get_user_step_field_names(client, helper_type)
         if schema_fields is None or "name" in schema_fields:
             config_dict["name"] = name
@@ -1534,7 +1683,12 @@ async def _handle_flow_helper(
         # Some helpers (switch_as_x) deliberately don't have `name` injected into
         # config_dict because their schema rejects it — but the tool still
         # requires `name` to be supplied so callers fail fast and consistently.
-        if not (name or config_dict.get("name")):
+        # Reject whitespace-only too (``" "`` is truthy in Python) so the
+        # flow-helper create gate is coherent with the simple-helper twin.
+        config_name = config_dict.get("name")
+        config_name_ok = isinstance(config_name, str) and bool(config_name.strip())
+        name_ok = name is not None and bool(name.strip())
+        if not (name_ok or config_name_ok):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -1562,18 +1716,15 @@ async def _handle_flow_helper(
             helper_id,  # type: ignore[arg-type]
         )
 
+    # Cache the flow_result keys read multiple times below (issue #1293
+    # follow-up: reduces three .get() lookups for entry_id and two for title
+    # to one each, and makes the post-flow logic readable as a sequence of
+    # named values rather than repeated dict access). ``.get()`` is kept —
+    # ``create_flow_helper`` propagates HA's optional entry_id via ``.get()``
+    # too (tools_config_entry_flow.py:L700), so a missing key must surface as
+    # None for the ``if entry_id:`` guard below, not raise KeyError.
     entry_id = flow_result.get("entry_id")
-    result: dict[str, Any] = {
-        "success": True,
-        "action": action,
-        "helper_type": helper_type,
-        "method": "config_flow",
-        "entry_id": entry_id,
-        "title": flow_result.get("title"),
-        "message": flow_result.get("message"),
-    }
-    if action == "update":
-        result["updated"] = True
+    title = flow_result.get("title")
 
     # Resolve all entities for this config entry (multi-entity helpers handled naturally).
     # For create with wait=True, poll briefly for at least one entity to appear —
@@ -1617,7 +1768,22 @@ async def _handle_flow_helper(
         else:
             entities = await _get_entities_for_config_entry(client, entry_id, warnings)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
-    result["entity_ids"] = entity_ids
+
+    # ``data`` mirrors the HA flow_result payload for cross-action uniformity
+    # with the create/update branches (issue #1293). ``entry_id`` and ``title``
+    # also stay flat as convenience accessors — they are the primary identifiers
+    # callers reach for, and remain heavily used by per-action metadata
+    # consumers throughout the codebase. Per-entity registry-write outcomes
+    # live in the ``applied`` flat array, not nested in ``data``, because one
+    # flow can yield N entities with different per-entity results.
+    extras: dict[str, Any] = {
+        "method": "config_flow",
+        "entry_id": entry_id,
+        "title": title,
+        "entity_ids": entity_ids,
+    }
+    if action == "update":
+        extras["updated"] = True
 
     # Apply registry updates (area_id / labels / category) to every entity.
     # Use `is not None` so an explicit empty value (area_id="" or labels=[])
@@ -1640,17 +1806,21 @@ async def _handle_flow_helper(
             )
         )
         if area_id is not None:
-            result["area_id"] = area_id if area_id else None
+            extras["area_id"] = area_id if area_id else None
         if labels_list is not None:
-            result["labels"] = labels_list
+            extras["labels"] = labels_list
         if category:
-            result["category"] = category
-        result["applied"] = applied_per_entity
+            extras["category"] = category
+        extras["applied"] = applied_per_entity
 
-    if warnings:
-        result["warnings"] = warnings
-
-    return result
+    return _helper_response(
+        action,
+        helper_type,
+        data={"entry_id": entry_id, "title": title},
+        message=flow_result.get("message"),
+        warnings=warnings,
+        **extras,
+    )
 
 
 def _format_schedule_days(
@@ -1757,7 +1927,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
-        For detailed helper documentation, use ha_get_skill_home_assistant_best_practices.
+        For detailed helper documentation, use ha_get_skill_guide.
         """
         try:
             # Use the websocket list endpoint for the helper type
@@ -2084,7 +2254,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "integration, statistics, trend, random, filter, tod, "
                     "generic_thermostat, switch_as_x, generic_hygrostat). "
                     "Accepts JSON string or dict. Ignored for simple helper types. "
-                    "Use ha_get_helper_schema(helper_type) to discover required fields."
+                    "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
             ),
@@ -2135,13 +2305,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           without it the tool falls back to the implicit `helper_id`-presence
           discriminator.
         - For flow-based helpers, config keys not declared by any step's
-          data_schema are silently ignored by HA; verify field names with
-          `ha_get_helper_schema` before relying on them.
+          data_schema are silently ignored by HA; submit once and the
+          validation error returns the `data_schema` for that helper so
+          subsequent calls use the correct field names.
         - Validation errors raised by this tool carry the helper's
-          `data_schema` in the response context so a follow-up call can
-          self-correct. Calling `ha_get_helper_schema(helper_type)` ahead of
-          time is therefore optional — the schema is delivered alongside the
-          first 4xx if you call without it.
+          `data_schema` in the response context (and `menu_options` for
+          menu-rooted helpers like `template`/`group` when no sub-type is
+          chosen yet) so a follow-up call can self-correct without a
+          separate schema-discovery round-trip.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:
@@ -2157,11 +2328,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ha_config_set_helper(helper_type="tod", name="Quiet Hours",
                 config={"after_time": "22:00:00", "before_time": "07:00:00"})
 
-        For complex schemas and per-type parameter details, use ha_get_helper_schema.
-        For broader helper-design guidance (when to pick which helper type, YAML
-        examples), use ha_get_skill_home_assistant_best_practices — the skill's
-        `helper-selection.md` reference covers the `input_*` family, `counter`,
-        `timer`, and `schedule` with worked examples and a decision matrix.
+        For helper-design guidance (when to pick which helper type, YAML
+        examples, per-type field tables), use ha_get_skill_guide — the
+        skill's `helper-selection.md` reference covers all 27 helper types
+        with worked examples and a decision matrix.
         """
         try:
             # Determine if this is a create or update — set early so the
@@ -2230,9 +2400,45 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ],
                         )
                     )
+                # Explicit-action update path: helper_id was confirmed non-None
+                # above; close the whitespace gap before the FLOW dispatch
+                # below (``if helper_type in FLOW_HELPER_TYPES: return await
+                # _handle_flow_helper(...)``). The simple-path whitespace twin
+                # inside the ``elif action == "update":`` branch fires after
+                # the FLOW dispatch returns and so is unreachable for flow
+                # helpers; without this guard, ``helper_id="   "`` would reach
+                # ``update_flow_helper`` and surface as a misleading "entry
+                # not found" from HA.
+                if action == "update" and helper_id is not None:
+                    validate_identifier_not_empty(
+                        helper_id,
+                        "helper_id",
+                        suggestions=[
+                            "Pass a valid helper_id to identify the helper to update",
+                            "Or omit helper_id and pass action='create' to create a new helper",
+                        ],
+                        context={"helper_type": helper_type, "action": action},
+                    )
             else:
                 # Implicit discriminator (back-compat). Pass action='create'
                 # or action='update' explicitly to avoid the inference.
+                # Reject empty/whitespace helper_id up front: ``bool("")`` is
+                # False, so without this gate ``helper_id=""`` silently routes
+                # to ``create`` even when the caller's intent was ``update``,
+                # producing a destructive intent-loss class identical to the
+                # one closed for labels/categories. ``None`` stays the
+                # documented "create-new" sentinel.
+                if helper_id is not None:
+                    validate_identifier_not_empty(
+                        helper_id,
+                        "helper_id",
+                        suggestions=[
+                            "Omit helper_id entirely to create a new helper",
+                            "Pass a valid helper_id to update an existing helper",
+                            "Or pass action='create' / action='update' explicitly to declare intent",
+                        ],
+                        context={"helper_type": helper_type},
+                    )
                 action = "update" if helper_id else "create"
 
             # Bug 4b/7c/10/14 (issue #1150): reject typed params that don't apply
@@ -2353,7 +2559,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
 
             if action == "create":
-                if not name:
+                # ``bool(" ")`` is True, so plain ``if not name`` would let
+                # whitespace-only names through to a downstream HA error.
+                if not name or not name.strip():
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2398,28 +2606,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
                     message["options"] = options
-                    # Bug 4a (issue #1150): if `initial` was passed but isn't
-                    # one of the options, reject explicitly instead of silently
-                    # dropping. The previous `if initial and initial in options`
-                    # check stripped invalid initials with `success: true`.
+                    # If `initial` was passed but isn't one of the options,
+                    # reject explicitly instead of silently dropping. Shared
+                    # with the update branch via the helper so the same
+                    # invariant fires on both code paths.
+                    _validate_initial_in_options(options, initial)
                     if initial is not None:
-                        if initial not in options:
-                            raise_tool_error(
-                                create_error_response(
-                                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                    f"initial={initial!r} must be one of options "
-                                    f"{options!r} for input_select.",
-                                    context=_simple_helper_error_context(
-                                        helper_type,
-                                        initial=initial,
-                                        options=options,
-                                    ),
-                                    suggestions=[
-                                        "Pick an `initial` value that's in `options`.",
-                                        "Or omit `initial` so the entity starts unset.",
-                                    ],
-                                )
-                            )
                         message["initial"] = initial
 
                 elif helper_type == "input_number":
@@ -2477,15 +2669,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message["has_date"] = has_date
                         message["has_time"] = has_time
 
-                    # Validate that at least one is True
-                    if not message["has_date"] and not message["has_time"]:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                "At least one of has_date or has_time must be True for input_datetime",
-                                context=_simple_helper_error_context(helper_type),
-                            )
-                        )
+                    # Validate that at least one is True — shared with the
+                    # update branch via the helper so the same invariant
+                    # fires on both code paths.
+                    _validate_datetime_has_date_or_time(
+                        message["has_date"], message["has_time"]
+                    )
 
                     if initial is not None:
                         message["initial"] = initial
@@ -2616,19 +2805,31 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if not entity_id and helper_data.get("id"):
                         entity_id = f"{helper_type}.{helper_data['id']}"
 
-                    # Wait for entity to be properly registered before proceeding
+                    # Issue #1293: collect warnings in a top-level list rather
+                    # than nest them in the payload dict. Aligns this branch
+                    # with the flow-helper path and lets callers do
+                    # ``result.get("warnings", [])`` uniformly.
+                    warnings: list[str] = []
+
+                    # Wait for entity to be properly registered before proceeding.
+                    # Tags live in their own tag registry and never appear in
+                    # ``/api/states/<entity_id>`` — polling there always 404s
+                    # for the full timeout. The sibling ``helper_type == "tag"``
+                    # branch under the update action below already skips the
+                    # wait for this reason; mirror it here so create doesn't
+                    # burn 10s per tag on every CI run.
                     wait_bool = coerce_bool_param(wait, "wait", default=True)
-                    if wait_bool and entity_id:
+                    if wait_bool and entity_id and helper_type != "tag":
                         try:
                             registered = await wait_for_entity_registered(
                                 client, entity_id
                             )
                             if not registered:
-                                helper_data["warning"] = (
+                                warnings.append(
                                     f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
                                 )
                         except Exception as e:
-                            helper_data["warning"] = (
+                            warnings.append(
                                 f"Helper created but verification failed: {e}"
                             )
 
@@ -2647,6 +2848,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             update_message
                         )
                         if update_result.get("success"):
+                            # Mirror the update branch's icon propagation
+                            # (line ~3343) so the create response's ``data``
+                            # carries the same registry-write echo set.
+                            if icon is not None:
+                                helper_data["icon"] = icon if icon else None
                             if area_id is not None:
                                 helper_data["area_id"] = area_id if area_id else None
                             if labels is not None:
@@ -2658,29 +2864,39 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if isinstance(error_detail, dict)
                                 else str(error_detail)
                             )
-                            helper_data["warning"] = (
+                            warnings.append(
                                 f"Helper created but entity registry update failed: {error_msg}"
                             )
 
-                    # Apply category via shared helper (consistent with automations/scripts)
+                    # Apply category via shared helper (consistent with automations/scripts).
+                    # Issue #1293: route the success/failure through ``cat_result`` so any
+                    # category-apply failure lands in the top-level ``warnings`` list instead
+                    # of leaking nested into ``helper_data``. Mirrors the precedent in
+                    # ``_handle_flow_helper`` (the ``cat_result`` block near the end of
+                    # ``_apply_registry_updates_to_entity``).
                     if category and entity_id:
+                        cat_result: dict[str, Any] = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            helper_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            helper_data["category"] = cat_result["category"]
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
-                    return {
-                        "success": True,
-                        "action": "create",
-                        "helper_type": helper_type,
-                        "helper_data": helper_data,
-                        "entity_id": entity_id,
-                        "message": f"Successfully created {helper_type}: {name}",
-                    }
+                    return _helper_response(
+                        "create",
+                        helper_type,
+                        data=helper_data,
+                        entity_id=entity_id,
+                        message=f"Successfully created {helper_type}: {name}",
+                        warnings=warnings,
+                    )
                 else:
                     raise_tool_error(
                         create_error_response(
@@ -2694,7 +2910,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
 
             elif action == "update":
-                if not helper_id:
+                # Same whitespace-upgrade rationale as the create-name check
+                # above — ``if not helper_id`` would let ``"   "`` through.
+                if not helper_id or not helper_id.strip():
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2728,6 +2946,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
                 updated_data: dict[str, Any] = {}
+                # Issue #1293: collect warnings in a top-level list for the
+                # update path too, mirroring create + flow-helper branches.
+                # (No re-annotation — the create branch above already defined
+                # ``warnings: list[str]``; mypy treats this as the same binding.)
+                warnings = []
 
                 if helper_type == "tag":
                     # Tags use their own registry — no entity registry entries.
@@ -2762,14 +2985,19 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     # Tags don't have entity registry entries, so return directly
                     # without wait_for_entity_registered (they're not entities).
-                    return {
-                        "success": True,
-                        "action": "update",
-                        "helper_type": helper_type,
-                        "entity_id": entity_id,
-                        "updated_data": updated_data,
-                        "message": f"Successfully updated {helper_type}: {entity_id}",
-                    }
+                    # Issue #1293: same uniform builder as the sibling create/update
+                    # branches. No producer appends to ``warnings`` on the tag path
+                    # today, but ``_helper_response`` already omits the key when the
+                    # list is empty — future warnings flow through the same contract
+                    # without further plumbing.
+                    return _helper_response(
+                        "update",
+                        helper_type,
+                        data=updated_data,
+                        entity_id=entity_id,
+                        message=f"Successfully updated {helper_type}: {entity_id}",
+                        warnings=warnings,
+                    )
 
                 elif helper_type in config_store_types:
                     # Person and zone: look up unique_id from entity registry
@@ -3048,6 +3276,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if initial is not None
                                 else existing.get("initial")
                             )
+                            # Parity with the create-branch guard. Resolves to
+                            # (new options, new initial) / (new options, old
+                            # initial) / (old options, new initial) — any
+                            # combination that excludes initial from the final
+                            # options list is caught.
+                            _validate_initial_in_options(
+                                update_msg["options"], initial_val
+                            )
                             if initial_val is not None:
                                 update_msg["initial"] = initial_val
 
@@ -3140,6 +3376,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 if has_time is not None
                                 else existing.get("has_time", False)
                             )
+                            # Parity with the create-branch guard. A merge
+                            # that resolves to (False, False) — caller
+                            # disabling the one component the existing entity
+                            # had — would otherwise write a broken-entity
+                            # payload and surface HA's cryptic generic error.
+                            _validate_datetime_has_date_or_time(
+                                update_msg["has_date"], update_msg["has_time"]
+                            )
                             initial_val = (
                                 initial
                                 if initial is not None
@@ -3230,30 +3474,49 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         reg_result = await client.send_websocket_message(
                             registry_update
                         )
-                        if not reg_result.get("success"):
+                        if reg_result.get("success"):
+                            # Issue #1293: mirror the create branch by propagating the
+                            # registry writes into ``updated_data`` so the response's
+                            # ``data`` reflects the post-update state.
+                            if icon is not None:
+                                updated_data["icon"] = icon if icon else None
+                            if area_id is not None:
+                                updated_data["area_id"] = area_id if area_id else None
+                            if labels is not None:
+                                updated_data["labels"] = labels
+                        else:
                             error_detail = reg_result.get("error", {})
                             error_msg = (
                                 error_detail.get("message", "Unknown error")
                                 if isinstance(error_detail, dict)
                                 else str(error_detail)
                             )
-                            logger.warning(
-                                f"Entity registry update failed for {entity_id}: {error_msg}"
-                            )
-                            updated_data["warning"] = (
+                            # No ``logger.warning`` here — the create-branch and
+                            # flow-helper registry-update failure paths surface this
+                            # via ``warnings.append`` only, and the response carries
+                            # the message to the caller in the top-level ``warnings``
+                            # list. Logging again would double-report.
+                            warnings.append(
                                 f"Config updated but entity registry update failed: {error_msg}"
                             )
 
-                    # Apply category via shared helper
+                    # Apply category via shared helper. Issue #1293: route through
+                    # ``cat_result`` so any category-apply failure lands in the top-level
+                    # ``warnings`` list instead of nested in ``updated_data``.
                     if category:
+                        cat_result = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            updated_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            updated_data["category"] = cat_result["category"]
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
                 else:
                     # Fallback for unknown/future helper types: entity registry update only
@@ -3287,39 +3550,43 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             )
                         )
 
-                    # Apply category via shared helper
+                    # Apply category via shared helper. Issue #1293: same temp-dict
+                    # routing as the simple-helper branch above.
                     if category:
+                        cat_result = {}
                         await apply_entity_category(
                             client,
                             entity_id,
                             category,
                             "helpers",
-                            updated_data,
+                            cat_result,
                             "helper",
                         )
+                        if "category" in cat_result:
+                            updated_data["category"] = cat_result["category"]
+                        elif cat_result.get("warnings"):
+                            warnings.extend(cat_result["warnings"])
 
                 # Wait for entity to reflect the update
                 wait_bool = coerce_bool_param(wait, "wait", default=True)
-                response: dict[str, Any] = {
-                    "success": True,
-                    "action": "update",
-                    "helper_type": helper_type,
-                    "entity_id": entity_id,
-                    "updated_data": updated_data,
-                    "message": f"Successfully updated {helper_type}: {entity_id}",
-                }
                 if wait_bool:
                     try:
                         registered = await wait_for_entity_registered(client, entity_id)
                         if not registered:
-                            response["warning"] = (
+                            warnings.append(
                                 f"Update applied but {entity_id} not yet queryable."
                             )
                     except Exception as e:
-                        response["warning"] = (
-                            f"Update applied but verification failed: {e}"
-                        )
-                return response
+                        warnings.append(f"Update applied but verification failed: {e}")
+
+                return _helper_response(
+                    "update",
+                    helper_type,
+                    data=updated_data,
+                    entity_id=entity_id,
+                    message=f"Successfully updated {helper_type}: {entity_id}",
+                    warnings=warnings,
+                )
 
             # This should never be reached since action is either "create" or "update"
             raise_tool_error(

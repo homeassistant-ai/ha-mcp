@@ -325,7 +325,7 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"
     # Normal fuzzy search should NOT have warning or partial flag
-    assert "warning" not in data or data.get("warning") is None
+    assert not data.get("warnings"), f"Unexpected warnings: {data.get('warnings')}"
     assert "partial" not in data or data.get("partial") is not True
     # Strong matches should not include suggestions
     assert "suggestions" not in data, "Strong matches should not include suggestions"
@@ -392,10 +392,13 @@ async def test_search_entities_fallback_fields_when_present(mcp_client):
     raw_data = assert_mcp_success(result, "Fallback field types")
     data = raw_data.get("data", raw_data)
 
-    # If warning is present, it should be a string
-    if "warning" in data and data["warning"] is not None:
-        assert isinstance(data["warning"], str), "warning must be a string"
-        logger.info(f"Warning present: {data['warning']}")
+    # If warnings are present, they should be a list of strings
+    if data.get("warnings"):
+        assert isinstance(data["warnings"], list), "warnings must be a list"
+        assert all(isinstance(w, str) for w in data["warnings"]), (
+            "every warning must be a string"
+        )
+        logger.info(f"Warnings present: {data['warnings']}")
 
     # If partial is present, it should be a boolean
     if "partial" in data and data["partial"] is not None:
@@ -602,7 +605,7 @@ async def area_with_mixed_domains(mcp_client):
     boolean_data = assert_mcp_success(boolean_result, "Create input_boolean")
     boolean_id = (
         boolean_data.get("entity_id")
-        or f"input_boolean.{boolean_data['helper_data']['id']}"
+        or f"input_boolean.{boolean_data['data']['id']}"
     )
 
     number_result = await mcp_client.call_tool(
@@ -619,7 +622,7 @@ async def area_with_mixed_domains(mcp_client):
     number_data = assert_mcp_success(number_result, "Create input_number")
     number_id = (
         number_data.get("entity_id")
-        or f"input_number.{number_data['helper_data']['id']}"
+        or f"input_number.{number_data['data']['id']}"
     )
 
     # Wait until both entities are visible under this area in the registries
@@ -925,7 +928,7 @@ async def two_areas_fuzzy_match(mcp_client):
         bool_data = assert_mcp_success(bool_result, f"Create boolean {tag}")
         bool_id = (
             bool_data.get("entity_id")
-            or f"input_boolean.{bool_data['helper_data']['id']}"
+            or f"input_boolean.{bool_data['data']['id']}"
         )
         created.append(("input_boolean", bool_id))
         helpers.append({"area_id": area_id, "boolean_id": bool_id, "tag": tag})
@@ -1110,7 +1113,7 @@ async def populated_area_for_shape_test(mcp_client):
     helper_data = assert_mcp_success(helper_result, "Create shape-test helper")
     boolean_id = (
         helper_data.get("entity_id")
-        or f"input_boolean.{helper_data['helper_data']['id']}"
+        or f"input_boolean.{helper_data['data']['id']}"
     )
     await wait_for_tool_result(
         mcp_client,
@@ -1324,7 +1327,7 @@ async def two_areas_with_shared_prefix(mcp_client):
         )
         h_data = assert_mcp_success(h_res, f"Create helper {label}")
         helpers.append(
-            h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+            h_data.get("entity_id") or f"input_boolean.{h_data['data']['id']}"
         )
     # Wait for both helpers to be visible under the shared prefix
     await wait_for_tool_result(
@@ -1448,7 +1451,7 @@ async def helper_with_alias(mcp_client):
     helper_data = assert_mcp_success(helper_res, "Create alias-target helper")
     eid = (
         helper_data.get("entity_id")
-        or f"input_boolean.{helper_data['helper_data']['id']}"
+        or f"input_boolean.{helper_data['data']['id']}"
     )
     await mcp_client.call_tool(
         "ha_set_entity", {"entity_id": eid, "aliases": [alias]}
@@ -1508,7 +1511,7 @@ async def area_with_alias(mcp_client):
         },
     )
     h_data = assert_mcp_success(h_res, "Create helper in alias-area")
-    eid = h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+    eid = h_data.get("entity_id") or f"input_boolean.{h_data['data']['id']}"
 
     try:
         await wait_for_tool_result(
@@ -1593,7 +1596,7 @@ async def hidden_helper(mcp_client):
         {"helper_type": "input_boolean", "name": f"e2e 1170 hidden {suffix}"},
     )
     data = assert_mcp_success(res, "Create hidden-target helper")
-    eid = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+    eid = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
     # Rename so the search query has a unique substring to grep on.
     await mcp_client.call_tool(
         "ha_set_entity", {"entity_id": eid, "name": distinctive, "hidden": True}
@@ -1741,7 +1744,7 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
         },
     )
     h_data = assert_mcp_success(h_res, "Create helper")
-    eid = h_data.get("entity_id") or f"input_boolean.{h_data['helper_data']['id']}"
+    eid = h_data.get("entity_id") or f"input_boolean.{h_data['data']['id']}"
 
     try:
         # Wait for helper to be visible in the area before hiding it.
@@ -1838,7 +1841,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
     v_data = assert_mcp_success(v_res, "create visible")
     v_eid = (
         v_data.get("entity_id")
-        or f"input_boolean.{v_data['helper_data']['id']}"
+        or f"input_boolean.{v_data['data']['id']}"
     )
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
@@ -1851,7 +1854,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
     h_data = assert_mcp_success(h_res, "create hidden-target")
     h_eid = (
         h_data.get("entity_id")
-        or f"input_boolean.{h_data['helper_data']['id']}"
+        or f"input_boolean.{h_data['data']['id']}"
     )
 
     try:
@@ -1943,7 +1946,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
     v_data = assert_mcp_success(v_res, "create visible dl")
     v_eid = (
         v_data.get("entity_id")
-        or f"input_boolean.{v_data['helper_data']['id']}"
+        or f"input_boolean.{v_data['data']['id']}"
     )
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
@@ -1952,7 +1955,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
     h_data = assert_mcp_success(h_res, "create hidden dl")
     h_eid = (
         h_data.get("entity_id")
-        or f"input_boolean.{h_data['helper_data']['id']}"
+        or f"input_boolean.{h_data['data']['id']}"
     )
 
     try:

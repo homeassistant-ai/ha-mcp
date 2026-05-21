@@ -1,0 +1,164 @@
+name: Build HAOS Test Image (Publish to GHCR)
+
+# Publishes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# Outputs an OCI artifact at ghcr.io/<owner>/haos-test-image:<HAOS-VERSION>-<short-sha>
+# plus a moving :<HAOS-VERSION>-latest tag the e2e workflow pulls from.
+#
+# PR-time builds happen inside haos-e2e-tests.yml itself (with caching);
+# this workflow only runs to publish stable tags after merge to master.
+#
+# Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
+# and push to master that touches the build script.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'tests/haos_image_build/**'
+      - '.github/workflows/build-haos-test-image.yml'
+  schedule:
+    # Weekly Monday 06:00 UTC — keeps the image current with addon updates
+    # even when nothing in this repo changes.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+  # libguestfs defaults to libvirt which isn't running on GitHub-hosted
+  # runners (per-user libvirtd socket missing for the unprivileged
+  # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
+  # Same setting as haos-e2e-tests.yml; the bake_test_state step added in
+  # #1326 shells out to guestfish and would otherwise hang trying to talk
+  # to libvirt.
+  LIBGUESTFS_BACKEND: direct
+
+jobs:
+  build:
+    name: Build HAOS qcow2
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Required for tests/src/e2e/tools/test_skills_resources.py — the
+          # skills bundle lives at src/ha_mcp/resources/skills-vendor. Kept
+          # in parity with haos-e2e-tests.yml even though the publish bake
+          # itself doesn't touch the submodule, so the two checkout shapes
+          # don't drift.
+          submodules: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools
+          # Ubuntu installs the kernel image as 0600 root:root, but
+          # libguestfs's supermin appliance builder needs to read it.
+          # See https://libguestfs.org/guestfs-faq.1.html#kernel-permissions
+          sudo chmod +r /boot/vmlinuz-*
+
+      - name: Enable KVM group perms
+        # Same udev trick used by home-assistant/operating-system's test workflow:
+        # makes /dev/kvm world-accessible so the unprivileged runner can use it.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Confirm KVM is usable
+        run: |
+          ls -l /dev/kvm
+          test -w /dev/kvm
+
+      - name: Extract pinned HAOS version
+        id: haos_version
+        run: |
+          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install build-script Python deps
+        run: pip install -r tests/haos_image_build/requirements.txt
+
+      - name: Build image
+        run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
+
+      - name: Extract publish-build diagnostics (always)
+        # On build failure (boot timeout, onboarding rejection, addon
+        # install error, bake step crash) Python's stdout via --verbose
+        # is the only signal otherwise. Grab the serial log + a
+        # post-mortem of the intermediate qcow2's /config dir so a
+        # future failure can be triaged without re-running locally.
+        # Tolerates missing files because the failure may be before
+        # boot (no serial yet) or before bake (no /config yet).
+        if: always()
+        run: |
+          sudo chmod +r /boot/vmlinuz-* || true
+          mkdir -p /tmp/haos-publish-diagnostics
+          intermediate=/tmp/haos-build/haos-test-image.qcow2
+          if [ -f "$intermediate" ]; then
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > /tmp/haos-publish-diagnostics/config-dir-listing.txt 2>&1 \
+              || echo "directory listing failed (qcow2 may not be baked yet)"
+            guestfish --ro -a "$intermediate" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage \
+                /tmp/haos-publish-diagnostics/storage.tar \
+              || echo ".storage tar-out failed"
+          else
+            echo "intermediate qcow2 not present — build failed before bake" \
+              > /tmp/haos-publish-diagnostics/no-qcow2.txt
+          fi
+          # build_image.start_qemu writes the serial log to <work_dir>/
+          # haos-serial.log (default work_dir = /tmp/haos-build); copy
+          # it out for upload.
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-publish-diagnostics/ \
+            2>/dev/null || true
+          ls -la /tmp/haos-publish-diagnostics/ || true
+
+      - name: Upload publish-build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: haos-publish-diagnostics-${{ github.sha }}
+          path: /tmp/haos-publish-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload built image as workflow artifact
+        # Always upload — even on PRs that don't push to GHCR — so reviewers
+        # can pull the artifact and verify locally.
+        uses: actions/upload-artifact@v7
+        with:
+          name: haos-test-image-${{ steps.haos_version.outputs.version }}-${{ github.sha }}
+          path: haos-test-image.qcow2
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Set up oras
+        uses: oras-project/setup-oras@v2
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push image to GHCR
+        env:
+          HAOS_VERSION: ${{ steps.haos_version.outputs.version }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          short_sha="${SHORT_SHA:0:7}"
+          versioned="${IMAGE_REPO}:${HAOS_VERSION}-${short_sha}"
+          moving="${IMAGE_REPO}:${HAOS_VERSION}-latest"
+          oras push "$versioned" \
+            --artifact-type application/vnd.homeassistant-ai.haos-test-image.v1 \
+            haos-test-image.qcow2:application/octet-stream
+          oras tag "$versioned" "${HAOS_VERSION}-latest"
+          echo "Pushed $versioned"
+          echo "Pushed $moving"

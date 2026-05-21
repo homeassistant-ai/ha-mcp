@@ -22,6 +22,7 @@ from ..utils.fuzzy_search import (
     tokenize,
 )
 from .helpers import exception_to_structured_error, safe_info, safe_progress
+from .tools_config_dashboards import fetch_dashboards_list
 
 logger = logging.getLogger(__name__)
 
@@ -1773,14 +1774,9 @@ class SmartSearchTools:
             if "dashboard" in search_types:
                 try:
                     # List all storage-mode dashboards
-                    dash_list_resp = await self.client.send_websocket_message(
-                        {"type": "lovelace/dashboards/list"}
+                    dashboard_entries: list[dict[str, Any]] = (
+                        await fetch_dashboards_list(self.client) or []
                     )
-                    dashboard_entries: list[dict[str, Any]] = []
-                    if isinstance(dash_list_resp, dict) and dash_list_resp.get(
-                        "success"
-                    ):
-                        dashboard_entries = dash_list_resp.get("result", [])
 
                     # Build list of dashboards to search (include default)
                     dashboards_to_search: list[tuple[str, str]] = [

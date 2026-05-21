@@ -90,13 +90,9 @@ Repeat Steps 1–5 until:
 
 ## Step 6: Final Report
 
-If improvements were identified during review, add them to the PR description's **Future improvements** section first:
-```bash
-gh pr edit "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "..."
-```
-(Edit the existing `## Future improvements` section, or append it if absent.)
+If improvements were identified during review, **default to fix-in-place** per AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements*. Only add to the PR description's `## Future improvements` section if the user has explicitly confirmed the work is out of scope. Never self-bucket findings there.
 
-Then post a summary comment:
+Post a summary comment:
 ```bash
 gh pr comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "## PR Assessment Summary
 

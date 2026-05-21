@@ -106,15 +106,47 @@ When implementing features or debugging, consult these resources:
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
+
+**Triage-state labels** (applied by `gemini-triage.yml` or manual triage):
+
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
-| `needs-choice` | Multiple approaches, needs stakeholder input |
+| `needs-choices` | Multiple approaches, needs stakeholder input |
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
 | `triaged` | Automated Gemini triage complete |
 | `triage-failed` | Automated Gemini triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
 | `issue-analyzed` | Deep Claude analysis complete |
+
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+
+| Label | Meaning |
+|-------|---------|
+| `runtime-bug` | Bug occurring during normal operation (post-startup) |
+| `startup-bug` | Bug during startup, install, or connect |
+| `agent-behavior` | AI agent behavior or workflow feedback (tool selection, prompt drift, etc.) |
+
+**Scope labels** (manually applied during triage; orthogonal to bug-class — an issue can carry both `runtime-bug` AND a scope marker):
+
+| Label | Meaning |
+|-------|---------|
+| `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
+| `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
+
+**Lifecycle labels** (manually applied; do not double as close-reasons):
+
+| Label | Meaning |
+|-------|---------|
+| `wontfix` | Issue is valid but will not be addressed. Typically used when closing an issue to record the rejection rationale. |
+| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, a pending design decision). Recorded so a sweeper search can find what's waiting |
+
+**Tracking / automation labels** (applied by tooling):
+
+| Label | Meaning |
+|-------|---------|
+| `python-upgrade` | Auto-attached to every Renovate-managed PR (including non-Python dependency updates) via `renovate.json` global `labels` array. |
 
 ### Issue Analysis Workflow
 
@@ -262,6 +294,8 @@ cd worktree/<branch-name>
 - **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
 - **For obvious choices**: Implement and document in final summary
 
+**When you notice an improvement during a PR**: fix it in place by default. See [Boy Scout Rule — Handling Discovered Improvements](#boy-scout-rule--handling-discovered-improvements) below for the deferral scale.
+
 **Final reporting (only after ALL workflow steps complete):**
 
 Once the PR is ready (all checks green, comments addressed), provide:
@@ -283,17 +317,63 @@ Once the PR is ready (all checks green, comments addressed), provide:
    - Any choices that may need user input
    - Current PR status
 
-### Handling Discovered Improvements
+### Boy Scout Rule — Handling Discovered Improvements
 
-When you notice something that could be improved while working on a PR, use this scale:
+**IMPORTANT — Default is fix-in-place.** "Boy Scout Rule" means leave touched code better than you found it. "Improve incrementally" means commit-by-commit within *this* PR — not across follow-up PRs. Deferral is the exception, not the default. Weigh fix-in-place sweeps against regression risk: if a sweep would meaningfully expand the diff or change the review surface, treat it as Mid-sized and ask the user.
 
-| Size | Action |
-|------|--------|
-| **Small** — a few lines, clearly in scope | Fix it inline, no mention needed |
-| **Mid-sized** — meaningful effort, worth doing but out of scope | Pause **before pushing** and ask the user whether to include it |
-| **Large / unrelated** — many files, design decisions, or different domain | Document in the PR description's **Future improvements** section; open a separate PR only if the user asks |
+**Never open a follow-up PR or issue without explicit user approval.**
 
-**Never open a separate improvement PR without explicit user approval.** Document it in the PR description first — it may already be covered by an open issue or the user may not want it at all.
+When you notice something while working on a PR, apply this scale:
+
+| What you find | Action |
+|---|---|
+| **Small** — a few lines, clearly in scope (see examples below) | **Fix in this PR** as a separate commit. No mention in PR description. |
+| **Mid-sized** — meaningful effort, worth doing but out of scope (e.g. adding a new helper module that doesn't exist yet, a gap that needs non-trivial new test scaffolding, a code-quality issue that's *not* really low) | **Pause before pushing.** Ask the user whether to bundle. |
+| **Large / unrelated** — many files, design decisions, different subsystem (e.g. would double the diff size or change the review surface, code quality is *really* low / technical debt) | Mention in PR description only if the user confirms. Open a separate issue **only if** the user asks AND you can state a concrete benefit in one sentence. |
+
+**"Small" examples — fix these inline, no mention needed:**
+
+- Typo, dead import, misnamed local
+- Stale docstring/comment or stale reference
+- 1–N line cleanup of code in this diff
+- Multi-site sweep of the same pattern you can grep for
+- Missing test for code you're touching (add the test without refactoring the surrounding code)
+- Low coverage for the area you're working in
+- Straightforward test-quality fix (better assertions, clearer names, removing duplication)
+- "Mirror X parity onto Y" where Y is in the diff
+- Migrating a singular→list or similar shape-consistency fix
+- Drift between docs and live state you can fix by reading both
+
+**When to ask the user about bundling.** ~200 lines is a *should-I-ask* heuristic, not a bundling cap. Under ~200 lines: bundle without asking. Over ~200 lines: ask the user whether to bundle — but **bundling at any size is fine if the work is not grossly out of scope**. The 200-line mark exists so the user hears about large bundled changes before they land, not to push large work out of the PR. Estimate honestly; do not inflate to manufacture a reason to defer.
+
+**Anti-noise gate — before filing any follow-up issue or PR, all three must be true:**
+
+1. The work is genuinely too large to bundle (i.e. truly out of scope, not just over the ~200-line ask-heuristic above). **All three sub-tests must pass:**
+   (a) It cannot be done by mirroring an existing sibling pattern in the same file or a closely-related file.
+   (b) You can name the actual design choice in one sentence with two named alternatives, **OR** the work is a genuinely large mechanical migration (e.g. *"replace `requests` with `httpx` across 40 sites"*) that exceeds this PR's scope by size alone.
+   (c) It would meaningfully change this PR's review surface, not just add to it.
+2. You can name a concrete end-user-facing or maintainer benefit in one sentence.
+3. A maintainer reading the issue 6 months later would act on it, not close as stale.
+
+If any are false: fix it now, or let it go. **Do not file an issue to "track" it.**
+
+These phrases — and **any semantically equivalent variant** — are escape hatches that signal the AI is making a scope decision the user should make instead. The list below is non-exhaustive; match on intent, not exact string. When you find yourself drafting any of them, treat it as a cue to re-apply the rules in this section before continuing:
+
+- "Post-merge follow-up" / "follow-up consideration" / "forward-looking note"
+- "Nice to have"
+- "Happy to file an issue (or note in PR body)"
+- "Pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of the Boy Scout Rule)
+- "Out of scope for this PR" / "not blocking this PR" (used as an assertion to skip — not as a question to the user via the verification template below)
+- "Real design work, not N lines"
+- "Worth tracking as a real follow-up issue rather than buried in a comment"
+
+**Scope is the user's call, not yours.** You do not decide whether something is in scope. If you think a discovered improvement is out of scope, say so explicitly and ask the user to confirm — do not silently drop it into a "future improvements" bucket:
+
+> *"This may be out of scope — user should verify. I think it is out of scope because [specific reason]. Should I fix it here or defer?"*
+
+Then defer to the user's answer.
+
+**Code-review bot suggestions** (Gemini Code Assist, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
 ### Hotfix Process (Critical Bugs Only)
 
@@ -311,17 +391,6 @@ gh pr create --draft --base master
 
 On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
 
-### Boy Scout Rule
-
-Improve code incrementally when touching it — especially tool docstrings and tests. Balance against regression risk (complexity, coverage, scope).
-
-| Scenario | Action |
-|----------|--------|
-| **No tests exist for code you're touching** | Add tests for the specific behavior you're implementing/fixing, without refactoring existing code |
-| **Tests exist but coverage is low** | Add tests for gaps if you're already working in that area |
-| **Tests exist, quality is low** | Improve test quality if it's straightforward (better assertions, clearer names, remove duplication) |
-| **Code quality is really low** | Open an issue describing the technical debt instead of fixing it inline |
-
 ### Test Coverage Requirements
 
 **When tests ARE required:**
@@ -336,7 +405,7 @@ Improve code incrementally when touching it — especially tool docstrings and t
 - Minor parameter additions to well-tested tools
 - Internal utilities already covered by E2E tests
 
-**When to open an issue instead:** Refactoring would touch many files, requires design decisions, or would significantly expand PR scope.
+**When to open an issue instead:** See § *Boy Scout Rule — Handling Discovered Improvements* for the gate. Never open without explicit user approval.
 
 ## CI/CD Workflows
 
@@ -507,7 +576,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 - `set` — create/update (`ha_config_set_helper`)
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
-- `call` — execute (`ha_call_service`)
+- `call` — execute (`ha_call_service`, `ha_call_event`)
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
 
 **Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
@@ -545,7 +614,7 @@ class DomainTools:
         # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
         # When NOT to use: route to preferred alternatives
         # Caveats: destructive side-effects, non-obvious gotchas
-        # For complex schemas: use ha_get_skill_home_assistant_best_practices
+        # For complex schemas: use ha_get_skill_guide
 
 def register_<domain>_tools(mcp, client, **kwargs):
     register_tool_methods(mcp, DomainTools(client))
@@ -579,7 +648,7 @@ A backup is created before every edit." Route safety concerns through `annotatio
 (`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
 
 **Defer complex schemas** instead of embedding them:
-`# For complex schemas: use ha_get_skill_home_assistant_best_practices`
+`# For complex schemas: use ha_get_skill_guide`
 
 **What NOT to include:** full parameter documentation, type descriptions already in the
 signature, HA domain internals the model already knows, or motivational prose.
@@ -640,11 +709,13 @@ Only use `raise_error=False` on `exception_to_structured_error` when you need to
 
 ### Return Values
 ```python
-{"success": True, "data": result}                    # Success
-{"success": True, "partial": True, "warning": "..."}  # Degraded
-raise ToolError(json.dumps({...}))                   # Tool-level failure (isError=true)
-{"success": False, "error": {...}}                   # Batch item failure only (in results list)
+{"success": True, "data": result}                     # Success
+{"success": True, "data": result, "warnings": [...]}  # Degraded (top-level list[str], omit when empty)
+raise ToolError(json.dumps({...}))                    # Tool-level failure (isError=true)
+{"success": False, "error": {...}}                    # Batch item failure only (in results list)
 ```
+
+`warnings` is always a top-level `list[str]`, never nested inside `data` and never a singular `"warning": "..."` string. See `tools_config_helpers.py::HelperResponse` / `_helper_response` for the canonical shape and `tests/src/unit/test_helper_response_shape.py` for the contract assertions.
 
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
@@ -689,7 +760,7 @@ Provide minimum context needed; let models fetch more on demand. LLM context is 
 **Principles:**
 - **Favor statelessness** — use content-derived identifiers (hashes, IDs) instead of server-side state. Example: dashboard optimistic locking via content hash.
 - **Delegate validation** to HA backend (voluptuous schemas with clear errors). Tool-side logic adds value for: format normalization, JSON string parsing, combining multiple API calls.
-- **Progressive disclosure** — docs on demand (`ha_get_skill_home_assistant_best_practices`), workflow hints between tools, error-driven discovery via `suggestions` arrays, layered params (required first, optional with defaults), focused returns (IDs/names; full state via follow-up).
+- **Progressive disclosure** — docs on demand (`ha_get_skill_guide`), workflow hints between tools, error-driven discovery via `suggestions` arrays, layered params (required first, optional with defaults), focused returns (IDs/names; full state via follow-up).
 
 ### Testing Model Knowledge
 
@@ -747,7 +818,9 @@ data = await wait_for_tool_result(
     description="deep search finds new automation",
 )
 ```
-Other available helpers: `wait_for_entity_state()`, `wait_for_entity_attribute()`, `wait_for_condition()`. See `wait_helpers.py` for the full set.
+Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wait_for_state_change()`. See `wait_helpers.py` for the full set.
+
+**Exception handling in polling helpers.** `wait_helpers.py` catches a narrow `_POLLING_TRANSIENT_ERRORS` tuple (MCP / transport / runtime classes) inside retry loops; bugs like `TypeError` / `AttributeError` / `KeyError` propagate so they fail tests immediately with a clear stack trace. Don't broaden these to `except Exception` — see `.gemini/styleguide.md` → *Exception Handling in Test Polling Loops*.
 
 ## Release Process
 

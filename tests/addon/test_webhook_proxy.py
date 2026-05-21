@@ -1224,13 +1224,17 @@ class TestOAuthProvider:
     def test_token_with_tampered_payload_rejected(self, provider):
         token = provider.issue_access_token()
         body, sig = token.rsplit(".", 1)
-        tampered_body = body[:-1] + ("A" if body[-1] != "A" else "B")
+        # Flip the first base64-url character (6 full data bits, no padding)
+        # to guarantee a different decoded byte regardless of key material.
+        tampered_body = ("A" if body[0] != "A" else "B") + body[1:]
         assert provider.validate_access_token(f"{tampered_body}.{sig}") is False
 
     def test_token_with_tampered_signature_rejected(self, provider):
         token = provider.issue_access_token()
         body, sig = token.rsplit(".", 1)
-        tampered_sig = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+        # Flip the first base64-url character (6 full data bits, no padding)
+        # to guarantee a different decoded byte regardless of key material.
+        tampered_sig = ("A" if sig[0] != "A" else "B") + sig[1:]
         assert provider.validate_access_token(f"{body}.{tampered_sig}") is False
 
     def test_expired_token_rejected(self, tmp_path):

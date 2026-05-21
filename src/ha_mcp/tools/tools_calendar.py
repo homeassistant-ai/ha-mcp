@@ -21,6 +21,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,18 @@ class CalendarTools:
                         "Calendar entity IDs start with 'calendar.' prefix",
                     ],
                 ))
+
+            # entity_id format-check above does not cover the ``uid`` parameter.
+            # Empty/whitespace uid would flow through to ``calendar.delete_event``
+            # and HA returns a misleading "event not found".
+            validate_identifier_not_empty(
+                uid,
+                "uid",
+                suggestions=[
+                    "Use ha_config_get_calendar_events() to list events and obtain valid UIDs",
+                ],
+                context={"entity_id": entity_id},
+            )
 
             # Build service data
             service_data: dict[str, Any] = {
