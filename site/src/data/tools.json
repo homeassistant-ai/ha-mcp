@@ -144,7 +144,18 @@
     "name": "ha_config_list_areas",
     "title": "List Areas",
     "description": "List all Home Assistant areas (rooms).\n\nReturns area ID, name, icon, floor assignment, aliases, and picture URL.",
-    "inputSchema": {},
+    "inputSchema": {
+      "properties": {
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"areas\"]). None = full response (default). Available keys: success, count, areas, message.')]",
+          "default": null
+        },
+        "area_fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each area record to only the specified keys. E.g. [\"area_id\", \"name\"] returns slim area records. None = full records (default). Unknown keys yield empty records. Available keys: area_id, name, icon, floor_id, aliases, picture, labels.')]",
+          "default": null
+        }
+      }
+    },
     "annotations": {
       "idempotentHint": true,
       "readOnlyHint": true
@@ -1749,7 +1760,7 @@
   {
     "name": "ha_get_history",
     "title": "Get Entity History or Statistics",
-    "description": "Retrieve historical data from Home Assistant's recorder.\n\n**Sources:**\n- \"history\" (default): Raw state changes, ~10 day retention, full resolution\n- \"statistics\": Pre-aggregated data, permanent retention, requires state_class\n\n**Shared params:** entity_ids, start_time, end_time, limit, offset\n**History params:** minimal_response, significant_changes_only\n**Statistics params:** period, statistic_types\n\n**Default time range:** 24h for history, 30 days for statistics\n\n**Use ha_get_history (default) when:**\n- Troubleshooting why a value changed (\"Why was my bedroom cold last night?\")\n- Checking event sequences (\"Did my garage door open while I was away?\")\n- Analyzing recent patterns (\"What time does motion usually trigger?\")\n\n**Use ha_get_history(source=\"statistics\") when:**\n- Tracking long-term trends beyond 10 days (\"Energy use this month vs last month?\")\n- Computing period averages (\"Average living room temperature over 6 months?\")\n- Entities must have state_class (measurement, total, total_increasing)\n\n**WARNING:** limit and offset apply per entity (not globally across all entities).\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.\nUse has_more and next_offset from the response to paginate.\n\n**Example -- history (default):**\n```python\nha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\nha_get_history(entity_ids=[\"sensor.temperature\", \"sensor.humidity\"], start_time=\"7d\", limit=500)\nha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100)\n```\n\n**Example -- statistics:**\n```python\nha_get_history(source=\"statistics\", entity_ids=\"sensor.total_energy_kwh\", start_time=\"30d\", period=\"day\")\nha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\",\n               start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])\nha_get_history(source=\"statistics\", entity_ids=\"sensor.energy_kwh\",\n               start_time=\"30d\", period=\"5minute\", limit=100, offset=200)\n```",
+    "description": "Retrieve historical data from Home Assistant's recorder.\n\n**Sources:**\n- \"history\" (default): Raw state changes, ~10 day retention, full resolution\n- \"statistics\": Pre-aggregated data, permanent retention, requires state_class\n\n**Shared params:** entity_ids, start_time, end_time, limit, offset\n**History params:** minimal_response, significant_changes_only\n**Statistics params:** period, statistic_types\n\n**Default time range:** 24h for history, 30 days for statistics\n\n**Use ha_get_history (default) when:**\n- Troubleshooting why a value changed (\"Why was my bedroom cold last night?\")\n- Checking event sequences (\"Did my garage door open while I was away?\")\n- Analyzing recent patterns (\"What time does motion usually trigger?\")\n\n**Use ha_get_history(source=\"statistics\") when:**\n- Tracking long-term trends beyond 10 days (\"Energy use this month vs last month?\")\n- Computing period averages (\"Average living room temperature over 6 months?\")\n- Entities must have state_class (measurement, total, total_increasing)\n\n**WARNING:** limit and offset apply per entity (not globally across all entities).\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.\nUse has_more and next_offset from the response to paginate.\n\n**Example -- history (default):**\n```python\nha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\nha_get_history(entity_ids=[\"sensor.temperature\", \"sensor.humidity\"], start_time=\"7d\", limit=500)\n# Default order=\"desc\" returns newest states first.\n# To paginate oldest-first, use order=\"asc\":\nha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n```\n\n**Example -- statistics:**\n```python\nha_get_history(source=\"statistics\", entity_ids=\"sensor.total_energy_kwh\", start_time=\"30d\", period=\"day\")\nha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\",\n               start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])\nha_get_history(source=\"statistics\", entity_ids=\"sensor.energy_kwh\",\n               start_time=\"30d\", period=\"5minute\", limit=100, offset=200)\n```",
     "inputSchema": {
       "properties": {
         "entity_ids": {
@@ -1789,6 +1800,14 @@
         },
         "statistic_types": {
           "type": "Annotated[str | list[str] | None, Field(description='Statistics types: \"mean\", \"min\", \"max\", \"sum\", \"state\", \"change\". Default: all. Ignored when source=\"history\"', default=None)]",
+          "default": null
+        },
+        "order": {
+          "type": "Annotated[Literal['asc', 'desc'], Field(default='desc', description='Sort order for history entries. \"desc\" (default): newest first. \"asc\": oldest first (chronological, as returned by HA API). Ignored when source=\"statistics\".')]",
+          "default": "desc"
+        },
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size. None = full response (default). History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params, warnings.')]",
           "default": null
         }
       },
@@ -2441,7 +2460,7 @@
   {
     "name": "ha_get_overview",
     "title": "Get System Overview",
-    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\nStandard/full modes paginate entities (default 200 per page) — use offset\nto fetch more. Use 'domains' filter to narrow scope.",
+    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\nStandard/full modes paginate entities (default 200 per page) — use offset\nto fetch more. Use 'domains' filter to narrow scope.\n\nUse fields= to project the response to only the keys you need — a\nsignificantly smaller payload when fetching a single sub-section (e.g.\nfields=[\"system_info\"] returns just that section instead of the full overview).",
     "inputSchema": {
       "properties": {
         "detail_level": {
@@ -2479,6 +2498,10 @@
         "include_dismissed_repairs": {
           "type": "Annotated[bool | str | None, Field(default=False, description='Include user-dismissed/ignored repairs (default: False). Matches the HA Repairs UI which hides dismissed items by default.')]",
           "default": false
+        },
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domains\"]). None = full response (default). Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, repairs, repairs_error, tool_discovery.')]",
+          "default": null
         }
       }
     },
@@ -2494,11 +2517,19 @@
   {
     "name": "ha_get_state",
     "title": "Get Entity State",
-    "description": "Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).\n\nSINGLE ENTITY:\nPass a string entity_id. Returns the entity's full state and attributes.\n\nMULTIPLE ENTITIES:\nPass a list of entity IDs (max 100). Efficiently retrieves states using\nparallel requests. Duplicates are automatically deduplicated.\nReturns success=True if at least one entity state was retrieved.\nCheck 'error_count' for any failed lookups in partial-success scenarios.\n\nEXAMPLES:\n- Single: ha_get_state(\"light.kitchen\")\n- Multiple: ha_get_state([\"light.kitchen\", \"light.living_room\", \"sensor.temperature\"])",
+    "description": "Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).\n\nSINGLE ENTITY:\nPass a string entity_id. Returns the entity's full state and attributes.\n\nMULTIPLE ENTITIES:\nPass a list of entity IDs (max 100). Efficiently retrieves states using\nparallel requests. Duplicates are automatically deduplicated.\nReturns success=True if at least one entity state was retrieved.\nCheck 'error_count' for any failed lookups in partial-success scenarios.\n\nFIELDS PROJECTION:\n`fields=` projects the per-entity record keys (see the fields= parameter\ndescription for the full key list), NOT the outer bulk response wrapper.\nIn single-entity mode it filters keys of the returned record directly. In bulk\nmode it filters keys of each record inside `states[entity_id]`; outer keys\n(`success`, `count`, `states`, `errors`, ...) are always preserved.\n`attribute_keys=` further narrows the `attributes` sub-dict and is only applied\nwhen `\"attributes\"` is in `fields=` (or `fields=None`); otherwise it is a no-op.\n\nWhen `attribute_keys=` is set but has no effect (because `attributes` was\nexcluded by `fields=`), a `warnings` list is emitted outside the projected\nentity record(s): in bulk mode at the response wrapper level (sibling of\n`success`/`count`/`states`); in single-entity mode at the top-level result\n(sibling of `data`/`metadata`, since the projected record IS `data`).\nThe warnings list is never a record key, so `fields=[\"state\"]` returns a\nrecord with only `state` regardless of whether the no-effect warning fires.\n\nEXAMPLES:\n- Single: ha_get_state(\"light.kitchen\")\n- Multiple: ha_get_state([\"light.kitchen\", \"light.living_room\", \"sensor.temperature\"])\n- State only: ha_get_state(\"light.kitchen\", fields=[\"state\"])\n- Slim bulk: ha_get_state([\"light.kitchen\", \"sensor.temperature\"], fields=[\"state\", \"attributes\"], attribute_keys=[\"brightness\"])",
     "inputSchema": {
       "properties": {
         "entity_id": {
           "type": "Annotated[str | list[str], Field(description=\"Entity ID or list of entity IDs to retrieve state for (e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])\")]"
+        },
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level entity record keys to reduce response size (e.g. [\"state\", \"attributes\"]). None = full entity record (default). Available keys: entity_id, state, attributes, last_changed, last_reported, last_updated, context.')]",
+          "default": null
+        },
+        "attribute_keys": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified keys from each entity\\'s attributes dict (e.g. [\"brightness\", \"color_temp\"] for lights). None = full attributes (default). Unknown keys are silently dropped. Requires \"attributes\" to be present in fields= (or fields=None).')]",
+          "default": null
         }
       },
       "required": [
@@ -2551,6 +2582,22 @@
         "include_hidden": {
           "type": "Annotated[bool | str, Field(default=True, description='Include entities marked hidden_by in the entity registry (default: True). Hidden entities still appear in results but receive a score penalty so they sort below comparable visible matches — typically pulling integration diagnostics and user-suppressed entries to the bottom of the list rather than excluding them. Set to False to filter them out entirely.')]",
           "default": true
+        },
+        "per_domain_limit": {
+          "type": "Annotated[int | str | None, Field(default=None, description='When group_by_domain=True, cap results per domain to this number. Applied after the global limit — use a high limit (e.g. limit=200) with per_domain_limit=5 to get up to 5 entities from each domain. Ignored when group_by_domain=False. None = no per-domain cap (default).')]",
+          "default": null
+        },
+        "state_filter": {
+          "type": "Annotated[str | None, Field(default=None, description='Filter results to entities in a specific state (e.g. \"on\", \"off\", \"unavailable\"). Case-insensitive — input is lowercased before matching. Applied server-side after search results are collected. For exact-match and domain-listing searches, total_matches reflects the filtered count. For fuzzy searches, state_filter is page-only and total_matches remains unfiltered (see state_filter_note in the response). None = no state filter (default).')]",
+          "default": null
+        },
+        "result_fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each entity record in results[] to only the specified keys. E.g. [\"entity_id\", \"state\"] returns slim entity records. None = full records (default). Unknown keys yield empty records; omit result_fields to see all available keys. Available keys: entity_id, friendly_name, domain, state, score, match_type.')]",
+          "default": null
+        },
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"results\"]). None = full response (default). Available keys: success, query, results, total_matches, count, offset, limit, has_more, next_offset, search_type, domain_filter, area_filter, area_name, area_names, by_domain, warnings, partial, message, note, state_filter, state_filter_note.')]",
+          "default": null
         }
       }
     },
@@ -2709,6 +2756,14 @@
         "detail_level": {
           "type": "Annotated[Literal['summary', 'full'], Field(default='summary', description=\"'summary': service name + description only (default). 'full': include parameter field schemas.\")]",
           "default": "summary"
+        },
+        "service_fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records (default). Unknown keys yield empty records. Available keys: name, description, domain, service, fields (full mode only), target (full mode only).')]",
+          "default": null
+        },
+        "fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"services\"]). None = full response (default). Available keys: success, domains, services, total_count, count, offset, limit, has_more, next_offset, detail_level, filters_applied.')]",
+          "default": null
         }
       }
     },
