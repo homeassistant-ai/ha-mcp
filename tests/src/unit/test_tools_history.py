@@ -165,6 +165,20 @@ class TestHaGetHistoryFieldsProjection:
             await history_tool(entity_ids="sensor.temp", fields='["')
 
 
+_ORDER_INNER_STUB = {
+    "success": True,
+    "source": "history",
+    "entities": [{"entity_id": "sensor.temp", "states": []}],
+    "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+    "query_params": {
+        "minimal_response": True,
+        "significant_changes_only": True,
+        "limit": 100,
+        "offset": 0,
+        "order": "desc",
+    },
+}
+
 _STATISTICS_INNER = {
     "success": True,
     "source": "statistics",
@@ -297,20 +311,6 @@ class TestHaGetHistoryOrder:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
-    _INNER_STUB = {
-        "success": True,
-        "source": "history",
-        "entities": [{"entity_id": "sensor.temp", "states": []}],
-        "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
-        "query_params": {
-            "minimal_response": True,
-            "significant_changes_only": True,
-            "limit": 100,
-            "offset": 0,
-            "order": "desc",
-        },
-    }
-
     def _ws_patch(self):
         ws = AsyncMock()
         ws.disconnect = AsyncMock()
@@ -326,7 +326,7 @@ class TestHaGetHistoryOrder:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(self._INNER_STUB),
+            return_value=dict(_ORDER_INNER_STUB),
         ) as mock_fetch:
             await history_tool(entity_ids="sensor.temp")
         _args, _kwargs = mock_fetch.call_args
@@ -338,7 +338,7 @@ class TestHaGetHistoryOrder:
         with self._ws_patch(), patch(
             "ha_mcp.tools.tools_history._fetch_history",
             new_callable=AsyncMock,
-            return_value=dict(self._INNER_STUB),
+            return_value=dict(_ORDER_INNER_STUB),
         ) as mock_fetch:
             await history_tool(entity_ids="sensor.temp", order="asc")
         _args, _kwargs = mock_fetch.call_args
