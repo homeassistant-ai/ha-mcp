@@ -49,7 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,16 @@ class BackupManager:
         async with lock:
             now = time.monotonic()
             throttle = self.throttle_seconds
-            if throttle and (now - self._last_snapshot.get(key, 0.0)) < throttle:
+            # Skip throttle if no prior snapshot exists for this key.
+            # Using ``get(key, 0.0)`` would falsely block the first capture
+            # whenever ``monotonic()`` < throttle (typical on a fresh process
+            # in CI), since 0.0 would be treated as "last snapshot at
+            # monotonic time 0".
+            if (
+                throttle
+                and key in self._last_snapshot
+                and (now - self._last_snapshot[key]) < throttle
+            ):
                 return None
             try:
                 config = await handler.fetch(self._client, entity_id)

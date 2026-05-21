@@ -61,15 +61,35 @@ FlowLookupReason = Literal[
 # the drift assertion below catches accidental divergence at import time.
 HelperTypeLiteral = Literal[
     # 12 SIMPLE
-    "input_button", "input_boolean", "input_select", "input_number",
-    "input_text", "input_datetime", "counter", "timer", "schedule",
-    "zone", "person", "tag",
+    "input_button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "input_text",
+    "input_datetime",
+    "counter",
+    "timer",
+    "schedule",
+    "zone",
+    "person",
+    "tag",
     # config-entry subentries
     "config_subentry",
     # 15 FLOW
-    "template", "group", "utility_meter", "derivative", "min_max",
-    "threshold", "integration", "statistics", "trend", "random",
-    "filter", "tod", "generic_thermostat", "switch_as_x",
+    "template",
+    "group",
+    "utility_meter",
+    "derivative",
+    "min_max",
+    "threshold",
+    "integration",
+    "statistics",
+    "trend",
+    "random",
+    "filter",
+    "tod",
+    "generic_thermostat",
+    "switch_as_x",
     "generic_hygrostat",
 ]
 assert set(get_args(HelperTypeLiteral)) == (
@@ -124,9 +144,7 @@ async def _get_entry_id_for_flow_helper(
     except Exception as e:
         logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
         if warnings is not None:
-            warnings.append(
-                f"entity_registry/get failed for {entity_id}: {e}"
-            )
+            warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
         return None, "lookup_failed"
 
     if not isinstance(result, dict) or not result.get("success"):
@@ -657,19 +675,23 @@ class IntegrationTools:
         result = await self._client.list_config_subentries(entry_id)
         if not isinstance(result, dict) or not result.get("success"):
             error_msg = websocket_error_message(result.get("error", "Operation failed"))
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to list config subentries: {error_msg}",
-                context={"entry_id": entry_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list config subentries: {error_msg}",
+                    context={"entry_id": entry_id},
+                )
+            )
 
         subentries = result.get("result")
         if not isinstance(subentries, list):
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Unexpected config subentry list response",
-                context={"entry_id": entry_id, "details": result},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected config subentry list response",
+                    context={"entry_id": entry_id, "details": result},
+                )
+            )
 
         return [subentry for subentry in subentries if isinstance(subentry, dict)]
 
@@ -684,16 +706,18 @@ class IntegrationTools:
     ) -> None:
         """Start a config subentry flow to read its schema, then abort it."""
         if not subentry_type:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "subentry_type is required when include_subentry_schema=True",
-                suggestions=[
-                    "Call ha_get_integration(entry_id=..., "
-                    "include_subentries=True) to inspect existing subentry "
-                    "types, then retry with subentry_type.",
-                ],
-                context={"entry_id": entry_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "subentry_type is required when include_subentry_schema=True",
+                    suggestions=[
+                        "Call ha_get_integration(entry_id=..., "
+                        "include_subentries=True) to inspect existing subentry "
+                        "types, then retry with subentry_type.",
+                    ],
+                    context={"entry_id": entry_id},
+                )
+            )
 
         flow_id = None
         try:
@@ -787,8 +811,7 @@ class IntegrationTools:
             return self._options_from_form_flow(flow)
         except Exception as exc:
             logger.warning(
-                f"Failed to fetch options for {entry_id}: "
-                f"{type(exc).__name__}: {exc}"
+                f"Failed to fetch options for {entry_id}: {type(exc).__name__}: {exc}"
             )
             return {}
         finally:
@@ -801,9 +824,7 @@ class IntegrationTools:
                         f"{type(abort_err).__name__}: {abort_err}"
                     )
 
-    async def _fetch_options_schema(
-        self, entry_id: str, resp: dict[str, Any]
-    ) -> None:
+    async def _fetch_options_schema(self, entry_id: str, resp: dict[str, Any]) -> None:
         """Start an options flow to read the schema, then abort it.
 
         Also populates ``resp["entry"]["options"]`` for form-type flows from
@@ -955,7 +976,9 @@ class IntegrationTools:
         if logger_levels is not None:
             domain = entry.get("domain") or ""
             level_info = logger_levels.get(domain)
-            formatted_entry["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            formatted_entry["log_level"] = (
+                level_info["name"] if level_info else "DEFAULT"
+            )
             formatted_entry["log_level_raw"] = level_info["raw"] if level_info else None
 
         # Include options when requested (for auditing template definitions, etc.)
@@ -968,9 +991,7 @@ class IntegrationTools:
                 "pref_disable_new_entities"
             ]
         if "pref_disable_polling" in entry:
-            formatted_entry["pref_disable_polling"] = entry[
-                "pref_disable_polling"
-            ]
+            formatted_entry["pref_disable_polling"] = entry["pref_disable_polling"]
 
         return formatted_entry
 
@@ -1124,8 +1145,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Config subentry ID to delete when "
-                    "helper_type='config_subentry'."
+                    "Config subentry ID to delete when helper_type='config_subentry'."
                 ),
                 default=None,
             ),
@@ -1273,9 +1293,7 @@ class IntegrationTools:
 
         if helper_type in SIMPLE_HELPER_TYPES:
             # Path 1: SIMPLE helper via websocket delete
-            return await self._delete_simple_helper(
-                helper_type, target, wait_bool
-            )
+            return await self._delete_simple_helper(helper_type, target, wait_bool)
 
         if helper_type in FLOW_HELPER_TYPES:
             # Path 2: FLOW helper via entity_id → config_entry_id lookup
@@ -1350,11 +1368,7 @@ class IntegrationTools:
                 # Reason discriminates the failure mode without a second
                 # WebSocket round-trip. The lookup helper already queried
                 # the registry; the response told us everything we need.
-                entity_id = (
-                    target
-                    if "." in target
-                    else f"{helper_type}.{target}"
-                )
+                entity_id = target if "." in target else f"{helper_type}.{target}"
                 if reason == "no_config_entry":
                     raise_tool_error(
                         create_error_response(
@@ -1464,10 +1478,7 @@ class IntegrationTools:
             }
             if wait_bool and entity_ids:
                 results = await asyncio.gather(
-                    *[
-                        wait_for_entity_removed(client, eid)
-                        for eid in entity_ids
-                    ],
+                    *[wait_for_entity_removed(client, eid) for eid in entity_ids],
                     return_exceptions=True,
                 )
                 # Auth/connection errors during polling must surface as
@@ -1508,7 +1519,7 @@ class IntegrationTools:
                     "Verify the target exists using ha_search_entities() "
                     "or ha_get_integration()",
                 ],
-        )
+            )
 
     async def _delete_config_subentry(
         self, entry_id: str, subentry_id: str
@@ -1517,11 +1528,13 @@ class IntegrationTools:
         result = await self._client.delete_config_subentry(entry_id, subentry_id)
         if not isinstance(result, dict) or not result.get("success"):
             error_msg = websocket_error_message(result.get("error", "Operation failed"))
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to delete config subentry: {error_msg}",
-                context={"entry_id": entry_id, "subentry_id": subentry_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete config subentry: {error_msg}",
+                    context={"entry_id": entry_id, "subentry_id": subentry_id},
+                )
+            )
         return {
             "success": True,
             "action": "delete",
@@ -1549,14 +1562,13 @@ class IntegrationTools:
         client = self._client
         # Convert to entity_id form
         entity_id = (
-            target if target.startswith(f"{helper_type}.")
+            target
+            if target.startswith(f"{helper_type}.")
             else f"{helper_type}.{target}"
         )
         # Bare helper_id (without prefix) form for fallback strategies
         helper_id = (
-            target.split(".", 1)[1]
-            if target.startswith(f"{helper_type}.")
-            else target
+            target.split(".", 1)[1] if target.startswith(f"{helper_type}.") else target
         )
 
         try:
@@ -1596,16 +1608,12 @@ class IntegrationTools:
                     "entity_id": entity_id,
                 }
                 try:
-                    registry_result = await client.send_websocket_message(
-                        registry_msg
-                    )
+                    registry_result = await client.send_websocket_message(registry_msg)
                     if (registry_result or {}).get("success"):
                         entity_entry = (registry_result or {}).get("result") or {}
                         unique_id = entity_entry.get("unique_id")
                         if unique_id:
-                            logger.info(
-                                f"Found unique_id: {unique_id} for {entity_id}"
-                            )
+                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                             break
                     if attempt < max_retries - 1:
                         wait_time = 0.5 * (2**attempt)
@@ -1618,9 +1626,7 @@ class IntegrationTools:
                     # APIError (e.g. 404) is informational and worth a retry.
                     # Auth/connection errors must propagate so they're not
                     # re-reported as ENTITY_NOT_FOUND in the fallback below.
-                    logger.warning(
-                        f"Registry lookup attempt {attempt + 1} failed: {e}"
-                    )
+                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                     if attempt < max_retries - 1:
                         wait_time = 0.5 * (2**attempt)
                         await asyncio.sleep(wait_time)
@@ -1655,9 +1661,7 @@ class IntegrationTools:
                         "fallback_used": "direct_id",
                     }
                     if wait_bool:
-                        removed = await wait_for_entity_removed(
-                            client, entity_id
-                        )
+                        removed = await wait_for_entity_removed(client, entity_id)
                         if not removed:
                             response.setdefault("warnings", []).append(
                                 f"Deletion confirmed but {entity_id} "
@@ -1689,8 +1693,7 @@ class IntegrationTools:
                             # entry is still there rather than silently
                             # short-circuit to already_deleted.
                             logger.debug(
-                                f"Registry verify for {entity_id} failed: "
-                                f"{verify_err}"
+                                f"Registry verify for {entity_id} failed: {verify_err}"
                             )
                             registry_still_has_entry = True
 
@@ -1746,9 +1749,7 @@ class IntegrationTools:
                     # entity is gone — treat as a soft signal and continue
                     # to the "all fallbacks exhausted" path. Auth/connection
                     # errors must propagate (handled by outer except).
-                    logger.debug(
-                        f"State check for {entity_id} raised APIError: {e}"
-                    )
+                    logger.debug(f"State check for {entity_id} raised APIError: {e}")
 
                 # All fallbacks exhausted
                 err_detail = (
@@ -1798,9 +1799,7 @@ class IntegrationTools:
                     ),
                 }
                 if wait_bool:
-                    removed = await wait_for_entity_removed(
-                        client, entity_id
-                    )
+                    removed = await wait_for_entity_removed(client, entity_id)
                     if not removed:
                         response.setdefault("warnings", []).append(
                             f"Deletion confirmed but {entity_id} "
@@ -1840,6 +1839,7 @@ class IntegrationTools:
                     "Ensure helper is not used by automations or scripts",
                 ],
             )
+
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""

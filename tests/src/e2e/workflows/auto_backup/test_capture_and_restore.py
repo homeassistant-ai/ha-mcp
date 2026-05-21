@@ -255,7 +255,7 @@ class TestHelperCaptureRestore:
 # ---------------------------------------------------------------- dashboard lane
 
 
-@pytest.mark.dashboards
+@pytest.mark.convenience
 @pytest.mark.cleanup
 class TestDashboardCaptureRestore:
     async def test_dashboard_capture_on_edit(
@@ -301,7 +301,7 @@ class TestDashboardCaptureRestore:
 # ---------------------------------------------------------------- script lane
 
 
-@pytest.mark.scripts
+@pytest.mark.script
 @pytest.mark.cleanup
 class TestScriptCaptureRestore:
     async def test_script_capture(
@@ -356,7 +356,7 @@ class TestScriptCaptureRestore:
 # ---------------------------------------------------------------- scene lane
 
 
-@pytest.mark.scenes
+@pytest.mark.convenience
 @pytest.mark.cleanup
 class TestSceneCaptureRestore:
     async def test_scene_capture(

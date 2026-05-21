@@ -211,7 +211,9 @@ class TodoTools:
     )
     @with_auto_backup(
         domain="todo_item",
-        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('item', '') or kw.get('uid', '') or ''}",
+        id_fn=lambda kw: (
+            f"{kw.get('entity_id', '')}::{kw.get('item', '') or kw.get('uid', '') or ''}"
+        ),
     )
     @log_tool_usage
     async def ha_set_todo_item(
@@ -434,7 +436,9 @@ class TodoTools:
             service_data = self._build_update_service_data(
                 entity_id, item, rename, status, description, due_date, due_datetime
             )
-            result = await self._client.call_service("todo", "update_item", service_data)
+            result = await self._client.call_service(
+                "todo", "update_item", service_data
+            )
             update_msg = self._build_update_message(
                 rename, status, description, due_date, due_datetime
             )
@@ -595,7 +599,9 @@ class TodoTools:
             }
 
             # Call the service
-            result = await self._client.call_service("todo", "remove_item", service_data)
+            result = await self._client.call_service(
+                "todo", "remove_item", service_data
+            )
 
             return {
                 "success": True,

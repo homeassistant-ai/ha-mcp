@@ -5,19 +5,16 @@ backup capture failures log WARNING but never block the wrapped tool.
 
 Usage
 -----
-Simple case (entity ID lives in a single kwarg)::
+Simple case (entity ID lives in a single kwarg): wrap the existing tool
+function with ``@with_auto_backup(domain="<domain>", id_param="<kwarg>")``
+placed above the ``@mcp.tool``/``@tool`` decorator and below it the
+``@log_tool_usage`` line, so the order from outermost to innermost is
+``@tool`` -> ``@with_auto_backup`` -> ``@log_tool_usage`` -> the async def.
 
-    @with_auto_backup(domain="automation", id_param="identifier")
-    @mcp.tool(name="ha_config_set_automation", ...)
-    @log_tool_usage
-    async def ha_config_set_automation(self, identifier: str, ...): ...
-
-Computed-key case (helpers — domain encodes ``helper_type``)::
-
-    @with_auto_backup(
-        domain_fn=lambda kw: f"helper_{kw['helper_type']}",
-        id_fn=lambda kw: f"{kw['helper_type']}:{kw.get('helper_id', '')}",
-    )
+Computed-key case (helpers — domain encodes ``helper_type``): use
+``domain_fn`` / ``id_fn`` instead of ``domain`` / ``id_param``; both take
+a single ``kw`` dict argument and return a string. Helpers typically use
+``domain_fn=lambda kw: f"helper_{kw['helper_type']}"``.
 
 The decorator must be applied **above** ``@mcp.tool`` so FastMCP sees the
 final wrapped callable as the tool. ``functools.wraps`` preserves the
@@ -87,13 +84,13 @@ def with_auto_backup(
                             args[0], "client", None
                         )
                     if client_obj is not None:
-                        snap_domain = (
-                            domain_fn(kwargs) if domain_fn is not None else domain  # type: ignore[assignment]
+                        snap_domain: str = (
+                            domain_fn(kwargs) if domain_fn is not None else domain or ""
                         )
                         if id_fn is not None:
                             entity_id = _resolve_str(id_fn(kwargs))
                         else:
-                            entity_id = _resolve_str(kwargs.get(id_param))  # type: ignore[arg-type]
+                            entity_id = _resolve_str(kwargs.get(id_param or ""))
                         if entity_id:
                             mgr = get_backup_manager(client_obj, settings)
                             await mgr.maybe_snapshot(

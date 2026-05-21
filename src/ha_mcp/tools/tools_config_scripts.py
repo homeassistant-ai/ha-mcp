@@ -224,19 +224,29 @@ class ConfigScriptTools:
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_JSON,
-                f"Invalid config parameter: {e}",
-                context={"script_id": script_id, "provided_config_type": type(config).__name__},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    f"Invalid config parameter: {e}",
+                    context={
+                        "script_id": script_id,
+                        "provided_config_type": type(config).__name__,
+                    },
+                )
+            )
 
         # Ensure config is a dict
         if parsed_config is None or not isinstance(parsed_config, dict):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Config parameter must be a JSON object",
-                context={"script_id": script_id, "provided_type": type(parsed_config).__name__},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Config parameter must be a JSON object",
+                    context={
+                        "script_id": script_id,
+                        "provided_type": type(parsed_config).__name__,
+                    },
+                )
+            )
 
         config_dict = cast(dict[str, Any], parsed_config)
 
@@ -251,11 +261,16 @@ class ConfigScriptTools:
             # Strip empty sequence array that would override blueprint
             config_dict = _strip_empty_script_fields(config_dict)
         elif "sequence" not in config_dict:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
-                context={"script_id": script_id, "required_fields": ["sequence OR use_blueprint"]},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
+                    context={
+                        "script_id": script_id,
+                        "required_fields": ["sequence OR use_blueprint"],
+                    },
+                )
+            )
 
         return config_dict, effective_category
 
@@ -490,7 +505,10 @@ class ConfigScriptTools:
                                 "Call ha_config_get_script() first",
                                 "Use the config_hash from that response",
                             ],
-                            context={"action": "python_transform", "script_id": script_id},
+                            context={
+                                "action": "python_transform",
+                                "script_id": script_id,
+                            },
                         )
                     )
 
@@ -509,12 +527,18 @@ class ConfigScriptTools:
                             ErrorCode.VALIDATION_FAILED,
                             message,
                             suggestions=suggestions,
-                            context={"action": "python_transform", "script_id": script_id},
+                            context={
+                                "action": "python_transform",
+                                "script_id": script_id,
+                            },
                         )
                     )
 
                 # Validate transformed config
-                if "sequence" not in transformed_config and "use_blueprint" not in transformed_config:
+                if (
+                    "sequence" not in transformed_config
+                    and "use_blueprint" not in transformed_config
+                ):
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.VALIDATION_FAILED,
@@ -523,7 +547,10 @@ class ConfigScriptTools:
                                 "The transform may have removed required fields",
                                 "Ensure the config still has a 'sequence' or 'use_blueprint' key",
                             ],
-                            context={"action": "python_transform", "script_id": script_id},
+                            context={
+                                "action": "python_transform",
+                                "script_id": script_id,
+                            },
                         )
                     )
                 bp_warnings = _check_best_practices(transformed_config)
@@ -564,7 +591,9 @@ class ConfigScriptTools:
                 )
 
             config_dict, effective_category = self._validate_script_config(
-                config, script_id, category,
+                config,
+                script_id,
+                category,
             )
 
             # Optional hash check for full config updates
@@ -588,7 +617,9 @@ class ConfigScriptTools:
             entity_id = f"script.{script_id}"
             if wait_bool:
                 try:
-                    registered = await wait_for_entity_registered(self._client, entity_id)
+                    registered = await wait_for_entity_registered(
+                        self._client, entity_id
+                    )
                     if not registered:
                         result.setdefault("warnings", []).append(
                             f"Script saved but {entity_id} not yet queryable. "
@@ -602,7 +633,12 @@ class ConfigScriptTools:
             # Apply category to entity registry if provided
             if effective_category and entity_id:
                 await apply_entity_category(
-                    self._client, entity_id, effective_category, "script", result, "script"
+                    self._client,
+                    entity_id,
+                    effective_category,
+                    "script",
+                    result,
+                    "script",
                 )
 
             if bp_warnings:

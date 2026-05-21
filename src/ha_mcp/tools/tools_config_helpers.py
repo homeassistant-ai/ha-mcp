@@ -1978,10 +1978,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
         id_fn=lambda kw: str(
-            kw.get("helper_id")
-            or kw.get("entry_id")
-            or kw.get("subentry_id")
-            or ""
+            kw.get("helper_id") or kw.get("entry_id") or kw.get("subentry_id") or ""
         ),
         client=client,
     )

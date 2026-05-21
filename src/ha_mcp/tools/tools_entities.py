@@ -559,7 +559,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @with_auto_backup(
         domain="entity",
         id_fn=lambda kw: (
-            str(kw["entity_id"][0]) if isinstance(kw.get("entity_id"), list) and kw["entity_id"]
+            str(kw["entity_id"][0])
+            if isinstance(kw.get("entity_id"), list) and kw["entity_id"]
             else str(kw.get("entity_id") or "")
         ),
         client=client,

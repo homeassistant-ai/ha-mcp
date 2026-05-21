@@ -1194,7 +1194,7 @@ def register_settings_routes(
 
     # ---- Auto-backup routes (#1288) ----
 
-    def _backup_mgr():
+    def _backup_mgr() -> Any:
         settings = get_global_settings()
         client = getattr(server, "client", None) or getattr(server, "_client", None)
         return get_backup_manager(client, settings) if client is not None else None
@@ -1258,7 +1258,7 @@ def register_settings_routes(
     async def _diff_backup(request: Request) -> JSONResponse:
         import difflib
 
-        import yaml
+        import yaml  # type: ignore[import-untyped]
 
         mgr = _backup_mgr()
         if mgr is None:
