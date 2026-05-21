@@ -316,9 +316,14 @@ def _do_spawn() -> None:
         # take the child down with it. CREATE_NEW_PROCESS_GROUP also
         # prevents the parent's CTRL_C_EVENT (issued by the console
         # window) from reaching the child process group.
+        # CREATE_NO_WINDOW suppresses the empty console window that
+        # ``python.exe`` (a console app) would otherwise pop up under
+        # Claude Desktop — DETACHED_PROCESS by itself doesn't reuse
+        # the parent's console, it just creates a fresh one.
         popen_kwargs["creationflags"] = (
             subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
             | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
         )
     else:
         # New session leader → parent SIGTERM / shell exit doesn't

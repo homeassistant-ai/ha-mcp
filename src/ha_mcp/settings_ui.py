@@ -535,11 +535,42 @@ let saveTimer = null;
 let openGroups = new Set();
 
 async function loadTools() {
-  const resp = await fetch('./api/settings/tools');
-  const data = await resp.json();
-  toolData = data.tools;
-  toolStates = data.states;
-  render();
+  let resp;
+  try {
+    resp = await fetch('./api/settings/tools');
+  } catch (e) {
+    updateStatus('Network error reaching /api/settings/tools: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    updateStatus(`/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`);
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    updateStatus('Failed to parse /api/settings/tools response as JSON: ' + e.message);
+    return;
+  }
+  toolData = data.tools || [];
+  toolStates = data.states || {};
+  if (toolData.length === 0) {
+    // Empty tool list is a sidecar misconfiguration — usually the
+    // parent stdio process couldn't dump the metadata cache. Tell
+    // the user where to look instead of leaving them on "Loading".
+    updateStatus(
+      'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json — ' +
+      'if missing/empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.'
+    );
+    return;
+  }
+  try {
+    render();
+  } catch (e) {
+    updateStatus('Render failed: ' + e.message + ' (open browser devtools for the stack)');
+    throw e;
+  }
   updateStatus('Loaded');
 
   // Show restart button if running as add-on; show Stop Sidecar
@@ -900,6 +931,21 @@ def build_settings_handlers(
             tools = await _get_tool_metadata(server)
         else:
             tools = load_tool_metadata_cache()
+            if not tools:
+                # The sidecar's main failure mode (and the most common
+                # reason a user lands on a perpetually-loading settings
+                # page) is that the parent stdio process didn't write
+                # the metadata cache before the sidecar served its
+                # first tools request. Log loudly to the sidecar log
+                # so post-mortem is one ``cat ~/.ha-mcp/sidecar.log``
+                # away. The JS shows a matching diagnostic to the user.
+                logger.warning(
+                    "tool metadata cache is empty or missing at %s — "
+                    "the parent stdio process likely did not dump it. "
+                    "Check the MCP-client log for 'Failed to dump tool "
+                    "metadata cache' from ha_mcp.__main__.",
+                    _get_tool_metadata_cache_path(),
+                )
         config = load_tool_config()
         states = config.get("tools", {})
         for name in DEFAULT_PINNED_TOOLS:

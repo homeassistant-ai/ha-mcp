@@ -677,7 +677,16 @@ def _maybe_spawn_settings_sidecar() -> None:
 
     try:
         metadata = asyncio.run(_get_tool_metadata(_get_server()))
-        dump_tool_metadata_cache(metadata)
+        dumped = dump_tool_metadata_cache(metadata)
+        # Log a deliberate one-liner so users debugging an empty
+        # settings page can see whether the parent's dump succeeded
+        # by grepping the stdio process output (which Claude Desktop
+        # surfaces in its MCP server log panel).
+        logger.info(
+            "Tool metadata cache: %d tools dumped, write %s",
+            len(metadata),
+            "succeeded" if dumped else "FAILED",
+        )
     except Exception as e:
         # Cache dump is best-effort — the sidecar falls back to an empty
         # tools list rather than blocking stdio startup. Include the
