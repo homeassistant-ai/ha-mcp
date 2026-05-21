@@ -444,7 +444,7 @@ The add-on provides 89+ MCP tools for controlling Home Assistant:
 
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
-- `ha_config_set_helper` — Create or update Home Assistant helper entities (27 types, unified interface).
+- `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
 - `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
 
 ### History & Statistics
