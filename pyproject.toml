@@ -173,6 +173,8 @@ markers = [
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
     "performance: performance measurement and regression tests",
+    "external_only: skips on HAOS inaddon tier (server runs in a separate addon container, so in-process env monkeypatching doesn't reach it)",
+    "inaddon_only: only runs on HAOS inaddon tier",
 ]
 asyncio_mode = "auto"
 

@@ -123,6 +123,7 @@ class TestListEditsBackups:
 
 @pytest.mark.automation
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestAutomationCaptureRestore:
     async def test_full_loop(self, mcp_client, monkeypatch: pytest.MonkeyPatch) -> None:
         _enable_auto_backup(monkeypatch)
@@ -206,8 +207,9 @@ class TestAutomationCaptureRestore:
 # ---------------------------------------------------------------- helper lane
 
 
-@pytest.mark.config
+@pytest.mark.helper
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestHelperCaptureRestore:
     async def test_input_boolean_capture(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -259,6 +261,7 @@ class TestHelperCaptureRestore:
 
 @pytest.mark.convenience
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestDashboardCaptureRestore:
     async def test_dashboard_capture_on_edit(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -305,6 +308,7 @@ class TestDashboardCaptureRestore:
 
 @pytest.mark.script
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestScriptCaptureRestore:
     async def test_script_capture(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -360,6 +364,7 @@ class TestScriptCaptureRestore:
 
 @pytest.mark.convenience
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestSceneCaptureRestore:
     async def test_scene_capture(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
@@ -413,6 +418,8 @@ class TestSceneCaptureRestore:
 
 
 @pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
 class TestToggleOffSkipsCapture:
     async def test_disabled_means_no_new_backups(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
