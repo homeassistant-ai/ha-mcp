@@ -139,6 +139,117 @@ class TestDeleteAutomationConfig:
         assert result["operation"] == "deleted"
 
 
+class TestUpsertAutomationConfigIdMismatch:
+    """Guard against silent overwrite when ``identifier`` and ``config['id']``
+    disagree (#1404).
+
+    Home Assistant's automation storage uses the inner ``config['id']`` as the
+    primary key. If the MCP server POSTs to ``/config/automation/config/{X}``
+    with a body carrying ``id=Y``, HA stores the body under ``Y`` and the
+    automation that previously owned ``Y`` is silently overwritten — while the
+    response reports success for ``X``. The guard converts that silent data
+    loss into a structured 400 error.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
+            client = HomeAssistantClient()
+            client.base_url = "http://test.local:8123"
+            client.token = "test-token"
+            client.timeout = 30
+            client.httpx_client = MagicMock()
+            return client
+
+    @pytest.mark.asyncio
+    async def test_update_with_mismatched_inner_id_is_rejected(self, mock_client):
+        """identifier resolves to AAA but config carries id=BBB → reject."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
+        mock_client._request = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.upsert_automation_config(
+                {"id": "BBB", "alias": "x", "trigger": [], "action": []},
+                identifier="automation.foo",
+            )
+
+        assert exc_info.value.status_code == 400
+        msg = str(exc_info.value)
+        assert "Mismatched" in msg
+        assert "'AAA'" in msg
+        assert "'BBB'" in msg
+        # Critical: the offending POST never reaches HA.
+        mock_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_with_matching_inner_id_proceeds(self, mock_client):
+        """identifier and config.id both resolve to the same unique_id → ok."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+        mock_client._poll_for_automation_entity = AsyncMock(return_value=None)
+
+        result = await mock_client.upsert_automation_config(
+            {"id": "AAA", "alias": "x", "trigger": [], "action": []},
+            identifier="automation.foo",
+        )
+
+        assert result["unique_id"] == "AAA"
+        assert result["operation"] == "updated"
+        mock_client._request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_without_inner_id_proceeds(self, mock_client):
+        """No inner id → existing code path injects unique_id, no guard fires."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x", "trigger": [], "action": []},
+            identifier="automation.foo",
+        )
+
+        assert result["unique_id"] == "AAA"
+        # Sent body should carry the resolved id.
+        sent_config = mock_client._request.call_args.kwargs["json"]
+        assert sent_config["id"] == "AAA"
+
+    @pytest.mark.asyncio
+    async def test_create_with_inner_id_is_rejected(self, mock_client):
+        """identifier=None + config['id']=X → reject (would silently overwrite
+        X if it exists; would create with caller-chosen id if it doesn't —
+        both are agent-slip patterns the guard converts to a loud error)."""
+        mock_client._request = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.upsert_automation_config(
+                {"id": "BBB", "alias": "x", "trigger": [], "action": []},
+                identifier=None,
+            )
+
+        assert exc_info.value.status_code == 400
+        msg = str(exc_info.value)
+        assert "Cannot create" in msg
+        assert "'BBB'" in msg
+        assert "Omit 'id'" in msg
+        mock_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_without_inner_id_proceeds(self, mock_client):
+        """Normal create path: no inner id, fresh timestamp assigned."""
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+        mock_client._poll_for_automation_entity = AsyncMock(
+            return_value="automation.new"
+        )
+
+        result = await mock_client.upsert_automation_config(
+            {"alias": "x", "trigger": [], "action": []},
+            identifier=None,
+        )
+
+        assert result["operation"] == "created"
+        assert result["entity_id"] == "automation.new"
+
+
 class TestPollForAutomationEntity:
     """Tests for the poll cadence in _poll_for_automation_entity (issue #1380).
 
