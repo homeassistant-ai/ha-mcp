@@ -8,7 +8,6 @@ from io import StringIO
 from unittest.mock import MagicMock
 
 import pytest
-from ruamel.yaml import YAML
 
 # Mock Home Assistant imports so the package __init__ can be loaded.
 sys.modules["voluptuous"] = MagicMock()
