@@ -26,9 +26,7 @@ from ha_mcp.settings_ui import (
 
 
 @pytest.fixture
-def tmp_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[Path]:
+def tmp_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
     """Redirect ha-mcp's data dir to ``tmp_path`` for the test.
 
     Uses the public ``HA_MCP_CONFIG_DIR`` env-var override rather than
@@ -92,9 +90,7 @@ class TestBuildSettingsHandlers:
         # provides a valid Host header for the response code paths).
         from starlette.routing import Route
 
-        app = Starlette(
-            routes=[Route("/api/settings/tools", handlers["get_tools"])]
-        )
+        app = Starlette(routes=[Route("/api/settings/tools", handlers["get_tools"])])
         client = TestClient(app)
         resp = client.get("/api/settings/tools")
         assert resp.status_code == 200
@@ -400,6 +396,7 @@ class TestRunMainWiring:
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "settings_ui_disabled").write_text("manual\n")
+
         # Track whether uvicorn was touched — the disable check happens
         # BEFORE the ``import uvicorn`` line inside run_main, so a
         # honored sentinel must return cleanly without any uvicorn
@@ -540,9 +537,7 @@ class TestDiscoverabilityFlow:
     suite ties producer + consumer together.
     """
 
-    def test_url_from_overview_serves_settings_page(
-        self, tmp_data_dir: Path
-    ) -> None:
+    def test_url_from_overview_serves_settings_page(self, tmp_data_dir: Path) -> None:
         """The URL ``ha_get_overview`` surfaces MUST hit a real /settings page.
 
         Equivalent to: spawn the sidecar, read ui.url like overview does,

@@ -130,7 +130,7 @@ async def _wait_addon_running(
     while True:
         try:
             detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
-            detail = (parse_mcp_result(detail_raw).get("addon") or {})
+            detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
         except ToolError as e:
             last_state = f"<ToolError: {e!s}[:60]>"

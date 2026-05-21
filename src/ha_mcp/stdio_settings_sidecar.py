@@ -185,7 +185,11 @@ def _spawn_lock() -> Iterator[bool]:
     try:
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
-        logger.debug("Cannot open spawn lock file %s; proceeding unlocked", lock_path, exc_info=True)
+        logger.debug(
+            "Cannot open spawn lock file %s; proceeding unlocked",
+            lock_path,
+            exc_info=True,
+        )
         yield True
         return
 
@@ -212,7 +216,11 @@ def _spawn_lock() -> Iterator[bool]:
                 yield False
                 return
             except OSError:
-                logger.debug("fcntl.flock failed on %s; proceeding unlocked", lock_path, exc_info=True)
+                logger.debug(
+                    "fcntl.flock failed on %s; proceeding unlocked",
+                    lock_path,
+                    exc_info=True,
+                )
                 yield True
                 return
             try:
@@ -274,9 +282,7 @@ def maybe_spawn() -> None:
         if _existing_sidecar_alive():
             url = read_sidecar_url()
             if url:
-                print(
-                    f"ha-mcp settings UI already running at: {url}", file=sys.stderr
-                )
+                print(f"ha-mcp settings UI already running at: {url}", file=sys.stderr)
             logger.info("Settings UI sidecar already running; skipping spawn.")
             return
 
@@ -472,9 +478,7 @@ def _build_app(
                     host_header,
                     sorted(allowed_hosts),
                 )
-                return PlainTextResponse(
-                    "Host header not allowed", status_code=400
-                )
+                return PlainTextResponse("Host header not allowed", status_code=400)
             if request.method in mutating_methods:
                 origin = request.headers.get("origin")
                 if origin is not None and origin not in allowed_origins:
@@ -484,9 +488,7 @@ def _build_app(
                         origin,
                         sorted(allowed_origins),
                     )
-                    return PlainTextResponse(
-                        "Origin not allowed", status_code=403
-                    )
+                    return PlainTextResponse("Origin not allowed", status_code=403)
             response = await call_next(request)
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
             response.headers.setdefault("Referrer-Policy", "no-referrer")

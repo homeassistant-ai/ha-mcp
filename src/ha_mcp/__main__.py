@@ -83,7 +83,9 @@ class OAuthProxyClient:
             logger.error(
                 f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}"
             )
-            raise HomeAssistantAuthError("No Home Assistant credentials in OAuth token claims")
+            raise HomeAssistantAuthError(
+                "No Home Assistant credentials in OAuth token claims"
+            )
 
         ha_token = claims["ha_token"]
 
@@ -958,6 +960,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     register_browser_landing(mcp, path)
 
     from ha_mcp.settings_ui import register_settings_routes
+
     register_settings_routes(mcp, _server, secret_path=path)
 
     tools = await mcp.list_tools()

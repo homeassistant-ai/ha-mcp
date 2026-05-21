@@ -1087,7 +1087,9 @@ def build_settings_handlers(
             # Supervisor socket misconfigured) and means the restart was
             # never initiated. Falls through to the `httpx.HTTPError`
             # handler below, which returns 502 + CONNECTION_FAILED.
-            logger.info("Restart request connection dropped (expected during self-restart)")
+            logger.info(
+                "Restart request connection dropped (expected during self-restart)"
+            )
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
@@ -1182,16 +1184,24 @@ def register_settings_routes(
         mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
         mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
         mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
-        mcp.custom_route("/api/settings/tools", methods=["POST"])(handlers["save_tools"])
-        mcp.custom_route("/api/settings/restart", methods=["POST"])(handlers["restart_addon"])
-        mcp.custom_route("/api/settings/info", methods=["GET"])(handlers["settings_info"])
+        mcp.custom_route("/api/settings/tools", methods=["POST"])(
+            handlers["save_tools"]
+        )
+        mcp.custom_route("/api/settings/restart", methods=["POST"])(
+            handlers["restart_addon"]
+        )
+        mcp.custom_route("/api/settings/info", methods=["GET"])(
+            handlers["settings_info"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
         # need the same secret to reach the UI as they do for the MCP
         # endpoint. The frontend uses relative fetches (./api/settings/...)
         # so the JS works at either prefix unchanged.
-        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(handlers["settings_page"])
+        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(
+            handlers["settings_page"]
+        )
         mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
             handlers["get_tools"]
         )
