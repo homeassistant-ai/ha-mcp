@@ -27,6 +27,7 @@ from .tools_config_entry_flow import (
     create_flow_helper,
     fetch_helper_flow_info,
     get_user_step_field_names,
+    set_config_subentry,
     update_flow_helper,
 )
 from .util_helpers import (
@@ -1978,6 +1979,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         helper_type: Annotated[
             Literal[
                 "counter",
+                "config_subentry",
                 "derivative",
                 "filter",
                 "generic_hygrostat",
@@ -2011,12 +2013,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "REQUIRED when creating (no helper_id provided). Display name "
-                    "for the helper. Optional on update — pass helper_id instead. "
-                    "For flow-based helper types on update (template, group, "
-                    "utility_meter, ...), this is typically ignored — options flows "
-                    "don't expose renaming. Rename a flow helper by deleting and "
-                    "recreating instead."
+                    "Display name for simple/flow helper creation. Required when "
+                    "creating a helper without helper_id. Optional on helper update. "
+                    "Ignored for helper_type='config_subentry', which uses "
+                    "entry_id/subentry_type/subentry_id instead. For flow-based "
+                    "helper updates (template, group, utility_meter, ...), this is "
+                    "typically ignored because options flows don't expose renaming. "
+                    "Rename a flow helper by deleting and recreating instead."
                 ),
                 default=None,
             ),
@@ -2028,6 +2031,46 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Parent config entry ID when helper_type='config_subentry'. "
+                    "Use ha_get_integration() to find entry IDs."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Integration-defined subentry type when "
+                    "helper_type='config_subentry'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Existing config subentry ID to reconfigure when "
+                    "helper_type='config_subentry'. Omit to create."
+                ),
+                default=None,
+            ),
+        ] = None,
+        show_advanced_options: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "When helper_type='config_subentry', ask Home Assistant "
+                    "to expose advanced flow options."
+                ),
+                default=False,
+            ),
+        ] = False,
         icon: Annotated[
             str | None,
             Field(
@@ -2249,7 +2292,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | dict | None,
             Field(
                 description=(
-                    "Config dict for flow-based helper types "
+                    "Config dict for flow-based helper types and "
+                    "helper_type='config_subentry' "
                     "(template, group, utility_meter, derivative, min_max, threshold, "
                     "integration, statistics, trend, random, filter, tod, "
                     "generic_thermostat, switch_as_x, generic_hygrostat). "
@@ -2281,9 +2325,12 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Create or update Home Assistant helper entities (27 types, unified interface).
+        Create or update Home Assistant helper entities and config subentries
+        (28 types, unified interface).
 
-        Create requires `name`; update requires `helper_id`.
+        SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
+        requires `helper_id`. Config subentry create requires `entry_id` and
+        `subentry_type`; config subentry update also requires `subentry_id`.
 
         SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
@@ -2295,15 +2342,20 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Note: `tod` is the purpose-built "is-current-time-in-range" indicator
         (supports cross-midnight ranges, unlike `schedule`).
 
+        CONFIG_SUBENTRY type (Config Subentry Flow API): config_subentry.
+        Pass `entry_id`, `subentry_type`, and `config`. Pass `subentry_id` to
+        reconfigure an existing subentry; omit it to create a new subentry.
+
         For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
         reject the `name` key on update — to rename a flow helper, delete and recreate.
 
         Behavior notes:
         - UPDATE preserves type-specific fields not re-passed (rename never wipes
           initial/icon/etc. for any simple helper).
-        - Pass `action="create"` or `action="update"` to disambiguate intent —
-          without it the tool falls back to the implicit `helper_id`-presence
-          discriminator.
+        - Pass `action="create"` or `action="update"` to disambiguate intent.
+          For SIMPLE/FLOW helpers, omitted action falls back to the implicit
+          `helper_id`-presence discriminator. For config subentries, omitted
+          action falls back to the `subentry_id`-presence discriminator.
         - For flow-based helpers, config keys not declared by any step's
           data_schema are silently ignored by HA; submit once and the
           validation error returns the `data_schema` for that helper so
@@ -2327,13 +2379,110 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - tod (time-of-day indicator, cross-midnight OK):
             ha_config_set_helper(helper_type="tod", name="Quiet Hours",
                 config={"after_time": "22:00:00", "before_time": "07:00:00"})
+        - config subentry (create under an existing integration):
+            ha_config_set_helper(helper_type="config_subentry",
+                entry_id="01HXYZ...", subentry_type="conversation",
+                config={"name": "Local agent", "model": "gemma3:27b"})
 
         For helper-design guidance (when to pick which helper type, YAML
         examples, per-type field tables), use ha_get_skill_guide — the
-        skill's `helper-selection.md` reference covers all 27 helper types
+        skill's `helper-selection.md` reference covers helper types
         with worked examples and a decision matrix.
         """
         try:
+            if helper_type == "config_subentry":
+                if action is not None:
+                    if action == "create" and subentry_id is not None:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                "action='create' was passed with subentry_id. "
+                                "Omit subentry_id to create a new subentry.",
+                                context={
+                                    "helper_type": helper_type,
+                                    "action": action,
+                                    "subentry_id": subentry_id,
+                                },
+                            )
+                        )
+                    if action == "update" and subentry_id is None:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                "action='update' requires subentry_id.",
+                                context={
+                                    "helper_type": helper_type,
+                                    "action": action,
+                                },
+                            )
+                        )
+                else:
+                    action = "update" if subentry_id else "create"
+
+                entry_id = validate_identifier_not_empty(
+                    entry_id,
+                    "entry_id",
+                    suggestions=[
+                        "Use ha_get_integration() to find the parent config entry ID",
+                    ],
+                    context={"helper_type": helper_type, "action": action},
+                )
+                subentry_type = validate_identifier_not_empty(
+                    subentry_type,
+                    "subentry_type",
+                    suggestions=[
+                        "Use ha_get_integration(entry_id=..., "
+                        "include_subentries=True, include_subentry_schema=True) "
+                        "to inspect available subentry metadata.",
+                    ],
+                    context={"helper_type": helper_type, "action": action},
+                )
+                if subentry_id is not None:
+                    subentry_id = validate_identifier_not_empty(
+                        subentry_id,
+                        "subentry_id",
+                        context={"helper_type": helper_type, "action": action},
+                    )
+                if not isinstance(config, dict):
+                    try:
+                        config_dict = (
+                            parse_json_param(config, "config") if config else {}
+                        )
+                    except ValueError as err:
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                str(err),
+                                context={
+                                    "helper_type": helper_type,
+                                    "action": action,
+                                    "parameter": "config",
+                                },
+                            )
+                        )
+                else:
+                    config_dict = config
+                if not isinstance(config_dict, dict):
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "config must be an object for config_subentry",
+                            context={"helper_type": helper_type, "action": action},
+                        )
+                    )
+                return await set_config_subentry(
+                    client,
+                    entry_id,
+                    subentry_type,
+                    config_dict,
+                    subentry_id=subentry_id,
+                    show_advanced_options=coerce_bool_param(
+                        show_advanced_options,
+                        "show_advanced_options",
+                        default=False,
+                    ),
+                )
+
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
             # if an exception bubbles out of the flow-helper branch below.
