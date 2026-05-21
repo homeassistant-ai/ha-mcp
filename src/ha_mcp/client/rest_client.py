@@ -782,6 +782,9 @@ class HomeAssistantClient:
             else:
                 return False, "Invalid response from Home Assistant"
         except Exception as e:
+            # Intentional broad-catch: is_connected() contract maps any failure
+            # to (False, error_msg); styleguide § "broad except at top-level
+            # setup/teardown handlers" applies (connection probe is the analog).
             logger.error(f"Failed to connect to Home Assistant: {e}")
             return False, str(e)
 
@@ -823,7 +826,7 @@ class HomeAssistantClient:
                     f"Converted entity_id {identifier} to unique_id {unique_id}"
                 )
                 return str(unique_id)
-            except Exception as e:
+            except HomeAssistantError as e:
                 raise HomeAssistantAPIError(
                     f"Failed to resolve automation {identifier}: {str(e)}",
                     status_code=404,
@@ -853,8 +856,8 @@ class HomeAssistantClient:
                 "GET", f"/config/automation/config/{unique_id}"
             )
             return response
-        except Exception as e:
-            if "404" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -915,18 +918,22 @@ class HomeAssistantClient:
             if entity_not_verified:
                 result["entity_not_verified"] = True
             return result
-        except Exception as e:
-            if "400" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 400:
                 raise HomeAssistantAPIError(
                     f"Invalid automation configuration: {str(e)}", status_code=400
                 ) from e
             raise
 
+    # 3-attempt × 6s upper-bound budget; first poll 0.1s catches the
+    # typical sub-1s entity-publish window.
+    _POLL_CADENCE: tuple[float, ...] = (0.1, 1.0, 4.9)
+
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Poll HA state to find the entity_id assigned to a newly created automation."""
         try:
-            for attempt in range(3):
-                await asyncio.sleep(1 * (attempt + 1))
+            for sleep_time in self._POLL_CADENCE:
+                await asyncio.sleep(sleep_time)
                 states = await self.get_states()
                 for state in states:
                     if not state.get("entity_id", "").startswith("automation."):
@@ -937,9 +944,14 @@ class HomeAssistantClient:
                             f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
                         )
                         return entity_id
-        except Exception as e:
+        except HomeAssistantError as e:
+            # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
+            # Mirrors test-side _POLLING_TRANSIENT_ERRORS in
+            # tests/src/e2e/utilities/wait_helpers.py and styleguide §
+            # "Exception Handling in Test Polling Loops".
             logger.warning(
-                f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
+                f"Failed to query actual entity_id for unique_id {unique_id}: {e}",
+                exc_info=True,
             )
             return None
 
