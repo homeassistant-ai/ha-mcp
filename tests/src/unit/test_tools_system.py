@@ -51,6 +51,10 @@ class TestHaRestartErrorHandling:
 
         Reproduces issue #612: user behind a reverse proxy gets 504 when HA
         shuts down, but HA actually restarted successfully.
+
+        Also pins the post-#1332 warnings-list contract on the
+        restart-initiated-but-connection-dropped branch
+        (``tools_system.py`` ~L208-214).
         """
         error = HomeAssistantAPIError("API error: 504 - ", status_code=504)
         client = _make_client_that_fails_on_restart(error)
@@ -59,6 +63,13 @@ class TestHaRestartErrorHandling:
         result = await tools.ha_restart(confirm=True)
 
         assert result["success"] is True
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Expected non-empty warnings list, got: {result!r}"
+        )
+        assert any("Wait 1-5 minutes" in w for w in warnings), (
+            f"Expected wait-for-restart warning content; got: {warnings!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_unrelated_error_still_fails(self):
@@ -69,6 +80,28 @@ class TestHaRestartErrorHandling:
 
         with pytest.raises(ToolError):
             await tools.ha_restart(confirm=True)
+
+    @pytest.mark.asyncio
+    async def test_success_path_returns_connection_lost_warning(self):
+        """Successful restart (no exception from call_service) surfaces a top-level
+        warnings list with the "connection will be lost" note. Pins the
+        post-#1332 contract on ``tools_system.py`` ~L188-194 (the first return
+        in ha_restart, previously emitting singular ``warning``)."""
+        client = AsyncMock()
+        client.check_config.return_value = {"result": "valid"}
+        client.call_service.return_value = None  # restart fires, no error
+        tools = SystemTools(client)
+
+        result = await tools.ha_restart(confirm=True)
+
+        assert result["success"] is True
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Expected non-empty warnings list, got: {result!r}"
+        )
+        assert any("Connection will be lost" in w for w in warnings), (
+            f"Expected connection-lost warning content; got: {warnings!r}"
+        )
 
 
 def _ws_client_with_issues(issues):

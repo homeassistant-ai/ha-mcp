@@ -231,6 +231,30 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], normalized)
 
 
+def _strip_redundant_identifier_echo(
+    result: dict[str, Any],
+    *,
+    extra_excludes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Strip the redundant ``identifier`` echo from an upsert/delete response.
+
+    The canonical ``automation_id`` key (resolved entity_id, falling back to
+    input identifier or ``unique_id``) makes re-echoing the raw ``identifier``
+    redundant noise.
+
+    ``unique_id`` is intentionally retained — it's HA's internal identifier,
+    distinct from ``entity_id``/``automation_id``, and callers track it for
+    cleanup. Do not extend ``extra_excludes`` to ``"unique_id"``: that
+    regression broke E2E ``test_duplicate_automation_prevention`` at 5fe5338.
+
+    ``extra_excludes`` lets a call site drop additional internal keys the
+    spread shouldn't surface (e.g. ``"success"`` on the python_transform
+    branch, where the caller manages that key directly).
+    """
+    excluded = {"identifier", *extra_excludes}
+    return {k: v for k, v in result.items() if k not in excluded}
+
+
 class AutomationConfigTools:
     """Configuration management tools for Home Assistant automations."""
 
@@ -284,7 +308,9 @@ class AutomationConfigTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `automation_id` is the resolved entity_id (canonical form, e.g. `automation.morning_routine`) when the registry lookup succeeds, falling back to the input `identifier` otherwise.
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeds, falling back to the input `identifier` otherwise.
 
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
@@ -406,6 +432,12 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when entity registration
+        succeeds, falling back to the input `identifier` (update path) or
+        the generated `unique_id` from the upsert response (fresh create
+        when no identifier was passed).
+
         Before reaching for ``ha_config_set_automation``, consider whether a
         dedicated tool fits the use case better:
 
@@ -425,6 +457,8 @@ class AutomationConfigTools:
           `{{ states(x) in [...] }}`
         - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
         - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
+        - Native `for:` field on `state`/`numeric_state` triggers and conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
         - `wait_for_trigger` instead of `wait_template`
         - `choose` action instead of template-based service names
         - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a
@@ -486,17 +520,25 @@ class AutomationConfigTools:
             "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
 
-        Motion-activated lighting with condition:
+        Motion-activated lighting — `for:` on the off-transition replaces action-delay:
         ha_config_set_automation(config={
             "alias": "Motion Light",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
-            "condition": [{"condition": "sun", "after": "sunset"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
-                {"delay": {"minutes": 5}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "off",
+                 "for": {"minutes": 5}, "id": "motion_off"}
             ],
-            "mode": "restart"
+            "action": [
+                {"choose": [
+                    {"conditions": [
+                        {"condition": "trigger", "id": "motion_on"},
+                        {"condition": "sun", "after": "sunset"}
+                    ],
+                     "sequence": [{"service": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
+                    {"conditions": [{"condition": "trigger", "id": "motion_off"}],
+                     "sequence": [{"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
+                ]}
+            ]
         })
 
         Update existing automation:
@@ -666,12 +708,15 @@ class AutomationConfigTools:
                 response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
-                    "identifier": identifier,
+                    "automation_id": (
+                        entity_id or identifier or result.get("unique_id")
+                    ),
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
-                    # Merge upsert result, excluding "success" (we set it ourselves)
-                    **{k: v for k, v in result.items() if k != "success"},
+                    **_strip_redundant_identifier_echo(
+                        result, extra_excludes=("success",)
+                    ),
                 }
                 if bp_warnings:
                     response["best_practice_warnings"] = bp_warnings
@@ -761,9 +806,15 @@ class AutomationConfigTools:
 
             merge_validation_meta(result, validation_meta)
 
+            automation_id = entity_id or identifier or result.get("unique_id")
             return {
                 "success": True,
-                **result,
+                # automation_id omitted when all three fallbacks are falsy —
+                # the create path is unguarded by validate_identifier_not_empty,
+                # and surfacing automation_id=None would lie about resolvability.
+                # HA's upsert contract makes this branch unreachable in practice.
+                **({"automation_id": automation_id} if automation_id else {}),
+                **_strip_redundant_identifier_echo(result),
             }
 
         except ToolError:
@@ -1001,6 +1052,11 @@ class AutomationConfigTools:
         """
         Delete a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeded before the delete, falling back to the input
+        `identifier` otherwise.
+
         EXAMPLES:
         - Delete automation: ha_config_remove_automation("automation.old_automation")
         - Delete by unique_id: ha_config_remove_automation("my_unique_id")
@@ -1040,7 +1096,14 @@ class AutomationConfigTools:
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
 
-            return {"success": True, "action": "delete", **result}
+            return {
+                "success": True,
+                "action": "delete",
+                "automation_id": (
+                    entity_id_for_wait or identifier or result.get("unique_id")
+                ),
+                **_strip_redundant_identifier_echo(result),
+            }
         except ToolError:
             raise
         except Exception as e:

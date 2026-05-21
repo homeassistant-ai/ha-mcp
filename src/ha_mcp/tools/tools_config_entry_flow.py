@@ -62,6 +62,10 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset({
 
 # Keys used to specify a menu selection — stripped before submitting form data.
 _MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
+_RECONFIGURE_SUCCESS_REASONS = frozenset({
+    "reauth_successful",
+    "reconfigure_successful",
+})
 
 
 class _FlowType(StrEnum):
@@ -364,9 +368,15 @@ async def _raise_flow_api_error(
     suggestions: list[str] = []
     message: str
 
+    current_schema = None
+    if current_step is not None:
+        step_schema = current_step.get("data_schema")
+        if isinstance(step_schema, list):
+            current_schema = step_schema
+
     # Single introspection round-trip — used by both branches below.
     info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-    schema = info.get("schema")
+    schema = info.get("schema") or current_schema
 
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
@@ -526,6 +536,197 @@ async def _handle_flow_steps(
     ))
 
 
+async def _handle_config_subentry_flow_steps(
+    client: Any,
+    flow_id: str,
+    initial_step: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+) -> dict[str, Any]:
+    """Walk a config subentry flow and accept HA's reconfigure-success abort."""
+    remaining_config = dict(config)
+    current_step = initial_step
+    last_menu_choice: str | None = None
+    max_steps = 10
+
+    for step_num in range(max_steps):
+        result_type = current_step.get("type")
+
+        if result_type == _FlowType.CREATE_ENTRY:
+            return {
+                "success": True,
+                "operation": "created",
+                "flow_result": current_step,
+            }
+
+        if result_type == _FlowType.ABORT:
+            reason = current_step.get("reason")
+            if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
+                return {
+                    "success": True,
+                    "operation": "reconfigured",
+                    "flow_result": current_step,
+                }
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Config subentry flow aborted: {reason}",
+                context={"flow_id": flow_id, "details": current_step},
+            ))
+
+        if result_type == _FlowType.MENU:
+            menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
+            last_menu_choice = menu_choice
+            logger.debug(
+                "Config subentry flow step %s: menu %s (step_id=%s)",
+                step_num,
+                menu_choice,
+                current_step.get("step_id"),
+            )
+            menu_payload = {"next_step_id": menu_choice}
+            try:
+                current_step = await asyncio.wait_for(
+                    client.submit_config_subentry_flow_step(flow_id, menu_payload),
+                    timeout=20.0,
+                )
+            except HomeAssistantAPIError as api_err:
+                if api_err.status_code in (400, 422):
+                    await _raise_flow_api_error(
+                        api_err,
+                        client=client,
+                        flow_id=flow_id,
+                        helper_type=None,
+                        menu_choice=last_menu_choice,
+                        current_step=current_step,
+                        submitted=menu_payload,
+                    )
+                raise
+            continue
+
+        if result_type == _FlowType.FORM:
+            form_data = _handle_form_step(flow_id, current_step, remaining_config)
+            logger.debug(
+                "Config subentry flow step %s: form submit "
+                "(step_id=%s, keys=%s)",
+                step_num,
+                current_step.get("step_id"),
+                sorted(form_data.keys()),
+            )
+            try:
+                current_step = await asyncio.wait_for(
+                    client.submit_config_subentry_flow_step(flow_id, form_data),
+                    timeout=20.0,
+                )
+            except HomeAssistantAPIError as api_err:
+                if api_err.status_code in (400, 422):
+                    await _raise_flow_api_error(
+                        api_err,
+                        client=client,
+                        flow_id=flow_id,
+                        helper_type=None,
+                        menu_choice=last_menu_choice,
+                        current_step=current_step,
+                        submitted=form_data,
+                    )
+                raise
+            continue
+
+        if result_type in {"progress", "progress_done"}:
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Config subentry flow requires an asynchronous progress step",
+                suggestions=[
+                    "Complete the provider setup in Home Assistant so the "
+                    "external resource is available.",
+                    "Retry the same ha_config_set_helper call after the "
+                    "resource is ready.",
+                ],
+                context={"flow_id": flow_id, "details": current_step},
+            ))
+
+        raise_tool_error(create_error_response(
+            ErrorCode.INTERNAL_UNEXPECTED,
+            f"Unexpected config subentry flow result type: {result_type}",
+            context={"flow_id": flow_id, "details": current_step},
+        ))
+
+    raise_tool_error(create_error_response(
+        ErrorCode.TIMEOUT_OPERATION,
+        f"Config subentry flow exceeded {max_steps} steps",
+        context={"flow_id": flow_id, "max_steps": max_steps},
+    ))
+
+
+async def set_config_subentry(
+    client: Any,
+    entry_id: str,
+    subentry_type: str,
+    config_dict: dict[str, Any],
+    *,
+    subentry_id: str | None = None,
+    show_advanced_options: bool | None = None,
+) -> dict[str, Any]:
+    """Create or reconfigure a config subentry via its flow.
+
+    Presence of ``subentry_id`` is the discriminator: omitted creates a new
+    subentry, provided reconfigures that existing subentry.
+    """
+    flow_result = await client.start_config_subentry_flow(
+        entry_id,
+        subentry_type,
+        subentry_id=subentry_id,
+        show_advanced_options=show_advanced_options,
+    )
+    flow_id = flow_result.get("flow_id")
+
+    if not flow_id:
+        raise_tool_error(create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Failed to start config subentry flow",
+            suggestions=[
+                "Use ha_get_integration(include_subentries=True) to confirm "
+                "the parent entry and available subentry metadata.",
+            ],
+            context={
+                "entry_id": entry_id,
+                "subentry_type": subentry_type,
+                "subentry_id": subentry_id,
+                "details": flow_result,
+            },
+        ))
+
+    try:
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            flow_id,
+            flow_result,
+            config_dict,
+            is_reconfigure=subentry_id is not None,
+        )
+    except Exception:
+        try:
+            await asyncio.wait_for(
+                client.abort_config_subentry_flow(flow_id), timeout=5.0
+            )
+        except Exception as abort_err:
+            logger.warning(
+                "Failed to abort config subentry flow %s after error: %s",
+                flow_id,
+                abort_err,
+            )
+        raise
+
+    return {
+        "success": True,
+        "entry_id": entry_id,
+        "subentry_type": subentry_type,
+        "subentry_id": subentry_id,
+        "operation": result["operation"],
+        "flow_result": result["flow_result"],
+        "message": f"Config subentry {result['operation']} successfully",
+    }
+
+
 async def get_user_step_field_names(
     client: Any, helper_type: str
 ) -> set[str] | None:
@@ -666,4 +867,3 @@ async def create_flow_helper(
         "domain": helper_type,
         "message": f"{helper_type} helper created successfully",
     }
-

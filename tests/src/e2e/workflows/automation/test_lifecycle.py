@@ -20,6 +20,7 @@ from ...utilities.assertions import (
 )
 from ...utilities.wait_helpers import (
     wait_for_entity_state,
+    wait_for_ha_event,
     wait_for_logbook_entry,
     wait_for_tool_result,
 )
@@ -172,34 +173,60 @@ class TestAutomationLifecycle:
 
         logger.info("✅ Automation configuration verified")
 
-        # 4. TRIGGER: Manually trigger the automation
-        logger.info("🚀 Triggering automation...")
-        trigger_result = await mcp_client.call_tool(
-            "ha_call_service",
-            {
-                "domain": "automation",
-                "service": "trigger",
-                "entity_id": automation_entity,
-            },
+        # 4. TRIGGER + VERIFY: subscribe to ``automation_triggered`` via
+        # HA WS BEFORE invoking the trigger, then fire the trigger from
+        # inside the subscription window. HA's ``automation_triggered``
+        # event fires within milliseconds of the trigger reaching the
+        # automation engine — much faster than the 10s logbook poll the
+        # previous flow used, which was the largest single chunk of
+        # this test's runtime (~10s of the ~16s total on regular e2e).
+        logger.info("🚀 Triggering automation + waiting for automation_triggered event...")
+
+        async def _fire_trigger():
+            trigger_result = await mcp_client.call_tool(
+                "ha_call_service",
+                {
+                    "domain": "automation",
+                    "service": "trigger",
+                    "entity_id": automation_entity,
+                },
+            )
+            assert_mcp_success(trigger_result, "automation trigger")
+
+        triggered_event = await wait_for_ha_event(
+            "automation_triggered",
+            _fire_trigger,
+            predicate=lambda ev: (ev.get("data") or {}).get("entity_id")
+            == automation_entity,
+            timeout=5.0,
         )
 
-        trigger_data = assert_mcp_success(trigger_result, "automation trigger")
-        logger.info("✅ Automation triggered successfully")
-
-        # 5. VERIFY: Check that automation ran (via logbook)
-        logger.info("📋 Checking automation execution in logbook...")
-        try:
-            automation_logged = await wait_for_logbook_entry(
-                mcp_client, automation_name, timeout=10, poll_interval=1.0
+        if triggered_event:
+            logger.info(f"✅ automation_triggered event observed for {automation_entity}")
+        else:
+            # Belt-and-suspenders fallback: even though the WS event
+            # missed, the trigger service call succeeded. Try the
+            # logbook path with a SHORT timeout so we don't burn the
+            # full 10s the previous flow did. Failure here is logged
+            # but doesn't fail the test — matches the original
+            # informational-only intent.
+            logger.warning(
+                "⚠️ automation_triggered event not observed within 5s — "
+                "falling back to logbook poll (2s budget)"
             )
-            if automation_logged:
-                logger.info("📋 Automation execution verified in logbook")
-            else:
-                logger.info(
-                    "📋 Logbook verification timeout - automation trigger was successful"
+            try:
+                automation_logged = await wait_for_logbook_entry(
+                    mcp_client, automation_name, timeout=2, poll_interval=0.5
                 )
-        except Exception as e:
-            logger.warning(f"Logbook verification failed: {e} - continuing with test")
+                if automation_logged:
+                    logger.info("📋 Automation execution verified via logbook fallback")
+                else:
+                    logger.info(
+                        "📋 Logbook fallback also timed out — trigger service call "
+                        "succeeded, treating as informational"
+                    )
+            except Exception as e:
+                logger.warning(f"Logbook fallback failed: {e} - continuing with test")
 
         # 6. UPDATE: Modify automation to add delay and different time
         logger.info("📝 Updating automation configuration...")
@@ -1399,8 +1426,8 @@ class TestAutomationDestructiveNegativeInputs:
     - Double-delete: second remove after successful deletion (same 404 path,
       separate test because it validates idempotency behaviour)
 
-    Methodology: source-verified against tools_config_automations.py lines 854-876.
-    Both inputs reach create_resource_not_found_error → raise_tool_error (ToolError).
+    Methodology: source-verified against tools_config_automations.py.
+    Both inputs reach the RESOURCE_NOT_FOUND branch → raise_tool_error (ToolError).
     The existing lifecycle tests verify deletion via ha_config_get_automation, not
     by calling ha_config_remove_automation on a nonexistent identifier directly.
     """
@@ -1411,7 +1438,7 @@ class TestAutomationDestructiveNegativeInputs:
         structured error, not success=True.
 
         Source path: Exception with "404"/"not found" in str →
-        create_resource_not_found_error → raise_tool_error.
+        RESOURCE_NOT_FOUND branch → raise_tool_error.
         """
         logger.info("Testing ha_config_remove_automation with nonexistent identifier...")
 
@@ -1441,7 +1468,7 @@ class TestAutomationDestructiveNegativeInputs:
         returns a structured error, not success=True (idempotency failure behaviour).
 
         Source path: first delete succeeds; second delete hits the same 404 branch
-        (create_resource_not_found_error → raise_tool_error) as the nonexistent test.
+        (RESOURCE_NOT_FOUND → raise_tool_error) as the nonexistent test.
         Tests a distinct scenario: the identifier was valid moments ago, so any
         caching or stale-state issue would cause a silent false success here.
         """

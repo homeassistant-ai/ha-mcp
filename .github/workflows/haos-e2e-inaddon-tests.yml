@@ -1,0 +1,218 @@
+name: HAOS E2E Tests (inaddon)
+
+# Parallel to haos-e2e-tests.yml — exercises the SAME test suite against
+# the SAME cached qcow2, but routes ``mcp_client`` to the ha-mcp dev
+# addon's HTTP endpoint INSIDE the booted HAOS instead of using an
+# in-process FastMCP server. This is the deployment path real users hit
+# when they install the addon + cloudflared on a real HAOS install.
+#
+# The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
+# refresh_dev_addon_source_in_qcow2 overwrites /supervisor/addons/local/ha_mcp_dev/
+# with PR source + bumps config.yaml ``version:`` → Supervisor detects an
+# update on next boot → trigger_dev_addon_update calls supervisor/api
+# addons/{slug}/update via WS → Docker rebuilds with layer cache → addon
+# restarts with PR source → mcp_client connects via HTTP transport.
+#
+# v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
+# initial green CI gives us a fast feedback loop. Once the full inaddon
+# plumbing is verified, expand to the full src/e2e/ tree (gated by
+# external_only / inaddon_only markers).
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'homeassistant-addon/**'
+      - 'homeassistant-addon-dev/**'
+      - '.github/workflows/haos-e2e-inaddon-tests.yml'
+  workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: 'Extra pytest args (e.g. "-k test_simple_connection") for targeted iteration'
+        type: string
+        required: false
+        default: ''
+      pytest_paths:
+        description: 'Test paths to run (default: full src/e2e/ — markers handle external_only / inaddon_only skips)'
+        type: string
+        required: false
+        default: 'src/e2e/'
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
+  LIBGUESTFS_BACKEND: direct
+
+jobs:
+  haos-e2e-inaddon:
+    name: HAOS E2E Tests (inaddon)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Compute image cache key
+        id: key
+        # Distinct ``-inaddon`` suffix from haos-e2e-tests.yml's cache
+        # key. The inaddon tier requires the bake-installed dev addon
+        # to be present in the qcow2, but the GHCR ``:HAOS_VERSION-latest``
+        # tag the external tier falls back to is published from master
+        # and doesn't yet include the addon. Sharing the cache would
+        # let an external-tier run save a GHCR-served (addon-less)
+        # qcow2 into the cache, breaking inaddon for everyone hitting
+        # that cache.
+        run: |
+          hash=$(git ls-tree -r HEAD \
+            tests/haos_image_build \
+            tests/initial_test_state \
+            custom_components/ha_mcp_tools \
+            homeassistant-addon-webhook-proxy/mcp_proxy \
+            homeassistant-addon \
+            homeassistant-addon-dev \
+            | sha256sum | cut -d' ' -f1 | head -c16)
+          echo "cache-key=haos-image-inaddon-$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore image from cache
+        id: restore-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.key.outputs.cache-key }}
+
+      - name: Install QEMU + OVMF + libguestfs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
+          sudo chmod +r /boot/vmlinuz-*
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # No GHCR fallback for the inaddon tier: GHCR's ``:HAOS_VERSION-latest``
+      # tag is published from master by build-haos-test-image.yml, but the
+      # addon-install bake step lives on this PR branch. Until the PR
+      # lands and the publish workflow re-bakes, GHCR doesn't have an
+      # inaddon-ready image. Cache miss here always means local build.
+
+      - name: Install build-script Python deps (cache miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: pip install -r tests/haos_image_build/requirements.txt
+
+      - name: Build image locally (cache miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 tests/haos_image_build/build_image.py --verbose \
+            --output /tmp/haos-test-image.qcow2
+
+      - name: Save image to cache (cache miss only)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.key.outputs.cache-key }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Confirm image present
+        run: ls -lh /tmp/haos-test-image.qcow2
+
+      - name: Run inaddon E2E suite
+        # HAOS_TEST_MODE=inaddon flips conftest.py's HAOS dispatch into
+        # the inaddon branch: addon source is overwritten with PR source
+        # before boot, Supervisor update is triggered, mcp_client uses
+        # HTTP transport to the addon's MCP endpoint.
+        #
+        # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
+        # workflow_dispatch pytest_paths input once the inaddon plumbing
+        # is stable. external_only-marked tests skip automatically.
+        #
+        # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
+        # each booting its own QEMU (per-worker port offset + qcow2 overlay
+        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
+        # rationale as the external HAOS workflow (#1350).
+        run: |
+          cd tests
+          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+            -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+        env:
+          HAMCP_ENV_FILE: "tests/.env.test"
+          HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+          HAOS_TEST_MODE: inaddon
+
+      - name: Extract HAOS + addon diagnostics from booted qcow2 (always)
+        if: always()
+        run: |
+          sudo chmod +r /boot/vmlinuz-* || true
+          mkdir -p /tmp/haos-inaddon-diagnostics
+          # /supervisor/homeassistant/.storage state + log files (HA Core).
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : ll /supervisor/homeassistant \
+            > /tmp/haos-inaddon-diagnostics/config-dir-listing.txt 2>&1 \
+            || echo "directory listing failed"
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : tar-out /supervisor/homeassistant/.storage /tmp/haos-inaddon-diagnostics/storage.tar \
+            || echo ".storage tar-out failed"
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-inaddon-diagnostics/ \
+            || echo "log glob copy failed"
+          # Addon-specific: capture the dev addon's source dir AND its
+          # config.yaml version after refresh, so we can verify the PR
+          # source actually landed.
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : ll /supervisor/addons/local/ha_mcp_dev \
+            > /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt 2>&1 \
+            || echo "addon dir listing failed"
+          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+            : mount /dev/sda8 / \
+            : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml /tmp/haos-inaddon-diagnostics/ \
+            || echo "addon config.yaml copy-out failed"
+          ls -la /tmp/haos-inaddon-diagnostics/ || true
+          echo '--- config dir listing ---'
+          cat /tmp/haos-inaddon-diagnostics/config-dir-listing.txt || true
+          echo '--- addon dir listing ---'
+          cat /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt || true
+          echo '--- addon config.yaml ---'
+          cat /tmp/haos-inaddon-diagnostics/config.yaml || true
+
+      - name: Upload HAOS inaddon diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: haos-inaddon-diagnostics
+          path: |
+            /tmp/haos-inaddon-diagnostics/
+            # conftest's finally-block dumps HA Core + Supervisor logs into
+            # /tmp/haos-diagnostics; surface those too so we can see why
+            # ``addons/{slug}/update`` failed with "unknown error".
+            /tmp/haos-diagnostics/
+            /tmp/haos-e2e-serial.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -469,8 +469,12 @@ class TestRenameEntityWithDevice:
 
         # Check device rename was skipped (no device for helper)
         device_result = rename_data.get("device_rename", {})
-        assert "warning" in device_result, (
-            "Device rename should have warning for helper entity (no device)"
+        warnings = device_result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Device rename should have warnings for helper entity (no device): {device_result}"
+        )
+        assert any("no associated device" in w for w in warnings), (
+            f"Expected no-associated-device warning content; got: {warnings!r}"
         )
         logger.info(f"Device rename result: {device_result}")
 

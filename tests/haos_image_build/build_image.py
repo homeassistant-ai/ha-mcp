@@ -92,34 +92,59 @@ class Addon:
     start: bool = True
 
 
-# v1 addon set — see #1281 comment thread for rationale. Configuring each
-# addon with real options (certs, serial coordinators, camera streams,
-# etc.) is deferred to follow-up commits; v1 just bakes them into the image
-# so tests can install + start with custom configs at runtime.
+# HAOS addon set — chosen for minimum image size while covering every
+# ``ha_manage_addon`` access shape exercised by the E2E tier (closes
+# #1350). Each entry below names the unique shape it contributes; if a
+# new addon doesn't add a shape that no other entry covers, it does not
+# belong here.
 #
-# Frigate stays in: it's the only one of the v1 set with the
-# ingress + ingress_panel=false + webui-set + full_access shape that
-# ha_manage_addon needs coverage for. Cost is real (~2 GB qcow2 footprint,
-# ~80s install, extra Docker registry dependency), but the testing surface
-# it covers isn't available from the other addons.
+# Shape coverage matrix:
+#   ┌──────────────────────┬────────────────────────────────────────────────┐
+#   │ Addon                │ Unique shape contribution                       │
+#   ├──────────────────────┼────────────────────────────────────────────────┤
+#   │ Mosquitto broker     │ core repo, ingress=false service, start-fail   │
+#   │ Node-RED             │ ingress=true + ingress_panel=true + manager    │
+#   │                      │ role + nested schema + /flows array-patch      │
+#   │ ESPHome Device       │ ingress=true + UART + discovery hint +         │
+#   │   Builder            │ WebSocket proxy (/compile, /validate)          │
+#   │ Matter Server        │ ingress=true + ingress_panel=false (hidden     │
+#   │                      │ sidebar) + host_dbus — core repo, ~50 MB,      │
+#   │                      │ replaces Frigate's ~2 GB hidden-panel coverage │
+#   │ AppDaemon            │ ingress=false + webui set (port-based UI       │
+#   │                      │ without Ingress)                               │
+#   │ MQTT IO              │ privileged block + start-fail (no broker       │
+#   │                      │ configured) — replaces Z2M's start-fail        │
+#   │                      │ coverage at a fraction of the size             │
+#   └──────────────────────┴────────────────────────────────────────────────┘
+#
+# Dropped vs the original #1281 set: Frigate (~2 GB) and Zigbee2MQTT (~220
+# MB compressed). Their shapes are covered by Matter Server, AppDaemon,
+# and MQTT IO at ~120 MB total — net savings ~2 GB after extraction.
 #
 # start=False addons fail to start without config and would block the build:
 #   - Mosquitto: schema requires require_certificate + cert paths
-#   - Z2M: needs a real or mocked serial coordinator
-#   - Frigate: needs at least one camera defined
+#   - MQTT IO: needs a configured MQTT broker connection
 ADDONS: tuple[Addon, ...] = (
     Addon(repo=None, name="Mosquitto broker", start=False),
     Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
     # Official ESPHome repo addon is named "ESPHome Device Builder"; match by
     # the unique part of the name so dev/beta variants don't shadow stable.
     Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome Device Builder"),
-    Addon(repo="https://github.com/zigbee2mqtt/hassio-zigbee2mqtt",
-          name="Zigbee2MQTT", start=False),
-    # Frigate repo ships "Frigate", "Frigate (Full Access)", "Frigate Beta",
-    # "Frigate (Full Access) Beta" — plain "Frigate" is enough for the canary;
-    # full-access variant only needed if tests need to mount camera devices.
-    Addon(repo="https://github.com/blakeblackshear/frigate-hass-addons",
-          name="Frigate", start=False),
+    # Matter Server is in the official ``core`` repo (no repo URL needed) and
+    # is one of the very few addons that ship with ``ingress_panel=false``,
+    # which is the canonical "hidden sidebar" shape that ``ha_get_addon``
+    # detail needs coverage for.
+    Addon(repo=None, name="Matter Server"),
+    # AppDaemon contributes the ``ingress=false`` + ``webui`` shape: a port-
+    # based UI advertised through the Supervisor ``webui`` field rather than
+    # Ingress. The wire contract for ``ha_get_addon`` reading ``webui`` and
+    # rendering it as a clickable URL is otherwise uncovered.
+    Addon(repo="https://github.com/hassio-addons/repository", name="AppDaemon"),
+    # MQTT IO replaces Zigbee2MQTT for start-fail coverage. Its schema
+    # requires a configured MQTT broker; with no broker the addon refuses
+    # to start, exercising the same Supervisor reject path Z2M used to.
+    Addon(repo="https://github.com/hassio-addons/repository",
+          name="MQTT IO", start=False),
 )
 
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
@@ -132,7 +157,40 @@ GET_HACS_ADDON = Addon(
     start=True,
 )
 
+# Advanced SSH & Web Terminal — used by the inaddon CI tier for network
+# diagnostics (#1349 item 7 debugging). The official ``core_ssh`` addon
+# wants port 22 which conflicts with HAOS's host SSHD; the community
+# ``Advanced SSH & Web Terminal`` addon defaults to its OWN port (22222)
+# and accepts password auth, so we can SSH from the CI runner into HAOS
+# to dump nftables rules, curl localhost:9583 from inside, etc. when
+# the addon's MCP port isn't reachable from outside HAOS.
+ADVANCED_SSH_ADDON = Addon(
+    repo="https://github.com/hassio-addons/repository",
+    name="Advanced SSH & Web Terminal",
+    start=False,  # configured + started by ``install_advanced_ssh`` below
+)
+
 HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
+
+# Dev-channel ha-mcp addon baked into the qcow2 from local source for the
+# inaddon HAOS E2E tier (#1349 item 7). The dev addon's config.yaml lives at
+# ``homeassistant-addon-dev/`` in the repo; we stage it under
+# ``/supervisor/addons/local/ha_mcp_dev/`` inside the qcow2 so Supervisor picks it up as
+# a local addon (slug: ``local_<config-slug>`` → ``local_ha_mcp_dev``).
+#
+# The secret_path option must be set deterministically so the test harness
+# can construct the addon's MCP URL without round-tripping Supervisor. Must
+# start with ``/`` and contain only URL-safe chars (see _is_valid_secret_path
+# in homeassistant-addon/start.py).
+HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+# Advanced SSH addon user/password set at install time so the runtime
+# helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
+# CI-test-only credential — overridable via env so the value never has
+# to live in source for a deployable image. Must stay in sync with
+# ``haos_runtime.SSH_ADDON_USER`` / ``SSH_ADDON_PASSWORD``.
+SSH_ADDON_USER = os.environ.get("HAOS_TEST_SSH_USER", "root")
+SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +538,60 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     return candidates[0]["slug"]
 
 
+# Per-addon post-install option overrides. Two situations need the bake
+# to set options (rather than letting Supervisor use config.yaml defaults):
+#
+# 1. ``start=True`` addons whose default options would refuse to start —
+#    e.g. Node-RED's addon defaults to ``ssl: true`` (verified live:
+#    hassio-addons/addon-node-red/node-red/config.yaml) but ships no
+#    cert, so a default-options install crashes the addon in a death
+#    loop. Lifecycle tests against such an addon would see only s6-rc
+#    startup spam instead of real runtime logs. Set ``ssl: false`` so
+#    the addon boots cleanly.
+#
+# 2. ``start=False`` addons that we want to STAY stopped. Without
+#    ``boot: manual`` + ``watchdog: false`` Supervisor's watchdog
+#    auto-restarts them after the initial crash, racing the test
+#    runner's "addon should be stopped" assertions. Explicitly setting
+#    these makes the bake's start-state stable across boots.
+_ADDON_OPTION_OVERRIDES: dict[str, dict[str, Any]] = {
+    "Node-RED": {
+        "options": {
+            # ``ssl: true`` is the addon's upstream default but ships
+            # no cert, crashing the addon's init-nginx on boot
+            # (verified by curling
+            # https://raw.githubusercontent.com/hassio-addons/addon-node-red/main/node-red/config.yaml ).
+            "ssl": False,
+            # ``leave_front_door_open: true`` is required for
+            # ``ha_manage_addon``'s proxy mode to work against this
+            # addon. The proxy path goes Supervisor →
+            # ``/addons/{slug}/api/...`` → the addon's DIRECT port,
+            # which is fronted by nginx with an ``auth_request``
+            # directive that demands HA Supervisor authentication.
+            # The default (false) blocks ha_manage_addon's calls with
+            # 401; ``true`` removes the auth_request and lets the
+            # proxy path through. Aligning the bake's options with
+            # what real users hit when they reach for ha_manage_addon
+            # — see node-red/rootfs/etc/nginx/templates/direct.gtpl
+            # for the ``{{ if not .leave_front_door_open }}`` block.
+            "leave_front_door_open": True,
+        },
+    },
+    "Mosquitto broker": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Zigbee2MQTT": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+    "Frigate": {
+        "boot": "manual",
+        "watchdog": False,
+    },
+}
+
+
 def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     """Install (and optionally start) a single addon. Returns slug.
 
@@ -488,14 +600,17 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
       - POST /store/reload                            refresh
       - GET  /store                                   list store contents
       - POST /store/addons/{slug}/install             install an addon
+      - POST /addons/{slug}/options                   set addon options
       - POST /addons/{slug}/start                     start it
-    Note the asymmetry: install lives under /store/addons/, start is on
-    the installed-addon path /addons/.
+    Note the asymmetry: install lives under /store/addons/, options +
+    start are on the installed-addon path /addons/.
 
-    Options are deliberately not set here in v1 (#1281 comment thread). Many
-    addon schemas have required fields (Mosquitto's require_certificate,
-    Z2M's serial config, Frigate's cameras) that need realistic values; the
-    test runner configures them per-test with mock streams/devices.
+    Per-addon option overrides live in ``_ADDON_OPTION_OVERRIDES`` —
+    they fix addons whose config.yaml defaults are incompatible with
+    starting fresh (Node-RED's ssl=true), or whose default ``boot``/
+    ``watchdog`` settings would have Supervisor auto-restart a
+    ``start=False`` addon (Mosquitto, Z2M, Frigate). Other addons get
+    Supervisor's schema-default options.
     """
     if addon.repo:
         _add_repository(ws, addon.repo)
@@ -503,6 +618,49 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
+    if overrides:
+        # Supervisor's POST /addons/{slug}/options behaviour:
+        #
+        # - ``options`` is a FULL-REPLACE field; the value must satisfy
+        #   the addon's config schema in its entirety. Sending a partial
+        #   options payload drops every other required field and
+        #   Supervisor rejects with e.g. "Missing option 'http_static'
+        #   in root" (verified on PR #1375 CI run 29357350 for Node-RED).
+        # - Top-level fields like ``boot``, ``watchdog``,
+        #   ``auto_update`` are PARTIAL updates — only the keys present
+        #   in the POST are touched. So a ``boot:manual /
+        #   watchdog:false`` override doesn't need to include
+        #   ``options`` in the same POST.
+        #
+        # Strategy: when overrides include an ``options`` block, GET
+        # the addon's current options, merge our override on top, and
+        # send the merged whole. When overrides only touch top-level
+        # fields, skip the GET and POST just those fields.
+        merged: dict[str, Any] = {
+            k: v for k, v in overrides.items() if k != "options"
+        }
+        if "options" in overrides:
+            current = ws.supervisor_api(
+                f"/addons/{slug}/info", method="get", timeout=30.0
+            )
+            current_options = current.get("options") or {}
+            merged["options"] = {**current_options, **overrides["options"]}
+
+        LOG.info(
+            "Applying option overrides to %s (slug=%s): %s",
+            addon.name,
+            slug,
+            overrides,
+        )
+        ws.supervisor_api(
+            f"/addons/{slug}/options",
+            method="post",
+            data=merged,
+            timeout=60.0,
+        )
+
     if addon.start:
         ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     return slug
@@ -534,6 +692,258 @@ def _check_core_auth(base_url: str, token: str) -> None:
         raise RuntimeError(
             f"HA Core rejected the access token at /api/states ({e.code})."
         ) from e
+
+
+def stage_dev_addon_source(qcow2: Path) -> None:
+    """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
+
+    Runs BEFORE first start_qemu so HAOS boots with the local addon visible
+    to Supervisor in the store. The bake then installs + builds the addon
+    while HAOS is running, which means the cached qcow2 ships with the addon
+    Docker image already built — every subsequent CI run only pays the cost
+    of an ``addons/{slug}/update`` (Docker layer cache hit, ~20-30s) instead
+    of a full first-install (~5 min).
+
+    The dev addon's Dockerfile expects ``start.py``, ``pyproject.toml``,
+    ``uv.lock``, and ``src/`` at the build-context root — same shape as the
+    addon-repo-branch flow used for manual fork testing (see
+    ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
+    in-HAOS build succeeds without any additional setup at install time.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    dev_addon_src = repo_root / "homeassistant-addon-dev"
+    if not dev_addon_src.exists():
+        raise RuntimeError(
+            f"homeassistant-addon-dev not found at {dev_addon_src} — "
+            f"checkout is incomplete; the image cannot be built."
+        )
+
+    LOG.info("Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/")
+    workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
+    try:
+        staging = workdir / "ha_mcp_dev"
+        shutil.copytree(dev_addon_src, staging)
+
+        # Files outside the addon dir that the Dockerfile COPYs from.
+        # Mirrors the addon-repo-branch manual steps.
+        shutil.copy(repo_root / "homeassistant-addon" / "start.py", staging / "start.py")
+        shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
+        shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
+        # a prior local run) doesn't shadow the current version.
+        addon_src_dir = staging / "src"
+        if addon_src_dir.exists():
+            shutil.rmtree(addon_src_dir)
+        addon_src_dir.mkdir()
+        shutil.copytree(repo_root / "src" / "ha_mcp", addon_src_dir / "ha_mcp")
+
+        # Dockerfile in homeassistant-addon-dev/ uses
+        # ``COPY homeassistant-addon/start.py /`` because it's authored to
+        # be built from the repo root context. Inside /supervisor/addons/local/ the
+        # build context is the addon dir itself, so the path needs to be
+        # ``COPY start.py /``. Same patch the FORK-DEV.md flow applies.
+        dockerfile = staging / "Dockerfile"
+        original = dockerfile.read_text()
+        patched = original.replace(
+            "COPY homeassistant-addon/start.py /",
+            "COPY start.py /",
+        )
+        if patched == original:
+            # Fail fast — silently writing the unpatched Dockerfile would
+            # cause an opaque addon-build failure 5+ min later during
+            # ``addons/{slug}/install``. Better to point at the patch line
+            # directly.
+            raise RuntimeError(
+                f"Dockerfile patch failed: expected line "
+                f"'COPY homeassistant-addon/start.py /' not found in "
+                f"{dockerfile}. The dev addon's Dockerfile may have been "
+                f"restructured; update the patch in stage_dev_addon_source "
+                f"to match the new shape."
+            )
+        dockerfile.write_text(patched)
+
+        # Strip the ``image:`` field from config.yaml. Production dev-addon
+        # ships built images at ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch};
+        # when Supervisor sees ``image:``, it tries to PULL from GHCR rather
+        # than build from the local Dockerfile. Per-PR version bumps produce
+        # tags that don't exist in GHCR → 404 → addon update fails.
+        # Removing the field forces Supervisor to build locally from the
+        # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
+        config_yaml = staging / "config.yaml"
+        config_lines = [
+            ln for ln in config_yaml.read_text().splitlines(keepends=True)
+            if not ln.startswith("image:")
+        ]
+        config_yaml.write_text("".join(config_lines))
+        # Verify the strip: a future restructure that indents the field
+        # under a parent key would make the line-prefix filter a no-op,
+        # silently re-introducing GHCR-pull behavior.
+        post_strip = config_yaml.read_text()
+        if "\nimage:" in post_strip or post_strip.startswith("image:"):
+            raise RuntimeError(
+                f"config.yaml ``image:`` strip did not remove the field "
+                f"from {config_yaml}; Supervisor will pull from GHCR and "
+                f"the per-PR version bump will 404. The field may now be "
+                f"indented under a parent — update the filter accordingly."
+            )
+
+        # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
+        # hassos-data partition. Same approach as bake_test_state's seed-tar.
+        seed_tar = workdir / "ha_mcp_dev.tar"
+        _run([
+            "tar", "--numeric-owner", "--owner=0", "--group=0",
+            "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
+        ])
+        _run([
+            "guestfish",
+            "--rw",
+            "-a", str(qcow2),
+            "run",
+            ":",
+            "mount", "/dev/sda8", "/",
+            ":",
+            "mkdir-p", "/supervisor/addons/local",
+            ":",
+            "tar-in", str(seed_tar), "/supervisor/addons/local",
+        ])
+        LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def install_advanced_ssh(ws: HAWebSocket) -> str:
+    """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
+
+    Sets a known root password ("haosdebug") so the CI workflow can
+    SSH in unattended. **Remaps the container's port 22 to HAOS port
+    22222** via Supervisor's ``network`` option, because the addon's
+    upstream default (verified at
+    https://raw.githubusercontent.com/hassio-addons/addon-ssh/main/ssh/config.yaml :
+    ``ports: 22/tcp: 22``) collides with HAOS's host sshd on port 22
+    under ``host_network: true``. The collision causes the addon's
+    sshd to silently fail to bind, which surfaces downstream as
+    ``kex_exchange_identification: read: Connection reset by peer``
+    (verified on PR #1375 CI run 26090534093). The QEMU hostfwd in
+    ``haos_runtime.boot_haos_qemu`` exposes guest:22222 on host:22222.
+    """
+    slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
+    LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=600.0)
+    # Schema: ssh.username, ssh.password, ssh.authorized_keys (list),
+    # ssh.sftp (bool), ssh.compatibility_mode (bool); top-level:
+    # apks (list), packages (list), init_commands (list)
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            "options": {
+                "ssh": {
+                    "username": SSH_ADDON_USER,
+                    "password": SSH_ADDON_PASSWORD,
+                    "authorized_keys": [],
+                    "sftp": False,
+                    # Without ``compatibility_mode: true`` modern OpenSSH
+                    # in this addon refuses root-with-password auth from
+                    # the CI runner's older ssh client. Enable it so
+                    # sshpass succeeds against the bake-set password.
+                    "compatibility_mode": True,
+                    "allow_agent_forwarding": False,
+                    "allow_remote_port_forwarding": False,
+                    "allow_tcp_forwarding": False,
+                },
+                "zsh": True,
+                "share_sessions": False,
+                "packages": [],
+                "init_commands": [],
+            },
+            # Remap container port 22 → HAOS port 22222 so the addon's
+            # sshd doesn't collide with HAOS's host sshd. Key is the
+            # internal port spec; value is the HAOS-side port.
+            "network": {"22/tcp": 22222},
+            "boot": "auto",
+        },
+        timeout=60.0,
+    )
+    # Disable Supervisor's per-addon "protection mode" so the SSH
+    # addon can ``docker exec`` into sibling addon containers (the
+    # filesystem-poisoning E2E in ``test_create_custom_tool.py`` needs
+    # this). With protection mode ON (Supervisor's default), the addon
+    # is denied Docker socket access and ``docker exec`` returns
+    # ``PROTECTION MODE ENABLED!`` instead of executing the command
+    # (verified on PR #1375 CI run 26091787525). The /security
+    # endpoint is Supervisor's documented way to flip this — see
+    # https://developers.home-assistant.io/docs/api/supervisor/endpoints#addon
+    # under "POST /addons/{slug}/security".
+    ws.supervisor_api(
+        f"/addons/{slug}/security",
+        method="post",
+        data={"protected": False},
+        timeout=30.0,
+    )
+    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
+    LOG.info(
+        "Advanced SSH installed + started on port 22222 "
+        "(user=root, protected=false)"
+    )
+    return slug
+
+
+def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
+    """Install the local ha-mcp dev addon during the bake's running phase.
+
+    Assumes ``stage_dev_addon_source`` ran before start_qemu so the source
+    is already at /supervisor/addons/local/ha_mcp_dev/. Supervisor's local store
+    scanner picks up the addon automatically on boot; we reload to be
+    explicit, install (which builds the Docker image — slow, ~5 min, but
+    only paid once per cache lifetime), set options including a
+    deterministic secret_path so test harness can construct the MCP URL,
+    and start the addon container.
+
+    Returns the installed slug (``local_ha_mcp_dev``).
+    """
+    _reload_store(ws)
+    slug = HA_MCP_DEV_ADDON_SLUG
+    LOG.info("Installing ha-mcp dev addon (slug=%s) — building Docker image...", slug)
+    # 900s install timeout matches the existing install_addons flow and
+    # covers the worst-case from-scratch uv sync + image build.
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    # Pre-set every dev-channel flag the test suite relies on so the addon
+    # exposes the full tool surface (mirrors the env-var setup in conftest's
+    # external-HAOS branch). The schema in homeassistant-addon-dev/config.yaml
+    # lists every flag we toggle here.
+    LOG.info("Setting ha-mcp dev addon options (preset secret_path + all dev flags on)")
+    # Supervisor's options POST replaces the full options dict, so we must
+    # include every field with a non-optional schema entry in the dev addon's
+    # homeassistant-addon-dev/config.yaml. Verified live: omitting
+    # ``backup_hint`` returns "Missing option 'backup_hint' in root".
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            "options": {
+                "backup_hint": "normal",
+                "secret_path": HA_MCP_TEST_SECRET_PATH,
+                "enable_tool_search": False,
+                "enable_yaml_config_editing": True,
+                "enable_code_mode": True,
+                "enable_lite_docstrings": False,
+                "enable_filesystem_tools": True,
+                "enable_custom_component_integration": True,
+                "tool_search_max_results": 5,
+                "disabled_tools": "",
+                "pinned_tools": "",
+                "verify_ssl": True,
+                "advanced_debug_logging": True,
+            },
+            "boot": "auto",
+        },
+        timeout=60.0,
+    )
+    LOG.info("Starting ha-mcp dev addon")
+    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
+    LOG.info("ha-mcp dev addon installed + started; slug=%s", slug)
+    return slug
 
 
 def _wait_supervisor_ready(ws: HAWebSocket) -> None:
@@ -781,6 +1191,12 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     qcow2 = fetch_haos_qcow2(work_dir)
+    # Stage the ha-mcp dev addon source into /supervisor/addons/local/ BEFORE first
+    # boot so Supervisor's local-store scanner picks it up during the
+    # running phase below. install_ha_mcp_dev_addon then builds the addon's
+    # Docker image while HAOS is up — that built image stays in the cached
+    # qcow2 so subsequent CI runs only need a quick ``addons/{slug}/update``.
+    stage_dev_addon_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -791,6 +1207,8 @@ def build(work_dir: Path, output: Path) -> None:
         with HAWebSocket(base_url, token) as ws:
             install_addons(ws)
             install_hacs(ws, base_url)
+            install_ha_mcp_dev_addon(ws)
+            install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
             # feeders. The canary test only needs addon lifecycle for now.

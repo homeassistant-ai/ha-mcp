@@ -2,9 +2,11 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_service import ServiceTools
 
 
@@ -96,3 +98,27 @@ class TestHaCallEvent:
         tools = _make_tools(ToolError("already structured"))
         with pytest.raises(ToolError, match="already structured"):
             await tools.ha_call_event("my_event")
+
+    async def test_timeout_returns_partial_success_with_warning(self):
+        """Connection-timeout from fire_event surfaces as partial-success with a top-level warnings list.
+
+        Pins the post-#1332 contract on the timeout branch (`tools_service.py:495+`):
+        the migrated `warnings: list[str]` shape replaces the legacy singular
+        `warning` string and must contain the dispatched-may-still-deliver note.
+        """
+        conn_error = HomeAssistantConnectionError("connection timed out")
+        conn_error.__cause__ = httpx.TimeoutException("Read timed out")
+        tools = _make_tools(conn_error)
+
+        result = await tools.ha_call_event("my_event")
+
+        assert result["success"] is True
+        assert result["partial"] is True
+        assert result["event_type"] == "my_event"
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Expected non-empty warnings list, got: {result!r}"
+        )
+        assert any("timed out" in w.lower() for w in warnings), (
+            f"Expected timeout-related warning content; got: {warnings!r}"
+        )

@@ -575,20 +575,18 @@ class TestUniformResponseShape:
         assert any("not yet queryable" in w for w in result["warnings"])
 
 
-def _assert_warnings_list_shape(result: dict[str, Any]) -> None:
-    """Cross-cutting warnings-list contract for lifecycle-write tools (#1332).
+def _assert_warnings_list_shape_core(result: dict[str, Any]) -> None:
+    """Shared warnings-list assertions for both shape helpers below.
 
-    Tighter than ``_assert_uniform_shape`` for the warnings half: applies to
-    any successful tool response, regardless of payload-wrapper key.
+    Enforces the warnings-list contract independent of any ``success`` /
+    status-marker convention:
 
-    - ``success`` is True
     - ``warnings`` is a non-empty ``list[str]`` at the top level
     - No singular ``warning`` string at the top level (legacy shape)
     - ``warnings`` does not leak into any nested dict value (no
       ``"data": {"warnings": [...]}`` or ``"result": {"warnings": [...]}``
       nesting pattern that pre-#1332 callers had to chase)
     """
-    assert result["success"] is True
     assert "warning" not in result, (
         "singular 'warning' key must not appear at top level"
     )
@@ -615,6 +613,40 @@ def _assert_warnings_list_shape(result: dict[str, Any]) -> None:
             assert "warning" not in value, (
                 f"singular 'warning' leaked into nested '{key}'"
             )
+
+
+def _assert_warnings_list_shape(result: dict[str, Any]) -> None:
+    """Cross-cutting warnings-list contract for lifecycle-write tools (#1332).
+
+    Tighter than ``_assert_uniform_shape`` for the warnings half: applies to
+    any successful tool response, regardless of payload-wrapper key.
+
+    - ``success`` is True
+    - ``warnings`` is a non-empty ``list[str]`` at the top level
+    - No singular ``warning`` string at the top level (legacy shape)
+    - ``warnings`` does not leak into any nested dict value (no
+      ``"data": {"warnings": [...]}`` or ``"result": {"warnings": [...]}``
+      nesting pattern that pre-#1332 callers had to chase)
+    """
+    assert result["success"] is True
+    _assert_warnings_list_shape_core(result)
+
+
+def _assert_warnings_list_shape_no_success(result: dict[str, Any]) -> None:
+    """Relaxed warnings-list shape contract for tools without a top-level
+    ``success`` key by design.
+
+    Mirrors ``_assert_warnings_list_shape`` minus the ``success: True``
+    assertion. Used for tools whose response uses a status-marker
+    (e.g. ``status: "pending_restart"``) or a payload-bag (e.g. ``mode:
+    "dry_run"``, list-mode integrations payload, deep_search fallback)
+    instead of the ``success`` boolean — those shapes are pre-existing
+    design choices, not regressions of #1332.
+
+    The warnings-list contract itself remains identical to the strict
+    helper.
+    """
+    _assert_warnings_list_shape_core(result)
 
 
 class TestLifecycleWriteWarningsShape:
@@ -1037,3 +1069,213 @@ class TestLifecycleWriteWarningsShape:
         assert any(
             "removal verification failed" in w for w in result["warnings"]
         )
+
+
+class TestSweepWarningsShape:
+    """Cross-cutting warnings-list shape coverage for tools migrated under
+    #1341 (the non-lifecycle-write half of #1332).
+
+    Mirrors the TestLifecycleWriteWarningsShape pattern from #1340, using
+    ``_assert_warnings_list_shape`` which enforces:
+      - ``success: True`` at top level
+      - ``warnings`` is a non-empty ``list[str]`` at the top level
+      - No singular ``warning`` legacy key
+      - ``warnings`` doesn't leak into nested dicts
+
+    Coverage 6/8 of the PR-touched src files cross-cuttingly pinned,
+    split by response-shape contract:
+
+    **Strict helper (top-level ``success: True`` + warnings) — 4 of 8:**
+    - ``backup.py`` (restore_backup)
+    - ``tools_service.py`` (ha_call_event timeout)
+    - ``tools_system.py`` (ha_restart success)
+    - ``tools_energy.py`` (ha_manage_energy_prefs dry_run with validate
+      failure — response carries ``success: True`` from
+      ``len(shape_errors) == 0``)
+
+    **Relaxed helper (no top-level ``success`` — status-marker / payload-bag
+    shape) — 2 of 8:**
+    - ``tools_addons.py``: ``ha_manage_addon`` config mode with
+      ``options`` returns ``status: "pending_restart"`` + top-level
+      warnings (closure tool, registered via ``register_addon_tools``)
+    - ``tools_integrations.py``: ``ha_get_integration`` single-entry
+      mode with ``include_diagnostics=False`` + ``device_id`` provided
+
+    **Not folded in (2 of 8) — multi-step WebSocket call chains where a
+    reliable cross-cutting mock needs to branch on the WS message
+    ``type`` to pass early-success steps and fail only at the target
+    emit-site. Content-level coverage already lives in the per-tool
+    unit/e2e test files cited:**
+
+    - ``tools_search.py``: ``ha_deep_search`` fallback path. The tool
+      calls ``await client.<state-source>`` before the fuzzy/exact
+      branch; trivial ``MagicMock()`` clients trip the
+      ``"MagicMock can't be used in 'await' expression"`` error before
+      the warning emit-site is reached. Per-tool tests in
+      ``test_tools_search.py`` exercise the fallback content already.
+    - ``tools_entities.py``: ``ha_set_entity`` with ``new_device_name``
+      flows entity-registry-lookup → entity-registry-update →
+      device-registry-lookup → device-registry-update → optional
+      expose-update. The nested ``device_rename`` warnings live deep
+      in that chain. Per-tool tests in ``test_entity_rename.py`` and
+      ``test_rename_consolidation.py`` exercise the nested-result
+      shape directly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_backup_restore_warnings_shape(self):
+        from ha_mcp.tools.backup import restore_backup
+
+        ws = AsyncMock()
+        ws.send_command.side_effect = [
+            {"success": True, "result": {"backups": [{"backup_id": "abc"}]}},
+            {"success": True, "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]}},
+            {"success": True, "result": {"config": {"create_backup": {"password": "pw"}}}},
+            {"success": True, "result": {"backup_job_id": "job"}},
+            {"success": True, "result": {"backups": [{"name": "Pre_Restore_Safety", "backup_id": "sxyz"}]}},
+            {"success": True},
+        ]
+        client = MagicMock()
+        client.base_url = "http://test"
+        client.token = "t"
+        client.verify_ssl = False
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await restore_backup(client, "abc")
+        _assert_warnings_list_shape(result)
+
+
+    @pytest.mark.asyncio
+    async def test_service_call_event_timeout_warnings_shape(self):
+        import httpx
+
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        conn_error = HomeAssistantConnectionError("timeout")
+        conn_error.__cause__ = httpx.TimeoutException("read timed out")
+        client = MagicMock()
+        client.fire_event = AsyncMock(side_effect=conn_error)
+        tools = ServiceTools.__new__(ServiceTools)
+        tools._client = client
+        tools._device_tools = MagicMock()
+
+        result = await tools.ha_call_event("evt_x")
+        _assert_warnings_list_shape(result)
+
+    @pytest.mark.asyncio
+    async def test_system_restart_warnings_shape(self):
+        from ha_mcp.tools.tools_system import SystemTools
+
+        client = AsyncMock()
+        client.check_config.return_value = {"result": "valid"}
+        client.call_service.return_value = None
+        tools = SystemTools(client)
+
+        result = await tools.ha_restart(confirm=True)
+        _assert_warnings_list_shape(result)
+
+    @pytest.mark.asyncio
+    async def test_integrations_get_integration_device_id_ignored_warnings_shape(self):
+        """Shape-pins the device_id-ignored warning emit in
+        ``ha_get_integration`` (entry_id mode, include_diagnostics=False,
+        device_id provided). Response shape is the single-entry payload
+        (no top-level ``success``) — uses the relaxed helper."""
+        from ha_mcp.tools.tools_integrations import IntegrationTools
+
+        tools = IntegrationTools.__new__(IntegrationTools)
+        tools._client = MagicMock()
+        tools._get_single_entry = AsyncMock(
+            return_value={
+                "entry_id": "abc",
+                "domain": "test_integration",
+                "state": "loaded",
+            }
+        )
+
+        result = await tools.ha_get_integration(
+            entry_id="abc",
+            device_id="dev_123",
+            include_diagnostics=False,
+        )
+        _assert_warnings_list_shape_no_success(result)
+
+    @pytest.mark.asyncio
+    async def test_addons_manage_addon_options_ignored_fields_warnings_shape(self):
+        """Shape-pins the ignored_fields warning emit in ``ha_manage_addon``
+        when options include a field not in the add-on schema. Config mode
+        with ``options`` returns ``status: "pending_restart"`` (no top-level
+        ``success``) — uses the relaxed helper. Mirrors the mock pattern in
+        ``test_tools_addons.py::test_config_mode_options_unknown_fields_warned``.
+        """
+        from ha_mcp.tools.tools_addons import register_addon_tools
+
+        registered: dict[str, Any] = {}
+        mock_mcp = MagicMock()
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                registered[func.__name__] = func
+                return func
+            return wrapper
+
+        mock_mcp.tool = tool_decorator
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.token = "test-token"
+        register_addon_tools(mock_mcp, client)
+        manage_addon = registered["ha_manage_addon"]
+
+        async def mock_supervisor_api(client_arg, endpoint, **kwargs):
+            if endpoint == "/addons/test_addon/info":
+                return {
+                    "success": True,
+                    "result": {
+                        "options": {"log_level": "info"},
+                        "schema": [
+                            {"name": "log_level", "required": False, "type": "str"}
+                        ],
+                    },
+                }
+            return {"success": True, "result": {}}
+
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            side_effect=mock_supervisor_api,
+        ):
+            result = await manage_addon(
+                slug="test_addon",
+                options={"log_level": "debug", "zombie_field": "ghost"},
+            )
+
+        _assert_warnings_list_shape_no_success(result)
+
+    @pytest.mark.asyncio
+    async def test_energy_manage_energy_prefs_dry_run_validate_failure_warnings_shape(self):
+        """Shape-pins the validate_warning emit in
+        ``_dry_run`` when HA's ``energy/validate`` fails. Response carries
+        ``success: True`` at top level (set from ``len(shape_errors) == 0``)
+        — uses the STRICT helper. Listed in the no-success bucket of the
+        Item 5 analysis but actually fits the strict contract.
+        """
+        from ha_mcp.tools.tools_energy import EnergyTools
+
+        tools = EnergyTools.__new__(EnergyTools)
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "energy not configured"}
+        )
+        tools._client = client
+
+        # Minimal valid prefs shape passing _shape_check() — empty source/device
+        # lists are accepted, only the top-level keys are required.
+        result = await tools._dry_run(
+            {
+                "energy_sources": [],
+                "device_consumption": [],
+            }
+        )
+
+        _assert_warnings_list_shape(result)
+

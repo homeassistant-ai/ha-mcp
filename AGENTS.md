@@ -357,13 +357,13 @@ When you notice something while working on a PR, apply this scale:
 
 If any are false: fix it now, or let it go. **Do not file an issue to "track" it.**
 
-These phrases are escape hatches that signal the AI is making a scope decision the user should make instead. When you find yourself drafting any of them, treat it as a cue to re-apply the rules in this section before continuing:
+These phrases — and **any semantically equivalent variant** — are escape hatches that signal the AI is making a scope decision the user should make instead. The list below is non-exhaustive; match on intent, not exact string. When you find yourself drafting any of them, treat it as a cue to re-apply the rules in this section before continuing:
 
-- "Post-merge follow-up" / "follow-up consideration"
+- "Post-merge follow-up" / "follow-up consideration" / "forward-looking note"
 - "Nice to have"
 - "Happy to file an issue (or note in PR body)"
 - "Pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of the Boy Scout Rule)
-- "Out of scope for this PR" (used as an assertion to skip — not as a question to the user via the verification template below)
+- "Out of scope for this PR" / "not blocking this PR" (used as an assertion to skip — not as a question to the user via the verification template below)
 - "Real design work, not N lines"
 - "Worth tracking as a real follow-up issue rather than buried in a comment"
 

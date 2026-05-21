@@ -555,7 +555,8 @@ class TestServiceCallWaitParameter:
                 entity_id="light.test",
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("could not be verified" in w for w in result["warnings"])
 
     async def test_call_service_toggle_waits(self, tools, mock_client):
         """toggle is a state-changing service and triggers wait."""
@@ -589,4 +590,5 @@ class TestServiceCallWaitParameter:
                 entity_id="light.test",
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("state verification failed" in w for w in result["warnings"])

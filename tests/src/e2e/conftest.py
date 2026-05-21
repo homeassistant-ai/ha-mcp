@@ -24,6 +24,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -45,11 +46,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_run
 
 from fastmcp import Client
 from haos_runtime import (
+    HA_MCP_DEV_ADDON_SLUG,
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
+    is_haos_inaddon_mode,
     login_for_token,
+    refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
+    set_default_backup_password,
+    trigger_dev_addon_update,
+    wait_for_addon_mcp_ready,
 )
 
 from ha_mcp.client import HomeAssistantClient
@@ -90,26 +97,54 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     session end by ``pytest_terminal_summary``. Direct ``sys.stderr``
     writes don't survive pytest-xdist's per-worker capture buffer, so
     going through pytest's own reporting plumbing is the reliable path.
-    History: this gate-instrumentation was added in #1310; the
-    ``HA_MCP_TOOLS_WAIT`` gate was added in #1346. The 5 gate budgets
-    were tightened with 2-63x headroom over observed-max in #1369
-    after 24-69 [READINESS_GATE_TIMING] samples accumulated across
-    23 master runs (49h cross-day span).
+
+    The current ``core_state`` emission includes ``entries_loaded`` /
+    ``entries_total`` / ``snapshot_ok`` from ``_snapshot_config_entries``
+    at the trip moment. ``pytest_terminal_summary`` warns when any
+    ``snapshot_ok`` sample shows ``entries_loaded < entries_total`` —
+    that drift means a slow integration finished ``async_setup_entry``
+    after ``CoreState.RUNNING`` was set and a follow-up gate is
+    justified. Gate-instrumentation history: introduced in #1310 and
+    iterated through #1346 / #1369; consolidated onto the single
+    ``CoreState.RUNNING`` check in the PR referencing #366
+    (Ilya0527 2026-05-18 thread for the structural rationale).
     """
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
 
 def pytest_collection_modifyitems(config, items):
-    """Enforce haos_only / container_only markers and auto-apply haos_only.
+    """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
-    Tests under ``tests/src/e2e/haos_only/`` get the marker for free so
-    individual files don't have to repeat ``pytestmark = pytest.mark.haos_only``.
-    Tests anywhere with either marker are skipped on the wrong backend.
+    Four mutually-orthogonal backend markers (#1349 item 7 introduces the
+    inaddon split):
+
+    - ``haos_only``: only runs when the HAOS backend is selected
+      (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
+      ``tests/src/e2e/haos_only/``.
+    - ``container_only``: only runs on the testcontainer backend.
+    - ``external_only``: HAOS external mode only (``mcp_client`` is an
+      in-process FastMCP server talking HTTP to HAOS). Skipped on the
+      inaddon tier.
+    - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
+      to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
+      exercised). Skipped on external mode and on testcontainer.
     """
     del config
     haos = is_haos_backend_selected()
-    skip_haos = pytest.mark.skip(reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)")
-    skip_container = pytest.mark.skip(reason="HAOS backend is active; test is container-only")
+    inaddon = haos and is_haos_inaddon_mode()
+    external_haos = haos and not inaddon
+    skip_haos = pytest.mark.skip(
+        reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
+    )
+    skip_container = pytest.mark.skip(
+        reason="HAOS backend is active; test is container-only"
+    )
+    skip_inaddon_only = pytest.mark.skip(
+        reason="inaddon mode required (set HAOS_TEST_MODE=inaddon)"
+    )
+    skip_external_only = pytest.mark.skip(
+        reason="HAOS external mode required (inaddon mode active)"
+    )
     for item in items:
         if "haos_only" in str(item.fspath):
             item.add_marker(pytest.mark.haos_only)
@@ -118,6 +153,19 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_haos)
         elif "container_only" in keywords and haos:
             item.add_marker(skip_container)
+        if "inaddon_only" in keywords and not inaddon:
+            item.add_marker(skip_inaddon_only)
+        # ``external_only`` skips ONLY on the inaddon tier. The name is
+        # historical (from #1361 where the only motivating consumer was
+        # ``test_supervisor_mock.py``, whose monkeypatch-based fixture
+        # works fine on testcontainer + external HAOS but can't reach
+        # the addon's separate process inaddon). Skipping on
+        # testcontainer too was a dispatcher bug — the mock fixture is
+        # in-process and runs cleanly there. Surfaced during PR #1375
+        # final-skip audit; 14 supervisor_mock tests were silently
+        # skipping on every testcontainer e2e-tests.yml run.
+        elif "external_only" in keywords and inaddon:
+            item.add_marker(skip_external_only)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -161,6 +209,27 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             else:
                 parts.append(f"{key}={value}")
         terminalreporter.write_line("[READINESS_GATE_TIMING] " + " ".join(parts))
+
+    # Drift check (warn-only): the ``_log_readiness_timing`` docstring
+    # promises this invariant — if any ``core_state`` sample shows
+    # ``entries_loaded < entries_total`` at trip time, a slow integration
+    # finished ``async_setup_entry`` after ``CoreState.RUNNING`` was set
+    # and a follow-up gate would be justified. ``snapshot_ok=False``
+    # samples are skipped (sentinel zeros, not real data).
+    drift_samples = [
+        p
+        for p in timings
+        if p.get("gate") == "core_state"
+        and p.get("snapshot_ok")
+        and p.get("entries_loaded", 0) < p.get("entries_total", 0)
+    ]
+    if drift_samples:
+        terminalreporter.write_line(
+            f"⚠️ [READINESS_GATE_DRIFT] {len(drift_samples)} core_state sample(s) "
+            f"with entries_loaded < entries_total — a slow integration "
+            f"finished async_setup_entry after CoreState.RUNNING; "
+            f"follow-up gate justified."
+        )
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -388,13 +457,11 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
         wait_start = time.monotonic()
         while lock_dir.exists():
             if time.monotonic() - wait_start >= 180:
-                # Asymmetric with ``HA_MCP_TOOLS_WAIT`` below (which is
-                # ``pytest.fail``): a stuck tool registration breaks
-                # every downstream test, while a stuck HACS download
-                # only breaks HACS-dependent tests — the rest of the
-                # session still produces useful signal. Clear the stale
-                # lock so a subsequent session does not also hit the
-                # 180s wait when the winner truly crashed.
+                # Warn-and-continue (not ``pytest.fail``): a stuck HACS
+                # download only breaks HACS-dependent tests, while the
+                # rest of the session still produces useful signal.
+                # Clear the stale lock so a subsequent session does not
+                # also hit the 180s wait when the winner truly crashed.
                 logger.warning(
                     f"Timeout waiting for HACS frontend lock release at "
                     f"{lock_dir}; proceeding without verification."
@@ -512,7 +579,7 @@ def _install_custom_component(
     if storage_file.exists():
         data = json.loads(storage_file.read_text())
         entries = data.get("data", {}).get("entries", [])
-        if not any(e.get("domain") == domain for e in entries):
+        if not any(isinstance(e, dict) and e.get("domain") == domain for e in entries):
             entries.append(
                 {
                     "created_at": "2025-09-07T23:56:28.040744+00:00",
@@ -585,6 +652,11 @@ def _wait_for_ha_api_ready(
     bounded retry after a real recoverable flake surfaces in the dump)
     can re-use the same readiness contract without duplicating the
     polling loop.
+
+    NOTE: ``/api/`` 200 is HA's *liveness* signal (HTTP component up),
+    not its *readiness* signal. The readiness gate that asserts every
+    integration's ``async_setup_entry`` has completed lives in
+    ``_wait_for_core_state_running`` below.
     """
     import requests as _requests
 
@@ -607,63 +679,153 @@ def _wait_for_ha_api_ready(
     return False
 
 
-def _wait_for_ha_mcp_tools_services(
+def _snapshot_config_entries(
     base_url: str,
     headers: dict[str, str],
-    timeout: int,
-) -> tuple[bool, float, int]:
-    """Poll ``/api/services`` for the ``ha_mcp_tools`` domain.
+    *,
+    timeout: float = 5.0,
+) -> tuple[int, int, bool]:
+    """Return ``(loaded_count, total_count, snapshot_ok)`` from
+    ``/api/config/config_entries/entry``.
 
-    Returns ``(ready, elapsed_s, domain_count)``:
+    Used by ``_wait_for_core_state_running`` to capture the entry-state
+    snapshot at the trip moment (and on timeout) so post-merge data can
+    verify whether ``CoreState.RUNNING`` actually closes the race for
+    slow integrations or whether late-binding entries are still loading
+    when the gate exits.
 
-    - ``ready`` — True if the domain appears within ``timeout`` seconds,
-      False on timeout.
-    - ``elapsed_s`` — wall-clock seconds spent polling, float-precise
-      (matches the precision the other readiness gates emit).
-      Always populated, both on success and on timeout, so the caller can
-      ``_log_readiness_timing`` regardless of branch.
-    - ``domain_count`` — size of the registered-domain set when the
-      target domain appeared (0 on timeout / no-200-response). Surfaces
-      as the ``count=`` extra on the timing line, parity with the
-      ``components`` / ``entities`` gates.
-
-    The single caller lives in ``ha_container_with_fresh_config``; the
-    helper extraction is preserved so a future bounded retry (if a
-    recoverable flake class surfaces in the dump) can re-use the same
-    wait contract without duplicating the polling loop.
+    ``snapshot_ok=False`` signals that the count fields are sentinel
+    ``(0, 0)`` rather than a legitimately empty entries list — the
+    distinction matters for the ``pytest_terminal_summary`` drift check,
+    which would otherwise read both sides as 0 on a persistently-broken
+    endpoint and never fire. The endpoint hit is best-effort
+    instrumentation, not a hard requirement.
     """
     import requests as _requests
 
-    # Wall-clock-bound (see ``_wait_for_ha_api_ready`` for the rationale on
-    # why ``range(timeout)`` would understate the actual budget).
+    try:
+        resp = _requests.get(
+            f"{base_url}/api/config/config_entries/entry",
+            timeout=timeout,
+            headers=headers,
+        )
+        if resp.status_code != 200:
+            logger.debug(f"snapshot_config_entries: HTTP {resp.status_code}")
+            return 0, 0, False
+        entries = resp.json()
+        if not isinstance(entries, list):
+            logger.debug(
+                f"snapshot_config_entries: unexpected body type {type(entries).__name__}"
+            )
+            return 0, 0, False
+        total = len(entries)
+        loaded = sum(
+            1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded"
+        )
+        return loaded, total, True
+    except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+        logger.debug(f"snapshot_config_entries: {type(exc).__name__}: {exc}")
+        return 0, 0, False
+
+
+def _wait_for_core_state_running(
+    base_url: str,
+    headers: dict[str, str],
+    timeout: int,
+) -> tuple[bool, float, str, int, int, bool]:
+    """Poll ``/api/core/state`` until ``state == "RUNNING"``.
+
+    Returns ``(success, elapsed_s, last_state, entries_loaded,
+    entries_total, snapshot_ok)``. ``snapshot_ok=False`` flags that the
+    entries fields are sentinel zeros rather than real data.
+
+    HA Core's ``APICoreStateView`` (``homeassistant/components/api/__init__.py``)
+    is the documented Supervisor-facing readiness endpoint: it reports the
+    ``CoreState`` enum value, which only transitions to ``"RUNNING"`` once
+    every integration's ``async_setup_entry`` has been dispatched (or hit
+    the 300s ``SLOW_SETUP_MAX_WAIT`` per-domain timeout from
+    ``homeassistant/setup.py``). ``/api/`` 200 by contrast is HA's
+    liveness signal — the HTTP component finishes setup early in bootstrap,
+    before most integrations.
+
+    Background (#366 thread, Ilya0527 2026-05-18): polling ``/api/`` then
+    counting components / entities / services across separate gates was
+    racing ``async_setup_entry`` for slow integrations. This helper
+    replaces five such gates with a single ``CoreState.RUNNING`` check.
+    A tight ``sun.sun`` state poll is still kept inline at the call site
+    because sun's first periodic position computation runs as a scheduled
+    task after ``async_setup_entry`` returns, so ``RUNNING`` does not
+    strictly imply ``sun.sun != "unknown"``.
+
+    Also captures ``/api/config/config_entries/entry`` at the trip moment
+    via ``_snapshot_config_entries`` to emit ``entries_loaded`` /
+    ``entries_total`` alongside the success signal. The post-merge data
+    window then verifies that ``RUNNING`` actually closes the race: any
+    run where ``entries_loaded < entries_total`` at trip time means a
+    slow integration finished its ``async_setup_entry`` after
+    ``CoreState.RUNNING`` was set, and a follow-up gate would be
+    justified.
+    """
+    import requests as _requests
+
     start_time = time.monotonic()
+    last_state = "<no response>"
     while time.monotonic() - start_time < timeout:
         try:
-            svc_resp = _requests.get(
-                f"{base_url}/api/services", timeout=5, headers=headers
+            response = _requests.get(
+                f"{base_url}/api/core/state", timeout=2, headers=headers
             )
-            if svc_resp.status_code == 200:
-                # Filter on truthy domain to mirror the diagnostic dump at
-                # _dump_ha_readiness_diagnostics. Drops None /
-                # empty-string ``domain`` values that would otherwise inflate
-                # ``len(domains)`` and pollute the ``ha_mcp_tools in domains``
-                # membership check.
-                domains = {
-                    s.get("domain") for s in svc_resp.json() if s.get("domain")
-                }
-                if "ha_mcp_tools" in domains:
-                    elapsed_s = time.monotonic() - start_time
-                    logger.info(
-                        f"✅ ha_mcp_tools services ready after {elapsed_s:.2f}s"
+            if response.status_code == 200:
+                # Parse before stamping last_state — a JSONDecodeError on
+                # a 200 body would otherwise leave last_state misreporting
+                # "HTTP 200" when the actual cause was malformed JSON,
+                # which the except below correctly attributes to the
+                # exception class.
+                state_value = response.json().get("state", "<unknown>")
+                last_state = state_value
+                if state_value == "RUNNING":
+                    elapsed = time.monotonic() - start_time
+                    entries_loaded, entries_total, snapshot_ok = (
+                        _snapshot_config_entries(base_url, headers)
                     )
-                    return True, elapsed_s, len(domains)
-        except (
-            _requests.exceptions.RequestException,
-            json.JSONDecodeError,
-        ) as exc:
-            logger.debug(f"ha_mcp_tools service check failed: {exc}")
+                    logger.info(
+                        f"🏃 CoreState.RUNNING after {elapsed:.1f}s "
+                        f"(entries loaded: {entries_loaded}/{entries_total}"
+                        f"{'' if snapshot_ok else ', snapshot unavailable'})"
+                    )
+                    return (
+                        True,
+                        elapsed,
+                        state_value,
+                        entries_loaded,
+                        entries_total,
+                        snapshot_ok,
+                    )
+            else:
+                # Surface HTTP status as a fallback ``last_state`` so a
+                # persistent non-200 (e.g. 503 during HA boot) shows up
+                # in the timeout ``pytest.fail`` message instead of the
+                # initial ``"<no response>"``.
+                last_state = f"HTTP {response.status_code}"
+        except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+            last_state = type(exc).__name__
+            logger.debug(f"core_state check failed: {exc}")
         time.sleep(1)
-    return False, time.monotonic() - start_time, 0
+
+    # Final snapshot for the failure-diagnostics path — HA is known-bad
+    # by this point, so use a tight 2s timeout rather than the default 5s
+    # to keep teardown responsive.
+    entries_loaded, entries_total, snapshot_ok = _snapshot_config_entries(
+        base_url, headers, timeout=2.0
+    )
+    return (
+        False,
+        time.monotonic() - start_time,
+        last_state,
+        entries_loaded,
+        entries_total,
+        snapshot_ok,
+    )
 
 
 def _dump_ha_readiness_diagnostics(
@@ -672,23 +834,23 @@ def _dump_ha_readiness_diagnostics(
     headers: dict[str, str],
     label: str,
     *,
-    service_domain: str | None = None,
     config_entry_domain: str | None = None,
 ) -> None:
     """Emit HA-side diagnostics for any readiness-gate failure.
 
     Generic best-effort dump used by every readiness gate in
-    ``ha_container_with_fresh_config``. The optional ``service_domain``
-    and ``config_entry_domain`` arguments let the caller surface
-    domain-specific presence/absence information (e.g.
-    ``service_domain="ha_mcp_tools"`` makes the dump call out whether
-    that specific domain is missing from ``/api/services``) instead of
-    only the generic counts.
+    ``ha_container_with_fresh_config``. The optional
+    ``config_entry_domain`` argument lets the caller surface
+    domain-specific presence/absence information (e.g. the sun-gate
+    failure path passes ``config_entry_domain="sun"`` to make the
+    config-entries section call out whether that specific entry is
+    present or which state it's stuck in) instead of only the generic
+    counts.
 
-    Without those arguments, the dump shows aggregate ``/api/services``
-    and ``/api/config/config_entries/entry`` domain lists — enough
-    context to distinguish "HA never finished starting" from "HA started
-    but a specific domain regressed".
+    Without it, the dump shows aggregate ``/api/services`` and
+    ``/api/config/config_entries/entry`` domain lists — enough context
+    to distinguish "HA never finished starting" from "HA started but a
+    specific domain regressed".
 
     Each capture is wrapped in its own try/except so a single failure
     (container already exited, HA API gone) does not lose the other
@@ -708,18 +870,7 @@ def _dump_ha_readiness_diagnostics(
             domains = sorted(
                 {s.get("domain") for s in svc_resp.json() if s.get("domain")}
             )
-            if service_domain:
-                present = service_domain in domains
-                logger.warning(
-                    f"  /api/services: {len(domains)} domains; "
-                    f"{service_domain}={'present' if present else 'absent'}"
-                )
-                if not present:
-                    # Surface adjacent domains so a reader can rule out a
-                    # regex / casing / typo class mismatch.
-                    logger.warning(f"  /api/services domains: {domains}")
-            else:
-                logger.warning(f"  /api/services: {len(domains)} domains: {domains}")
+            logger.warning(f"  /api/services: {len(domains)} domains: {domains}")
         else:
             logger.warning(
                 f"  /api/services: HTTP {svc_resp.status_code} {svc_resp.text[:200]}"
@@ -745,11 +896,17 @@ def _dump_ha_readiness_diagnostics(
         if entries_resp.status_code == 200:
             entries = entries_resp.json()
             entry_domains = sorted(
-                {e.get("domain") for e in entries if e.get("domain")}
+                {
+                    e.get("domain")
+                    for e in entries
+                    if isinstance(e, dict) and e.get("domain")
+                }
             )
             if config_entry_domain:
                 matching = [
-                    e for e in entries if e.get("domain") == config_entry_domain
+                    e
+                    for e in entries
+                    if isinstance(e, dict) and e.get("domain") == config_entry_domain
                 ]
                 if matching:
                     for entry in matching:
@@ -922,6 +1079,71 @@ def _blueprint_http_server():
         srv.shutdown()
 
 
+def _haos_worker_setup(base_image_path: Path) -> Path:
+    """Allocate per-worker ports + qcow2 overlay for parallel HAOS runs (#1350).
+
+    Each pytest-xdist worker gets its own QEMU instance, so it needs its
+    own port set (otherwise hostfwd collides on bind) and its own
+    writable qcow2 (otherwise the recorder-refresh + dev-addon-staging
+    mutations race). On a single-worker (no ``-n``) run, ``worker_id``
+    is ``"master"`` and we keep the base ports + base image path — same
+    behavior as before the parallel work.
+
+    Per-worker qcow2 is a backing-file overlay rather than a full
+    reflink copy: GitHub-hosted Linux runners are ext4 (no reflink),
+    so ``cp --reflink=auto`` falls back to a real 12 GB copy that
+    overflows the runner's 14 GB SSD when multiplied across workers.
+    The overlay is tiny at creation (~200 KB) and grows only as the
+    worker mutates state on top of the shared read-only base.
+    """
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    # pytest-xdist worker IDs are ``gw0``/``gw1``/.../``gwN``. ``master``
+    # (no ``-n``) gets offset 0, identical to the pre-parallel behavior.
+    if worker_id.startswith("gw") and worker_id[2:].isdigit():
+        worker_idx = int(worker_id[2:])
+    else:
+        worker_idx = 0
+    # +100 per worker is large enough that none of the four port sets
+    # (HA / SSH / addon MCP / SSH-debug) collide between adjacent
+    # workers, even after future port additions.
+    offset = worker_idx * 100
+    os.environ["HAOS_TEST_HA_PORT"] = str(18123 + offset)
+    os.environ["HAOS_TEST_SSH_PORT"] = str(12222 + offset)
+    os.environ["HAOS_TEST_ADDON_PORT"] = str(19583 + offset)
+    os.environ["HAOS_TEST_SSH_DEBUG_PORT"] = str(22222 + offset)
+    if worker_idx == 0 and worker_id == "master":
+        # Single-worker run — no overlay needed, mutate the base image
+        # directly (matches the pre-parallel path).
+        return base_image_path
+    overlay_path = base_image_path.with_name(
+        f"{base_image_path.stem}-{worker_id}{base_image_path.suffix}"
+    )
+    if overlay_path.exists():
+        overlay_path.unlink()
+    subprocess.run(
+        [
+            "qemu-img",
+            "create",
+            "-f",
+            "qcow2",
+            "-F",
+            "qcow2",
+            "-b",
+            str(base_image_path),
+            str(overlay_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    logger.info(
+        "HAOS parallel: worker %s using port offset %d, overlay qcow2 %s",
+        worker_id,
+        offset,
+        overlay_path,
+    )
+    return overlay_path
+
+
 @pytest.fixture(scope="session")
 def ha_container_with_fresh_config(_blueprint_http_server):
     """Create Home Assistant test environment with fresh config.
@@ -935,13 +1157,28 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     """
     # HAOS backend dispatch — short-circuit the testcontainer path entirely.
     if is_haos_backend_selected():
-        image_path = Path(os.environ[HAOS_IMAGE_ENV])
-        logger.info("HAOS backend selected — booting qcow2 at %s", image_path)
+        base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
+        inaddon = is_haos_inaddon_mode()
+        # Per-worker port + overlay setup for pytest-xdist parallel HAOS
+        # (#1350). Single-worker runs short-circuit and reuse the base
+        # image path unchanged.
+        image_path = _haos_worker_setup(base_image_path)
+        logger.info(
+            "HAOS backend selected (mode=%s) — booting qcow2 at %s",
+            "inaddon" if inaddon else "external",
+            image_path,
+        )
         # Shift the baked recorder timestamps forward so seeded rows fall
         # inside history's 24h window (same intent as the testcontainer
         # path's _refresh_recorder_timestamps). Must run before boot
         # because HA Core takes an exclusive lock on the DB.
         refresh_recorder_in_qcow2(image_path)
+        # Inaddon mode: overwrite the baked addon source with PR's current
+        # source + bump config.yaml version so Supervisor detects an
+        # update-available on next boot. The Supervisor WS API trigger
+        # below applies it via Docker layer cache (#1349 item 7).
+        if inaddon:
+            refresh_dev_addon_source_in_qcow2(image_path)
         with boot_haos_qemu(image_path) as base_url:
             token = login_for_token(base_url, TEST_USER, TEST_PASSWORD)
             # Mirror the env-var setup the testcontainer path does below at
@@ -970,9 +1207,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             last_sun_status: int | None = None
             while time.monotonic() - sun_start < SUN_WAIT:
                 try:
-                    sun_resp = requests.get(
-                        sun_url, timeout=5, headers=haos_headers
-                    )
+                    sun_resp = requests.get(sun_url, timeout=5, headers=haos_headers)
                     last_sun_status = sun_resp.status_code
                     if sun_resp.status_code == 200:
                         sun_state = sun_resp.json().get("state", "unknown")
@@ -997,8 +1232,63 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "⚠️ HAOS sun.sun still not ready after %ds "
                     "(last_status=%s, last_exc=%r) — template / connection "
                     "tests may race",
-                    SUN_WAIT, last_sun_status, last_sun_err,
+                    SUN_WAIT,
+                    last_sun_status,
+                    last_sun_err,
                 )
+            # Sun.sun ready means all *integrations* finished setup, but
+            # the demo platform that registers ``light.bed_light`` and the
+            # other seeded fixtures publishes its initial states *after*
+            # its integration's async_setup returns — the recorder + state
+            # machine writes are scheduled tasks. Under the parallel
+            # HAOS run (-n2) the first test on each worker hits the search
+            # / state API before those tasks complete, and search returns
+            # ``total_matches=0`` for ``light`` (verified on PR #1379 CI
+            # run 26130708983 diagnostics: core.entity_registry has all 6
+            # lights, but the state machine had no light.* entries at the
+            # moment the test fired). Poll for one of the known seeded
+            # light entities so downstream tests don't race.
+            light_url = f"{base_url}/api/states/light.bed_light"
+            LIGHT_WAIT = 60
+            light_start = time.monotonic()
+            last_light_status: int | None = None
+            while time.monotonic() - light_start < LIGHT_WAIT:
+                try:
+                    light_resp = requests.get(
+                        light_url, timeout=5, headers=haos_headers
+                    )
+                    last_light_status = light_resp.status_code
+                    if light_resp.status_code == 200:
+                        elapsed = time.monotonic() - light_start
+                        logger.info(
+                            "✅ HAOS light.bed_light is in state machine after %.1fs",
+                            elapsed,
+                        )
+                        break
+                except (
+                    requests.exceptions.RequestException,
+                    json.JSONDecodeError,
+                ):
+                    pass
+                time.sleep(1)
+            else:
+                logger.warning(
+                    "⚠️ HAOS light.bed_light still not in state machine after "
+                    "%ds (last_status=%s) — search / state tests may race",
+                    LIGHT_WAIT,
+                    last_light_status,
+                )
+            # Set HA Core's default backup-create password via WS so
+            # ha_backup_create tests pass without a pre-baked seed. Must
+            # run AFTER the sun.sun ready-wait above — sun.sun ready
+            # implies all integrations have finished loading, including
+            # ``backup`` which registers the ``backup/config/update`` WS
+            # command. Calling earlier would hit "Unknown command" before
+            # the integration's WS handlers are registered. The helper
+            # also retries on unknown_command as a belt-and-braces
+            # defence against race conditions on slow CI runners.
+            # Idempotent — safe across the inaddon dev-addon update.
+            set_default_backup_password(base_url, token)
             # The session-scope _blueprint_http_server fixture computes its
             # base_url using host.docker.internal — meaningless from inside
             # the HAOS QEMU guest. Slirp user networking always reaches the
@@ -1008,7 +1298,31 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 **_blueprint_http_server,
                 "base_url": f"http://10.0.2.2:{_blueprint_http_server['port']}",
             }
+            # Inaddon mode: refresh_dev_addon_source_in_qcow2 ran above
+            # with a bumped version, so Supervisor now sees an update
+            # available. Trigger it via WS supervisor_api (Docker layer
+            # cache → only the COPY src/ + uv-sync-project layers
+            # re-execute), then wait for the addon's MCP endpoint.
+            addon_mcp_url: str | None = None
+            # Pull setup-time work INTO the try/finally so post-mortem log
+            # dump runs even when trigger_dev_addon_update or
+            # wait_for_addon_mcp_ready raises — those steps own ~all the
+            # inaddon-specific failure surface, and without logs they're
+            # opaque "unknown error" failures.
             try:
+                if inaddon:
+                    logger.info(
+                        "Inaddon mode: triggering Supervisor addon update for PR source"
+                    )
+                    trigger_dev_addon_update(base_url, token, timeout=600.0)
+                    addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
+                    logger.info("Inaddon addon MCP endpoint ready at %s", addon_mcp_url)
+                    assert addon_mcp_url is not None, (
+                        "Inaddon setup completed without producing an "
+                        "addon_mcp_url — wait_for_addon_mcp_ready contract "
+                        "violation. Downstream mcp_client fixture would fail "
+                        "with an obscure TypeError on transport construction."
+                    )
                 yield {
                     "container": None,
                     "port": None,
@@ -1016,7 +1330,13 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     "config_path": None,
                     "blueprint_server": blueprint_for_haos,
                     "token": token,
-                    "backend": "haos",
+                    # backend marker distinguishes inaddon dispatch (mcp_client
+                    # uses HTTP transport to addon_mcp_url) from external
+                    # (in-process FastMCP server pointing at base_url).
+                    "backend": "haos_inaddon" if inaddon else "haos",
+                    # Only set on inaddon mode; external/container modes use
+                    # the in-process server and don't need this.
+                    "addon_mcp_url": addon_mcp_url,
                 }
             finally:
                 # Pull HA Core's runtime log + Supervisor's own log via the
@@ -1034,18 +1354,48 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # supervisor would stall session teardown forever.
                 log_dest = Path("/tmp/haos-diagnostics")
                 log_dest.mkdir(parents=True, exist_ok=True)
-                for name, url in (
-                    ("ha-core-runtime.log", f"{base_url}/api/hassio/core/logs?lines=20000"),
-                    ("supervisor-runtime.log", f"{base_url}/api/hassio/supervisor/logs?lines=20000"),
-                ):
+                log_endpoints = [
+                    (
+                        "ha-core-runtime.log",
+                        f"{base_url}/api/hassio/core/logs?lines=20000",
+                    ),
+                    (
+                        "supervisor-runtime.log",
+                        f"{base_url}/api/hassio/supervisor/logs?lines=20000",
+                    ),
+                ]
+                # Inaddon mode: also grab the dev addon container's logs —
+                # often the real "Check Supervisor logs for details" detail
+                # lives in the addon's own container output rather than
+                # Supervisor's. /api/hassio/addons/{slug}/logs IS in
+                # HA Core's REST PATHS_ADMIN allowlist (verified at
+                # hassio/http.py).
+                if inaddon:
+                    log_endpoints.append(
+                        (
+                            "ha-mcp-dev-addon.log",
+                            f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000",
+                        ),
+                    )
+                # Narrow except: any non-network error (NameError, KeyError
+                # from a future refactor) should propagate instead of being
+                # misreported as "Failed to dump". Per-endpoint network
+                # failures are still per-mortem and shouldn't kill teardown.
+                for name, url in log_endpoints:
                     try:
                         req = urllib.request.Request(
-                            url, headers={"Authorization": f"Bearer {token}"},
+                            url,
+                            headers={"Authorization": f"Bearer {token}"},
                         )
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             (log_dest / name).write_bytes(resp.read())
                         logger.info("Dumped %s via supervisor", name)
-                    except Exception as exc:
+                    except (
+                        OSError,
+                        urllib.error.URLError,
+                        urllib.error.HTTPError,
+                        TimeoutError,
+                    ) as exc:
                         logger.warning("Failed to dump %s: %s", name, exc)
         return
 
@@ -1193,6 +1543,31 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         logger.info("🗑️ Removed .HA_RESTORE file from config")
 
     with container:
+        # Readiness-gate budgets for the testcontainer path. Defined at
+        # the top of this ``with container:`` block for grep-ability —
+        # successor of the five per-gate constants the single
+        # ``CoreState.RUNNING`` check replaced. The HAOS branch above
+        # keeps its own ``SUN_WAIT = 60`` local (HAOS-qemu boot is a
+        # different scope, no ``[READINESS_GATE_TIMING]`` emit).
+        #
+        # ``CORE_STATE_TIMEOUT = 60`` ≈ 12× the observed-max of ~5s
+        # across the first CI window (4 worker sessions,
+        # ``entries_loaded == entries_total == 11``). The upstream
+        # per-domain ceiling ``SLOW_SETUP_MAX_WAIT = 300`` from
+        # ``homeassistant/setup.py`` is the latest point at which a
+        # stuck integration would surface as ``CoreState`` stuck at
+        # ``starting`` — 60s is well clear of that without paying the
+        # worst-case wall-clock if a slow integration legitimately
+        # needs the full budget.
+        CORE_STATE_TIMEOUT = 60
+        # ``SUN_WAIT = 5`` is the residual tight poll:
+        # ``CoreState.RUNNING`` does not strictly imply
+        # ``sun.sun != "unknown"`` because sun's first periodic position
+        # computation runs as a scheduled task after
+        # ``async_setup_entry`` returns. Template tests asserting
+        # above/below_horizon would fail without this inline check.
+        SUN_WAIT = 5
+
         # Get the dynamically assigned port
         host_port = container.get_exposed_port(8123)
         base_url = f"http://localhost:{host_port}"
@@ -1251,239 +1626,46 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 "The container may have failed to start. Check Docker logs for details."
             )
 
-        # Poll until HA components are fully loaded.  HA typically loads 80+
-        # components; 50 is the minimum needed for tests (covers automation,
-        # script, input_*, group, scene, and other commonly-tested domains).
-        MIN_COMPONENTS = 50
-        # Tightened from 30s to 10s based on [READINESS_GATE_TIMING] samples
-        # (#1310 instrumentation + 69-sample aggregate across 23 master runs):
-        # observed max 3.04s, p95 2.07s. New budget gives 3.3× / 4.8× headroom
-        # while surfacing real degradations (>10s) as fast-fail signals.
-        # Precedent: #1273 tightened INPUT_BOOLEAN_WAIT the same way.
-        STABILIZATION_TIMEOUT = 10
-
-        logger.info("⏳ Waiting for Home Assistant components to stabilize...")
-        last_count = 0
-        # Wall-clock-bound polling: ``range(STABILIZATION_TIMEOUT)`` would let
-        # a slow ``/api/config`` (2s HTTP timeout + 1s sleep ≈ up to 3s per
-        # iteration) stretch the effective wait to ~3× the declared budget.
-        stabilize_start = time.monotonic()
-        while time.monotonic() - stabilize_start < STABILIZATION_TIMEOUT:
-            try:
-                config_resp = requests.get(
-                    f"{base_url}/api/config", timeout=2, headers=headers
-                )
-                if config_resp.status_code == 200:
-                    component_count = len(config_resp.json().get("components", []))
-                    if component_count >= MIN_COMPONENTS:
-                        elapsed = time.monotonic() - stabilize_start
-                        logger.info(
-                            f"✅ Home Assistant stabilized with {component_count} components "
-                            f"after {elapsed:.1f}s"
-                        )
-                        _log_readiness_timing(
-                            "components", elapsed, count=component_count
-                        )
-                        break
-                    if component_count != last_count:
-                        logger.info(
-                            f"⏳ {component_count} components loaded, waiting for more..."
-                        )
-                        last_count = component_count
-                elif config_resp.status_code >= 400:
-                    logger.warning(
-                        f"⚠️ Stabilization check returned HTTP {config_resp.status_code}"
-                    )
-            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
-                logger.debug(f"Stabilization check failed: {exc}")
-            time.sleep(1)
-        else:
+        # Single readiness gate: poll ``/api/core/state`` until
+        # ``CoreState.RUNNING``. This replaces five separate polling gates
+        # (components/entities/input_boolean/ha_mcp_tools/sun) that were
+        # racing ``async_setup_entry`` for slow integrations — see #366
+        # thread (Ilya0527 2026-05-18) and the docstring on
+        # ``_wait_for_core_state_running`` for the structural rationale.
+        # ``CORE_STATE_TIMEOUT`` is defined at the top of this ``with
+        # container:`` block alongside ``SUN_WAIT`` for grep-ability.
+        logger.info("⏳ Waiting for HA CoreState to reach RUNNING...")
+        (
+            core_state_ok,
+            core_state_elapsed,
+            core_state_last,
+            entries_loaded,
+            entries_total,
+            snapshot_ok,
+        ) = _wait_for_core_state_running(base_url, headers, CORE_STATE_TIMEOUT)
+        if not core_state_ok:
             _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="stabilization-timeout"
+                container, base_url, headers, label="core-state-not-running"
             )
             pytest.fail(
-                f"Home Assistant component stabilization timed out after {STABILIZATION_TIMEOUT}s. "
-                f"Only {last_count} components loaded (minimum: {MIN_COMPONENTS}). "
-                f"Check Docker logs."
+                f"HA CoreState did not reach 'RUNNING' within "
+                f"{CORE_STATE_TIMEOUT}s. Last observed state: "
+                f"{core_state_last!r}. Config entries loaded: "
+                f"{entries_loaded}/{entries_total}"
+                f"{'' if snapshot_ok else ' (snapshot unavailable)'}. "
+                f"Most likely an integration's async_setup_entry hit the "
+                f"300s SLOW_SETUP_MAX_WAIT ceiling. Check Docker logs."
             )
+        _log_readiness_timing(
+            "core_state",
+            core_state_elapsed,
+            state=core_state_last,
+            entries_loaded=entries_loaded,
+            entries_total=entries_total,
+            snapshot_ok=snapshot_ok,
+        )
 
-        # Wait for entities to actually register (components loaded ≠
-        # entities available). HA 2026.4+ can report 80+ components while
-        # individual integrations (demo, sun, helpers) are still registering
-        # their entities and WebSocket handlers. The demo integration alone
-        # creates 60+ entities (lights, sensors, switches, etc.).
-        MIN_ENTITIES = 50
-        # Tightened from 30s to 10s based on the same 69-sample aggregate:
-        # observed max 4.29s, p95 4.14s. New budget gives 2.3× / 2.4× headroom
-        # — the tightest landing in this PR, but the cross-day distribution
-        # held steady across the 49h sampling window.
-        ENTITY_STABILIZATION_TIMEOUT = 10
-        logger.info("⏳ Waiting for entities to register...")
-        last_entity_count = 0
-        # Wall-clock-bound polling — same rationale as the component-
-        # stabilization loop above.
-        entity_start = time.monotonic()
-        while time.monotonic() - entity_start < ENTITY_STABILIZATION_TIMEOUT:
-            try:
-                states_resp = requests.get(
-                    f"{base_url}/api/states",
-                    timeout=5,
-                    headers=headers,
-                )
-                if states_resp.status_code == 200:
-                    entity_count = len(states_resp.json())
-                    if entity_count >= MIN_ENTITIES:
-                        elapsed = time.monotonic() - entity_start
-                        logger.info(
-                            f"✅ {entity_count} entities registered after {elapsed:.1f}s"
-                        )
-                        _log_readiness_timing("entities", elapsed, count=entity_count)
-                        break
-                    if entity_count != last_entity_count:
-                        logger.info(
-                            f"⏳ {entity_count} entities registered, "
-                            f"waiting for more..."
-                        )
-                        last_entity_count = entity_count
-            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
-                logger.debug(f"Entity registration check failed: {exc}")
-            time.sleep(1)
-        else:
-            _dump_ha_readiness_diagnostics(
-                container, base_url, headers, label="entity-registration-timeout"
-            )
-            pytest.fail(
-                f"Entity registration timed out after "
-                f"{ENTITY_STABILIZATION_TIMEOUT}s. "
-                f"Only {last_entity_count} entities registered "
-                f"(minimum: {MIN_ENTITIES}). Check Docker logs."
-            )
-
-        # Wait for input_boolean service domain to register. HA loads
-        # entities before their services for some integrations; helper and
-        # automation tests need input_boolean.* to be callable.
-        # (sun is intentionally not polled here — it registers sun.sun as an
-        # entity but never a service domain, so it would always time out.
-        # sun.sun readiness is gated by the state check below.)
-        # Tightened from 10s to 3s based on the same 69-sample aggregate:
-        # observed max 0.83s, p95 0.59s. New budget gives 3.6× / 5.1× headroom
-        # while continuing the precedent set by #1273 (30s → 10s).
-        INPUT_BOOLEAN_WAIT = 3
-        logger.info("⏳ Waiting for input_boolean service domain to register...")
-        # Wall-clock-bound polling — same rationale as the loops above.
-        ib_start = time.monotonic()
-        while time.monotonic() - ib_start < INPUT_BOOLEAN_WAIT:
-            try:
-                svc_resp = requests.get(
-                    f"{base_url}/api/services", timeout=5, headers=headers
-                )
-                if svc_resp.status_code == 200:
-                    domains = {s.get("domain") for s in svc_resp.json()}
-                    if "input_boolean" in domains:
-                        elapsed = time.monotonic() - ib_start
-                        logger.info(
-                            f"✅ input_boolean service ready after {elapsed:.1f}s"
-                        )
-                        _log_readiness_timing("input_boolean", elapsed)
-                        break
-            except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
-                logger.debug(f"Service check failed: {exc}")
-            time.sleep(1)
-        else:
-            _dump_ha_readiness_diagnostics(
-                container,
-                base_url,
-                headers,
-                label="input-boolean-warn",
-                service_domain="input_boolean",
-            )
-            logger.warning(
-                f"⚠️ input_boolean service not registered after {INPUT_BOOLEAN_WAIT}s "
-                f"— helper/automation tests may be flaky"
-            )
-
-        # Loud failure (``pytest.fail`` rather than ``logger.warning``):
-        # filesystem and config-editing tests downstream require
-        # ha_mcp_tools, and a silent warn here lets them proceed into
-        # COMPONENT_NOT_INSTALLED on the first tool call — surfacing
-        # the registration gap beats misattributing it to the calling
-        # test.
-        #
-        # On timeout the branch dumps HA-side diagnostics (``/api/services``
-        # snapshot, ``/api/config/config_entries/entry`` state, ``docker
-        # logs --tail 100``, container state) and then fails fast. The
-        # container-restart retry path that originally sat here added a
-        # ~3-minute slow-failure penalty (matching the second readiness
-        # sequence) for negligible recovery value once the underlying
-        # H_LOAD failure class — manifest-requirement-install never firing
-        # for synthetic config entries — was fixed structurally by
-        # pre-installing manifest ``requirements`` in the container
-        # entrypoint above (see ``_collect_manifest_requirements`` call
-        # site). The remaining unmitigated flake classes are tracked
-        # internally as:
-        #   H_DEPS    — async_setup_entry raises ModuleNotFoundError
-        #               despite manifest-listed deps being installed
-        #   H_LISTEN  — HA accepts the entry but never registers
-        #               services (silent setup-success-but-no-effect)
-        #   H_RESOURCE — entry setup deadlocks waiting on a resource
-        #               the test environment doesn't provide
-        # Reintroduce a bounded retry only if a future dump surfaces one
-        # of those in the wild.
-        # Tightened from 180s to 5s based on 24 [READINESS_GATE_TIMING]
-        # samples since #1346 instrumented this gate (observed max 0.08s,
-        # p95 0.07s). The original 180s was a defensive guess pre-data;
-        # actual emission consistently completes under 100ms across all
-        # observed master runs. 5s gives ~63× headroom over max — still
-        # well within CI runner variance tolerance.
-        HA_MCP_TOOLS_WAIT = 5
-        ha_mcp_tools_src = repo_root / "custom_components" / "ha_mcp_tools"
-        if ha_mcp_tools_src.exists():
-            logger.info("⏳ Waiting for ha_mcp_tools services to register...")
-            ha_mcp_ready, ha_mcp_elapsed, ha_mcp_domain_count = (
-                _wait_for_ha_mcp_tools_services(
-                    base_url, headers, HA_MCP_TOOLS_WAIT
-                )
-            )
-            if ha_mcp_ready:
-                # Success-only emit, parity with the other four readiness
-                # gates above (components / entities / input_boolean / sun)
-                # which call _log_readiness_timing only inside their hit
-                # branch. ``count`` mirrors components/entities.
-                _log_readiness_timing(
-                    "ha_mcp_tools",
-                    ha_mcp_elapsed,
-                    count=ha_mcp_domain_count,
-                )
-            else:
-                _dump_ha_readiness_diagnostics(
-                    container,
-                    base_url,
-                    headers,
-                    label="ha-mcp-tools-timeout",
-                    service_domain="ha_mcp_tools",
-                    config_entry_domain="ha_mcp_tools",
-                )
-                pytest.fail(
-                    f"ha_mcp_tools services not registered after "
-                    f"{HA_MCP_TOOLS_WAIT}s. See diagnostic dump above. "
-                    "Required for filesystem and config-editing tests; "
-                    "a silent warning here would let those tests proceed "
-                    "into COMPONENT_NOT_INSTALLED on the first tool call."
-                )
-
-        # Wait for sun.sun to leave the 'unknown' state.  During HA startup the
-        # sun integration reports 'unknown' until it computes the first position.
-        # Template tests that assert above/below_horizon will fail if we proceed
-        # before the sun integration finishes its first calculation.
-        # Tightened from 30s to 5s based on the same 69-sample aggregate:
-        # observed max 0.21s, p95 0.07s. Already the loosest gate by a wide
-        # margin pre-tightening (142×); 5s still leaves 24× / 71× headroom.
-        # (The HAOS-boot branch's SUN_WAIT = 60 is a different scope — HAOS-qemu
-        # readiness, no [READINESS_GATE_TIMING] emit — and is intentionally
-        # left untouched here.)
-        SUN_WAIT = 5
         logger.info("⏳ Waiting for sun.sun to reach a known state...")
-        # Wall-clock-bound polling — same rationale as the loops above.
         sun_start = time.monotonic()
         while time.monotonic() - sun_start < SUN_WAIT:
             try:
@@ -1526,7 +1708,20 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         try:
             yield container_info
         finally:
-            # Cleanup temp directory (container cleanup handled by 'with' statement)
+            # Container cleanup runs via the enclosing ``with container:``
+            # block's ``__exit__`` (calls ``stop()`` which removes the
+            # container). With ``TESTCONTAINERS_RYUK_DISABLED=true`` set in
+            # the CI workflow env (see .github/workflows/{pr,e2e-tests}.yml)
+            # the with-block exit IS the only cleanup mechanism — Python's
+            # context-manager protocol guarantees ``__exit__`` fires on
+            # both normal and exception flows, so the Ryuk reaper safety
+            # net is not needed. Refs #366.
+            #
+            # Do NOT add an explicit ``container.stop()`` here.
+            # testcontainers' ``DockerContainer.stop()`` calls
+            # ``remove(force=True)`` and is non-idempotent — a second call
+            # from the enclosing ``with container:`` ``__exit__`` raises
+            # ``docker.errors.NotFound`` at session teardown.
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.info("✅ Cleanup completed")
 
@@ -1563,11 +1758,26 @@ async def ha_client(
 @pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
-) -> AsyncGenerator[HomeAssistantSmartMCPServer]:
-    """Create MCP server instance connected to the container or HAOS QEMU."""
-    logger.info("🚀 Creating MCP server instance...")
+) -> AsyncGenerator[HomeAssistantSmartMCPServer | None]:
+    """Create MCP server instance connected to the container or HAOS QEMU.
 
+    Yields None on the inaddon HAOS backend — the ha-mcp dev addon
+    running inside the booted HAOS IS the server in that mode, so
+    spinning up an in-process FastMCP server here would be wasteful and
+    misleading (it'd connect to HA but tests would never use it).
+    The ``mcp_client`` fixture branches on backend to either use this
+    in-process server or build an HTTP transport pointing at the addon.
+    """
     container_info = ha_container_with_fresh_config
+    if container_info.get("backend") == "haos_inaddon":
+        logger.info(
+            "Inaddon mode: skipping in-process MCP server "
+            "(tests use addon's HTTP MCP endpoint instead)"
+        )
+        yield None
+        return
+
+    logger.info("🚀 Creating MCP server instance...")
     base_url = container_info["base_url"]
     token = container_info.get("token", TEST_TOKEN)
 
@@ -1586,10 +1796,39 @@ async def mcp_server(
 
 
 @pytest.fixture(scope="session")
-async def mcp_client(mcp_server) -> AsyncGenerator[Client]:
-    """Create FastMCP client connected to our server."""
-    client = Client(mcp_server.mcp)
+async def mcp_client(
+    ha_container_with_fresh_config, mcp_server
+) -> AsyncGenerator[Client]:
+    """Create FastMCP client — in-memory for in-process server, HTTP for inaddon.
 
+    On testcontainer + HAOS-external: in-memory transport bound to the
+    ``mcp_server`` fixture (current behavior).
+    On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
+    addon's MCP endpoint (running inside the booted HAOS). The addon
+    is the server in that mode; the local process is just a client.
+    """
+    container_info = ha_container_with_fresh_config
+    if container_info.get("backend") == "haos_inaddon":
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        addon_url = container_info.get("addon_mcp_url")
+        if not addon_url:
+            raise RuntimeError(
+                "Inaddon backend signaled but container_info has no "
+                "addon_mcp_url — wait_for_addon_mcp_ready must run + "
+                "populate this key before mcp_client is requested. "
+                "Check ha_container_with_fresh_config's inaddon branch."
+            )
+        logger.info(f"🔗 FastMCP client connecting (HTTP) to {addon_url}")
+        transport = StreamableHttpTransport(url=addon_url)
+        client = Client(transport)
+        async with client:
+            logger.debug("🔗 FastMCP client connected (HTTP transport, inaddon)")
+            yield client
+        return
+
+    # Default path: in-memory transport.
+    client = Client(mcp_server.mcp)
     async with client:
         logger.debug("🔗 FastMCP client connected (in-memory transport)")
         yield client

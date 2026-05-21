@@ -39,6 +39,7 @@ from .util_helpers import (
     get_logger_levels,
     parse_diagnostics_fields,
     wait_for_entity_removed,
+    websocket_error_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,15 @@ FlowLookupReason = Literal[
 
 
 # Tool parameter type for ha_delete_helpers_integrations.helper_type.
-# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES exactly — the drift
-# assertion below catches accidental divergence at import time.
+# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES plus config_subentry —
+# the drift assertion below catches accidental divergence at import time.
 HelperTypeLiteral = Literal[
     # 12 SIMPLE
     "input_button", "input_boolean", "input_select", "input_number",
     "input_text", "input_datetime", "counter", "timer", "schedule",
     "zone", "person", "tag",
+    # config-entry subentries
+    "config_subentry",
     # 15 FLOW
     "template", "group", "utility_meter", "derivative", "min_max",
     "threshold", "integration", "statistics", "trend", "random",
@@ -69,9 +72,10 @@ HelperTypeLiteral = Literal[
     "generic_hygrostat",
 ]
 assert set(get_args(HelperTypeLiteral)) == (
-    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES
+    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES | {"config_subentry"}
 ), (
-    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES — "
+    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES "
+    "| {'config_subentry'} — "
     "update the inline list to match."
 )
 
@@ -194,6 +198,60 @@ class IntegrationTools:
                 description="When entry_id is set, also return the options flow schema "
                 "(available fields and their types). Use before ha_config_set_helper "
                 "to understand what can be updated. Only applies when supports_options=true.",
+                default=False,
+            ),
+        ] = False,
+        include_subentries: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "When entry_id is set, include config subentries for the "
+                    "integration entry. Useful for integrations that expose "
+                    "conversation agents, devices, or other extension points "
+                    "as subentries."
+                ),
+                default=False,
+            ),
+        ] = False,
+        include_subentry_schema: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "When entry_id is set, return introspection-only config "
+                    "subentry schema information; no subentry is created. "
+                    "Pair with subentry_type, and optionally subentry_id for "
+                    "reconfigure schema."
+                ),
+                default=False,
+            ),
+        ] = False,
+        subentry_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Integration-defined subentry type used with "
+                    "include_subentry_schema=True."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Existing subentry ID used with include_subentry_schema=True "
+                    "to inspect a reconfigure flow."
+                ),
+                default=None,
+            ),
+        ] = None,
+        show_advanced_options: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "When include_subentry_schema=True, ask Home Assistant to "
+                    "expose advanced flow options."
+                ),
                 default=False,
             ),
         ] = False,
@@ -345,6 +403,9 @@ class IntegrationTools:
         - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
         - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
         - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
+        - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
+        - Inspect subentry create schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation")
+        - Inspect subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - List template entries: ha_get_integration(domain="template")
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
@@ -372,6 +433,28 @@ class IntegrationTools:
             )
             include_diagnostics_bool = coerce_bool_param(
                 include_diagnostics, "include_diagnostics", default=False
+            )
+            include_subentries_bool = cast(
+                bool,
+                coerce_bool_param(
+                    include_subentries, "include_subentries", default=False
+                ),
+            )
+            include_subentry_schema_bool = cast(
+                bool,
+                coerce_bool_param(
+                    include_subentry_schema,
+                    "include_subentry_schema",
+                    default=False,
+                ),
+            )
+            show_advanced_options_bool = cast(
+                bool,
+                coerce_bool_param(
+                    show_advanced_options,
+                    "show_advanced_options",
+                    default=False,
+                ),
             )
             exact_match_bool = coerce_bool_param(
                 exact_match, "exact_match", default=True
@@ -420,7 +503,16 @@ class IntegrationTools:
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
-                resp = await self._get_single_entry(entry_id, include_schema_bool)
+                resp = await self._get_single_entry(
+                    entry_id,
+                    include_schema_bool,
+                    include_subentries=include_subentries_bool
+                    or include_subentry_schema_bool,
+                    include_subentry_schema=include_subentry_schema_bool,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options_bool,
+                )
                 if include_diagnostics_bool:
                     resp["diagnostics"] = await fetch_integration_diagnostics(
                         self._client,
@@ -443,21 +535,35 @@ class IntegrationTools:
             result = await self._list_entries(
                 domain, query, include_opts, exact_match_bool, limit_int, offset_int
             )
-            if (
-                include_diagnostics_bool
-                or device_id is not None
-                or fields_list is not None
-                or truncate_bytes is not None
-                or diagnostics_data_path is not None
-                or data_limit_int is not None
-                or data_offset_int > 0
-            ):
+            ignored_detail_params = []
+            if include_diagnostics_bool:
+                ignored_detail_params.append("include_diagnostics")
+            if device_id is not None:
+                ignored_detail_params.append("device_id")
+            if fields_list is not None:
+                ignored_detail_params.append("diagnostics_fields")
+            if truncate_bytes is not None:
+                ignored_detail_params.append("diagnostics_truncate_at_bytes")
+            if diagnostics_data_path is not None:
+                ignored_detail_params.append("diagnostics_data_path")
+            if data_offset_int > 0:
+                ignored_detail_params.append("diagnostics_data_offset")
+            if data_limit_int is not None:
+                ignored_detail_params.append("diagnostics_data_limit")
+            if include_subentries_bool:
+                ignored_detail_params.append("include_subentries")
+            if include_subentry_schema_bool:
+                ignored_detail_params.append("include_subentry_schema")
+            if subentry_type is not None:
+                ignored_detail_params.append("subentry_type")
+            if subentry_id is not None:
+                ignored_detail_params.append("subentry_id")
+            if show_advanced_options_bool:
+                ignored_detail_params.append("show_advanced_options")
+            if ignored_detail_params:
                 result.setdefault("warnings", []).append(
-                    "include_diagnostics, device_id, diagnostics_fields, "
-                    "diagnostics_truncate_at_bytes, diagnostics_data_path, "
-                    "diagnostics_data_offset, and/or diagnostics_data_limit "
-                    "were provided but ignored because entry_id was not set "
-                    "(list mode)"
+                    f"{', '.join(ignored_detail_params)} "
+                    "ignored because entry_id was not set (list mode)"
                 )
             return result
 
@@ -475,7 +581,15 @@ class IntegrationTools:
             )
 
     async def _get_single_entry(
-        self, entry_id: str, include_schema: bool | None
+        self,
+        entry_id: str,
+        include_schema: bool | None,
+        *,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
@@ -510,6 +624,20 @@ class IntegrationTools:
             if include_schema and result.get("supports_options"):
                 await self._fetch_options_schema(entry_id, resp)
 
+            if include_subentries:
+                subentries = await self._fetch_config_subentries(entry_id)
+                resp["subentry_count"] = len(subentries)
+                resp["subentries"] = subentries
+
+            if include_subentry_schema:
+                await self._fetch_config_subentry_schema(
+                    entry_id,
+                    resp,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options,
+                )
+
             return resp
         except ToolError:
             raise
@@ -522,6 +650,89 @@ class IntegrationTools:
                     "config entries",
                 ],
             )
+
+    async def _fetch_config_subentries(self, entry_id: str) -> list[dict[str, Any]]:
+        """Fetch config subentries for a detailed entry response."""
+        result = await self._client.list_config_subentries(entry_id)
+        if not isinstance(result, dict) or not result.get("success"):
+            error_msg = websocket_error_message(result.get("error", "Operation failed"))
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to list config subentries: {error_msg}",
+                context={"entry_id": entry_id},
+            ))
+
+        subentries = result.get("result")
+        if not isinstance(subentries, list):
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Unexpected config subentry list response",
+                context={"entry_id": entry_id, "details": result},
+            ))
+
+        return [subentry for subentry in subentries if isinstance(subentry, dict)]
+
+    async def _fetch_config_subentry_schema(
+        self,
+        entry_id: str,
+        resp: dict[str, Any],
+        *,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
+    ) -> None:
+        """Start a config subentry flow to read its schema, then abort it."""
+        if not subentry_type:
+            raise_tool_error(create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "subentry_type is required when include_subentry_schema=True",
+                suggestions=[
+                    "Call ha_get_integration(entry_id=..., "
+                    "include_subentries=True) to inspect existing subentry "
+                    "types, then retry with subentry_type.",
+                ],
+                context={"entry_id": entry_id},
+            ))
+
+        flow_id = None
+        try:
+            flow_result = await self._client.start_config_subentry_flow(
+                entry_id,
+                subentry_type,
+                subentry_id=subentry_id,
+                show_advanced_options=show_advanced_options,
+            )
+            flow_id = flow_result.get("flow_id")
+            flow_type = flow_result.get("type")
+            schema: dict[str, Any] = {
+                "subentry_type": subentry_type,
+                "subentry_id": subentry_id,
+                "flow_type": flow_type,
+                "step_id": flow_result.get("step_id"),
+                "description_placeholders": flow_result.get(
+                    "description_placeholders", {}
+                ),
+            }
+            if flow_type == "form":
+                schema["data_schema"] = flow_result.get("data_schema", [])
+            elif flow_type == "menu":
+                schema["menu_options"] = flow_result.get("menu_options", [])
+            else:
+                schema["details"] = flow_result
+            resp["subentry_schema"] = schema
+        finally:
+            if flow_id:
+                try:
+                    await asyncio.wait_for(
+                        self._client.abort_config_subentry_flow(flow_id),
+                        timeout=5.0,
+                    )
+                except Exception as abort_err:
+                    logger.warning(
+                        "Failed to abort config subentry introspection flow %s: %s",
+                        flow_id,
+                        abort_err,
+                    )
 
     @staticmethod
     def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -888,7 +1099,9 @@ class IntegrationTools:
                     "(b) full entity_id (requires helper_type), "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
                     "(c) config entry_id for any integration (helper_type=None), "
-                    "e.g. value from ha_get_integration()."
+                    "e.g. value from ha_get_integration(); "
+                    "(d) parent config entry_id for config_subentry "
+                    "(requires helper_type='config_subentry' and subentry_id)."
                 )
             ),
         ],
@@ -898,7 +1111,18 @@ class IntegrationTools:
                 description=(
                     "Helper type. Required when target is a helper_id (bare) "
                     "or entity_id. Set to None when target is a config entry_id "
-                    "to delete any integration."
+                    "to delete any integration. Use 'config_subentry' to delete "
+                    "a config subentry under target."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Config subentry ID to delete when "
+                    "helper_type='config_subentry'."
                 ),
                 default=None,
             ),
@@ -930,8 +1154,9 @@ class IntegrationTools:
     ) -> dict[str, Any]:
         """Delete a Home Assistant helper or integration config entry.
 
-        Combines simple-helper websocket deletion and config-entry deletion
-        under one entry point with three routing paths driven by helper_type.
+        Combines simple-helper websocket deletion, config-entry deletion, and
+        config-subentry deletion under one entry point with four routing paths
+        driven by helper_type.
 
         WHEN NOT TO USE:
         - Removing only an entity (without deleting its underlying helper or
@@ -955,6 +1180,8 @@ class IntegrationTools:
           (e.g. utility_meter tariffs) are removed together.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
+        - helper_type="config_subentry" + parent entry_id + subentry_id →
+          delete one config subentry.
 
         EXAMPLES:
         - Delete SIMPLE button:
@@ -970,6 +1197,11 @@ class IntegrationTools:
         - Delete any integration by entry_id:
           ha_delete_helpers_integrations(
               target="01HXYZ...", confirm=True
+          )
+        - Delete a config subentry:
+          ha_delete_helpers_integrations(
+              target="01HXYZ...", helper_type="config_subentry",
+              subentry_id="subentry-123", confirm=True
           )
 
         **WARNING:** Deleting a helper or integration that is referenced by
@@ -1022,6 +1254,19 @@ class IntegrationTools:
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
+
+        if helper_type == "config_subentry":
+            # Path 4: Delete one subentry under a parent config entry
+            subentry_id = validate_identifier_not_empty(
+                subentry_id,
+                "subentry_id",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=..., include_subentries=True) "
+                    "to find subentry IDs",
+                ],
+                context={"target": target, "helper_type": helper_type},
+            )
+            return await self._delete_config_subentry(target, subentry_id)
 
         if helper_type in SIMPLE_HELPER_TYPES:
             # Path 1: SIMPLE helper via websocket delete
@@ -1237,13 +1482,13 @@ class IntegrationTools:
                     if res is not True
                 ]
                 if not_removed:
-                    response["warning"] = (
+                    response.setdefault("warnings", []).append(
                         f"Deletion confirmed but the following entities "
                         f"are still present after the wait window: "
                         f"{not_removed}"
                     )
             if warnings:
-                response["warnings"] = warnings
+                response.setdefault("warnings", []).extend(warnings)
             return response
 
         except ToolError:
@@ -1260,7 +1505,30 @@ class IntegrationTools:
                     "Verify the target exists using ha_search_entities() "
                     "or ha_get_integration()",
                 ],
-            )
+        )
+
+    async def _delete_config_subentry(
+        self, entry_id: str, subentry_id: str
+    ) -> dict[str, Any]:
+        """Delete one config subentry under a parent config entry."""
+        result = await self._client.delete_config_subentry(entry_id, subentry_id)
+        if not isinstance(result, dict) or not result.get("success"):
+            error_msg = websocket_error_message(result.get("error", "Operation failed"))
+            raise_tool_error(create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to delete config subentry: {error_msg}",
+                context={"entry_id": entry_id, "subentry_id": subentry_id},
+            ))
+        return {
+            "success": True,
+            "action": "delete",
+            "target": entry_id,
+            "helper_type": "config_subentry",
+            "subentry_id": subentry_id,
+            "method": "config_subentry_delete",
+            "message": f"Successfully deleted config subentry: {subentry_id}",
+            "result": result.get("result"),
+        }
 
     # === Path 1: SIMPLE helper delete via websocket ===
     async def _delete_simple_helper(
@@ -1388,7 +1656,7 @@ class IntegrationTools:
                             client, entity_id
                         )
                         if not removed:
-                            response["warning"] = (
+                            response.setdefault("warnings", []).append(
                                 f"Deletion confirmed but {entity_id} "
                                 "is still present after the wait window."
                             )
@@ -1531,7 +1799,7 @@ class IntegrationTools:
                         client, entity_id
                     )
                     if not removed:
-                        response["warning"] = (
+                        response.setdefault("warnings", []).append(
                             f"Deletion confirmed but {entity_id} "
                             "is still present after the wait window."
                         )

@@ -23,6 +23,7 @@ ALLOWED_YAML_KEYS = frozenset(
         "binary_sensor",
         "command_line",
         "rest",
+        "knx",
         "mqtt",
         "shell_command",
         "switch",
