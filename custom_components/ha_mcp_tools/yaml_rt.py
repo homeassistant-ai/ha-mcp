@@ -74,12 +74,18 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
+def _build_yaml() -> YAML:
+    """Create a fresh round-trip YAML instance with HA tag support."""
+    ry = YAML(typ="rt")
+    ry.preserve_quotes = True
+    return ry
+
+
 class _YAMLStorage(threading.local):
     """Thread-local storage for ruamel.yaml instances."""
 
     def __init__(self) -> None:
-        self.yaml = YAML(typ="rt")
-        self.yaml.preserve_quotes = True
+        self.yaml = _build_yaml()
 
 
 _STORAGE = _YAMLStorage()
@@ -98,8 +104,7 @@ def make_yaml() -> YAML:
     try:
         return _STORAGE.yaml
     except AttributeError:
-        _STORAGE.yaml = YAML(typ="rt")
-        _STORAGE.yaml.preserve_quotes = True
+        _STORAGE.yaml = _build_yaml()
         return _STORAGE.yaml
 
 
