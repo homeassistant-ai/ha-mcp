@@ -260,6 +260,90 @@
     "source_file": "tools_areas.py"
   },
   {
+    "name": "ha_manage_pipeline",
+    "title": "Manage Assist Pipeline",
+    "description": "Manage Home Assistant Assist pipelines.\n\nUse action='list' to discover pipeline IDs, action='get' to inspect one\npipeline, action='create' or action='update' to write pipeline settings,\nand action='set_preferred' to choose the preferred pipeline.\n\nEXAMPLES:\n- List pipelines: ha_manage_pipeline(action=\"list\")\n- Get one pipeline: ha_manage_pipeline(action=\"get\", pipeline_id=\"preferred\")\n- Create by cloning preferred: ha_manage_pipeline(\n      action=\"create\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Create by cloning a specific pipeline: ha_manage_pipeline(\n      action=\"create\",\n      base_pipeline_id=\"preferred\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Update conversation agent and clear TTS voice: ha_manage_pipeline(\n      action=\"update\",\n      pipeline_id=\"preferred\",\n      conversation_engine=\"conversation.local_llm\",\n      tts_voice=\"\",\n  )\n- Set preferred: ha_manage_pipeline(\n      action=\"set_preferred\",\n      pipeline_id=\"preferred\",\n  )\n\nEmpty string clears nullable STT/TTS/wake-word fields. Non-nullable\nfields such as name, language, conversation_language, and\nconversation_engine must be omitted or non-empty.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "Annotated[PipelineAction, Field(description='Pipeline operation: list, get, create, update, or set_preferred.')]"
+        },
+        "pipeline_id": {
+          "type": "Annotated[str | None, Field(description='Assist pipeline ID. Required for get, update, and set_preferred.', default=None)]",
+          "default": null
+        },
+        "name": {
+          "type": "Annotated[str | None, Field(description=\"Pipeline display name. Required when action='create'.\", default=None)]",
+          "default": null
+        },
+        "conversation_engine": {
+          "type": "Annotated[str | None, Field(description=\"Conversation agent entity ID or engine ID. Required when action='create'.\", default=None)]",
+          "default": null
+        },
+        "base_pipeline_id": {
+          "type": "Annotated[str | None, Field(description='Pipeline ID to clone when creating. Omit to clone the preferred pipeline. Ignored for non-create actions.', default=None)]",
+          "default": null
+        },
+        "conversation_language": {
+          "type": "Annotated[str | None, Field(description=\"Conversation language, usually '*'.\", default=None)]",
+          "default": null
+        },
+        "language": {
+          "type": "Annotated[str | None, Field(description=\"Pipeline language, e.g. 'en'.\", default=None)]",
+          "default": null
+        },
+        "stt_engine": {
+          "type": "Annotated[str | None, Field(description='Speech-to-text engine. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "stt_language": {
+          "type": "Annotated[str | None, Field(description='Speech-to-text language. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "tts_engine": {
+          "type": "Annotated[str | None, Field(description='Text-to-speech engine. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "tts_language": {
+          "type": "Annotated[str | None, Field(description='Text-to-speech language. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "tts_voice": {
+          "type": "Annotated[str | None, Field(description='Text-to-speech voice. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "wake_word_entity": {
+          "type": "Annotated[str | None, Field(description='Wake-word entity ID. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "wake_word_id": {
+          "type": "Annotated[str | None, Field(description='Wake-word ID. Pass empty string to clear.', default=None)]",
+          "default": null
+        },
+        "prefer_local_intents": {
+          "type": "Annotated[bool | None, Field(description='Whether Home Assistant local intents should be preferred before the conversation engine.', default=None)]",
+          "default": null
+        },
+        "make_preferred": {
+          "type": "Annotated[bool, Field(description='For create/update only, also set the resulting pipeline as preferred with an extra websocket call. Ignored for other actions.', default=False)]",
+          "default": false
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "readOnlyHint": false
+    },
+    "tags": [
+      "Assist"
+    ],
+    "source_file": "tools_voice_assistant.py"
+  },
+  {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
     "description": "Retrieve Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `automation_id` is the resolved entity_id (canonical\nform, e.g. `automation.morning_routine`) when the registry lookup\nsucceeds, falling back to the input `identifier` otherwise.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_guide.",
