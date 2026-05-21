@@ -77,8 +77,7 @@ class TestLabelGetMissingReturnsResourceNotFound:
         )
         # The list-tool recovery suggestion (already pre-#1297) must survive.
         assert any(
-            "ha_config_get_label" in s
-            for s in _all_suggestions(error_data["error"])
+            "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
         )
         # The available_label_ids surface (pre-#1297) must survive too.
         assert "available_label_ids" in error_data
@@ -115,8 +114,7 @@ class TestCategoryGetMissingReturnsResourceNotFound:
             "as RESOURCE_NOT_FOUND."
         )
         assert any(
-            "ha_config_get_category" in s
-            for s in _all_suggestions(error_data["error"])
+            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
         )
         assert "available_category_ids" in error_data
         assert error_data["scope"] == "automation"

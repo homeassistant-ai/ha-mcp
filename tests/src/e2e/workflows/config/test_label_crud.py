@@ -38,7 +38,9 @@ class TestLabelCRUD:
 
         logger.info(f"Found {data['count']} labels")
         for label in data["labels"][:5]:  # Log first 5
-            logger.info(f"  - {label.get('name', 'Unknown')} (id: {label.get('label_id')})")
+            logger.info(
+                f"  - {label.get('name', 'Unknown')} (id: {label.get('label_id')})"
+            )
 
     async def test_label_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete label lifecycle: create, get, update, delete."""
@@ -276,7 +278,6 @@ class TestLabelAssignment:
         cleanup_tracker.track("label", label_id)
         logger.info(f"Created label for assignment: {label_id}")
 
-
         # Assign label to entity
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -324,7 +325,6 @@ class TestLabelAssignment:
             cleanup_tracker.track("label", label_id)
         logger.info(f"Created labels: {label_ids}")
 
-
         # Assign both labels
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -367,7 +367,6 @@ class TestLabelAssignment:
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
 
-
         # Assign using string (JSON array) instead of list
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -409,7 +408,6 @@ class TestLabelAssignment:
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
 
-
         # Assign using JSON array string
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -436,7 +434,9 @@ class TestLabelAssignment:
             {"label_id": label_id},
         )
 
-    async def test_assign_label_to_nonexistent_entity(self, mcp_client, cleanup_tracker):
+    async def test_assign_label_to_nonexistent_entity(
+        self, mcp_client, cleanup_tracker
+    ):
         """Test assigning label to non-existent entity."""
         logger.info("Testing label assignment to non-existent entity")
 
@@ -448,7 +448,6 @@ class TestLabelAssignment:
         create_data = assert_mcp_success(create_result, "Create label")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
-
 
         # Try to assign to non-existent entity
         data = await safe_call_tool(
@@ -526,7 +525,5 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     list_label_ids = [lbl.get("label_id") for lbl in list_data.get("labels", [])]
     for label_id in label_ids:
-        assert label_id not in list_label_ids, (
-            f"Label {label_id} should be deleted"
-        )
+        assert label_id not in list_label_ids, f"Label {label_id} should be deleted"
     logger.info("All label deletions verified")

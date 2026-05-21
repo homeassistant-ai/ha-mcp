@@ -36,7 +36,11 @@ class CategoryTools:
     @tool(
         name="ha_config_get_category",
         tags={"Labels & Categories"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Category"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Category",
+        },
     )
     @log_tool_usage
     async def ha_config_get_category(
@@ -276,7 +280,11 @@ class CategoryTools:
     @tool(
         name="ha_config_remove_category",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Category"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Category",
+        },
     )
     @log_tool_usage
     async def ha_config_remove_category(
