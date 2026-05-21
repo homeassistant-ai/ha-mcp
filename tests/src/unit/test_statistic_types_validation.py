@@ -86,12 +86,15 @@ class TestStatisticTypesValidation:
             return {"success": True, "result": {"sensor.test": []}}
 
         ws.send_command = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
-        ), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                return_value=(ws, None),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -115,12 +118,15 @@ class TestStatisticTypesValidation:
             return {"success": True, "result": {"sensor.test": []}}
 
         ws.send_command = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
-        ), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                return_value=(ws, None),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             await history_tool(
                 entity_ids="sensor.test",
@@ -143,12 +149,15 @@ class TestStatisticTypesValidation:
             return {"success": True, "result": {"sensor.test": []}}
 
         ws.send_command = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.get_connected_ws_client",
-            return_value=(ws, None),
-        ), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d: d,
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                return_value=(ws, None),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             await history_tool(
                 entity_ids="sensor.test",

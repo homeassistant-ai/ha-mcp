@@ -12,6 +12,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.util_helpers import (
     DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS,
     _resolve_data_path,
+    add_timezone_metadata,
     apply_entity_category,
     build_pagination_metadata,
     coerce_int_param,
@@ -497,9 +498,7 @@ class TestFetchIntegrationDiagnostics:
     async def test_custom_timeout_propagates(self):
         client = MagicMock()
         client._request = AsyncMock(return_value={})
-        await fetch_integration_diagnostics(
-            client, "entry_abc", timeout_seconds=10.0
-        )
+        await fetch_integration_diagnostics(client, "entry_abc", timeout_seconds=10.0)
         assert client._request.await_args.kwargs["timeout"] == 10.0
 
     @pytest.mark.asyncio
@@ -731,9 +730,7 @@ class TestFetchIntegrationDiagnostics:
         requested key appears in ``omitted_fields`` (no silent fall-through to
         the full payload)."""
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {}, "issues": []}
-        )
+        client._request = AsyncMock(return_value={"home_assistant": {}, "issues": []})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -871,9 +868,7 @@ class TestFetchIntegrationDiagnostics:
     @pytest.mark.asyncio
     async def test_data_path_pagination_offset_skips_then_has_more_false_at_end(self):
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"items": [str(i) for i in range(25)]}
-        )
+        client._request = AsyncMock(return_value={"items": [str(i) for i in range(25)]})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -919,9 +914,7 @@ class TestFetchIntegrationDiagnostics:
     @pytest.mark.asyncio
     async def test_data_path_descent_into_non_dict_surfaces_error(self):
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"devices": ["d1", "d2"]}
-        )
+        client._request = AsyncMock(return_value={"devices": ["d1", "d2"]})
         result = await fetch_integration_diagnostics(
             client, "entry_abc", data_path="devices.0"
         )
@@ -937,17 +930,13 @@ class TestFetchIntegrationDiagnostics:
         swallowed instead of resolving silently."""
         client = MagicMock()
         client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path=""
-        )
+        result = await fetch_integration_diagnostics(client, "entry_abc", data_path="")
         # Data passes through unchanged; resolver branch is skipped.
         assert result["data"] == {"foo": "bar"}
         assert "data_path" not in result
         assert "data_path_error" not in result
         # New: empty / whitespace-stripped inputs surface a warning.
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
 
     @pytest.mark.asyncio
     async def test_data_path_combined_with_fields_projection(self):
@@ -1056,9 +1045,7 @@ class TestFetchIntegrationDiagnostics:
         "sub-tree not present" message rather than the generic
         ``cannot descend into NoneType`` wording."""
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {"version": None}}
-        )
+        client._request = AsyncMock(return_value={"home_assistant": {"version": None}})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -1098,9 +1085,7 @@ class TestFetchIntegrationDiagnostics:
         the offset was dropped (rather than silently doing nothing)."""
         client = MagicMock()
         client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_offset=5
-        )
+        result = await fetch_integration_diagnostics(client, "entry_abc", data_offset=5)
         assert "data_pagination_warning" in result
         assert "data_path not set" in result["data_pagination_warning"]
         # Underlying data is unchanged — the warning is the only signal.
@@ -1118,9 +1103,7 @@ class TestFetchIntegrationDiagnostics:
         )
         assert result["data"] == {"foo": "bar"}
         assert "data_path" not in result
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
 
     @pytest.mark.asyncio
     async def test_whitespace_path_plus_offset_keeps_whitespace_warning(self):
@@ -1135,9 +1118,7 @@ class TestFetchIntegrationDiagnostics:
         result = await fetch_integration_diagnostics(
             client, "entry_abc", data_path="   ", data_offset=5
         )
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
         # Specifically NOT the downstream-consequence warning.
         assert "data_path not set" not in result["data_pagination_warning"]
 
@@ -1323,9 +1304,7 @@ class TestApplyEntityCategoryWriter:
     @pytest.mark.asyncio
     async def test_success_does_not_create_warnings_key(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True}
-        )
+        client.send_websocket_message = AsyncMock(return_value={"success": True})
         result: dict[str, object] = {}
 
         await apply_entity_category(
@@ -1363,3 +1342,116 @@ class TestApplyEntityCategoryWriter:
         assert "earlier note" in warnings
         assert any("failed to set category" in w for w in warnings)
         assert "category_warning" not in result
+
+
+class TestAddTimezoneMetadata:
+    """Behavioral assertions for add_timezone_metadata (issue #1199).
+
+    Pins the ``include_metadata=False`` short-circuit and the config-fetch
+    fallback so regressions fail loudly.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "America/New_York"})
+        return client
+
+    @pytest.mark.asyncio
+    async def test_default_wraps_in_data_metadata_envelope(self, mock_client):
+        """include_metadata=True (default) wraps data in {data, metadata}."""
+        data = {"success": True, "results": []}
+        result = await add_timezone_metadata(mock_client, data)
+        assert "data" in result
+        assert "metadata" in result
+        assert result["data"] is data
+
+    @pytest.mark.asyncio
+    async def test_include_metadata_false_returns_data_unchanged(self, mock_client):
+        """include_metadata=False bypasses wrapping — returns data object identity."""
+        data = {"success": True, "results": []}
+        result = await add_timezone_metadata(mock_client, data, include_metadata=False)
+        # Same object; no wrapping
+        assert result is data
+        assert "metadata" not in result
+        assert "data" not in result
+
+    @pytest.mark.asyncio
+    async def test_metadata_contains_ha_timezone(self, mock_client):
+        """metadata.home_assistant_timezone is populated from HA config."""
+        result = await add_timezone_metadata(mock_client, {"success": True})
+        assert result["metadata"]["home_assistant_timezone"] == "America/New_York"
+
+    @pytest.mark.asyncio
+    async def test_config_failure_falls_back_to_unknown_timezone(self):
+        """On connection-class exception the wrapper still returns with 'Unknown' timezone."""
+        client = MagicMock()
+        # Use OSError which is in the narrow exception tuple (connection-class errors).
+        client.get_config = AsyncMock(side_effect=OSError("connection refused"))
+        result = await add_timezone_metadata(client, {"success": True})
+        # Wrapper is still present; timezone is the fallback sentinel
+        assert "data" in result
+        assert result["metadata"]["home_assistant_timezone"] == "Unknown"
+
+
+class TestProjectFieldsTypoGuard:
+    """project_fields() typo guard: warn when requested top-level keys are absent.
+
+    Pins kingpanther13 v11 fix: project_fields() must emit a diagnostic in
+    warnings[] when any requested key doesn't exist, rather than returning a
+    mysteriously empty response (e.g. fields=["entity_history"] on a response
+    whose real key is "entities").
+    """
+
+    def test_unknown_fields_key_emits_warning(self):
+        """All unknown keys: success + warnings listing the available keys."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["nonexistent_key"])
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any("nonexistent_key" in w for w in result["warnings"])
+        # Available keys hint should mention real keys
+        assert any("entities" in w for w in result["warnings"])
+
+    def test_partial_unknown_key_warns_about_missing_only(self):
+        """Mixed valid+invalid: valid key is kept; diagnostic names the unknown one."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["entities", "typo_key"])
+        assert "entities" in result
+        assert result["entities"] == [1, 2]
+        assert "warnings" in result
+        assert any("typo_key" in w for w in result["warnings"])
+        # "entities" is valid — should not appear in the unknown list
+        warn_text = " ".join(result["warnings"])
+        assert "entities" not in warn_text.split("not found")[0]
+
+    def test_all_valid_fields_no_warning(self):
+        """When all requested keys exist, no warning is emitted."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["entities"])
+        assert "entities" in result
+        assert "warnings" not in result
+
+    def test_success_field_request_no_false_warning(self):
+        """fields=["success"] must not warn — success is force-retained, not unknown."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "count": 5}
+        result = project_fields(data, ["success"])
+        assert result["success"] is True
+        assert "warnings" not in result
+
+    def test_warning_survives_projection_because_warnings_is_force_retained(self):
+        """The warning added by the typo guard is itself force-retained."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["ghost_key"])
+        # warnings must be in the output even though it was not in fields=
+        assert "warnings" in result

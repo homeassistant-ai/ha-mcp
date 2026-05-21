@@ -288,6 +288,81 @@ def parse_string_list_param(
     raise ValueError(f"{param_name} must be string, list, or None")
 
 
+def project_fields(
+    data: dict[str, Any],
+    fields: str | list[str] | None,
+) -> dict[str, Any]:
+    """Apply optional field projection to a response data dict.
+
+    Always retains ``success`` and ``warnings``.  Accepts a list or a
+    CSV/JSON-array string for *fields*.  Apply to the inner payload before any
+    outer wrapper that adds top-level keys you want to preserve.
+
+    Typo guard: if any requested key does not exist in *data* (excluding the
+    always-retained ``success``/``warnings`` keys), a diagnostic is appended to
+    ``result["warnings"]`` listing the unknown keys and the available ones.
+    This mirrors the per-record ``result_fields_warning`` guard and ensures
+    callers get a signal rather than a mysteriously empty response.
+    """
+    if fields is None:
+        return data
+    parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
+    keep = set(parsed) | {"success", "warnings"}
+    result = {k: v for k, v in data.items() if k in keep}
+    # Typo guard — flag any requested keys that are absent from the response.
+    # Exclude the always-retained sentinels so fields=["success"] never warns.
+    _force_retain = {"success", "warnings"}
+    unknown = sorted(set(parsed) - set(data.keys()) - _force_retain)
+    if unknown:
+        available = sorted(k for k in data.keys() if k not in _force_retain)
+        result.setdefault("warnings", []).append(
+            f"fields {unknown!r} not found in response — available keys: {available!r}"
+        )
+    return result
+
+
+def project_records(
+    records: list[dict[str, Any]], fields: list[str] | None
+) -> list[dict[str, Any]]:
+    """Project each record dict to only the specified keys.
+
+    Returns *records* unchanged when *fields* is ``None``.  Unknown keys are
+    silently dropped from each record.  Call :func:`result_fields_warning`
+    on the original and projected lists if you want a diagnostic when all keys
+    were unknown (typo guard).
+    """
+    if fields is None:
+        return records
+    keep = set(fields)
+    return [{k: v for k, v in r.items() if k in keep} for r in records]
+
+
+def result_fields_warning(
+    original: list[dict[str, Any]],
+    projected: list[dict[str, Any]],
+    fields: list[str],
+    param_name: str = "result_fields",
+) -> str | None:
+    """Return a diagnostic string when all projected records are empty dicts.
+
+    Fires only when *original* is non-empty and every projected record is
+    ``{}`` — the typical cause is specifying only unknown field names
+    (e.g. a typo in ``result_fields``).  The caller should append the
+    returned string to the response ``warnings`` list.
+    """
+    if not original or not projected:
+        return None
+    if all(not r for r in projected):
+        # Sample up to 3 records for the available-keys hint so we don't
+        # iterate the whole (potentially large) list.
+        available = sorted({k for r in original[:3] for k in r})
+        return (
+            f"{param_name} {sorted(fields)!r} matched no record keys — "
+            f"records came out empty. Available keys: {available!r}"
+        )
+    return None
+
+
 def build_pagination_metadata(
     total_count: int, offset: int, limit: int, count: int
 ) -> dict[str, Any]:
@@ -447,8 +522,17 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     return levels
 
 
-async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, Any]:
-    """Add Home Assistant timezone to tool responses for local time context."""
+async def add_timezone_metadata(
+    client: Any, data: dict[str, Any], include_metadata: bool = True
+) -> dict[str, Any]:
+    """Add Home Assistant timezone to tool responses for local time context.
+
+    Wraps *data* in ``{"data": ..., "metadata": {...}}``.  Pass
+    ``include_metadata=False`` to return *data* unchanged — the ``metadata``
+    wrapper is then omitted entirely.
+    """
+    if not include_metadata:
+        return data
     try:
         config = await client.get_config()
         ha_timezone = config.get("time_zone", "UTC")
@@ -461,8 +545,19 @@ async def add_timezone_metadata(client: Any, data: dict[str, Any]) -> dict[str, 
                 "note": f"All timestamps are in UTC. Home Assistant timezone is {ha_timezone}.",
             },
         }
-    except Exception:
-        # Fallback if config fetch fails
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as _tz_exc:
+        logger.warning(
+            "add_timezone_metadata: failed to fetch HA timezone config — "
+            "falling back to 'Unknown': %s",
+            _tz_exc,
+            exc_info=True,
+        )
         return {
             "data": data,
             "metadata": {

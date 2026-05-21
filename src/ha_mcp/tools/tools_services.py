@@ -12,14 +12,20 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import build_pagination_metadata, coerce_int_param
+from .util_helpers import (
+    build_pagination_metadata,
+    coerce_int_param,
+    parse_string_list_param,
+    project_fields,
+    result_fields_warning,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +74,32 @@ class ServiceDiscoveryTools:
                 ),
             ),
         ] = "summary",
+        service_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each service record to only the specified keys. "
+                    'E.g. ["name", "description"] returns slim service records. '
+                    "None = full records (default). Unknown keys yield empty records. "
+                    "Available keys: name, description, domain, service, fields (full mode only), "
+                    "target (full mode only)."
+                ),
+            ),
+        ] = None,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["services"]). '
+                    "None = full response (default). "
+                    "Available keys: success, domains, services, total_count, count, "
+                    "offset, limit, has_more, next_offset, detail_level, filters_applied."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """List available Home Assistant services with optional pagination and detail control.
 
@@ -96,6 +128,29 @@ class ServiceDiscoveryTools:
             # Paginate through all services
             ha_list_services(offset=50)
         """
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+        parsed_service_fields: list[str] | None = None
+        if service_fields is not None:
+            try:
+                parsed_service_fields = parse_string_list_param(
+                    service_fields, "service_fields", allow_csv=True
+                )
+                if (
+                    parsed_service_fields is not None
+                    and len(parsed_service_fields) == 0
+                ):
+                    raise ValueError("service_fields must contain at least one key")
+            except ValueError as exc:
+                raise_tool_error(
+                    create_validation_error(str(exc), parameter="service_fields")
+                )
         try:
             limit_int = coerce_int_param(
                 limit, "limit", default=50, min_value=1, max_value=200
@@ -119,7 +174,22 @@ class ServiceDiscoveryTools:
                 detail_level=detail_level,
             )
 
-            return result
+            if parsed_service_fields is not None and "services" in result:
+                _orig_svc_vals = list(result["services"].values())
+                result["services"] = {
+                    k: {fk: fv for fk, fv in v.items() if fk in parsed_service_fields}
+                    for k, v in result["services"].items()
+                }
+                _warn = result_fields_warning(
+                    _orig_svc_vals,
+                    list(result["services"].values()),
+                    parsed_service_fields,
+                    param_name="service_fields",
+                )
+                if _warn:
+                    result.setdefault("warnings", []).append(_warn)
+
+            return project_fields(result, parsed_fields)
 
         except ToolError:
             raise
@@ -234,8 +304,12 @@ def _process_services(
         for service_name, service_def in domain_services.items():
             service_key = f"{domain}.{service_name}"
             entry = _build_service_entry(
-                domain, service_name, service_def, translations,
-                query_lower, detail_level,
+                domain,
+                service_name,
+                service_def,
+                translations,
+                query_lower,
+                detail_level,
             )
             if entry is not None:
                 services[service_key] = entry
