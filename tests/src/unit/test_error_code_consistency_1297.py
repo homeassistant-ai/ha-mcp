@@ -396,3 +396,229 @@ class TestZoneMutationRoutesNotFoundToResourceNotFound:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert any("ha_get_zone" in s for s in _all_suggestions(error_data["error"]))
+
+
+# ---------------------------------------------------------------------------
+# D4 — available_*_ids parity for dashboards / automations / scripts
+# (KP13 #1397 second-pass review): the same audit family extended to the
+# three remaining sites whose RESOURCE_NOT_FOUND raise was missing the
+# ``available_*_ids`` payload that labels / categories / zones / devices
+# all surface. Pinning matches the sibling depth — error code + list-tool
+# suggestion + ``available_*_ids`` payload truncated to first-10.
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteDashboardNotFoundSurfacesAvailableIds:
+    """Regression: ``ha_config_delete_dashboard`` with an unresolvable
+    url_path must populate ``available_dashboard_ids`` (first-10) in the
+    error context, mirroring the sibling registries.
+    ``_resolve_dashboard`` already returns the dashboards list alongside
+    the match — the fix re-uses it instead of discarding via ``_``.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def delete_tool(self, mock_client):
+        from ha_mcp.tools.tools_config_dashboards import (
+            register_config_dashboard_tools,
+        )
+
+        mcp = MagicMock()
+        registered: dict[str, Any] = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                registered[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        register_config_dashboard_tools(mcp, mock_client)
+        return registered["ha_config_delete_dashboard"]
+
+    async def test_missing_dashboard_surfaces_available_dashboard_ids(
+        self, delete_tool, mock_client
+    ):
+        # Registry list with three entries; the requested url_path is absent.
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [
+                {"id": "dash-a", "url_path": "alpha-dash"},
+                {"id": "dash-b", "url_path": "beta-dash"},
+                {"id": "dash-c", "url_path": "gamma-dash"},
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="ghost-dash")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data["action"] == "delete"
+        assert error_data["url_path"] == "ghost-dash"
+        # First-10 url_paths surface; here the registry only had 3 so all 3
+        # appear. Mirrors the sibling labels/categories/zones first-10 cap.
+        assert error_data.get("available_dashboard_ids") == [
+            "alpha-dash",
+            "beta-dash",
+            "gamma-dash",
+        ]
+        assert any(
+            "ha_config_get_dashboard" in s
+            for s in _all_suggestions(error_data["error"])
+        )
+
+
+class TestGetAutomationMissingSurfacesAvailableIds:
+    """Regression: ``ha_config_get_automation`` with a 404 from the REST
+    client must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
+    (first-10 from the entity registry, filtered by ``automation.`` prefix).
+    Pre-#1397-D4 the 404 fell through the generic ``exception_to_structured_error``
+    route, surfacing as ``INTERNAL_ERROR`` without an actionable payload.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        client = MagicMock()
+        client.get_automation_config = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "Automation not found: automation.missing",
+                status_code=404,
+            )
+        )
+        # Entity registry list returns both automation and non-automation
+        # entries; the helper must filter by domain prefix.
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "automation.morning_routine"},
+                    {"entity_id": "automation.evening_routine"},
+                    {"entity_id": "script.something"},  # filtered out
+                    {"entity_id": "light.bedroom"},  # filtered out
+                ],
+            }
+        )
+        client.get_services = AsyncMock(return_value={})
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+
+        return AutomationConfigTools(mock_client)
+
+    async def test_missing_automation_surfaces_available_automation_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_automation(identifier="automation.missing")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("automation_id") == "automation.missing"
+        # First-10 entries filtered to automation. prefix.
+        assert error_data.get("available_automation_ids") == [
+            "automation.morning_routine",
+            "automation.evening_routine",
+        ]
+        assert any(
+            "ha_search_entities(domain_filter='automation')" in s
+            for s in _all_suggestions(error_data["error"])
+        )
+
+    async def test_registry_list_failure_yields_empty_available_ids(
+        self, tools, mock_client
+    ):
+        """Best-effort: when ``entity_registry/list`` fails, the structured
+        not-found raise still fires with ``available_automation_ids: []``
+        rather than masking the 404 behind the registry error.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("ws transport closed")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_automation(identifier="automation.missing")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("available_automation_ids") == []
+
+
+class TestGetScriptMissingSurfacesAvailableIds:
+    """Regression: ``ha_config_get_script`` with a 404 from the REST client
+    must surface ``RESOURCE_NOT_FOUND`` + ``available_script_ids`` (first-10
+    from the entity registry, filtered by ``script.`` prefix). Mirrors the
+    automations shape one-for-one.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        client = MagicMock()
+        client.get_script_config = AsyncMock(
+            side_effect=HomeAssistantAPIError(
+                "Script not found: missing_script",
+                status_code=404,
+            )
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "script.morning_routine"},
+                    {"entity_id": "script.evening_routine"},
+                    {"entity_id": "automation.something"},  # filtered out
+                ],
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_missing_script_surfaces_available_script_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_script(script_id="missing_script")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("script_id") == "missing_script"
+        assert error_data.get("available_script_ids") == [
+            "script.morning_routine",
+            "script.evening_routine",
+        ]
+        assert any(
+            "ha_search_entities(domain_filter='script')" in s
+            for s in _all_suggestions(error_data["error"])
+        )
+
+    async def test_registry_list_failure_yields_empty_available_ids(
+        self, tools, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=RuntimeError("ws transport closed")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_script(script_id="missing_script")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("available_script_ids") == []

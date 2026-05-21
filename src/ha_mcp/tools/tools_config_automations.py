@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -838,6 +839,34 @@ class AutomationConfigTools:
                 suggestions=suggestions,
             )
 
+    async def _list_automation_entity_ids(self) -> list[str]:
+        """Best-effort list of automation entity_ids from the entity registry.
+
+        Used to populate ``available_automation_ids`` in RESOURCE_NOT_FOUND
+        error context. Returns an empty list on any failure — caller treats
+        absence as "no IDs to report" rather than failing the structured
+        error raise.
+        """
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+        except Exception as e:
+            logger.debug(
+                "Failed to list automation entity_ids from registry: %s", e
+            )
+            return []
+        entries = result.get("result", []) if isinstance(result, dict) else result
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry["entity_id"]
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("entity_id"), str)
+            and entry["entity_id"].startswith("automation.")
+        ]
+
     async def _get_automation_config_internal(
         self, identifier: str
     ) -> tuple[dict[str, Any], str]:
@@ -845,8 +874,33 @@ class AutomationConfigTools:
 
         Returns (normalized_config, config_hash) tuple.
         Used internally by _fetch_and_verify_hash and ha_config_get_automation.
+
+        Raises a structured ``RESOURCE_NOT_FOUND`` ToolError when the REST
+        client returns 404, populating ``available_automation_ids`` so
+        agents can recover without a separate search round-trip. Other
+        ``HomeAssistantAPIError`` instances propagate unchanged to caller
+        exception handlers (``exception_to_structured_error`` route).
         """
-        config_result = await self._client.get_automation_config(identifier)
+        try:
+            config_result = await self._client.get_automation_config(identifier)
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                available_ids = await self._list_automation_entity_ids()
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Automation not found: {identifier}",
+                        context={
+                            "automation_id": identifier,
+                            "available_automation_ids": available_ids[:10],
+                        },
+                        suggestions=[
+                            "Use ha_search_entities(domain_filter='automation') to find existing automations",
+                            "Verify the entity_id or unique_id is correct",
+                        ],
+                    )
+                )
+            raise
         normalized_config = _normalize_config_for_roundtrip(config_result)
         config_hash_value = compute_config_hash(normalized_config)
         return normalized_config, config_hash_value
