@@ -34,21 +34,32 @@ _ELAPSED_RE = re.compile(r"entity-registration-elapsed:\s*([\d.]+)ms")
 
 @pytest.mark.automation
 @pytest.mark.cleanup
+@pytest.mark.external_only
 class TestPollCadenceMeasurement1389:
-    """Empirical p50/p99 measurement of automation entity-registration latency."""
+    """Empirical p50/p99 measurement of automation entity-registration latency.
+
+    Uses ``caplog`` to read the DEBUG records emitted by
+    ``_poll_for_automation_entity``. That capture only works when the
+    rest_client runs in the same process as pytest (testcontainer +
+    HAOS-external modes); on the HAOS-inaddon tier the rest_client lives
+    in the addon's separate process and its log records never reach
+    ``caplog.records``. Marked ``external_only`` so the test is skipped
+    on the inaddon tier instead of failing with a false-negative
+    "no records captured" assertion.
+    """
 
     N_SAMPLES = 10
 
     async def test_poll_cadence_p50_p99(
         self, mcp_client, cleanup_tracker, test_data_factory, caplog
     ):
-        # Capture the DEBUG records emitted by _poll_for_automation_entity for
-        # the duration of this test only. Other tests in the same worker
-        # share the caplog buffer; the rest_client logger name + regex are
-        # tight enough that cross-test pollution is impossible — only
-        # successful registrations matched against the unique ID prefix
-        # below would be counted, and the iteration count assertion
-        # bounds the sample size we trust.
+        # Capture the DEBUG records emitted by ``_poll_for_automation_entity``
+        # during this test only. ``caplog`` is per-test-method-scoped, so
+        # records emitted by other tests in the same worker (before or
+        # after this one) don't appear in ``caplog.records`` here. The
+        # rest_client logger-name filter + regex below narrow to the
+        # elapsed-ms records specifically, and ``caplog.clear()`` at entry
+        # is belt-and-suspenders for any setup-phase noise.
         caplog.set_level(logging.DEBUG, logger="ha_mcp.client.rest_client")
 
         # Clear any pre-existing matching records so a long-running worker's
@@ -100,8 +111,12 @@ class TestPollCadenceMeasurement1389:
         samples.sort()
         n = len(samples)
         p50 = statistics.median(samples)
-        p90 = samples[max(0, int(0.9 * (n - 1)))]
-        p99 = samples[max(0, int(0.99 * (n - 1)))]
+        p90 = samples[max(0, int(0.9 * n) - 1)]
+        # For small ``N_SAMPLES`` (=10), ``int(0.99 * (n-1))`` collapses to
+        # the same index as p90 (both → 8 for n=10), silently dropping the
+        # worst-case sample. Use the maximum as p99 so an outlier can't
+        # violate the decision-rule threshold without surfacing.
+        p99 = samples[-1]
         s_min = samples[0]
         s_max = samples[-1]
 
