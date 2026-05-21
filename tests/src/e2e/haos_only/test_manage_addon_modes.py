@@ -52,16 +52,16 @@ from typing import Any
 import pytest
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 pytestmark = [pytest.mark.haos_only]
 
-# Node-RED's container takes 20–60s after install to leave "startup" and
-# enter "started". Any test whose contract requires the addon to actually
-# answer HTTP (i.e. asserts on ``status_code`` rather than tolerating a
-# structured error) must wait for it; otherwise CI flakes whenever the
-# runner is slow enough that the addon isn't ready by test-call time.
-# The bake installs Node-RED with ``start=True`` (build_image.py ADDONS),
-# so we only need to wait — never to start it ourselves.
+# Tests that assert strictly on ``status_code`` (with no fall-back error
+# branch) need the addon's container to have reached Supervisor's
+# ``started`` state — the bake installs every addon with ``start=True``,
+# but the container can take tens of seconds to leave its transient boot
+# phase, which is enough to flake the strict assertion. Timeout sized
+# for cache-cold runners; 2s poll matches sibling lifecycle helpers.
 _ADDON_RUNNING_TIMEOUT_S = 120.0
 _ADDON_RUNNING_POLL_S = 2.0
 
@@ -109,22 +109,24 @@ async def _wait_addon_running(
 
     Use this before any test that asserts on the HTTP/WS contract of an
     addon (rather than tolerating an addon-not-running structured
-    error). ``ha_manage_addon`` short-circuits with
-    ``{"success": False, "error": {...}, "state": "startup"}`` when
-    Supervisor reports the addon as anything other than ``started``;
-    the bake installs addons with ``start=True`` but their containers
-    can take 20-60s to leave the ``startup`` phase, which is enough to
-    flake any strict-shape assertion. Mirrors the
-    ``wait_for_entity_registered`` discipline already mandated by
-    AGENTS.md for tests that act on freshly created entities.
+    error). When Supervisor reports the addon as anything other than
+    ``started``, ``ha_manage_addon`` raises ``ToolError`` from its
+    running-state guard (``tools_addons.py`` "Verify add-on is running");
+    the JSON-encoded error payload carries the observed transient state.
+    The bake installs addons with ``start=True``, but their containers
+    can take tens of seconds to reach ``started`` — long enough to
+    flake any strict-shape assertion on the proxy path. Mirrors
+    ``_wait_for_state`` in ``test_addon_lifecycle.py`` (same private-
+    sibling convention as ``_resolve_slug``).
 
-    Transient ``ToolError`` from ``ha_get_addon`` (e.g. a momentary
-    Supervisor 5xx during boot) is treated as "not ready yet" and the
-    poll continues until the outer timeout. The deadline still fires;
-    transient errors can't mask a wedged addon forever.
+    Transient errors from ``ha_get_addon`` are caught via the project's
+    canonical ``_POLLING_TRANSIENT_ERRORS`` tuple (see
+    ``tests/src/e2e/utilities/wait_helpers.py``) — the same discipline
+    every other polling helper in the suite uses. Bugs (``TypeError`` /
+    ``AttributeError`` / ``KeyError`` / ``AssertionError``) propagate.
+    The deadline still fires; transient errors can't mask a wedged
+    addon forever.
     """
-    from fastmcp.exceptions import ToolError
-
     deadline = time.monotonic() + timeout
     last_state: str | None = None
     while True:
@@ -132,8 +134,8 @@ async def _wait_addon_running(
             detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
             detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
-        except ToolError as e:
-            last_state = f"<ToolError: {e!s}[:60]>"
+        except _POLLING_TRANSIENT_ERRORS as e:
+            last_state = f"<transient: {str(e)[:60]}>"
         if last_state == "started":
             return
         if time.monotonic() >= deadline:
