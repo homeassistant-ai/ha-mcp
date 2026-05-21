@@ -1426,8 +1426,8 @@ class TestAutomationDestructiveNegativeInputs:
     - Double-delete: second remove after successful deletion (same 404 path,
       separate test because it validates idempotency behaviour)
 
-    Methodology: source-verified against tools_config_automations.py lines 854-876.
-    Both inputs reach create_resource_not_found_error → raise_tool_error (ToolError).
+    Methodology: source-verified against tools_config_automations.py.
+    Both inputs reach the RESOURCE_NOT_FOUND branch → raise_tool_error (ToolError).
     The existing lifecycle tests verify deletion via ha_config_get_automation, not
     by calling ha_config_remove_automation on a nonexistent identifier directly.
     """
@@ -1438,7 +1438,7 @@ class TestAutomationDestructiveNegativeInputs:
         structured error, not success=True.
 
         Source path: Exception with "404"/"not found" in str →
-        create_resource_not_found_error → raise_tool_error.
+        RESOURCE_NOT_FOUND branch → raise_tool_error.
         """
         logger.info("Testing ha_config_remove_automation with nonexistent identifier...")
 
@@ -1468,7 +1468,7 @@ class TestAutomationDestructiveNegativeInputs:
         returns a structured error, not success=True (idempotency failure behaviour).
 
         Source path: first delete succeeds; second delete hits the same 404 branch
-        (create_resource_not_found_error → raise_tool_error) as the nonexistent test.
+        (RESOURCE_NOT_FOUND → raise_tool_error) as the nonexistent test.
         Tests a distinct scenario: the identifier was valid moments ago, so any
         caching or stale-state issue would cause a silent false success here.
         """

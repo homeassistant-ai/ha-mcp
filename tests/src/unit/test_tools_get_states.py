@@ -219,6 +219,7 @@ class TestHaGetStateSingleEntity:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -258,14 +259,385 @@ class TestHaGetStateSingleEntity:
         mock_client.get_entity_state.assert_called_once_with("light.kitchen")
 
     @pytest.mark.asyncio
-    async def test_single_entity_not_found_raises_tool_error(self, mock_client, get_state_tool):
+    async def test_single_entity_not_found_raises_tool_error(
+        self, mock_client, get_state_tool
+    ):
         """Single entity that doesn't exist raises ToolError."""
-        mock_client.get_entity_state = AsyncMock(
-            side_effect=Exception("404 Not Found")
-        )
+        mock_client.get_entity_state = AsyncMock(side_effect=Exception("404 Not Found"))
 
         with pytest.raises(ToolError) as exc_info:
             await get_state_tool(entity_id="sensor.nonexistent")
 
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_attribute_keys_no_effect_emits_warning_single(
+        self, mock_client, get_state_tool
+    ):
+        """Single-entity: warn when attribute_keys is set but attributes is excluded from fields.
+
+        Warning lives OUTSIDE the projected entity record (sibling of ``data``)
+        so that ``fields=["state"]`` returns a record with only ``state`` and
+        no extra warning key mixed into the projected entity-record keyspace.
+        """
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        # FIELDS PROJECTION contract: fields=["state"] returns ONLY {"state": ...}
+        # in the projected record. ``warning`` must NOT leak into the record.
+        data = result["data"]
+        assert data == {"state": "on"}
+        assert "warnings" not in data
+        # Warning lives at the top-level result, sibling of ``data``/``metadata``.
+        assert "warnings" in result
+        assert any("attribute_keys" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_attribute_keys_no_warning_when_attributes_included(
+        self, mock_client, get_state_tool
+    ):
+        """No warning when attributes IS in fields — attribute_keys applies."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255, "color_temp": 3500},
+            }
+        )
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state", "attributes"],
+            attribute_keys=["brightness"],
+        )
+
+        data = result["data"]
+        assert "warnings" not in data
+        assert data["attributes"] == {"brightness": 255}
+
+    @pytest.mark.asyncio
+    async def test_non_dict_state_with_attribute_keys_no_effect_still_warns(
+        self, mock_client, get_state_tool
+    ):
+        """Warning fires even when get_entity_state returns None (non-dict entity record).
+
+        C2 regression: the isinstance(entity_record, dict) guard must NOT suppress
+        the warning — add_timezone_metadata always returns a dict so the write is safe.
+        """
+        mock_client.get_entity_state = AsyncMock(return_value=None)
+
+        result = await get_state_tool(
+            entity_id="light.kitchen",
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        # Warning must be present at the top level even when entity_record is None
+        assert "warnings" in result
+        assert any("attribute_keys" in w for w in result["warnings"])
+
+
+class TestHaGetStateAttributeKeysWarningBulk:
+    """Bulk-path warning when attribute_keys is set but 'attributes' is not in fields=."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def get_states_tool(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_attribute_keys_no_effect_emits_warning(self, get_states_tool):
+        """Bulk-path: warn once at the top level when attribute_keys is silently ignored."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            fields=["state"],
+            attribute_keys=["brightness"],
+        )
+
+        data = result["data"]
+        assert "warnings" in data
+        assert any("attribute_keys" in w for w in data["warnings"])
+        assert data["states"]["light.kitchen"] == {"state": "on"}
+
+    @pytest.mark.asyncio
+    async def test_bulk_no_warning_when_attributes_in_fields(
+        self, mock_client, get_states_tool
+    ):
+        """When attributes IS in fields, attribute_keys applies and no warning is emitted."""
+        mock_client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp": 3500},
+            }
+        )
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            fields=["state", "attributes"],
+            attribute_keys=["brightness"],
+        )
+        data = result["data"]
+        assert "warnings" not in data
+        assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 200}
+
+
+class TestHaGetStateFieldsValidation:
+    """Tests for malformed fields= and attribute_keys= parameter validation."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def ha_get_state(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_bad_fields_integer_raises_tool_error(self, ha_get_state):
+        """fields=123 raises ToolError with VALIDATION_FAILED and parameter='fields'.
+
+        Pins the parameter attribution so a regression swapping the two raise
+        sites (``fields`` vs ``attribute_keys``) can't silently pass — the
+        symmetric mirror test for ``attribute_keys`` asserts the same hint.
+        """
+        with pytest.raises(ToolError) as exc_info:
+            await ha_get_state(entity_id="light.kitchen", fields=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        # parameter is surfaced at the top level of the error response
+        assert error.get("parameter") == "fields"
+
+    @pytest.mark.asyncio
+    async def test_bad_json_fields_raises_tool_error(self, ha_get_state):
+        """fields='[\"' (malformed JSON) raises ToolError."""
+        with pytest.raises(ToolError):
+            await ha_get_state(entity_id="light.kitchen", fields='["')
+
+    @pytest.mark.asyncio
+    async def test_bad_attribute_keys_raises_with_correct_param(self, ha_get_state):
+        """attribute_keys=123 raises ToolError with parameter='attribute_keys' in the error."""
+        with pytest.raises(ToolError) as exc_info:
+            await ha_get_state(entity_id="light.kitchen", attribute_keys=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        # parameter is surfaced at the top level of the error response
+        assert error.get("parameter") == "attribute_keys"
+
+
+class TestAttributeKeysTypoGuardSingleEntity:
+    """attribute_keys typo guard: warn when filtered attrs empty but original had keys.
+
+    Mirrors the *_fields typo guard added in v11 — if an agent writes
+    attribute_keys=["brightnes"] (typo for "brightness") it gets a diagnostic
+    listing the available keys rather than a silent attributes: {}.
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.bedroom",
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp": 3500},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def ha_get_state(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_attribute_key_emits_warning(self, ha_get_state):
+        """attribute_keys with only unknown keys emits a diagnostic in warnings[].
+
+        Reproduces kingpanther13 v11 repro: ha_get_state("light.bedroom",
+        attribute_keys=["nonexistent_attr"]) must surface a warning rather than
+        silently returning attributes: {}.
+        """
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["nonexistent_attr"],
+        )
+        assert result["data"]["attributes"] == {}
+        assert "warnings" in result, (
+            "Expected warnings at top-level when attribute filter empties attrs"
+        )
+        assert any("attribute_keys" in w for w in result["warnings"]), (
+            f"Expected attribute_keys diagnostic in warnings, got: {result['warnings']}"
+        )
+        # Available keys hint must mention the real attribute names
+        assert any("brightness" in w for w in result["warnings"]), (
+            "Available keys hint should include 'brightness'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_known_attribute_key_no_warning(self, ha_get_state):
+        """When attribute_keys matches at least one key, no warning is emitted."""
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["brightness"],
+        )
+        assert result["data"]["attributes"] == {"brightness": 200}
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_mixed_known_unknown_attribute_keys_no_warning(self, ha_get_state):
+        """Partial match (some keys found) does not trigger the typo guard."""
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["brightness", "nonexistent"],
+        )
+        # brightness matched — attrs is non-empty, so no warning
+        assert result["data"]["attributes"] == {"brightness": 200}
+        assert "warnings" not in result
+
+
+class TestAttributeKeysTypoGuardBulk:
+    """Bulk-path attribute_keys typo guard."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255, "color_temp": 4000},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def get_states_tool(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_attribute_key_bulk_emits_warning(self, get_states_tool):
+        """Bulk: attribute_keys typo surfaces as a top-level warning."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            attribute_keys=["typo_attr"],
+        )
+        data = result["data"]
+        assert data["states"]["light.kitchen"]["attributes"] == {}
+        assert "warnings" in data
+        assert any("attribute_keys" in w for w in data["warnings"])
+        assert any("brightness" in w for w in data["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_known_attribute_key_bulk_no_warning(self, get_states_tool):
+        """Bulk: no warning when attribute_keys matches at least one key."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            attribute_keys=["brightness"],
+        )
+        data = result["data"]
+        assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 255}
+        assert "warnings" not in data
+
+
+# Note: project_fields() typo-guard unit tests live in test_util_helpers.py
+# (TestProjectFieldsTypoGuard). ha_get_state uses _project_entity for its
+# fields= parameter — not project_fields — so integration tests through
+# ha_get_state cannot reach the project_fields code path.

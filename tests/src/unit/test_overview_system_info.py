@@ -96,6 +96,209 @@ class TestHaGetOverviewSystemInfo:
         assert "allowlist_external_dirs" not in result["system_info"]
 
 
+class TestHaGetOverviewFieldsProjection:
+    """fields= projects the response to the requested top-level keys.
+
+    Pins the contract from issue #1199: callers that only need one section
+    (e.g. system_info) can request it via fields= and receive a response
+    that omits all other top-level keys.
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(
+            return_value={"version": "2026.5.0", "location_name": "Home"}
+        )
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.get_system_overview = AsyncMock(
+            return_value={
+                "success": True,
+                "domains": {"light": {"count": 3}},
+                "entity_summary": [],
+                "total_entities": 3,
+            }
+        )
+        return smart
+
+    @pytest.fixture
+    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.mark.asyncio
+    async def test_fields_none_returns_full_response(self, overview_tool):
+        """fields=None (default) returns the full response — no projection."""
+        result = await overview_tool()
+        assert "success" in result
+        assert "system_info" in result
+        assert "domains" in result
+
+    @pytest.mark.asyncio
+    async def test_fields_single_key_projects_correctly(self, overview_tool):
+        """fields=["system_info"] keeps only system_info (+ success always)."""
+        result = await overview_tool(fields=["system_info"])
+        assert result["success"] is True
+        assert "system_info" in result
+        assert result["system_info"]["version"] == "2026.5.0"
+        # All other top-level keys must be absent.
+        for key in ("domains", "entity_summary", "total_entities", "repair_count"):
+            assert key not in result, f"unexpected key {key!r} survived projection"
+
+    @pytest.mark.asyncio
+    async def test_fields_multiple_keys(self, overview_tool):
+        """fields=["system_info", "domains"] keeps exactly those two (+ success)."""
+        result = await overview_tool(fields=["system_info", "domains"])
+        assert "system_info" in result
+        assert "domains" in result
+        assert "entity_summary" not in result
+
+    @pytest.mark.asyncio
+    async def test_fields_success_always_included(self, overview_tool):
+        """success is always present even when the caller omits it from fields."""
+        result = await overview_tool(fields=["domains"])
+        assert "success" in result
+
+    @pytest.mark.asyncio
+    async def test_fields_unknown_key_silently_absent(self, overview_tool):
+        """Requesting a non-existent key silently produces no entry — no error."""
+        result = await overview_tool(fields=["nonexistent_key"])
+        assert result["success"] is True
+        assert "nonexistent_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_bad_fields_integer_raises_tool_error(self, overview_tool):
+        """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.
+
+        Pins the early-validate raise path (``tools_search.py`` ha_get_overview)
+        so a regression dropping the try/except still surfaces a regression.
+        """
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await overview_tool(fields=123)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert error.get("parameter") == "fields"
+
+    @pytest.mark.asyncio
+    async def test_bad_json_fields_raises_tool_error(self, overview_tool):
+        """fields='[\"' (malformed JSON) raises ToolError."""
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError):
+            await overview_tool(fields='["')
+
+
+class TestHaGetOverviewSystemSummaryVersion:
+    """Tests for system_summary["version"] enrichment from HA config (issue #1199)."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_smart_tools_with_summary(self):
+        """smart_tools returns a result that includes a system_summary sub-dict."""
+        smart = MagicMock()
+        smart.get_system_overview = AsyncMock(
+            return_value={
+                "success": True,
+                "system_summary": {"entity_count": 10},
+            }
+        )
+        return smart
+
+    @pytest.fixture
+    def overview_tool_with_version(self, mock_mcp, mock_smart_tools_with_summary):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"version": "2026.5.3"})
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.fixture
+    def overview_tool_config_fails(self, mock_mcp, mock_smart_tools_with_summary):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(side_effect=RuntimeError("connection refused"))
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.fixture
+    def overview_tool_version_none(self, mock_mcp, mock_smart_tools_with_summary):
+        """Config returns successfully but version key is absent."""
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})  # version key missing
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.mark.asyncio
+    async def test_version_populated_from_config(self, overview_tool_with_version):
+        """system_summary["version"] reflects the HA version from config."""
+        result = await overview_tool_with_version()
+        assert result["system_summary"]["version"] == "2026.5.3"
+
+    @pytest.mark.asyncio
+    async def test_version_unknown_on_config_failure(self, overview_tool_config_fails):
+        """system_summary["version"] is "unknown" when config fetch raises."""
+        result = await overview_tool_config_fails()
+        assert "system_summary" in result
+        assert result["system_summary"]["version"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_version_unknown_when_config_omits_key(
+        self, overview_tool_version_none
+    ):
+        """system_summary["version"] is "unknown" when config has no version key."""
+        result = await overview_tool_version_none()
+        assert result["system_summary"]["version"] == "unknown"
+
+
 class TestHaGetOverviewSettingsUrl:
     """Pin the stdio sidecar URL surfacing in ha_get_overview (issue #863).
 
@@ -109,7 +312,7 @@ class TestHaGetOverviewSettingsUrl:
     @pytest.fixture
     def mock_mcp(self):
         mcp = MagicMock()
-        self.registered_tools = {}
+        self.registered_tools: dict = {}
 
         def tool_decorator(*args, **kwargs):
             def wrapper(func):

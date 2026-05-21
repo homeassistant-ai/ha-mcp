@@ -16,7 +16,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
+from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -683,13 +683,14 @@ class ResourceTools:
                 error_str = str(error_msg).lower()
                 if "not found" in error_str or "unable to find" in error_str:
                     raise_tool_error(
-                        create_resource_not_found_error(
-                            "Dashboard resource",
-                            resource_id,
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Dashboard resource '{resource_id}' not found",
                             details=(
                                 f"Resource '{resource_id}' not found. "
                                 "Use ha_config_list_dashboard_resources() to see available resources."
                             ),
+                            context={"action": "delete", "resource_id": resource_id},
                         )
                     )
 
