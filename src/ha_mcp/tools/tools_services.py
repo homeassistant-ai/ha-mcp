@@ -131,17 +131,26 @@ class ServiceDiscoveryTools:
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_service_fields: list[str] | None = None
         if service_fields is not None:
             try:
-                parsed_service_fields = parse_string_list_param(service_fields, "service_fields", allow_csv=True)
-                if parsed_service_fields is not None and len(parsed_service_fields) == 0:
+                parsed_service_fields = parse_string_list_param(
+                    service_fields, "service_fields", allow_csv=True
+                )
+                if (
+                    parsed_service_fields is not None
+                    and len(parsed_service_fields) == 0
+                ):
                     raise ValueError("service_fields must contain at least one key")
             except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="service_fields"))
+                raise_tool_error(
+                    create_validation_error(str(exc), parameter="service_fields")
+                )
         try:
             limit_int = coerce_int_param(
                 limit, "limit", default=50, min_value=1, max_value=200
@@ -295,8 +304,12 @@ def _process_services(
         for service_name, service_def in domain_services.items():
             service_key = f"{domain}.{service_name}"
             entry = _build_service_entry(
-                domain, service_name, service_def, translations,
-                query_lower, detail_level,
+                domain,
+                service_name,
+                service_def,
+                translations,
+                query_lower,
+                detail_level,
             )
             if entry is not None:
                 services[service_key] = entry

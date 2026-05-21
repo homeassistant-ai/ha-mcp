@@ -205,7 +205,10 @@ def _project_entity(
         attrs = record.get("attributes")
         if isinstance(attrs, dict):
             attr_keep = set(attribute_keys)
-            record = {**record, "attributes": {k: v for k, v in attrs.items() if k in attr_keep}}
+            record = {
+                **record,
+                "attributes": {k: v for k, v in attrs.items() if k in attr_keep},
+            }
         elif "attributes" in record:
             # ``attributes`` is present but not a dict — filter cannot apply.
             # Log at warning so the no-op is visible at default log levels
@@ -374,17 +377,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_result_fields: list[str] | None = None
         if result_fields is not None:
             try:
-                parsed_result_fields = parse_string_list_param(result_fields, "result_fields", allow_csv=True)
+                parsed_result_fields = parse_string_list_param(
+                    result_fields, "result_fields", allow_csv=True
+                )
                 if parsed_result_fields is not None and len(parsed_result_fields) == 0:
                     raise ValueError("result_fields must contain at least one key")
             except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="result_fields"))
+                raise_tool_error(
+                    create_validation_error(str(exc), parameter="result_fields")
+                )
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
         # HA domains are canonically lowercase, no whitespace; agents
@@ -427,13 +436,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # with default=True the result is a real bool, but the type
             # system still admits None — coalesce defensively for static
             # typing.
-            include_hidden_bool = (
-                coerced_hidden if coerced_hidden is not None else True
-            )
+            include_hidden_bool = coerced_hidden if coerced_hidden is not None else True
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
             limit = coerce_int_param(limit, "limit", default=10, min_value=1)
             per_domain_limit_int = (
-                coerce_int_param(per_domain_limit, "per_domain_limit", default=None, min_value=1)
+                coerce_int_param(
+                    per_domain_limit, "per_domain_limit", default=None, min_value=1
+                )
                 if per_domain_limit is not None
                 else None
             )
@@ -487,13 +496,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     aliases_map: dict[str, list[str]] = {}
                     if area_entity_ids:
                         try:
-                            entries_resp = await client.send_websocket_message({
-                                "type": "config/entity_registry/get_entries",
-                                "entity_ids": area_entity_ids,
-                            })
-                            if (
-                                isinstance(entries_resp, dict)
-                                and entries_resp.get("success")
+                            entries_resp = await client.send_websocket_message(
+                                {
+                                    "type": "config/entity_registry/get_entries",
+                                    "entity_ids": area_entity_ids,
+                                }
+                            )
+                            if isinstance(entries_resp, dict) and entries_resp.get(
+                                "success"
                             ):
                                 for eid, entry in (
                                     entries_resp.get("result", {}) or {}
@@ -605,8 +615,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
                     if parsed_result_fields is not None and "results" in search_data:
                         _orig = search_data["results"]
-                        search_data["results"] = _project_records(_orig, parsed_result_fields)
-                        _warn = _result_fields_warning(_orig, search_data["results"], parsed_result_fields)
+                        search_data["results"] = _project_records(
+                            _orig, parsed_result_fields
+                        )
+                        _warn = _result_fields_warning(
+                            _orig, search_data["results"], parsed_result_fields
+                        )
                         if _warn:
                             search_data.setdefault("warnings", []).append(_warn)
 
@@ -673,11 +687,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         # 100, every hidden one at 80 — without the
                         # secondary key the page split would shift
                         # between calls).
-                        all_results.sort(
-                            key=lambda x: (-x["score"], x["entity_id"])
-                        )
+                        all_results.sort(key=lambda x: (-x["score"], x["entity_id"]))
                         if state_filter:
-                            all_results = [r for r in all_results if r.get("state") == state_filter]
+                            all_results = [
+                                r for r in all_results if r.get("state") == state_filter
+                            ]
                         paginated = all_results[offset : offset + limit]
 
                         area_search_data: dict[str, Any] = {
@@ -732,12 +746,21 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     for d, entities in paginated_by_domain.items()
                                 }
                             area_search_data["by_domain"] = paginated_by_domain
-                        if parsed_result_fields is not None and "results" in area_search_data:
+                        if (
+                            parsed_result_fields is not None
+                            and "results" in area_search_data
+                        ):
                             _orig = area_search_data["results"]
-                            area_search_data["results"] = _project_records(_orig, parsed_result_fields)
-                            _warn = _result_fields_warning(_orig, area_search_data["results"], parsed_result_fields)
+                            area_search_data["results"] = _project_records(
+                                _orig, parsed_result_fields
+                            )
+                            _warn = _result_fields_warning(
+                                _orig, area_search_data["results"], parsed_result_fields
+                            )
                             if _warn:
-                                area_search_data.setdefault("warnings", []).append(_warn)
+                                area_search_data.setdefault("warnings", []).append(
+                                    _warn
+                                )
                         _r = await add_timezone_metadata(client, area_search_data)
                         if parsed_fields is not None:
                             _sfn = _r["data"].get("state_filter_note")
@@ -816,10 +839,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     e
                     for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
-                    and (
-                        include_hidden_bool
-                        or e.get("entity_id") not in hidden_ids
-                    )
+                    and (include_hidden_bool or e.get("entity_id") not in hidden_ids)
                 ]
 
                 # Score: 100 baseline for domain membership (exact, not
@@ -832,23 +852,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     score = apply_hidden_penalty(
                         100, "_hidden" if entity_id in hidden_ids else None
                     )
-                    scored_entities.append({
-                        "entity_id": entity_id,
-                        "friendly_name": attributes.get("friendly_name", entity_id),
-                        "domain": domain_filter,
-                        "state": entity.get("state", "unknown"),
-                        "score": score,
-                        "match_type": "domain_listing",
-                    })
+                    scored_entities.append(
+                        {
+                            "entity_id": entity_id,
+                            "friendly_name": attributes.get("friendly_name", entity_id),
+                            "domain": domain_filter,
+                            "state": entity.get("state", "unknown"),
+                            "score": score,
+                            "match_type": "domain_listing",
+                        }
+                    )
                 # Tie-break on entity_id for stable pagination — every
                 # visible domain entry scores 100 and every hidden one
                 # scores 80, so sorting by score alone leaves the
                 # within-tier ordering up to dict iteration.
-                scored_entities.sort(
-                    key=lambda x: (-x["score"], x["entity_id"])
-                )
+                scored_entities.sort(key=lambda x: (-x["score"], x["entity_id"]))
                 if state_filter:
-                    scored_entities = [e for e in scored_entities if e.get("state") == state_filter]
+                    scored_entities = [
+                        e for e in scored_entities if e.get("state") == state_filter
+                    ]
                 results = scored_entities[offset : offset + limit]
 
                 domain_list_data: dict[str, Any] = {
@@ -866,14 +888,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     domain_list_data["state_filter"] = state_filter
                 if parsed_result_fields is not None:
                     _orig = results
-                    domain_list_data["results"] = _project_records(_orig, parsed_result_fields)
-                    _warn = _result_fields_warning(_orig, domain_list_data["results"], parsed_result_fields)
+                    domain_list_data["results"] = _project_records(
+                        _orig, parsed_result_fields
+                    )
+                    _warn = _result_fields_warning(
+                        _orig, domain_list_data["results"], parsed_result_fields
+                    )
                     if _warn:
                         domain_list_data.setdefault("warnings", []).append(_warn)
                 if group_by_domain_bool:
-                    domain_list_results = results[:per_domain_limit_int] if per_domain_limit_int is not None else results
+                    domain_list_results = (
+                        results[:per_domain_limit_int]
+                        if per_domain_limit_int is not None
+                        else results
+                    )
                     if parsed_result_fields is not None:
-                        domain_list_results = _project_records(domain_list_results, parsed_result_fields)
+                        domain_list_results = _project_records(
+                            domain_list_results, parsed_result_fields
+                        )
                     domain_list_data["by_domain"] = {domain_filter: domain_list_results}
                 _r = await add_timezone_metadata(client, domain_list_data)
                 if parsed_fields is not None:
@@ -971,7 +1003,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # total_matches and has_more reflect the unfiltered fuzzy-search dataset;
             # only count is updated to match the filtered page.
             if state_filter and "results" in result and search_type == "fuzzy_search":
-                filtered = [r for r in result["results"] if r.get("state") == state_filter]
+                filtered = [
+                    r for r in result["results"] if r.get("state") == state_filter
+                ]
                 result["results"] = filtered
                 result["count"] = len(filtered)
                 # Signal that state_filter is page-only for fuzzy mode.
@@ -1017,7 +1051,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if parsed_result_fields is not None and "results" in result:
                 _orig = result["results"]
                 result["results"] = _project_records(_orig, parsed_result_fields)
-                _warn = _result_fields_warning(_orig, result["results"], parsed_result_fields)
+                _warn = _result_fields_warning(
+                    _orig, result["results"], parsed_result_fields
+                )
                 if _warn:
                     result.setdefault("warnings", []).append(_warn)
             if parsed_result_fields is not None and "by_domain" in result:
@@ -1166,7 +1202,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
                 description=(
                     "Return only the specified top-level response keys to reduce "
-                    "response size (e.g. [\"system_info\", \"domains\"]). "
+                    'response size (e.g. ["system_info", "domains"]). '
                     "None = full response (default). "
                     "Available keys: success, system_summary, domain_stats, "
                     "area_analysis, ai_insights, pagination, partial, warnings, "
@@ -1197,7 +1233,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
 
@@ -1276,7 +1314,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "system_summary" in result:
                 result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
-            logger.warning("Failed to fetch system info for overview: %s", e, exc_info=True)
+            logger.warning(
+                "Failed to fetch system info for overview: %s", e, exc_info=True
+            )
             # Config fetch failed — populate version sentinel so system_summary
             # always has a "version" key regardless of connection state.
             if "system_summary" in result:
@@ -1303,7 +1343,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for n in notifications
                         ]
             except Exception as e:
-                logger.warning("Failed to fetch notifications for overview: %s", e, exc_info=True)
+                logger.warning(
+                    "Failed to fetch notifications for overview: %s", e, exc_info=True
+                )
 
         # Active repairs only by default — matches the HA Repairs UI so agents
         # don't chase problems the user already dismissed.
@@ -1330,9 +1372,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             else:
                 err = repairs_result.get("error") or {}
                 err_msg = (
-                    err.get("message")
-                    if isinstance(err, dict)
-                    else str(err)
+                    err.get("message") if isinstance(err, dict) else str(err)
                 ) or "unknown error"
                 logger.warning(
                     "repairs/list_issues returned success=false: %s", err_msg
@@ -1587,7 +1627,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 attribute_keys, "attribute_keys", allow_csv=True
             )
         except ValueError as e:
-            raise_tool_error(create_validation_error(str(e), parameter="attribute_keys"))
+            raise_tool_error(
+                create_validation_error(str(e), parameter="attribute_keys")
+            )
 
         # `attribute_keys` only takes effect when `attributes` is in the projected
         # field set (or `fields=None`). Surface a warning rather than silently
@@ -1603,7 +1645,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
-                entity_record = _project_entity(result, parsed_fields, parsed_attribute_keys)
+                entity_record = _project_entity(
+                    result, parsed_fields, parsed_attribute_keys
+                )
                 # Always wrap (include_metadata=True); callers and tests rely on
                 # the ``result["data"]`` envelope even when fields= is active.
                 wrapped = await add_timezone_metadata(client, entity_record)

@@ -219,6 +219,7 @@ class TestHaGetStateSingleEntity:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -258,11 +259,11 @@ class TestHaGetStateSingleEntity:
         mock_client.get_entity_state.assert_called_once_with("light.kitchen")
 
     @pytest.mark.asyncio
-    async def test_single_entity_not_found_raises_tool_error(self, mock_client, get_state_tool):
+    async def test_single_entity_not_found_raises_tool_error(
+        self, mock_client, get_state_tool
+    ):
         """Single entity that doesn't exist raises ToolError."""
-        mock_client.get_entity_state = AsyncMock(
-            side_effect=Exception("404 Not Found")
-        )
+        mock_client.get_entity_state = AsyncMock(side_effect=Exception("404 Not Found"))
 
         with pytest.raises(ToolError) as exc_info:
             await get_state_tool(entity_id="sensor.nonexistent")
@@ -360,6 +361,7 @@ class TestHaGetStateAttributeKeysWarningBulk:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -384,9 +386,7 @@ class TestHaGetStateAttributeKeysWarningBulk:
         return self.registered_tools["ha_get_state"]
 
     @pytest.mark.asyncio
-    async def test_bulk_attribute_keys_no_effect_emits_warning(
-        self, get_states_tool
-    ):
+    async def test_bulk_attribute_keys_no_effect_emits_warning(self, get_states_tool):
         """Bulk-path: warn once at the top level when attribute_keys is silently ignored."""
         result = await get_states_tool(
             entity_id=["light.kitchen"],
@@ -400,7 +400,9 @@ class TestHaGetStateAttributeKeysWarningBulk:
         assert data["states"]["light.kitchen"] == {"state": "on"}
 
     @pytest.mark.asyncio
-    async def test_bulk_no_warning_when_attributes_in_fields(self, mock_client, get_states_tool):
+    async def test_bulk_no_warning_when_attributes_in_fields(
+        self, mock_client, get_states_tool
+    ):
         """When attributes IS in fields, attribute_keys applies and no warning is emitted."""
         mock_client.get_entity_state = AsyncMock(
             return_value={
@@ -431,6 +433,7 @@ class TestHaGetStateFieldsValidation:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator

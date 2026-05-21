@@ -21,7 +21,14 @@ class TestProjectEntity:
 
     def test_none_fields_and_none_attribute_keys_returns_unchanged(self):
         result = _project_entity(dict(_ENTITY_RECORD), None, None)
-        assert set(result.keys()) == {"entity_id", "state", "attributes", "last_changed", "last_updated", "context"}
+        assert set(result.keys()) == {
+            "entity_id",
+            "state",
+            "attributes",
+            "last_changed",
+            "last_updated",
+            "context",
+        }
 
     def test_fields_keeps_only_specified_keys(self):
         result = _project_entity(dict(_ENTITY_RECORD), ["state"], None)
@@ -47,7 +54,9 @@ class TestProjectEntity:
         assert result["attributes"] == {}
 
     def test_fields_and_attribute_keys_combined(self):
-        result = _project_entity(dict(_ENTITY_RECORD), ["state", "attributes"], ["brightness"])
+        result = _project_entity(
+            dict(_ENTITY_RECORD), ["state", "attributes"], ["brightness"]
+        )
         assert set(result.keys()) == {"state", "attributes"}
         assert result["attributes"] == {"brightness": 200}
 
@@ -69,5 +78,3 @@ class TestProjectEntity:
     def test_non_dict_record_returned_unchanged(self):
         # Defensive: error paths may pass None/non-dict; helper must not raise.
         assert _project_entity(None, ["state"], None) is None  # type: ignore[arg-type]
-
-

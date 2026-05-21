@@ -92,7 +92,9 @@ class TestRemoveAreaOrFloorRouting:
     @pytest.fixture
     def tools(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value={"success": True, "result": None})
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": None}
+        )
         return AreaTools(client)
 
     async def test_area_kind_routes_to_area_registry(self, tools):
@@ -123,7 +125,10 @@ class TestSetAreaOrFloorRouting:
     def tools(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"area_id": "x", "floor_id": "x", "name": "X"}}
+            return_value={
+                "success": True,
+                "result": {"area_id": "x", "floor_id": "x", "name": "X"},
+            }
         )
         return AreaTools(client)
 
@@ -175,7 +180,9 @@ class TestSetAreaOrFloorCrossKindRejection:
 
     async def test_floor_id_rejected_for_floor(self, tools):
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(kind="floor", name="Ground", floor_id="ground")
+            await tools.ha_set_area_or_floor(
+                kind="floor", name="Ground", floor_id="ground"
+            )
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "floor_id" in error_data["error"]["message"]
@@ -183,7 +190,9 @@ class TestSetAreaOrFloorCrossKindRejection:
 
     async def test_picture_rejected_for_floor(self, tools):
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(kind="floor", name="Ground", picture="http://x")
+            await tools.ha_set_area_or_floor(
+                kind="floor", name="Ground", picture="http://x"
+            )
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "picture" in error_data["error"]["message"]
@@ -205,13 +214,15 @@ class TestHaConfigListAreasFieldsProjection:
     @pytest.fixture
     def tools(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value={
-            "success": True,
-            "result": [
-                {"area_id": "kitchen", "name": "Kitchen"},
-                {"area_id": "bedroom", "name": "Bedroom"},
-            ],
-        })
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"area_id": "kitchen", "name": "Kitchen"},
+                    {"area_id": "bedroom", "name": "Bedroom"},
+                ],
+            }
+        )
         return AreaTools(client)
 
     async def test_no_fields_returns_full_response(self, tools):
@@ -261,13 +272,15 @@ class TestHaConfigListAreasAreaFieldsProjection:
     @pytest.fixture
     def tools(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value={
-            "success": True,
-            "result": [
-                {"area_id": "kitchen", "name": "Kitchen", "icon": "mdi:home"},
-                {"area_id": "bedroom", "name": "Bedroom", "icon": None},
-            ],
-        })
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"area_id": "kitchen", "name": "Kitchen", "icon": "mdi:home"},
+                    {"area_id": "bedroom", "name": "Bedroom", "icon": None},
+                ],
+            }
+        )
         return AreaTools(client)
 
     async def test_area_fields_projects_each_record(self, tools):
@@ -292,7 +305,9 @@ class TestHaConfigListAreasAreaFieldsProjection:
         for area in result["areas"]:
             assert area == {}
         # Diagnostic warning is present and names the wrong parameter
-        assert "warnings" in result, "Expected warnings key when all projected records are empty"
+        assert "warnings" in result, (
+            "Expected warnings key when all projected records are empty"
+        )
         assert any("are_id" in w for w in result["warnings"]), (
             f"Expected typo field name in warning, got: {result['warnings']}"
         )

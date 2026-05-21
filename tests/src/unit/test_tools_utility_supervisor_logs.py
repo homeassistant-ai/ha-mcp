@@ -542,9 +542,7 @@ class TestGetErrorLogBranchSelection:
         """
         mock_response = MagicMock()
         mock_response.text = "error log via proxy\n"
-        mock_client._request = AsyncMock(
-            return_value={"components": ["sun", "demo"]}
-        )
+        mock_client._request = AsyncMock(return_value={"components": ["sun", "demo"]})
         mock_client._raw_request = AsyncMock(return_value=mock_response)
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
@@ -558,9 +556,7 @@ class TestGetErrorLogBranchSelection:
         )
 
     @pytest.mark.asyncio
-    async def test_non_addon_supervised_uses_hassio_core_logs_proxy(
-        self, mock_client
-    ):
+    async def test_non_addon_supervised_uses_hassio_core_logs_proxy(self, mock_client):
         """External HAOS/Supervised client → /api/hassio/core/logs proxy.
 
         ``/api/error_log`` returns 404 by-design on HAOS, so the supervised
@@ -1052,9 +1048,7 @@ class TestGetSupervisorLogWrapper:
         assert any("SUPERVISOR_TOKEN" in s for s in suggestions)
 
     @pytest.mark.asyncio
-    async def test_auth_error_non_addon_suggests_admin_lla(
-        self, client_with_logs
-    ):
+    async def test_auth_error_non_addon_suggests_admin_lla(self, client_with_logs):
         """Non-addon ``HomeAssistantAuthError`` on the addon-logs path
         (Docker/uvx hitting ``/api/hassio/addons/{slug}/logs`` with a
         bad/expired LLA) → admin-LLA suggestion, NOT the ``SUPERVISOR_TOKEN``

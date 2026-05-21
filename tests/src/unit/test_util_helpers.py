@@ -498,9 +498,7 @@ class TestFetchIntegrationDiagnostics:
     async def test_custom_timeout_propagates(self):
         client = MagicMock()
         client._request = AsyncMock(return_value={})
-        await fetch_integration_diagnostics(
-            client, "entry_abc", timeout_seconds=10.0
-        )
+        await fetch_integration_diagnostics(client, "entry_abc", timeout_seconds=10.0)
         assert client._request.await_args.kwargs["timeout"] == 10.0
 
     @pytest.mark.asyncio
@@ -732,9 +730,7 @@ class TestFetchIntegrationDiagnostics:
         requested key appears in ``omitted_fields`` (no silent fall-through to
         the full payload)."""
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {}, "issues": []}
-        )
+        client._request = AsyncMock(return_value={"home_assistant": {}, "issues": []})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -872,9 +868,7 @@ class TestFetchIntegrationDiagnostics:
     @pytest.mark.asyncio
     async def test_data_path_pagination_offset_skips_then_has_more_false_at_end(self):
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"items": [str(i) for i in range(25)]}
-        )
+        client._request = AsyncMock(return_value={"items": [str(i) for i in range(25)]})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -920,9 +914,7 @@ class TestFetchIntegrationDiagnostics:
     @pytest.mark.asyncio
     async def test_data_path_descent_into_non_dict_surfaces_error(self):
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"devices": ["d1", "d2"]}
-        )
+        client._request = AsyncMock(return_value={"devices": ["d1", "d2"]})
         result = await fetch_integration_diagnostics(
             client, "entry_abc", data_path="devices.0"
         )
@@ -938,17 +930,13 @@ class TestFetchIntegrationDiagnostics:
         swallowed instead of resolving silently."""
         client = MagicMock()
         client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path=""
-        )
+        result = await fetch_integration_diagnostics(client, "entry_abc", data_path="")
         # Data passes through unchanged; resolver branch is skipped.
         assert result["data"] == {"foo": "bar"}
         assert "data_path" not in result
         assert "data_path_error" not in result
         # New: empty / whitespace-stripped inputs surface a warning.
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
 
     @pytest.mark.asyncio
     async def test_data_path_combined_with_fields_projection(self):
@@ -1057,9 +1045,7 @@ class TestFetchIntegrationDiagnostics:
         "sub-tree not present" message rather than the generic
         ``cannot descend into NoneType`` wording."""
         client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {"version": None}}
-        )
+        client._request = AsyncMock(return_value={"home_assistant": {"version": None}})
         result = await fetch_integration_diagnostics(
             client,
             "entry_abc",
@@ -1099,9 +1085,7 @@ class TestFetchIntegrationDiagnostics:
         the offset was dropped (rather than silently doing nothing)."""
         client = MagicMock()
         client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_offset=5
-        )
+        result = await fetch_integration_diagnostics(client, "entry_abc", data_offset=5)
         assert "data_pagination_warning" in result
         assert "data_path not set" in result["data_pagination_warning"]
         # Underlying data is unchanged — the warning is the only signal.
@@ -1119,9 +1103,7 @@ class TestFetchIntegrationDiagnostics:
         )
         assert result["data"] == {"foo": "bar"}
         assert "data_path" not in result
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
 
     @pytest.mark.asyncio
     async def test_whitespace_path_plus_offset_keeps_whitespace_warning(self):
@@ -1136,9 +1118,7 @@ class TestFetchIntegrationDiagnostics:
         result = await fetch_integration_diagnostics(
             client, "entry_abc", data_path="   ", data_offset=5
         )
-        assert "empty or whitespace-only" in result.get(
-            "data_pagination_warning", ""
-        )
+        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
         # Specifically NOT the downstream-consequence warning.
         assert "data_path not set" not in result["data_pagination_warning"]
 
@@ -1324,9 +1304,7 @@ class TestApplyEntityCategoryWriter:
     @pytest.mark.asyncio
     async def test_success_does_not_create_warnings_key(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True}
-        )
+        client.send_websocket_message = AsyncMock(return_value={"success": True})
         result: dict[str, object] = {}
 
         await apply_entity_category(

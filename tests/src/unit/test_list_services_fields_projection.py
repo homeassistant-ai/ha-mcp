@@ -29,7 +29,9 @@ class TestHaListServicesFieldsProjection:
         # get_services returns an empty dict (no services), _process_services handles it
         client.get_services = AsyncMock(return_value={})
         # send_websocket_message used by _get_service_translations
-        client.send_websocket_message = AsyncMock(return_value={"success": True, "result": {"resources": {}}})
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"resources": {}}}
+        )
         return client
 
     @pytest.fixture
@@ -90,14 +92,16 @@ class TestHaListServicesServiceFieldsProjection:
     def mock_client(self):
         client = MagicMock()
         # Two light services so we can verify projection on multiple records.
-        client.get_services = AsyncMock(return_value={
-            "light": {
-                "services": {
-                    "turn_on": {"description": "Turn on a light"},
-                    "turn_off": {"description": "Turn off a light"},
+        client.get_services = AsyncMock(
+            return_value={
+                "light": {
+                    "services": {
+                        "turn_on": {"description": "Turn on a light"},
+                        "turn_off": {"description": "Turn off a light"},
+                    }
                 }
             }
-        })
+        )
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": {"resources": {}}}
         )
@@ -142,7 +146,9 @@ class TestHaListServicesServiceFieldsProjection:
         )
 
     @pytest.mark.asyncio
-    async def test_service_fields_does_not_affect_outer_response_keys(self, list_services_tool):
+    async def test_service_fields_does_not_affect_outer_response_keys(
+        self, list_services_tool
+    ):
         """service_fields only projects inside services{}; top-level keys unchanged."""
         result = await list_services_tool(service_fields=["name"])
         assert "success" in result

@@ -74,12 +74,16 @@ def smart_search_tools() -> SmartSearchTools:
     # No entities → all phases short-circuit cleanly without further mocking.
     client.get_states = AsyncMock(return_value=[])
     # Helper phase issues input_*/list WebSocket calls; succeed with empty results.
-    client.send_websocket_message = AsyncMock(return_value={"success": True, "result": []})
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": []}
+    )
     return SmartSearchTools(client=client)
 
 
 @pytest.mark.asyncio
-async def test_deep_search_works_without_ctx(smart_search_tools: SmartSearchTools) -> None:
+async def test_deep_search_works_without_ctx(
+    smart_search_tools: SmartSearchTools,
+) -> None:
     """Legacy callers passing no ctx still get a normal result dict."""
     result = await smart_search_tools.deep_search(
         "anything", search_types=["helper"], limit=5
@@ -178,9 +182,7 @@ async def test_ha_get_history_emits_progress_with_ctx() -> None:
     # Three events: connect, query dispatch, completion (progress jumps 1 -> 3).
     assert ctx.report_progress.await_count == 3
     calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=3, message_contains="connecting"
-    )
+    _assert_progress_call(calls[0], progress=0, total=3, message_contains="connecting")
     _assert_progress_call(
         calls[1], progress=1, total=3, message_contains="querying recorder (history)"
     )
@@ -242,7 +244,11 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
         return_value={
             "success": True,
             "result": [
-                {"run_id": "1.0", "timestamp": "2025-01-01T00:00:00Z", "state": "stopped"}
+                {
+                    "run_id": "1.0",
+                    "timestamp": "2025-01-01T00:00:00Z",
+                    "state": "stopped",
+                }
             ],
         }
     )
@@ -264,9 +270,7 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
     # Three events: connect (0), fetch list (1), final listed-N (3).
     assert ctx.report_progress.await_count == 3
     calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=3, message_contains="connecting"
-    )
+    _assert_progress_call(calls[0], progress=0, total=3, message_contains="connecting")
     _assert_progress_call(
         calls[1], progress=1, total=3, message_contains="fetching trace list"
     )
@@ -349,12 +353,8 @@ async def test_ha_hacs_search_emits_progress_with_ctx() -> None:
     _assert_progress_call(
         calls[1], progress=1, total=3, message_contains="fetching HACS repository list"
     )
-    _assert_progress_call(
-        calls[2], progress=2, total=3, message_contains="filtering"
-    )
-    _assert_progress_call(
-        calls[3], progress=3, total=3, message_contains="matched"
-    )
+    _assert_progress_call(calls[2], progress=2, total=3, message_contains="filtering")
+    _assert_progress_call(calls[3], progress=3, total=3, message_contains="matched")
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +617,10 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
     assert ctx.report_progress.await_count == 4
     calls = ctx.report_progress.await_args_list
     _assert_progress_call(
-        calls[2], progress=2, total=3, message_contains="no traces; gathering diagnostics"
+        calls[2],
+        progress=2,
+        total=3,
+        message_contains="no traces; gathering diagnostics",
     )
     _assert_progress_call(
         calls[3], progress=3, total=3, message_contains="diagnostics complete"

@@ -17,7 +17,14 @@ from ha_mcp.tools.tools_history import HistoryTools
 # Helpers
 # ---------------------------------------------------------------------------
 
-PAGINATION_FIELDS = {"total_count", "offset", "limit", "count", "has_more", "next_offset"}
+PAGINATION_FIELDS = {
+    "total_count",
+    "offset",
+    "limit",
+    "count",
+    "has_more",
+    "next_offset",
+}
 
 
 def _make_mock_client() -> MagicMock:
@@ -29,7 +36,9 @@ def _make_mock_client() -> MagicMock:
 
 def _make_history_states(n: int) -> list[dict]:
     """Generate n minimal state-change dicts (short-form HA format)."""
-    return [{"s": str(i), "lu": 1700000000.0 + i, "lc": 1700000000.0 + i} for i in range(n)]
+    return [
+        {"s": str(i), "lu": 1700000000.0 + i, "lc": 1700000000.0 + i} for i in range(n)
+    ]
 
 
 def _make_stat_rows(n: int) -> list[dict]:
@@ -37,7 +46,9 @@ def _make_stat_rows(n: int) -> list[dict]:
     return [{"start": 1700000000 + i * 300, "mean": float(i)} for i in range(n)]
 
 
-def _make_ws_client_mock(history_result: dict | None = None, stat_result: dict | None = None) -> MagicMock:
+def _make_ws_client_mock(
+    history_result: dict | None = None, stat_result: dict | None = None
+) -> MagicMock:
     ws = MagicMock()
     ws.disconnect = AsyncMock()
 
@@ -79,7 +90,13 @@ class TestHistoryPagination:
     async def test_default_offset_returns_first_page(self, history_tool):
         """offset=0 (default) returns the first limit entries."""
         states = _make_history_states(20)
-        with self._patch_ws(states), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=5)
 
         entity = result["entities"][0]
@@ -93,7 +110,13 @@ class TestHistoryPagination:
     async def test_offset_skips_entries(self, history_tool):
         """offset=5 skips the first 5 entries (newest-first by default)."""
         states = _make_history_states(20)
-        with self._patch_ws(states), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=5, offset=5)
 
         entity = result["entities"][0]
@@ -107,7 +130,13 @@ class TestHistoryPagination:
     async def test_offset_beyond_total_returns_empty(self, history_tool):
         """offset beyond total_count returns empty states, has_more=False."""
         states = _make_history_states(10)
-        with self._patch_ws(states), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=5, offset=100)
 
         entity = result["entities"][0]
@@ -120,7 +149,13 @@ class TestHistoryPagination:
     async def test_last_page_has_more_false(self, history_tool):
         """Final page returns has_more=False and next_offset=None."""
         states = _make_history_states(7)
-        with self._patch_ws(states), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=5, offset=5)
 
         entity = result["entities"][0]
@@ -132,7 +167,13 @@ class TestHistoryPagination:
     async def test_pagination_fields_present(self, history_tool):
         """All standardized pagination fields are present in each entity."""
         states = _make_history_states(3)
-        with self._patch_ws(states), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=2)
 
         entity = result["entities"][0]
@@ -186,7 +227,13 @@ class TestStatisticsPagination:
     async def test_default_limit_applied(self, history_tool):
         """Without explicit limit, default (100) is applied."""
         rows = _make_stat_rows(150)
-        with self._patch_ws(rows), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", start_time="30d"
             )
@@ -201,10 +248,19 @@ class TestStatisticsPagination:
     async def test_offset_skips_rows(self, history_tool):
         """offset=10 skips the first 10 statistics rows."""
         rows = _make_stat_rows(20)
-        with self._patch_ws(rows), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(
-                entity_ids="sensor.energy", source="statistics",
-                start_time="30d", limit=5, offset=10,
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                limit=5,
+                offset=10,
             )
 
         entity = result["entities"][0]
@@ -216,10 +272,19 @@ class TestStatisticsPagination:
     async def test_offset_beyond_total_returns_empty(self, history_tool):
         """offset beyond available rows returns empty statistics."""
         rows = _make_stat_rows(5)
-        with self._patch_ws(rows), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(
-                entity_ids="sensor.energy", source="statistics",
-                start_time="30d", limit=5, offset=50,
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                limit=5,
+                offset=50,
             )
 
         entity = result["entities"][0]
@@ -231,9 +296,18 @@ class TestStatisticsPagination:
     async def test_pagination_fields_present(self, history_tool):
         """All standardized pagination fields present for statistics source."""
         rows = _make_stat_rows(3)
-        with self._patch_ws(rows), patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(
-                entity_ids="sensor.energy", source="statistics", start_time="30d", limit=2
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                limit=2,
             )
 
         entity = result["entities"][0]
@@ -245,8 +319,10 @@ class TestStatisticsPagination:
         rows = _make_stat_rows(5)
         with self._patch_ws(rows), pytest.raises(ToolError) as exc_info:
             await history_tool(
-                entity_ids="sensor.energy", source="statistics",
-                start_time="30d", offset="-5",
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                offset="-5",
             )
 
         error = json.loads(str(exc_info.value))["error"]
@@ -258,13 +334,14 @@ class TestStatisticsPagination:
         rows = _make_stat_rows(5)
         with self._patch_ws(rows), pytest.raises(ToolError) as exc_info:
             await history_tool(
-                entity_ids="sensor.energy", source="statistics",
-                start_time="30d", limit="bad",
+                entity_ids="sensor.energy",
+                source="statistics",
+                start_time="30d",
+                limit="bad",
             )
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-
 
     @pytest.mark.asyncio
     async def test_statistics_query_params_default(self, history_tool):
@@ -274,9 +351,12 @@ class TestStatisticsPagination:
         matching _fetch_history symmetry. Default call: no statistic_types, no limit/offset.
         """
         rows = _make_stat_rows(5)
-        with self._patch_ws(rows), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", start_time="30d"
@@ -298,9 +378,12 @@ class TestStatisticsPagination:
         assertion — stronger than checking key presence only.
         """
         rows = _make_stat_rows(50)
-        with self._patch_ws(rows), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy",
@@ -326,9 +409,12 @@ class TestStatisticsPagination:
         top-level statistic_types key contained the parsed list. Both must now be a list.
         """
         rows = _make_stat_rows(5)
-        with self._patch_ws(rows), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy",
@@ -342,15 +428,20 @@ class TestStatisticsPagination:
         assert result["statistic_types"] == ["mean", "max"]
 
     @pytest.mark.asyncio
-    async def test_statistics_query_params_string_bracketed_normalized(self, history_tool):
+    async def test_statistics_query_params_string_bracketed_normalized(
+        self, history_tool
+    ):
         """query_params.statistic_types reflects the normalized list when caller passes a bracketed string.
 
         Regression test for #990: covers the parse_string_list_param branch (e.g. '["mean","max"]').
         """
         rows = _make_stat_rows(5)
-        with self._patch_ws(rows), patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: d,
+        with (
+            self._patch_ws(rows),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy",
@@ -410,12 +501,22 @@ class TestMultiEntityOffsetGuard:
     async def test_multi_entity_offset_zero_allowed(self, history_tool):
         """offset=0 (default) with multiple entity_ids is allowed."""
         states = _make_history_states(5)
-        ws = _make_ws_client_mock(history_result={
-            "sensor.a": states,
-            "sensor.b": states,
-        })
-        with patch("ha_mcp.tools.tools_history.get_connected_ws_client", return_value=(ws, None)), \
-             patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        ws = _make_ws_client_mock(
+            history_result={
+                "sensor.a": states,
+                "sensor.b": states,
+            }
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_connected_ws_client",
+                return_value=(ws, None),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(
                 entity_ids=["sensor.a", "sensor.b"],
                 offset=0,
@@ -474,8 +575,13 @@ class TestHistoryLimitBoundary:
     async def test_default_limit_applied_history(self, history_tool):
         """Without explicit limit, default (100) is applied for history source."""
         states = _make_history_states(150)
-        with self._patch_ws(states), \
-             patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test")
 
         entity = result["entities"][0]
@@ -492,7 +598,13 @@ class TestHistoryLimitBoundary:
         above-maximum values — soft cap for oversized requests (per util_helpers.py).
         """
         states = _make_history_states(5)
-        with self._patch_ws(states),              patch("ha_mcp.tools.tools_history.add_timezone_metadata", side_effect=lambda _c, d, **_kw: d):
+        with (
+            self._patch_ws(states),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _c, d, **_kw: d,
+            ),
+        ):
             result = await history_tool(entity_ids="sensor.test", limit=1001)
 
         entity = result["entities"][0]

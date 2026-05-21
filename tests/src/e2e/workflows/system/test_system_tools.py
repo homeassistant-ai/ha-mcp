@@ -80,7 +80,9 @@ class TestSystemTools:
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail without confirmation"
         error = data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "not confirmed" in error_msg.lower(), (
             f"Expected 'not confirmed' error, got: {error_msg}"
         )
@@ -110,7 +112,9 @@ class TestSystemTools:
         # Should fail with helpful error
         assert data.get("success") is False, "Restart should fail with confirm=False"
         error = data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "not confirmed" in error_msg.lower(), (
             f"Expected 'not confirmed' error, got: {error_msg}"
         )
@@ -132,9 +136,7 @@ class TestSystemTools:
         """
         logger.info("Testing reload automations...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "automations"}
-        )
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "automations"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload automations result: {data}")
@@ -155,9 +157,7 @@ class TestSystemTools:
         """
         logger.info("Testing reload scripts...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "scripts"}
-        )
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "scripts"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload scripts result: {data}")
@@ -175,9 +175,7 @@ class TestSystemTools:
         """
         logger.info("Testing reload scenes...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "scenes"}
-        )
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "scenes"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload scenes result: {data}")
@@ -195,9 +193,7 @@ class TestSystemTools:
         """
         logger.info("Testing reload core config...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "core"}
-        )
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "core"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload core config result: {data}")
@@ -224,7 +220,9 @@ class TestSystemTools:
         # Should fail with helpful error
         assert data.get("success") is False, "Reload should fail for invalid target"
         error = data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "invalid" in error_msg.lower(), (
             f"Expected 'invalid' in error, got: {error_msg}"
         )
@@ -232,7 +230,9 @@ class TestSystemTools:
         # Should provide valid targets (returned at top level in error response)
         assert "valid_targets" in data, "Should provide list of valid targets"
         valid_targets = data["valid_targets"]
-        assert "automations" in valid_targets, "Valid targets should include 'automations'"
+        assert "automations" in valid_targets, (
+            "Valid targets should include 'automations'"
+        )
         assert "scripts" in valid_targets, "Valid targets should include 'scripts'"
 
         logger.info("Invalid target test passed with helpful error message")
@@ -248,9 +248,7 @@ class TestSystemTools:
         """
         logger.info("Testing reload all components...")
 
-        result = await mcp_client.call_tool(
-            "ha_reload_core", {"target": "all"}
-        )
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "all"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload all result: {data}")
@@ -303,7 +301,9 @@ class TestSystemTools:
         ]
 
         for field in expected_fields:
-            assert field in system_info, f"Missing expected field in system_info: {field}"
+            assert field in system_info, (
+                f"Missing expected field in system_info: {field}"
+            )
 
         # allowlist_external_dirs is list (HA exposed it) or None (HA omitted the key)
         allowlist = system_info["allowlist_external_dirs"]
@@ -452,7 +452,9 @@ class TestSystemTools:
         assert "count" in repairs, "Repairs should contain 'count'"
         assert isinstance(repairs["issues"], list), "Repairs issues should be a list"
 
-        logger.info(f"System health with repairs: {repairs['count']} repair issues found")
+        logger.info(
+            f"System health with repairs: {repairs['count']} repair issues found"
+        )
 
     @pytest.mark.asyncio
     async def test_get_system_health_default_no_extras(self, mcp_client):
@@ -468,7 +470,9 @@ class TestSystemTools:
             pytest.skip("system_health not available in test environment")
 
         assert "repairs" not in data, "Default health should not include repairs"
-        assert "zha_network" not in data, "Default health should not include zha_network"
+        assert "zha_network" not in data, (
+            "Default health should not include zha_network"
+        )
 
         logger.info("Default system health correctly excludes extras")
 
@@ -522,7 +526,9 @@ class TestSystemTools:
             if "not available" in error_msg.lower():
                 pytest.skip("system_health not available in test environment")
             else:
-                pytest.fail(f"Get system health with combined include failed: {error_msg}")
+                pytest.fail(
+                    f"Get system health with combined include failed: {error_msg}"
+                )
 
         assert "repairs" in data, "Combined include should have repairs"
         assert "zha_network" in data, "Combined include should have zha_network"
@@ -553,7 +559,9 @@ class TestSystemTools:
                 pytest.fail(f"Get system health with zwave_network failed: {error_msg}")
 
         assert "health_info" in data, "Missing 'health_info' field"
-        assert "zwave_network" in data, "Missing 'zwave_network' when include='zwave_network'"
+        assert "zwave_network" in data, (
+            "Missing 'zwave_network' when include='zwave_network'"
+        )
 
         zwave = data["zwave_network"]
         assert "controller" in zwave, "Z-Wave network should contain 'controller'"
@@ -580,12 +588,16 @@ class TestSystemTools:
             if "not available" in error_msg.lower():
                 pytest.skip("system_health not available in test environment")
             else:
-                pytest.fail(f"Get system health with unknown include failed: {error_msg}")
+                pytest.fail(
+                    f"Get system health with unknown include failed: {error_msg}"
+                )
 
-        assert "warnings" in data, "Unknown include value should produce a warnings entry"
-        assert any(
-            "bogus_section" in w for w in data["warnings"]
-        ), "Warnings should mention the unknown section"
+        assert "warnings" in data, (
+            "Unknown include value should produce a warnings entry"
+        )
+        assert any("bogus_section" in w for w in data["warnings"]), (
+            "Warnings should mention the unknown section"
+        )
 
         logger.info(f"Unknown include warnings: {data['warnings']}")
 
@@ -620,7 +632,9 @@ class TestSystemToolsIntegration:
             )
             reload_data = parse_mcp_result(reload_result)
 
-            assert reload_data.get("success") is True, "Reload should succeed after valid config check"
+            assert reload_data.get("success") is True, (
+                "Reload should succeed after valid config check"
+            )
             logger.info("Workflow completed: config check -> reload automations")
         else:
             logger.warning("Config has errors - reload would be skipped in production")
@@ -718,7 +732,8 @@ class TestSystemToolsIntegration:
 
         # Verify it appears in the overview
         result = await mcp_client.call_tool(
-            "ha_get_overview", {"detail_level": "minimal"},
+            "ha_get_overview",
+            {"detail_level": "minimal"},
         )
         data = parse_mcp_result(result)
 
@@ -743,7 +758,8 @@ class TestSystemToolsIntegration:
 
         # Verify it's gone
         result2 = await mcp_client.call_tool(
-            "ha_get_overview", {"detail_level": "minimal"},
+            "ha_get_overview",
+            {"detail_level": "minimal"},
         )
         data2 = parse_mcp_result(result2)
 
@@ -777,9 +793,14 @@ class TestSystemToolsIntegration:
         assert "version" in data["system_info"], "system_info must be populated"
 
         # All unrequested top-level keys must be absent.
-        for absent_key in ("domains", "entity_summary", "total_entities", "repair_count"):
+        for absent_key in (
+            "domains",
+            "entity_summary",
+            "total_entities",
+            "repair_count",
+        ):
             assert absent_key not in data, (
-                f"key {absent_key!r} should be projected out when fields=[\"system_info\"]"
+                f'key {absent_key!r} should be projected out when fields=["system_info"]'
             )
 
         logger.info("fields= projection test passed")
@@ -814,9 +835,7 @@ class TestGetSystemHealthDiagnosticsE2E:
         assert "ha_get_integration" in diag["error"]
 
     @pytest.mark.asyncio
-    async def test_diagnostics_with_config_entry_id_returns_subdict(
-        self, mcp_client
-    ):
+    async def test_diagnostics_with_config_entry_id_returns_subdict(self, mcp_client):
         """include='diagnostics' + a real config_entry_id returns either a
         populated data payload or a graceful 404 error — same contract as the
         helper test."""

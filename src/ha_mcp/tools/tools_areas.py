@@ -135,7 +135,11 @@ class AreaTools:
     @tool(
         name="ha_config_list_areas",
         tags={"Areas & Floors"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Areas"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "List Areas",
+        },
     )
     @log_tool_usage
     async def ha_config_list_areas(
@@ -173,17 +177,23 @@ class AreaTools:
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_area_fields: list[str] | None = None
         if area_fields is not None:
             try:
-                parsed_area_fields = parse_string_list_param(area_fields, "area_fields", allow_csv=True)
+                parsed_area_fields = parse_string_list_param(
+                    area_fields, "area_fields", allow_csv=True
+                )
                 if parsed_area_fields is not None and len(parsed_area_fields) == 0:
                     raise ValueError("area_fields must contain at least one key")
             except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="area_fields"))
+                raise_tool_error(
+                    create_validation_error(str(exc), parameter="area_fields")
+                )
         try:
             message: dict[str, Any] = {
                 "type": "config/area_registry/list",
@@ -210,19 +220,25 @@ class AreaTools:
                         response.setdefault("warnings", []).append(_warn)
                 return project_fields(response, parsed_fields)
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to list areas"),
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to list areas"),
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error listing areas: {e}")
-            exception_to_structured_error(e, context={"operation": "list_areas"}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"operation": "list_areas"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
     # ============================================================
     # FLOOR TOOLS
@@ -231,7 +247,11 @@ class AreaTools:
     @tool(
         name="ha_config_list_floors",
         tags={"Areas & Floors"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "List Floors",
+        },
     )
     @log_tool_usage
     async def ha_config_list_floors(self) -> dict[str, Any]:
@@ -256,24 +276,34 @@ class AreaTools:
                     "message": f"Found {len(floors)} floor(s)",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to list floors"),
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to list floors"),
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error listing floors: {e}")
-            exception_to_structured_error(e, context={"operation": "list_floors"}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"operation": "list_floors"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
     @tool(
         name="ha_list_floors_areas",
         tags={"Areas & Floors"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Floors and Areas"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "List Floors and Areas",
+        },
     )
     @log_tool_usage
     async def ha_list_floors_areas(self) -> dict[str, Any]:
@@ -306,20 +336,22 @@ class AreaTools:
             areas_ok = areas_result.get("success") and "result" in areas_result
             floors_ok = floors_result.get("success") and "result" in floors_result
             if not (areas_ok and floors_ok):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to retrieve area or floor registry",
-                    context={
-                        "areas_success": areas_result.get("success"),
-                        "floors_success": floors_result.get("success"),
-                        "areas_response_keys": sorted(areas_result.keys()),
-                        "floors_response_keys": sorted(floors_result.keys()),
-                    },
-                    suggestions=[
-                        "Check Home Assistant connection",
-                        "Verify WebSocket connection is active",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Failed to retrieve area or floor registry",
+                        context={
+                            "areas_success": areas_result.get("success"),
+                            "floors_success": floors_result.get("success"),
+                            "areas_response_keys": sorted(areas_result.keys()),
+                            "floors_response_keys": sorted(floors_result.keys()),
+                        },
+                        suggestions=[
+                            "Check Home Assistant connection",
+                            "Verify WebSocket connection is active",
+                        ],
+                    )
+                )
 
             areas = areas_result["result"]
             floors = floors_result["result"]
@@ -416,7 +448,10 @@ class AreaTools:
     @tool(
         name="ha_set_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "title": "Create or Update Area or Floor"},
+        annotations={
+            "destructiveHint": True,
+            "title": "Create or Update Area or Floor",
+        },
     )
     @log_tool_usage
     async def ha_set_area_or_floor(
@@ -494,10 +529,12 @@ class AreaTools:
             try:
                 parsed_aliases = parse_string_list_param(aliases, "aliases")
             except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid aliases parameter: {e}",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid aliases parameter: {e}",
+                    )
+                )
 
             # Reject cross-kind params loudly so silent intent loss can't happen
             # (e.g., kind='floor' with picture='...' previously dropped the picture
@@ -511,15 +548,17 @@ class AreaTools:
                 if picture is not None:
                     cross_kind_params.append("picture")
             if cross_kind_params:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
-                    context={"kind": kind, "invalid_parameters": cross_kind_params},
-                    suggestions=[
-                        "For kind='area' use: name, id, floor_id, icon, aliases, picture",
-                        "For kind='floor' use: name, id, level, icon, aliases",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
+                        context={"kind": kind, "invalid_parameters": cross_kind_params},
+                        suggestions=[
+                            "For kind='area' use: name, id, floor_id, icon, aliases, picture",
+                            "For kind='floor' use: name, id, level, icon, aliases",
+                        ],
+                    )
+                )
 
             # ``None`` stays the documented "create-new" sentinel; explicit
             # empty/whitespace would silently route to the ``if id:`` create
@@ -538,7 +577,12 @@ class AreaTools:
             if kind == "area":
                 if id:
                     message = self._build_area_update_message(
-                        id, name, floor_id, icon, parsed_aliases, picture,
+                        id,
+                        name,
+                        floor_id,
+                        icon,
+                        parsed_aliases,
+                        picture,
                     )
                     operation = "update"
                 else:
@@ -552,7 +596,11 @@ class AreaTools:
                         suggestions=["Provide a non-empty name for the new area"],
                     )
                     message = self._build_area_create_message(
-                        name, floor_id, icon, parsed_aliases, picture,
+                        name,
+                        floor_id,
+                        icon,
+                        parsed_aliases,
+                        picture,
                     )
                     operation = "create"
                 result_key = "area"
@@ -560,7 +608,11 @@ class AreaTools:
             else:  # kind == "floor"
                 if id:
                     message = self._build_floor_update_message(
-                        id, name, level, icon, parsed_aliases,
+                        id,
+                        name,
+                        level,
+                        icon,
+                        parsed_aliases,
                     )
                     operation = "update"
                 else:
@@ -572,7 +624,10 @@ class AreaTools:
                         suggestions=["Provide a non-empty name for the new floor"],
                     )
                     message = self._build_floor_create_message(
-                        name, level, icon, parsed_aliases,
+                        name,
+                        level,
+                        icon,
+                        parsed_aliases,
                     )
                     operation = "create"
                 result_key = "floor"
@@ -593,17 +648,23 @@ class AreaTools:
                 }
 
             error = result.get("error", {})
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
             ctx: dict[str, Any] = {"operation": operation, "kind": kind}
             if name:
                 ctx["name"] = name
             if id:
                 ctx[id_key] = id
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to {operation} {kind}: {error_msg}",
-                context=ctx,
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {operation} {kind}: {error_msg}",
+                    context=ctx,
+                )
+            )
 
         except ToolError:
             raise
@@ -625,7 +686,11 @@ class AreaTools:
     @tool(
         name="ha_remove_area_or_floor",
         tags={"Areas & Floors"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Area or Floor"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Area or Floor",
+        },
     )
     @log_tool_usage
     async def ha_remove_area_or_floor(
@@ -636,7 +701,9 @@ class AreaTools:
         ],
         id: Annotated[  # noqa: A002
             str,
-            Field(description="Area ID or floor ID to delete (use ha_list_floors_areas to find IDs)"),
+            Field(
+                description="Area ID or floor ID to delete (use ha_list_floors_areas to find IDs)"
+            ),
         ],
     ) -> dict[str, Any]:
         """Remove a Home Assistant area or floor.
@@ -673,12 +740,18 @@ class AreaTools:
                 }
 
             error = result.get("error", {})
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to remove {kind}: {error_msg}",
-                context={"kind": kind, id_key: id},
-            ))
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to remove {kind}: {error_msg}",
+                    context={"kind": kind, id_key: id},
+                )
+            )
 
         except ToolError:
             raise

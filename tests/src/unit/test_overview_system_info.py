@@ -249,7 +249,9 @@ class TestHaGetOverviewSystemSummaryVersion:
         client.base_url = "http://localhost:8123"
         client.get_config = AsyncMock(return_value={"version": "2026.5.3"})
         client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
         return self.registered_tools["ha_get_overview"]
 
     @pytest.fixture
@@ -258,7 +260,9 @@ class TestHaGetOverviewSystemSummaryVersion:
         client.base_url = "http://localhost:8123"
         client.get_config = AsyncMock(side_effect=RuntimeError("connection refused"))
         client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
         return self.registered_tools["ha_get_overview"]
 
     @pytest.fixture
@@ -268,7 +272,9 @@ class TestHaGetOverviewSystemSummaryVersion:
         client.base_url = "http://localhost:8123"
         client.get_config = AsyncMock(return_value={})  # version key missing
         client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(mock_mcp, client, smart_tools=mock_smart_tools_with_summary)
+        register_search_tools(
+            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
+        )
         return self.registered_tools["ha_get_overview"]
 
     @pytest.mark.asyncio
@@ -285,7 +291,9 @@ class TestHaGetOverviewSystemSummaryVersion:
         assert result["system_summary"]["version"] == "unknown"
 
     @pytest.mark.asyncio
-    async def test_version_unknown_when_config_omits_key(self, overview_tool_version_none):
+    async def test_version_unknown_when_config_omits_key(
+        self, overview_tool_version_none
+    ):
         """system_summary["version"] is "unknown" when config has no version key."""
         result = await overview_tool_version_none()
         assert result["system_summary"]["version"] == "unknown"

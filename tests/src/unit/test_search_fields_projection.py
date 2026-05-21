@@ -24,7 +24,13 @@ class TestProjectFields:
         assert result["results"] == [1, 2]
 
     def test_multiple_fields_retained(self):
-        data = {"success": True, "results": [], "count": 0, "query": "x", "has_more": False}
+        data = {
+            "success": True,
+            "results": [],
+            "count": 0,
+            "query": "x",
+            "has_more": False,
+        }
         result = project_fields(data, ["results", "count"])
         assert set(result.keys()) == {"success", "results", "count"}
 
@@ -89,6 +95,7 @@ class TestHaSearchEntitiesFieldsProjection:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -100,14 +107,18 @@ class TestHaSearchEntitiesFieldsProjection:
         client.base_url = "http://localhost:8123"
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # exact_match=True (default) calls client.get_states() + send_websocket_message()
-        client.get_states = AsyncMock(return_value=[
-            {
-                "entity_id": "light.kitchen",
-                "state": "on",
-                "attributes": {"friendly_name": "Kitchen Light", "brightness": 200},
-            }
-        ])
-        client.send_websocket_message = AsyncMock(return_value={"success": True, "result": []})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "light.kitchen",
+                    "state": "on",
+                    "attributes": {"friendly_name": "Kitchen Light", "brightness": 200},
+                }
+            ]
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
         return client
 
     @pytest.fixture
@@ -173,6 +184,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -184,18 +196,20 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         client.base_url = "http://localhost:8123"
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Used by the domain-listing branch (parallel states + registry fetch)
-        client.get_states = AsyncMock(return_value=[
-            {
-                "entity_id": "light.kitchen",
-                "state": "on",
-                "attributes": {"friendly_name": "Kitchen Light"},
-            },
-            {
-                "entity_id": "light.living_room",
-                "state": "off",
-                "attributes": {"friendly_name": "Living Room Light"},
-            },
-        ])
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "light.kitchen",
+                    "state": "on",
+                    "attributes": {"friendly_name": "Kitchen Light"},
+                },
+                {
+                    "entity_id": "light.living_room",
+                    "state": "off",
+                    "attributes": {"friendly_name": "Living Room Light"},
+                },
+            ]
+        )
         # Default WS response (registry list / alias enrichment): empty success.
         client.send_websocket_message = AsyncMock(
             return_value={"success": True, "result": []}
@@ -206,23 +220,25 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
     def mock_smart_tools_populated(self):
         """smart_tools mock returning one area with one entity (kitchen.light)."""
         smart = MagicMock()
-        smart.get_entities_by_area = AsyncMock(return_value={
-            "areas": {
-                "kitchen": {
-                    "area_name": "Kitchen",
-                    "entities": {
-                        "light": [
-                            {
-                                "entity_id": "light.kitchen",
-                                "friendly_name": "Kitchen Light",
-                                "state": "on",
-                                "_hidden_by": None,
-                            }
-                        ],
-                    },
+        smart.get_entities_by_area = AsyncMock(
+            return_value={
+                "areas": {
+                    "kitchen": {
+                        "area_name": "Kitchen",
+                        "entities": {
+                            "light": [
+                                {
+                                    "entity_id": "light.kitchen",
+                                    "friendly_name": "Kitchen Light",
+                                    "state": "on",
+                                    "_hidden_by": None,
+                                }
+                            ],
+                        },
+                    }
                 }
             }
-        })
+        )
         return smart
 
     @pytest.fixture
@@ -234,7 +250,9 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.fixture
     def search_tool_populated(self, mock_mcp, mock_client, mock_smart_tools_populated):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools_populated)
+        register_search_tools(
+            mock_mcp, mock_client, smart_tools=mock_smart_tools_populated
+        )
         return self.registered_tools["ha_search_entities"]
 
     @pytest.fixture
@@ -257,7 +275,9 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert "area_filter" not in data
 
     @pytest.mark.asyncio
-    async def test_area_plus_query_branch_unprojected_baseline(self, search_tool_populated):
+    async def test_area_plus_query_branch_unprojected_baseline(
+        self, search_tool_populated
+    ):
         """fields=None on area+query returns the full response (sanity check)."""
         result = await search_tool_populated(query="kitchen", area_filter="kitchen")
         data = result["data"]
@@ -276,7 +296,9 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert "search_type" not in data
 
     @pytest.mark.asyncio
-    async def test_area_only_populated_branch_unprojected_baseline(self, search_tool_populated):
+    async def test_area_only_populated_branch_unprojected_baseline(
+        self, search_tool_populated
+    ):
         """fields=None on area-only returns the full response (sanity check)."""
         result = await search_tool_populated(area_filter="kitchen")
         data = result["data"]
@@ -323,7 +345,9 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert "search_type" not in data
 
     @pytest.mark.asyncio
-    async def test_domain_listing_branch_unprojected_baseline(self, search_tool_populated):
+    async def test_domain_listing_branch_unprojected_baseline(
+        self, search_tool_populated
+    ):
         """fields=None on the domain-listing branch returns the full response."""
         result = await search_tool_populated(domain_filter="light")
         data = result["data"]
@@ -571,9 +595,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         This pins the dual-count contract: the fuzzy engine already paginated
         internally so total_matches cannot be recomputed after state filtering.
         """
-        result = await search_tool(
-            query="light", exact_match=False, state_filter="on"
-        )
+        result = await search_tool(query="light", exact_match=False, state_filter="on")
         data = result["data"]
         # count reflects only the filtered page
         assert data["count"] == 1, "count should reflect only the on-state entity"
@@ -586,9 +608,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
     @pytest.mark.asyncio
     async def test_fuzzy_state_filter_note_present(self, search_tool):
         """state_filter_note appears in the response to explain the dual-count."""
-        result = await search_tool(
-            query="light", exact_match=False, state_filter="on"
-        )
+        result = await search_tool(query="light", exact_match=False, state_filter="on")
         data = result["data"]
         assert "state_filter_note" in data
         assert "has_more" in data["state_filter_note"]

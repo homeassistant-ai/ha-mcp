@@ -284,7 +284,9 @@ class HistoryTools:
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
-                parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         try:
@@ -305,19 +307,27 @@ class HistoryTools:
                     min_value=0,
                 )
             except ValueError as e:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    context={"parameter": "offset"},
-                    suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(e),
+                        context={"parameter": "offset"},
+                        suggestions=[
+                            "Provide offset as a non-negative integer (e.g., 0)"
+                        ],
+                    )
+                )
             if _effective_offset_check > 0 and len(entity_id_list) > 1:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "offset > 0 requires a single entity_id",
-                    context={"offset": offset, "entity_count": len(entity_id_list)},
-                    suggestions=["Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "offset > 0 requires a single entity_id",
+                        context={"offset": offset, "entity_count": len(entity_id_list)},
+                        suggestions=[
+                            "Use a single entity_id when offset > 0, or use offset=0 for multi-entity requests."
+                        ],
+                    )
+                )
 
             # Source-dependent default hours
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
@@ -345,10 +355,13 @@ class HistoryTools:
                 verify_ssl=self._client.verify_ssl,
             )
             if error or ws_client is None:
-                raise_tool_error(error or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket",
-                ))
+                raise_tool_error(
+                    error
+                    or create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Failed to connect to Home Assistant WebSocket",
+                    )
+                )
 
             await safe_progress(
                 ctx,
@@ -360,16 +373,27 @@ class HistoryTools:
             try:
                 if source == "statistics":
                     inner = await _fetch_statistics(
-                        ws_client, entity_id_list,
-                        start_dt, end_dt, period, statistic_types,
-                        limit, offset,
+                        ws_client,
+                        entity_id_list,
+                        start_dt,
+                        end_dt,
+                        period,
+                        statistic_types,
+                        limit,
+                        offset,
                     )
                 else:
                     inner = await _fetch_history(
-                        ws_client, entity_id_list,
-                        start_dt, end_dt, minimal_response,
-                        significant_changes_only, limit, offset,
-                        _DEFAULT_HISTORY_LIMIT, _MAX_HISTORY_LIMIT,
+                        ws_client,
+                        entity_id_list,
+                        start_dt,
+                        end_dt,
+                        minimal_response,
+                        significant_changes_only,
+                        limit,
+                        offset,
+                        _DEFAULT_HISTORY_LIMIT,
+                        _MAX_HISTORY_LIMIT,
                         order=order,
                     )
                 await safe_progress(
@@ -418,29 +442,35 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
         if entity_ids.startswith("["):
             parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
             if parsed_ids is None:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "entity_ids is required",
-                    suggestions=["Provide at least one entity ID"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        "entity_ids is required",
+                        suggestions=["Provide at least one entity ID"],
+                    )
+                )
             return parsed_ids
         elif "," in entity_ids:
             result = [e.strip() for e in entity_ids.split(",") if e.strip()]
             if not result:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "entity_ids is required",
-                    suggestions=["Provide at least one entity ID"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        "entity_ids is required",
+                        suggestions=["Provide at least one entity ID"],
+                    )
+                )
             return result
         else:
             return [entity_ids.strip()]
     if not entity_ids:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_MISSING_PARAMETER,
-            "entity_ids is required",
-            suggestions=["Provide at least one entity ID"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_MISSING_PARAMETER,
+                "entity_ids is required",
+                suggestions=["Provide at least one entity ID"],
+            )
+        )
 
     return entity_ids
 
@@ -454,26 +484,30 @@ def _parse_time_range(
     try:
         start_dt = parse_relative_time(start_time, default_hours=default_hours)
     except ValueError as e:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            str(e),
-            context={"parameter": "start_time"},
-            suggestions=[
-                "Use ISO format: '2025-01-25T00:00:00Z'",
-                "Use relative format: '24h', '7d', '2w', '1m'",
-            ],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "start_time"},
+                suggestions=[
+                    "Use ISO format: '2025-01-25T00:00:00Z'",
+                    "Use relative format: '24h', '7d', '2w', '1m'",
+                ],
+            )
+        )
 
     if end_time:
         try:
             end_dt = parse_relative_time(end_time, default_hours=0)
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                context={"parameter": "end_time"},
-                suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                    context={"parameter": "end_time"},
+                    suggestions=["Use ISO format: '2025-01-26T00:00:00Z'"],
+                )
+            )
     else:
         end_dt = datetime.now(UTC)
 
@@ -510,12 +544,14 @@ async def _fetch_history(
             max_value=max_limit,
         )
     except ValueError as e:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            str(e),
-            context={"parameter": "limit"},
-            suggestions=["Provide limit as an integer (e.g., 100)"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "limit"},
+                suggestions=["Provide limit as an integer (e.g., 100)"],
+            )
+        )
 
     try:
         effective_offset = coerce_int_param(
@@ -525,12 +561,14 @@ async def _fetch_history(
             min_value=0,
         )
     except ValueError as e:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            str(e),
-            context={"parameter": "offset"},
-            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "offset"},
+                suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+            )
+        )
 
     command_params = {
         "start_time": start_dt.isoformat(),
@@ -547,16 +585,18 @@ async def _fetch_history(
 
     if not response.get("success"):
         error_msg = response.get("error", "Unknown error")
-        raise_tool_error(create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to retrieve history: {error_msg}",
-            context={"entity_ids": entity_id_list},
-            suggestions=[
-                "Verify entity IDs exist using ha_search_entities()",
-                "Check that entities are recorded (not excluded from recorder)",
-                "Ensure time range is within recorder retention period (~10 days)",
-            ],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to retrieve history: {error_msg}",
+                context={"entity_ids": entity_id_list},
+                suggestions=[
+                    "Verify entity IDs exist using ha_search_entities()",
+                    "Check that entities are recorded (not excluded from recorder)",
+                    "Ensure time range is within recorder retention period (~10 days)",
+                ],
+            )
+        )
 
     result_data = response.get("result", {})
     entities_history = []
@@ -565,7 +605,9 @@ async def _fetch_history(
         entity_states = result_data.get(entity_id, [])
         if order == "desc":
             entity_states = list(reversed(entity_states))
-        paged_states = entity_states[effective_offset : effective_offset + effective_limit]
+        paged_states = entity_states[
+            effective_offset : effective_offset + effective_limit
+        ]
 
         formatted_states = []
         for state in paged_states:
@@ -589,15 +631,17 @@ async def _fetch_history(
             limit=effective_limit,
             count=len(formatted_states),
         )
-        entities_history.append({
-            "entity_id": entity_id,
-            "period": {
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
-            },
-            "states": formatted_states,
-            **pagination,
-        })
+        entities_history.append(
+            {
+                "entity_id": entity_id,
+                "period": {
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                },
+                "states": formatted_states,
+                **pagination,
+            }
+        )
 
     history_data = {
         "success": True,
@@ -643,12 +687,14 @@ async def _fetch_statistics(
             max_value=_MAX_HISTORY_LIMIT,
         )
     except ValueError as e:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            str(e),
-            context={"parameter": "limit"},
-            suggestions=["Provide limit as an integer (e.g., 100)"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "limit"},
+                suggestions=["Provide limit as an integer (e.g., 100)"],
+            )
+        )
 
     try:
         effective_offset = coerce_int_param(
@@ -658,31 +704,39 @@ async def _fetch_statistics(
             min_value=0,
         )
     except ValueError as e:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            str(e),
-            context={"parameter": "offset"},
-            suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                str(e),
+                context={"parameter": "offset"},
+                suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
+            )
+        )
 
     # Validate period
     valid_periods = ["5minute", "hour", "day", "week", "month", "year"]
     if period not in valid_periods:
-        raise_tool_error(create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"Invalid period: {period}",
-            context={"period": period, "valid_periods": valid_periods},
-            suggestions=[f"Use one of: {', '.join(valid_periods)}"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid period: {period}",
+                context={"period": period, "valid_periods": valid_periods},
+                suggestions=[f"Use one of: {', '.join(valid_periods)}"],
+            )
+        )
 
     # Parse statistic_types
     stat_types_list: list[str] | None = None
     if statistic_types is not None:
         if isinstance(statistic_types, str):
             if statistic_types.startswith("["):
-                stat_types_list = parse_string_list_param(statistic_types, "statistic_types")
+                stat_types_list = parse_string_list_param(
+                    statistic_types, "statistic_types"
+                )
             elif "," in statistic_types:
-                stat_types_list = [s.strip() for s in statistic_types.split(",") if s.strip()]
+                stat_types_list = [
+                    s.strip() for s in statistic_types.split(",") if s.strip()
+                ]
             else:
                 stat_types_list = [statistic_types.strip()]
         else:
@@ -691,21 +745,28 @@ async def _fetch_statistics(
         valid_types = ["mean", "min", "max", "sum", "state", "change"]
         assert stat_types_list is not None
         if not stat_types_list:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "statistic_types cannot be an empty list. "
-                "Omit the parameter to retrieve all types, or specify at least one valid type.",
-                context={"parameter": "statistic_types", "value": statistic_types},
-                suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "statistic_types cannot be an empty list. "
+                    "Omit the parameter to retrieve all types, or specify at least one valid type.",
+                    context={"parameter": "statistic_types", "value": statistic_types},
+                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
+                )
+            )
         invalid_types = [t for t in stat_types_list if t not in valid_types]
         if invalid_types:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid statistic types: {invalid_types}",
-                context={"invalid_types": invalid_types, "valid_types": valid_types},
-                suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid statistic types: {invalid_types}",
+                    context={
+                        "invalid_types": invalid_types,
+                        "valid_types": valid_types,
+                    },
+                    suggestions=[f"Use one or more of: {', '.join(valid_types)}"],
+                )
+            )
 
     command_params: dict[str, Any] = {
         "start_time": start_dt.isoformat(),
@@ -722,16 +783,18 @@ async def _fetch_statistics(
 
     if not response.get("success"):
         error_msg = response.get("error", "Unknown error")
-        raise_tool_error(create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to retrieve statistics: {error_msg}",
-            context={"entity_ids": entity_id_list},
-            suggestions=[
-                "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                "Use ha_search_entities() to check entity attributes",
-                "Statistics are only available for entities that track numeric values",
-            ],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to retrieve statistics: {error_msg}",
+                context={"entity_ids": entity_id_list},
+                suggestions=[
+                    "Verify entities have state_class attribute (measurement, total, total_increasing)",
+                    "Use ha_search_entities() to check entity attributes",
+                    "Statistics are only available for entities that track numeric values",
+                ],
+            )
+        )
 
     result_data = response.get("result", {})
     entities_statistics = []
@@ -739,7 +802,9 @@ async def _fetch_statistics(
 
     for entity_id in entity_id_list:
         entity_stats = result_data.get(entity_id, [])
-        paged_stats = entity_stats[effective_offset : effective_offset + effective_limit]
+        paged_stats = entity_stats[
+            effective_offset : effective_offset + effective_limit
+        ]
         formatted_stats = []
         unit = None
 
@@ -758,13 +823,15 @@ async def _fetch_statistics(
             limit=effective_limit,
             count=len(formatted_stats),
         )
-        entities_statistics.append({
-            "entity_id": entity_id,
-            "period": period,
-            "statistics": formatted_stats,
-            "unit_of_measurement": unit,
-            **pagination,
-        })
+        entities_statistics.append(
+            {
+                "entity_id": entity_id,
+                "period": period,
+                "statistics": formatted_stats,
+                "unit_of_measurement": unit,
+                **pagination,
+            }
+        )
 
     empty_entities: list[str] = [
         str(e["entity_id"]) for e in entities_statistics if e["count"] == 0

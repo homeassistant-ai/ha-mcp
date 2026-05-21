@@ -71,9 +71,7 @@ def public_fields(d: dict[str, Any]) -> dict[str, Any]:
     later mutation of those values would propagate.
     """
     return {
-        k: v
-        for k, v in d.items()
-        if not (isinstance(k, str) and k.startswith("_"))
+        k: v for k, v in d.items() if not (isinstance(k, str) and k.startswith("_"))
     }
 
 
@@ -499,7 +497,9 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
             continue
         levels[domain] = {
             "name": name,
-            "raw": raw_level if isinstance(raw_level, int) and not isinstance(raw_level, bool) else None,
+            "raw": raw_level
+            if isinstance(raw_level, int) and not isinstance(raw_level, bool)
+            else None,
         }
     return levels
 
@@ -988,7 +988,9 @@ async def fetch_integration_diagnostics(
             )
             logger.warning("Diagnostics fetch refused (403): %s", e)
         else:
-            result["error"] = f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
+            result["error"] = (
+                f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
+            )
             logger.warning("Diagnostics fetch API error: %s", e)
     except HomeAssistantConnectionError as e:
         msg = str(e)
@@ -1092,9 +1094,7 @@ def _project_cap_and_paginate_diagnostics(
                 # is set without ``data_limit`` (no window to slice). Surface
                 # a structured warning rather than silently dropping the kwarg.
                 if data_limit is not None:
-                    type_name = (
-                        "null" if resolved is None else type(resolved).__name__
-                    )
+                    type_name = "null" if resolved is None else type(resolved).__name__
                     result["data_pagination_warning"] = (
                         f"data_limit ignored: resolved value at '{data_path}' "
                         f"is {type_name}, not a list"
@@ -1114,8 +1114,7 @@ def _project_cap_and_paginate_diagnostics(
         # land together (the whitespace input nulled ``data_path``, dropping
         # us into this elif; the earlier warning takes precedence).
         result["data_pagination_warning"] = (
-            "data_offset ignored: data_path not set "
-            "(no resolved sub-tree to paginate)"
+            "data_offset ignored: data_path not set (no resolved sub-tree to paginate)"
         )
 
     if truncate_at_bytes is not None and data is not None:
@@ -1145,9 +1144,7 @@ def _project_cap_and_paginate_diagnostics(
                 del result["data"]
 
 
-def _resolve_data_path(
-    data: Any, path: str
-) -> tuple[Any, str | None]:
+def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
     """Walk ``data`` along the dotted ``path`` and return ``(value, error)``.
 
     Returns ``(value, None)`` on success or ``(None, error_message)`` when
@@ -1171,8 +1168,7 @@ def _resolve_data_path(
     for seg in segments:
         if not seg:
             return None, (
-                f"data_path '{path}' has an empty segment "
-                f"(after '{'.'.join(walked)}')"
+                f"data_path '{path}' has an empty segment (after '{'.'.join(walked)}')"
             )
         if current is None:
             return None, (

@@ -66,8 +66,16 @@ _HISTORY_INNER = {
     "success": True,
     "source": "history",
     "entities": [{"entity_id": "sensor.temp", "states": []}],
-    "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
-    "query_params": {"minimal_response": True, "significant_changes_only": True, "limit": 100, "offset": 0},
+    "period": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-01-02T00:00:00+00:00",
+    },
+    "query_params": {
+        "minimal_response": True,
+        "significant_changes_only": True,
+        "limit": 100,
+        "offset": 0,
+    },
 }
 
 
@@ -100,22 +108,34 @@ class TestHaGetHistoryFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_no_fields_returns_full_response(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_HISTORY_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_HISTORY_INNER),
+            ),
         ):
             result = await history_tool(entity_ids="sensor.temp")
         assert "data" in result
         assert "metadata" in result
-        assert set(result["data"].keys()) == {"success", "source", "entities", "period", "query_params"}
+        assert set(result["data"].keys()) == {
+            "success",
+            "source",
+            "entities",
+            "period",
+            "query_params",
+        }
 
     @pytest.mark.asyncio
     async def test_single_field_projects_to_that_key_plus_success(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_HISTORY_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_HISTORY_INNER),
+            ),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["entities"])
         assert set(result["data"].keys()) == {"success", "entities"}
@@ -124,21 +144,29 @@ class TestHaGetHistoryFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_multiple_fields_projects_correctly(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_HISTORY_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_HISTORY_INNER),
+            ),
         ):
-            result = await history_tool(entity_ids="sensor.temp", fields=["source", "period"])
+            result = await history_tool(
+                entity_ids="sensor.temp", fields=["source", "period"]
+            )
         assert set(result["data"].keys()) == {"success", "source", "period"}
         assert "metadata" in result
 
     @pytest.mark.asyncio
     async def test_success_always_present_regardless_of_fields(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_HISTORY_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_HISTORY_INNER),
+            ),
         ):
             result = await history_tool(entity_ids="sensor.temp", fields=["source"])
         assert "success" in result["data"]
@@ -146,12 +174,17 @@ class TestHaGetHistoryFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_unknown_field_silently_omitted(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_HISTORY_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_HISTORY_INNER),
+            ),
         ):
-            result = await history_tool(entity_ids="sensor.temp", fields=["nonexistent"])
+            result = await history_tool(
+                entity_ids="sensor.temp", fields=["nonexistent"]
+            )
         assert set(result["data"].keys()) == {"success"}
 
     @pytest.mark.asyncio
@@ -169,7 +202,10 @@ _ORDER_INNER_STUB = {
     "success": True,
     "source": "history",
     "entities": [{"entity_id": "sensor.temp", "states": []}],
-    "period": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+    "period": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-01-02T00:00:00+00:00",
+    },
     "query_params": {
         "minimal_response": True,
         "significant_changes_only": True,
@@ -184,7 +220,10 @@ _STATISTICS_INNER = {
     "source": "statistics",
     "entities": [{"entity_id": "sensor.energy", "statistics": []}],
     "period_type": "hour",
-    "time_range": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+    "time_range": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-01-02T00:00:00+00:00",
+    },
     "statistic_types": ["mean"],
     "query_params": {"limit": 100, "offset": 0},
 }
@@ -217,25 +256,36 @@ class TestHaGetHistoryStatisticsFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_no_fields_returns_full_response(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=dict(_STATISTICS_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=dict(_STATISTICS_INNER),
+            ),
         ):
             result = await history_tool(entity_ids="sensor.energy", source="statistics")
         assert "data" in result
         assert "metadata" in result
         assert set(result["data"].keys()) == {
-            "success", "source", "entities", "period_type",
-            "time_range", "statistic_types", "query_params",
+            "success",
+            "source",
+            "entities",
+            "period_type",
+            "time_range",
+            "statistic_types",
+            "query_params",
         }
 
     @pytest.mark.asyncio
     async def test_single_field_projection(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=dict(_STATISTICS_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=dict(_STATISTICS_INNER),
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", fields=["entities"]
@@ -245,10 +295,13 @@ class TestHaGetHistoryStatisticsFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_stats_specific_key_period_type(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=dict(_STATISTICS_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=dict(_STATISTICS_INNER),
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", fields=["period_type"]
@@ -258,10 +311,13 @@ class TestHaGetHistoryStatisticsFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_success_always_present(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=dict(_STATISTICS_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=dict(_STATISTICS_INNER),
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", fields=["entities"]
@@ -270,10 +326,13 @@ class TestHaGetHistoryStatisticsFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_unknown_field_omitted(self, history_tool):
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=dict(_STATISTICS_INNER),
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=dict(_STATISTICS_INNER),
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", fields=["nonexistent"]
@@ -283,12 +342,16 @@ class TestHaGetHistoryStatisticsFieldsProjection:
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, history_tool):
         with pytest.raises(ToolError):
-            await history_tool(entity_ids="sensor.energy", source="statistics", fields=123)
+            await history_tool(
+                entity_ids="sensor.energy", source="statistics", fields=123
+            )
 
     @pytest.mark.asyncio
     async def test_bad_json_fields_raises_tool_error(self, history_tool):
         with pytest.raises(ToolError):
-            await history_tool(entity_ids="sensor.energy", source="statistics", fields='["')
+            await history_tool(
+                entity_ids="sensor.energy", source="statistics", fields='["'
+            )
 
 
 class TestHaGetHistoryOrder:
@@ -323,11 +386,14 @@ class TestHaGetHistoryOrder:
     @pytest.mark.asyncio
     async def test_order_desc_default_passed_to_fetch_history(self, history_tool):
         """Default order='desc' is threaded through to _fetch_history."""
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_ORDER_INNER_STUB),
-        ) as mock_fetch:
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_ORDER_INNER_STUB),
+            ) as mock_fetch,
+        ):
             await history_tool(entity_ids="sensor.temp")
         _args, _kwargs = mock_fetch.call_args
         assert _kwargs.get("order") == "desc" or "desc" in _args
@@ -335,11 +401,14 @@ class TestHaGetHistoryOrder:
     @pytest.mark.asyncio
     async def test_order_asc_passed_to_fetch_history(self, history_tool):
         """order='asc' is passed through to _fetch_history unchanged."""
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_history",
-            new_callable=AsyncMock,
-            return_value=dict(_ORDER_INNER_STUB),
-        ) as mock_fetch:
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_history",
+                new_callable=AsyncMock,
+                return_value=dict(_ORDER_INNER_STUB),
+            ) as mock_fetch,
+        ):
             await history_tool(entity_ids="sensor.temp", order="asc")
         _args, _kwargs = mock_fetch.call_args
         assert _kwargs.get("order") == "asc" or "asc" in _args
@@ -352,15 +421,23 @@ class TestHaGetHistoryOrder:
             "source": "statistics",
             "entities": [],
             "period_type": "day",
-            "time_range": {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-02T00:00:00+00:00"},
+            "time_range": {
+                "start": "2025-01-01T00:00:00+00:00",
+                "end": "2025-01-02T00:00:00+00:00",
+            },
             "statistic_types": ["mean"],
             "query_params": {"limit": 100, "offset": 0},
         }
-        with self._ws_patch(), patch(
-            "ha_mcp.tools.tools_history._fetch_statistics",
-            new_callable=AsyncMock,
-            return_value=_stats_stub,
-        ) as mock_stats:
-            await history_tool(entity_ids="sensor.energy", source="statistics", order="asc")
+        with (
+            self._ws_patch(),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_statistics",
+                new_callable=AsyncMock,
+                return_value=_stats_stub,
+            ) as mock_stats,
+        ):
+            await history_tool(
+                entity_ids="sensor.energy", source="statistics", order="asc"
+            )
         # _fetch_statistics should be called, not _fetch_history
         mock_stats.assert_called_once()
