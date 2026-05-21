@@ -29,6 +29,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from .auto_backup import with_auto_backup
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
@@ -372,6 +373,7 @@ class AutomationConfigTools:
             "title": "Create or Update Automation",
         },
     )
+    @with_auto_backup(domain="automation", id_param="identifier")
     @log_tool_usage
     async def ha_config_set_automation(
         self,
@@ -1032,6 +1034,7 @@ class AutomationConfigTools:
             "title": "Remove Automation",
         },
     )
+    @with_auto_backup(domain="automation", id_param="identifier")
     @log_tool_usage
     async def ha_config_remove_automation(
         self,

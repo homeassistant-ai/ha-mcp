@@ -121,17 +121,78 @@ User-facing entry points (both call `BackupManager.restore`):
 
 Restore is upsert: re-creates entities that were deleted between backup and restore. If HA rejects (validation error, etc.), error propagates with structured suggestions.
 
-## List / view / diff / delete flow
+## Polymorphic `ha_manage_backup` tool
 
-Each operation is a thin method on `BackupManager`, exposed via:
+`ha_backup_create` and `ha_backup_restore` are **merged** into a single
+polymorphic tool `ha_manage_backup` that handles BOTH the existing full-HA-
+snapshot functionality AND the new per-edit auto-backup operations. Net tool
+count change: **-1** (remove 2 tools, add 1).
 
-| MCP tool | UI endpoint | UI element |
+```python
+ha_manage_backup(
+    scope: Literal["snapshot", "edits"],
+    action: Literal["create", "restore", "list", "view", "delete"],
+    # snapshot scope params
+    name: str | None = None,          # snapshot.create: tarball name
+    backup_id: str | None = None,     # snapshot.restore: tarball ID
+    restore_database: bool = False,   # snapshot.restore: include DB
+    # edits scope params
+    domain: str | None = None,        # edits.list / edits.delete: filter
+    entity_id: str | None = None,     # edits.list / edits.delete: filter
+    backup_name: str | None = None,   # edits.view / edits.restore / edits.delete
+    older_than_days: int | None = None,  # edits.delete: bulk-by-age
+)
+```
+
+### Routing matrix
+
+| scope | action | Behavior |
 |---|---|---|
-| `ha_manage_auto_backup(action="list", domain?, entity_id?, since?, limit?)` | `GET /api/settings/backups?...` | Backup list table with filters |
-| `ha_manage_auto_backup(action="view", name=...)` | `GET /api/settings/backups/<name>` | "View" button → modal showing YAML |
-| `ha_manage_auto_backup(action="diff", name=...)` | `GET /api/settings/backups/<name>/diff` | "Diff" button → modal with unified diff vs current state |
-| `ha_manage_auto_backup(action="restore", name=...)` | `POST /api/settings/backups/<name>/restore` | "Restore" button (confirmation modal) |
-| `ha_manage_auto_backup(action="delete", name=...)` *or* `(action="delete_bulk", domain?, entity_id?, older_than?)` | `DELETE /api/settings/backups/<name>`, `DELETE /api/settings/backups?...` | Per-row "Delete" + bulk "Delete all matching filters" |
+| `snapshot` | `create` | Existing `ha_backup_create` behavior — full HA tarball via HA's native backup integration |
+| `snapshot` | `restore` | Existing `ha_backup_restore` behavior — HA restarts, pre-restore safety tarball created automatically |
+| `edits` | `list` | List auto-backup files filterable by `domain` and/or `entity_id` |
+| `edits` | `view` | Return one auto-backup's YAML content + parsed `config` |
+| `edits` | `restore` | Re-apply one auto-backup (creates fresh safety snapshot first); no HA restart |
+| `edits` | `delete` | Delete one auto-backup by name OR bulk-delete by filter (domain/entity_id/older_than_days) |
+
+### Gating against accidental wrong-mode usage
+
+This is the main design risk — without strong gates, the LLM could route
+"restore my automation" through `(scope="snapshot", action="restore")`,
+which would restart HA. Layered defenses:
+
+1. **Type validation**: `scope` and `action` are `Literal`-typed so Pydantic
+   rejects unknown values before the tool body runs.
+2. **Scope+action matrix validation**: invalid combinations
+   (`(snapshot, list)`, `(snapshot, view)`, `(snapshot, delete)`,
+   `(edits, create)`) raise `VALIDATION_INVALID_PARAMETER` with the valid
+   combinations listed in `suggestions`.
+3. **Required-param checks per cell**:
+   - `(snapshot, restore)` requires `backup_id`; if `backup_name` or
+     `entity_id` is passed instead, structured error explains the param
+     belongs to the other scope.
+   - `(edits, restore/view/delete-single)` requires `backup_name` (which
+     follows the `<domain>.<entity_id>.<timestamp>.yaml` shape — clearly
+     not a tarball ID).
+4. **Annotation differentiation**:
+   - `(snapshot, restore)` keeps the existing `destructiveHint: True` AND
+     surfaces the "LAST RESORT — HA will restart" warning in the response.
+   - `(edits, restore)` is also destructive but explicitly safer; response
+     includes `restart_required: false` and the path of the safety backup
+     created.
+5. **Docstring**: the tool's docstring leads with a routing table so the
+   LLM picks the right cell. Per-scope sections clearly state what each
+   does and how they differ.
+
+### UI mapping
+
+| Tool call | UI endpoint | UI element |
+|---|---|---|
+| `(edits, list)` | `GET /api/settings/backups?...` | Backups tab list table with filters |
+| `(edits, view)` | `GET /api/settings/backups/<name>` | "View" button → modal showing YAML |
+| (no tool — UI-only diff) | `GET /api/settings/backups/<name>/diff` | "Diff" button → modal with unified diff vs current state |
+| `(edits, restore)` | `POST /api/settings/backups/<name>/restore` | "Restore" button (confirmation modal) |
+| `(edits, delete)` | `DELETE /api/settings/backups/<name>` and `DELETE /api/settings/backups?...` | Per-row "Delete" + bulk "Delete matching filters" |
 
 **List item shape:**
 ```json
@@ -208,12 +269,12 @@ One test file per backed-up domain (`test_automation.py`, `test_script.py`, ...,
 **New:**
 - `src/ha_mcp/backup_manager.py`
 - `src/ha_mcp/tools/auto_backup.py` (decorator)
-- `src/ha_mcp/tools/tools_auto_backup.py` (`ha_manage_auto_backup` tool)
 - `tests/src/unit/test_backup_manager.py`
 - `tests/src/e2e/workflows/auto_backup/` (one test file per domain)
 
 **Modified:**
 - `src/ha_mcp/config.py` (4 settings)
+- `src/ha_mcp/tools/backup.py` — merge `ha_backup_create`+`ha_backup_restore` into a single `ha_manage_backup` polymorphic tool; add the `edits` scope handlers
 - `src/ha_mcp/settings_ui.py` (5 routes + Backups tab)
 - `homeassistant-addon/config.yaml` + `homeassistant-addon-dev/config.yaml` (4 options + schema)
 - `homeassistant-addon-dev/translations/en.yaml` (4 translations)

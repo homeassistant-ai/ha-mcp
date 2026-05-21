@@ -17,6 +17,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -245,6 +246,7 @@ class ResourceTools:
             "title": "Set Dashboard Resource",
         },
     )
+    @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage
     async def ha_config_set_dashboard_resource(
         self,
@@ -635,6 +637,7 @@ class ResourceTools:
             "title": "Delete Dashboard Resource",
         },
     )
+    @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
     @log_tool_usage
     async def ha_config_delete_dashboard_resource(
         self,

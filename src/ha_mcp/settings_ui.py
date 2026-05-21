@@ -20,7 +20,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 from ._version import is_running_in_addon
+from .backup_manager import get_backup_manager
 from .client.supervisor_client import make_supervisor_httpx_client
+from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -438,32 +440,107 @@ _SETTINGS_HTML = (
     font-size: 0.85rem; flex-shrink: 0; }
   .restart-btn:hover { background: var(--accent-hover); }
   .restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 16px; border: none; background: transparent; color: var(--text-secondary);
+    font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  /* Backups */
+  .backup-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .backup-filters input { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.85rem; }
+  .backup-filters input:focus { border-color: var(--accent); outline: none; }
+  .backup-filters button { padding: 8px 12px; border-radius: 8px; border: none;
+    background: var(--surface); color: var(--text); font-size: 0.85rem; cursor: pointer; }
+  .backup-filters button:hover { background: var(--surface-hover); }
+  .backup-filters button.danger { background: #3a1a1a; color: #ff6b6b; }
+  .backup-state { background: var(--surface); border-radius: 10px; padding: 10px 16px; margin-bottom: 12px;
+    font-size: 0.85rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
+  .backup-state span { display: inline-block; }
+  .backup-state strong { color: var(--text); }
+  .backup-row { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
+  .backup-row-info { flex: 1; min-width: 0; }
+  .backup-row-name { font-size: 0.9rem; font-weight: 500; word-break: break-all; }
+  .backup-row-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+  .backup-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .backup-row-actions button { padding: 6px 10px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.8rem; cursor: pointer; }
+  .backup-row-actions button:hover { background: var(--accent-hover); }
+  .backup-row-actions button.danger { background: var(--danger); }
+  .backup-row-actions button.secondary { background: var(--surface-hover); color: var(--text); }
+  .backup-empty { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 0.9rem;
+    background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; }
+  /* Modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .modal-backdrop.show { display: flex; }
+  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; }
+  .modal-header { padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .modal-title { font-size: 1.05rem; font-weight: 600; word-break: break-all; }
+  .modal-close { background: transparent; border: none; color: var(--text-secondary);
+    font-size: 1.4rem; cursor: pointer; padding: 0 8px; }
+  .modal-body { flex: 1; overflow: auto; padding: 16px; }
+  .modal-body pre { background: var(--surface); padding: 12px; border-radius: 8px;
+    font-size: 0.8rem; overflow: auto; line-height: 1.4; }
+  .diff-add { color: #6bff6b; }
+  .diff-rem { color: #ff6b6b; }
+  .diff-hdr { color: #6cb4ff; }
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>Tool Settings</h1>
+  <h1>HA-MCP Settings</h1>
   <span id="status" class="status">Loading...</span>
 </div>
-<div class="readonly-notice">
-  Safety toggles (Tool Search, YAML Config Editing) are managed in the
-  add-on configuration page and require a restart to change.
+<div class="tabs">
+  <button class="tab active" data-panel="tools">Tools</button>
+  <button class="tab" data-panel="backups">Backups</button>
 </div>
-<div class="pin-notice show" id="pinNotice">
-  Pin toggles only take effect when Tool Search is enabled in the add-on
-  configuration. Without Tool Search, all enabled tools are always visible
-  and pinning has no extra effect.
+<div class="panel active" id="panel-tools">
+  <div class="readonly-notice">
+    Safety toggles (Tool Search, YAML Config Editing) are managed in the
+    add-on configuration page and require a restart to change.
+  </div>
+  <div class="pin-notice show" id="pinNotice">
+    Pin toggles only take effect when Tool Search is enabled in the add-on
+    configuration. Without Tool Search, all enabled tools are always visible
+    and pinning has no extra effect.
+  </div>
+  <div class="restart-notice" id="restartNotice">
+    <span class="restart-notice-text">
+      ⚠ Changes saved. Restart the add-on for them to take effect — disabled
+      tools will be fully removed from the MCP tool list on next startup.
+    </span>
+    <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
+  </div>
+  <div class="summary" id="summary"></div>
+  <input type="text" class="search" id="search" placeholder="Search tools...">
+  <div id="groups"></div>
 </div>
-<div class="restart-notice" id="restartNotice">
-  <span class="restart-notice-text">
-    ⚠ Changes saved. Restart the add-on for them to take effect — disabled
-    tools will be fully removed from the MCP tool list on next startup.
-  </span>
-  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
+<div class="panel" id="panel-backups">
+  <div class="backup-state" id="backupState">Loading backup state…</div>
+  <div class="backup-filters">
+    <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)">
+    <input type="text" id="backupEntity" placeholder="Entity ID">
+    <button id="backupRefresh">Refresh</button>
+    <button id="backupBulkDelete" class="danger">Bulk delete matching…</button>
+  </div>
+  <div id="backupList"></div>
 </div>
-<div class="summary" id="summary"></div>
-<input type="text" class="search" id="search" placeholder="Search tools...">
-<div id="groups"></div>
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle"></span>
+      <button class="modal-close" id="modalClose">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
 <script>
 let toolData = [];
 let toolStates = {};
@@ -750,6 +827,154 @@ document.getElementById('search').addEventListener('input', (e) => {
 });
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
+
+// ===== Tab switching =====
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+    const target = tab.dataset.panel;
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
+    if (target === 'backups') loadBackups();
+  });
+});
+
+// ===== Backups tab =====
+let backupEntries = [];
+
+async function loadBackups() {
+  const params = new URLSearchParams();
+  const d = document.getElementById('backupDomain').value.trim();
+  const e = document.getElementById('backupEntity').value.trim();
+  if (d) params.set('domain', d);
+  if (e) params.set('entity_id', e);
+  const stateEl = document.getElementById('backupState');
+  const listEl = document.getElementById('backupList');
+  try {
+    const resp = await fetch('./api/settings/backups?' + params.toString());
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      stateEl.innerHTML = '<span class="diff-rem">Error loading backups</span>';
+      listEl.innerHTML = '';
+      return;
+    }
+    backupEntries = data.backups || [];
+    stateEl.innerHTML =
+      `<span>Status: <strong>${data.enabled ? 'enabled' : 'disabled'}</strong></span>` +
+      `<span>Throttle: <strong>${data.throttle_minutes} min</strong></span>` +
+      `<span>Retain per entity: <strong>${data.retain_per_entity}</strong></span>` +
+      `<span>Directory: <strong>${escapeHtml(data.backup_dir)}</strong></span>` +
+      `<span>Total: <strong>${data.count}</strong></span>`;
+    renderBackups();
+  } catch (err) {
+    stateEl.innerHTML = '<span class="diff-rem">Network error: ' + escapeHtml(String(err)) + '</span>';
+    listEl.innerHTML = '';
+  }
+}
+
+function renderBackups() {
+  const listEl = document.getElementById('backupList');
+  if (!backupEntries.length) {
+    listEl.innerHTML = '<div class="backup-empty">No backups yet. Enable auto-backup in the add-on config and edit an entity to create one.</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  backupEntries.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'backup-row';
+    const ts = b.timestamp || '';
+    const tsFmt = ts.length === 15
+      ? ts.slice(0,4)+'-'+ts.slice(4,6)+'-'+ts.slice(6,8)+' '+ts.slice(9,11)+':'+ts.slice(11,13)+':'+ts.slice(13,15)
+      : ts;
+    row.innerHTML =
+      `<div class="backup-row-info">` +
+        `<div class="backup-row-name">${escapeHtml(b.name)}</div>` +
+        `<div class="backup-row-meta">` +
+          `<strong>${escapeHtml(b.domain)}</strong> · ` +
+          `${escapeHtml(b.entity_id)} · ${tsFmt} · ${b.size} bytes` +
+        `</div>` +
+      `</div>` +
+      `<div class="backup-row-actions">` +
+        `<button data-act="view">View</button>` +
+        `<button data-act="diff" class="secondary">Diff</button>` +
+        `<button data-act="restore">Restore</button>` +
+        `<button data-act="delete" class="danger">Delete</button>` +
+      `</div>`;
+    row.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => backupAction(btn.dataset.act, b.name));
+    });
+    listEl.appendChild(row);
+  });
+}
+
+async function backupAction(act, name) {
+  if (act === 'view') {
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name));
+    const data = await resp.json();
+    if (!resp.ok) { alert(JSON.stringify(data)); return; }
+    showModal('View: ' + name, '<pre>' + escapeHtml(yamlStringify(data.data)) + '</pre>');
+  } else if (act === 'diff') {
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/diff');
+    const data = await resp.json();
+    if (!resp.ok) { alert(JSON.stringify(data)); return; }
+    const html = (data.diff || '(identical)').split('\\n').map(line => {
+      let cls = '';
+      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) cls = 'diff-hdr';
+      else if (line.startsWith('+')) cls = 'diff-add';
+      else if (line.startsWith('-')) cls = 'diff-rem';
+      return `<span class="${cls}">${escapeHtml(line)}</span>`;
+    }).join('\\n');
+    showModal('Diff: ' + name, '<pre>' + html + '</pre>');
+  } else if (act === 'restore') {
+    if (!confirm('Restore ' + name + '?\\n\\nThis will overwrite the current entity state. A safety backup of the current state is taken first.')) return;
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) { alert('Restore failed: ' + JSON.stringify(data)); return; }
+    alert('Restored. Safety backup: ' + (data.data && data.data.safety_backup ? data.data.safety_backup : '(none)'));
+    loadBackups();
+  } else if (act === 'delete') {
+    if (!confirm('Delete ' + name + '? This cannot be undone.')) return;
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name), {method: 'DELETE'});
+    if (!resp.ok) { const d = await resp.json(); alert('Delete failed: ' + JSON.stringify(d)); return; }
+    loadBackups();
+  }
+}
+
+async function bulkDeleteBackups() {
+  const d = document.getElementById('backupDomain').value.trim();
+  const e = document.getElementById('backupEntity').value.trim();
+  const days = prompt('Delete backups older than N days (leave blank to use current filters only):', '');
+  const params = new URLSearchParams();
+  if (d) params.set('domain', d);
+  if (e) params.set('entity_id', e);
+  if (days) params.set('older_than_days', days);
+  if (!params.toString()) { alert('Set at least one filter (Domain, Entity, or age in days).'); return; }
+  if (!confirm('Delete all backups matching: ' + params.toString() + '?')) return;
+  const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
+  const data = await resp.json();
+  if (!resp.ok) { alert('Bulk delete failed: ' + JSON.stringify(data)); return; }
+  alert('Deleted ' + (data.count || 0) + ' backup(s)');
+  loadBackups();
+}
+
+function showModal(title, html) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalBackdrop').classList.add('show');
+}
+function closeModal() { document.getElementById('modalBackdrop').classList.remove('show'); }
+
+// Minimal YAML stringify for view modal. Server already serializes the
+// snapshot file as YAML, but the JSON we get back wraps it; just dump as
+// indented JSON for readability — closer to YAML than the raw object.
+function yamlStringify(obj) { return JSON.stringify(obj, null, 2); }
+
+document.getElementById('backupRefresh').addEventListener('click', loadBackups);
+document.getElementById('backupBulkDelete').addEventListener('click', bulkDeleteBackups);
+document.getElementById('modalClose').addEventListener('click', closeModal);
+document.getElementById('modalBackdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'modalBackdrop') closeModal();
+});
+
 loadTools();
 </script>
 </body>
@@ -929,7 +1154,9 @@ def register_settings_routes(
             # Supervisor socket misconfigured) and means the restart was
             # never initiated. Falls through to the `httpx.HTTPError`
             # handler below, which returns 502 + CONNECTION_FAILED.
-            logger.info("Restart request connection dropped (expected during self-restart)")
+            logger.info(
+                "Restart request connection dropped (expected during self-restart)"
+            )
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
@@ -965,6 +1192,177 @@ def register_settings_routes(
             }
         )
 
+    # ---- Auto-backup routes (#1288) ----
+
+    def _backup_mgr():
+        settings = get_global_settings()
+        client = getattr(server, "client", None) or getattr(server, "_client", None)
+        return get_backup_manager(client, settings) if client is not None else None
+
+    def _bad_request(
+        message: str,
+        *,
+        code: ErrorCode = ErrorCode.VALIDATION_INVALID_PARAMETER,
+        status: int = 400,
+    ) -> JSONResponse:
+        return JSONResponse(create_error_response(code, message), status_code=status)
+
+    def _not_found(name: str) -> JSONResponse:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND, f"Backup {name!r} not found"
+            ),
+            status_code=404,
+        )
+
+    async def _list_backups(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        params = request.query_params
+        try:
+            limit = int(params.get("limit", "500"))
+        except ValueError:
+            return _bad_request("'limit' must be an integer")
+        entries = mgr.list_snapshots(
+            domain=params.get("domain") or None,
+            entity_id=params.get("entity_id") or None,
+            limit=max(1, min(10_000, limit)),
+        )
+        settings = get_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "backups": entries,
+                "count": len(entries),
+                "backup_dir": str(mgr.backup_dir),
+                "enabled": mgr.enabled,
+                "throttle_minutes": settings.auto_backup_throttle_minutes,
+                "retain_per_entity": settings.auto_backup_retain_per_entity,
+            }
+        )
+
+    async def _view_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            data = mgr.read_snapshot(name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "data": data})
+
+    async def _diff_backup(request: Request) -> JSONResponse:
+        import difflib
+
+        import yaml
+
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            snapshot = mgr.read_snapshot(name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        handler = mgr.handler_for(snapshot["domain"])
+        if handler is None:
+            return _bad_request(
+                f"No handler for domain {snapshot['domain']!r}; cannot diff",
+                code=ErrorCode.RESOURCE_NOT_FOUND,
+                status=404,
+            )
+        client = getattr(server, "client", None) or getattr(server, "_client", None)
+        try:
+            current = await handler.fetch(client, snapshot["entity_id"])
+        except Exception as err:
+            current = {"_error": f"{type(err).__name__}: {err}"}
+        backup_yaml = yaml.safe_dump(
+            snapshot.get("config"), default_flow_style=False, sort_keys=True
+        ).splitlines()
+        current_yaml = yaml.safe_dump(
+            current, default_flow_style=False, sort_keys=True
+        ).splitlines()
+        diff = list(
+            difflib.unified_diff(
+                backup_yaml,
+                current_yaml,
+                fromfile=f"backup:{name}",
+                tofile=f"current:{snapshot['entity_id']}",
+                lineterm="",
+            )
+        )
+        return JSONResponse(
+            {
+                "success": True,
+                "diff": "\n".join(diff),
+                "backup_present": current is not None
+                and not (isinstance(current, dict) and "_error" in current),
+            }
+        )
+
+    async def _restore_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            result = await mgr.restore_snapshot(name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except (ValueError, LookupError) as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "data": result})
+
+    async def _delete_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            mgr.delete_snapshot(name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "deleted": [name]})
+
+    async def _delete_backups_bulk(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        params = request.query_params
+        older = params.get("older_than_days")
+        try:
+            older_int = int(older) if older is not None else None
+        except ValueError:
+            return _bad_request("'older_than_days' must be an integer")
+        if (
+            params.get("domain") is None
+            and params.get("entity_id") is None
+            and older_int is None
+        ):
+            return _bad_request(
+                "Bulk delete requires at least one filter "
+                "(domain, entity_id, older_than_days)"
+            )
+        try:
+            deleted = mgr.delete_bulk(
+                domain=params.get("domain") or None,
+                entity_id=params.get("entity_id") or None,
+                older_than_days=older_int,
+            )
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse(
+            {"success": True, "deleted": deleted, "count": len(deleted)}
+        )
+
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
@@ -988,6 +1386,21 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/tools", methods=["POST"])(_save_tools)
         mcp.custom_route("/api/settings/restart", methods=["POST"])(_restart_addon)
         mcp.custom_route("/api/settings/info", methods=["GET"])(_settings_info)
+        # Auto-backup endpoints (#1288)
+        mcp.custom_route("/api/settings/backups", methods=["GET"])(_list_backups)
+        mcp.custom_route("/api/settings/backups", methods=["DELETE"])(
+            _delete_backups_bulk
+        )
+        mcp.custom_route("/api/settings/backups/{name}", methods=["GET"])(_view_backup)
+        mcp.custom_route("/api/settings/backups/{name}/diff", methods=["GET"])(
+            _diff_backup
+        )
+        mcp.custom_route("/api/settings/backups/{name}/restore", methods=["POST"])(
+            _restore_backup
+        )
+        mcp.custom_route("/api/settings/backups/{name}", methods=["DELETE"])(
+            _delete_backup
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -1007,3 +1420,22 @@ def register_settings_routes(
         mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
             _settings_info
         )
+        # Auto-backup endpoints (#1288)
+        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(
+            _list_backups
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["DELETE"])(
+            _delete_backups_bulk
+        )
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["GET"]
+        )(_view_backup)
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/diff", methods=["GET"]
+        )(_diff_backup)
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/restore", methods=["POST"]
+        )(_restore_backup)
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["DELETE"]
+        )(_delete_backup)

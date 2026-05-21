@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -133,6 +134,7 @@ class LabelTools:
         tags={"Labels & Categories"},
         annotations={"destructiveHint": True, "title": "Create or Update Label"},
     )
+    @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage
     async def ha_config_set_label(
         self,
@@ -249,6 +251,7 @@ class LabelTools:
         tags={"Labels & Categories"},
         annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Label"},
     )
+    @with_auto_backup(domain="label", id_param="label_id")
     @log_tool_usage
     async def ha_config_remove_label(
         self,

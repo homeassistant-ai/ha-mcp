@@ -111,7 +111,9 @@ class Settings(BaseSettings):
     # Max results returned by ha_search_tools. Pydantic enforces the
     # 2-10 range; the addon-dev schema also uses ``int(2,10)?`` so the
     # supervisor UI rejects out-of-range values before they reach env vars.
-    tool_search_max_results: int = Field(5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS")
+    tool_search_max_results: int = Field(
+        5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS"
+    )
 
     # Lite docstrings — replace selected heavy tool descriptions with
     # shorter variants that defer detailed guidance to the
@@ -148,10 +150,31 @@ class Settings(BaseSettings):
     # by default so saved tools survive addon restarts (the /data directory
     # is mapped per-addon by Supervisor and is preserved across addon
     # updates).
-    code_mode_saved_tools_path: str = Field(
-        "", alias="CODE_MODE_SAVED_TOOLS_PATH"
+    code_mode_saved_tools_path: str = Field("", alias="CODE_MODE_SAVED_TOOLS_PATH")
+
+    # Auto-backup of edited entities (#1288).
+    # Captures the pre-write state of every wrapped write/destructive tool
+    # to a local directory. Disabled by default; captures are best-effort
+    # and never block the underlying write.
+    enable_auto_backup: bool = Field(False, alias="ENABLE_AUTO_BACKUP")
+
+    # Per-entity throttle window. 0 (default) = backup every write; N>0 =
+    # at most one snapshot per N minutes per entity. Upper bound 1440
+    # (one day) prevents accidental indefinite throttling via typo.
+    auto_backup_throttle_minutes: int = Field(
+        0, ge=0, le=1440, alias="AUTO_BACKUP_THROTTLE_MINUTES"
     )
 
+    # Max snapshots kept per entity. Older snapshots beyond this cap
+    # are rotated out on each successful capture.
+    auto_backup_retain_per_entity: int = Field(
+        20, ge=1, le=10_000, alias="AUTO_BACKUP_RETAIN_PER_ENTITY"
+    )
+
+    # Backup directory override. Empty ("") resolves at runtime to a
+    # deployment-mode default: ``/data/ha_mcp_backups`` in the add-on,
+    # otherwise ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``.
+    auto_backup_dir: str = Field("", alias="HAMCP_BACKUP_DIR")
 
     @property
     def env_file_name(self) -> str:

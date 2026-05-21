@@ -24,6 +24,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from .auto_backup import with_auto_backup
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
@@ -266,6 +267,7 @@ class ConfigScriptTools:
             "title": "Create or Update Script",
         },
     )
+    @with_auto_backup(domain="script", id_param="script_id")
     @log_tool_usage
     async def ha_config_set_script(
         self,
@@ -644,6 +646,7 @@ class ConfigScriptTools:
             "title": "Remove Script",
         },
     )
+    @with_auto_backup(domain="script", id_param="script_id")
     @log_tool_usage
     async def ha_config_remove_script(
         self,

@@ -218,6 +218,9 @@ def main() -> int:
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
     enable_lite_docstrings = False  # default
+    enable_auto_backup = False  # default (#1288)
+    auto_backup_throttle_minutes = 0  # default — every write
+    auto_backup_retain_per_entity = 20  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -242,6 +245,12 @@ def main() -> int:
             enable_code_mode = raw_code_mode if isinstance(raw_code_mode, bool) else False
             raw_lite_docstrings = config.get("enable_lite_docstrings", False)
             enable_lite_docstrings = raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
+            raw_auto_backup = config.get("enable_auto_backup", False)
+            enable_auto_backup = raw_auto_backup if isinstance(raw_auto_backup, bool) else False
+            raw_throttle = config.get("auto_backup_throttle_minutes", 0)
+            auto_backup_throttle_minutes = raw_throttle if isinstance(raw_throttle, int) else 0
+            raw_retain = config.get("auto_backup_retain_per_entity", 20)
+            auto_backup_retain_per_entity = raw_retain if isinstance(raw_retain, int) else 20
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
             raw_disabled = config.get("disabled_tools", "")
@@ -282,6 +291,9 @@ def main() -> int:
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
+    os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
+    os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy

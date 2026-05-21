@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -554,6 +555,14 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "idempotentHint": True,
             "title": "Set Entity",
         },
+    )
+    @with_auto_backup(
+        domain="entity",
+        id_fn=lambda kw: (
+            str(kw["entity_id"][0]) if isinstance(kw.get("entity_id"), list) and kw["entity_id"]
+            else str(kw.get("entity_id") or "")
+        ),
+        client=client,
     )
     @log_tool_usage
     async def ha_set_entity(

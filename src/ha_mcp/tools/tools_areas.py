@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -453,6 +454,10 @@ class AreaTools:
             "title": "Create or Update Area or Floor",
         },
     )
+    @with_auto_backup(
+        domain="area_or_floor",
+        id_fn=lambda kw: f"{kw.get('kind', '')}:{kw.get('id', '') or ''}",
+    )
     @log_tool_usage
     async def ha_set_area_or_floor(
         self,
@@ -691,6 +696,10 @@ class AreaTools:
             "idempotentHint": True,
             "title": "Remove Area or Floor",
         },
+    )
+    @with_auto_backup(
+        domain="area_or_floor",
+        id_fn=lambda kw: f"{kw.get('kind', '')}:{kw.get('id', '') or ''}",
     )
     @log_tool_usage
     async def ha_remove_area_or_floor(

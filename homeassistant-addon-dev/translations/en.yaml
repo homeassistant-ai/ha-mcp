@@ -45,6 +45,30 @@ configuration:
       Saved tools persist to /data/saved_tools.json by default so they
       survive add-on restarts. See docs/beta.md for known limitations.
       Requires restart to take effect.
+  enable_auto_backup:
+    name: Enable auto-backup of edits
+    description: >-
+      Captures a per-entity snapshot before every wrapped write/destructive
+      MCP tool call (automation, script, scene, helper, dashboard, label,
+      category, group, zone, area, calendar, todo, entity, integration, and
+      sibling remove/delete tools). Snapshots are saved as YAML files under
+      /data/ha_mcp_backups/ (override via HAMCP_BACKUP_DIR) and listed,
+      restored, or deleted via the Backups tab in the web settings UI or
+      via ha_manage_backup(scope='edits', ...). Best-effort — failures log
+      a WARNING but never block the underlying write. Off by default. No
+      restart required to take effect.
+  auto_backup_throttle_minutes:
+    name: Auto-backup throttle (minutes)
+    description: >-
+      Per-entity throttle window. 0 (default) captures a snapshot on every
+      wrapped write. N>0 captures at most one snapshot per N minutes per
+      entity. Range 0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-backup retention (per entity)
+    description: >-
+      Maximum number of snapshots kept per entity. Older snapshots beyond
+      this cap are rotated out on each successful capture. Default 20,
+      range 1–10000.
   enable_lite_docstrings:
     name: Enable lite tool docstrings (beta)
     description: >-

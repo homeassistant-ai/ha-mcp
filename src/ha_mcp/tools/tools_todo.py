@@ -16,6 +16,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -207,6 +208,10 @@ class TodoTools:
         name="ha_set_todo_item",
         tags={"Todo Lists"},
         annotations={"destructiveHint": True, "title": "Set Todo Item"},
+    )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('item', '') or kw.get('uid', '') or ''}",
     )
     @log_tool_usage
     async def ha_set_todo_item(
@@ -517,6 +522,10 @@ class TodoTools:
             "idempotentHint": True,
             "title": "Remove Todo Item",
         },
+    )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('item', '') or ''}",
     )
     @log_tool_usage
     async def ha_remove_todo_item(

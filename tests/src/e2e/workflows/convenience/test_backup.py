@@ -41,7 +41,11 @@ class TestBackupTools:
         try:
             # Create backup without name (auto-generated)
             logger.info("📦 Creating backup (auto-named)...")
-            data = await safe_call_tool(mcp_client, "ha_backup_create", {})
+            data = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "snapshot", "action": "create"},
+            )
 
             logger.info(f"📦 Backup creation result: {data}")
 
@@ -98,7 +102,9 @@ class TestBackupTools:
             logger.info(f"📦 Creating backup: {custom_name}...")
 
             data = await safe_call_tool(
-                mcp_client, "ha_backup_create", {"name": custom_name}
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "snapshot", "action": "create", "name": custom_name},
             )
 
             logger.info(f"📦 Backup creation result: {data}")
@@ -154,8 +160,12 @@ class TestBackupTools:
             logger.info("🔍 Testing restore with non-existent backup ID...")
             data = await safe_call_tool(
                 mcp_client,
-                "ha_backup_restore",
-                {"backup_id": "nonexistent_backup_id_12345"},
+                "ha_manage_backup",
+                {
+                    "scope": "snapshot",
+                    "action": "restore",
+                    "backup_id": "nonexistent_backup_id_12345",
+                },
             )
 
             logger.info(f"📊 Restore validation result: {data}")
@@ -189,7 +199,11 @@ class TestBackupTools:
         try:
             # Create a backup (which internally retrieves config/password)
             logger.info("📦 Creating backup to test config retrieval...")
-            data = await safe_call_tool(mcp_client, "ha_backup_create", {})
+            data = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "snapshot", "action": "create"},
+            )
 
             logger.info(f"📦 Backup result: {data}")
 

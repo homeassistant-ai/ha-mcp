@@ -16,6 +16,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -164,6 +165,10 @@ class CalendarTools:
         tags={"Calendar"},
         annotations={"destructiveHint": True, "title": "Create or Update Calendar Event"},
     )
+    @with_auto_backup(
+        domain="calendar_event",
+        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('uid', '') or ''}",
+    )
     @log_tool_usage
     async def ha_config_set_calendar_event(
         self,
@@ -287,6 +292,10 @@ class CalendarTools:
         name="ha_config_remove_calendar_event",
         tags={"Calendar"},
         annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Calendar Event"},
+    )
+    @with_auto_backup(
+        domain="calendar_event",
+        id_fn=lambda kw: f"{kw.get('entity_id', '')}::{kw.get('uid', '') or ''}",
     )
     @log_tool_usage
     async def ha_config_remove_calendar_event(

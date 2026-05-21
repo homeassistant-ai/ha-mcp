@@ -17,6 +17,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -190,6 +191,7 @@ class GroupTools:
         tags={"Groups"},
         annotations={"destructiveHint": True, "title": "Create or Update Group"},
     )
+    @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
     async def ha_config_set_group(
         self,
@@ -347,6 +349,7 @@ class GroupTools:
         tags={"Groups"},
         annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Group"},
     )
+    @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
     async def ha_config_remove_group(
         self,

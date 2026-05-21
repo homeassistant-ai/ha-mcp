@@ -19,6 +19,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -1008,6 +1009,7 @@ class IntegrationTools:
         tags={"Integrations"},
         annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
     )
+    @with_auto_backup(domain="integration", id_param="entry_id")
     @log_tool_usage
     async def ha_set_integration_enabled(
         self,
@@ -1086,6 +1088,7 @@ class IntegrationTools:
             "title": "Delete Helper or Integration",
         },
     )
+    @with_auto_backup(domain="integration", id_param="target")
     @log_tool_usage
     async def ha_delete_helpers_integrations(
         self,

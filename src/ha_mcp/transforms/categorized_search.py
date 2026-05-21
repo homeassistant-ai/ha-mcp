@@ -39,8 +39,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     "ha_restart",
     "ha_reload_core",
-    "ha_backup_create",
-    "ha_backup_restore",
+    "ha_manage_backup",
     "ha_get_overview",
     "ha_report_issue",
     "ha_search_entities",

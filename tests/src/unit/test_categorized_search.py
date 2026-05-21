@@ -290,8 +290,7 @@ class TestDefaultPinnedTools:
     def test_contains_critical_tools(self):
         assert "ha_restart" in DEFAULT_PINNED_TOOLS
         assert "ha_get_overview" in DEFAULT_PINNED_TOOLS
-        assert "ha_backup_create" in DEFAULT_PINNED_TOOLS
-        assert "ha_backup_restore" in DEFAULT_PINNED_TOOLS
+        assert "ha_manage_backup" in DEFAULT_PINNED_TOOLS
         assert "ha_report_issue" in DEFAULT_PINNED_TOOLS
         assert "ha_reload_core" in DEFAULT_PINNED_TOOLS
 

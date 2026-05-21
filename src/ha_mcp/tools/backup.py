@@ -1,19 +1,33 @@
 """
 Backup and restore tools for Home Assistant MCP Server.
 
-Provides backup creation and restoration capabilities with safety mechanisms.
+Provides the polymorphic ``ha_manage_backup`` tool, which handles both:
+
+* **Full HA snapshots** (``scope="snapshot"``) — the original
+  ``ha_backup_create`` / ``ha_backup_restore`` functionality. Heavy
+  tarball creation via HA's native backup integration; restore restarts
+  HA. Last-resort recovery.
+* **Per-edit auto-backups** (``scope="edits"``) — list / view / restore
+  / delete operations against the per-entity snapshots produced by the
+  ``@with_auto_backup`` decorator (#1288). Lightweight, no HA restart.
+
+The merge consolidates the previous two tools so the LLM cannot
+accidentally route "restore my automation" through the heavyweight full
+HA restore path. Each call must explicitly pick its scope.
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..backup_manager import get_backup_manager
 from ..client.rest_client import HomeAssistantClient
 from ..client.websocket_client import HomeAssistantWebSocketClient
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -89,9 +103,7 @@ async def _get_local_backup_agent_id(
         )
 
     local_agents: list[str] = [
-        a["agent_id"]
-        for a in agents
-        if a.get("name") == "local" and a.get("agent_id")
+        a["agent_id"] for a in agents if a.get("name") == "local" and a.get("agent_id")
     ]
     # Prefer hassio.local (Supervisor) over backup.local (Core) when both exist
     for preferred in ("hassio.local", "backup.local"):
@@ -104,7 +116,11 @@ async def _get_local_backup_agent_id(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "No local backup agent found",
-            context={"available_agents": [a.get("agent_id") for a in agents if a.get("agent_id")]},
+            context={
+                "available_agents": [
+                    a.get("agent_id") for a in agents if a.get("agent_id")
+                ]
+            },
             suggestions=[
                 "Backup creation requires a local agent (hassio.local on "
                 "Supervised, backup.local on Core); none is registered",
@@ -130,21 +146,27 @@ async def _get_backup_password(
     """
     backup_config = await ws_client.send_command("backup/config/info")
     if not backup_config.get("success"):
-        raise_tool_error(create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "Failed to retrieve backup configuration",
-            context={"details": backup_config},
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Failed to retrieve backup configuration",
+                context={"details": backup_config},
+            )
+        )
 
     config_data = backup_config.get("result", {}).get("config", {})
     default_password = config_data.get("create_backup", {}).get("password")
 
     if not default_password:
-        raise_tool_error(create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            "No default backup password configured in Home Assistant",
-            suggestions=["Configure automatic backups in Home Assistant settings to set a default password"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "No default backup password configured in Home Assistant",
+                suggestions=[
+                    "Configure automatic backups in Home Assistant settings to set a default password"
+                ],
+            )
+        )
 
     return cast(str, default_password)
 
@@ -213,19 +235,25 @@ async def _poll_backup_completion(
                     continue
 
             elif event_state == "failed":
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Backup creation failed",
-                    context={"backup_job_id": backup_job_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Backup creation failed",
+                        context={"backup_job_id": backup_job_id},
+                    )
+                )
 
     logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
-    raise_tool_error(create_error_response(
-        ErrorCode.TIMEOUT_OPERATION,
-        f"Backup creation timed out after {max_wait_seconds} seconds",
-        context={"backup_job_id": backup_job_id, "name": name},
-        suggestions=["Backup may still be in progress. Check Home Assistant backup status."],
-    ))
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.TIMEOUT_OPERATION,
+            f"Backup creation timed out after {max_wait_seconds} seconds",
+            context={"backup_job_id": backup_job_id, "name": name},
+            suggestions=[
+                "Backup may still be in progress. Check Home Assistant backup status."
+            ],
+        )
+    )
 
 
 async def create_backup(
@@ -249,10 +277,13 @@ async def create_backup(
             client.base_url, client.token, verify_ssl=client.verify_ssl
         )
         if error:
-            raise_tool_error(error or create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                "Failed to connect to Home Assistant WebSocket for backup",
-            ))
+            raise_tool_error(
+                error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket for backup",
+                )
+            )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
         # Get backup password (raises ToolError on failure)
@@ -289,10 +320,12 @@ async def create_backup(
         result = await ws_client.send_command("backup/generate", **backup_params)
 
         if not result.get("success"):
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                result.get("error", "Backup creation failed"),
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Backup creation failed"),
+                )
+            )
 
         backup_job_id = result.get("result", {}).get("backup_job_id")
         logger.info(f"Backup job started: {backup_job_id}, waiting for completion...")
@@ -356,11 +389,15 @@ async def _create_safety_backup(
     )
 
     if not safety_backup.get("success"):
-        raise_tool_error(create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            safety_backup.get("error", "Failed to create safety backup before restore"),
-            suggestions=["Cannot proceed with restore without safety backup"],
-        ))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                safety_backup.get(
+                    "error", "Failed to create safety backup before restore"
+                ),
+                suggestions=["Cannot proceed with restore without safety backup"],
+            )
+        )
 
     safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
     logger.info(f"Safety backup created: {safety_backup_id}")
@@ -391,29 +428,36 @@ async def restore_backup(
             client.base_url, client.token, verify_ssl=client.verify_ssl
         )
         if error:
-            raise_tool_error(error or create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                "Failed to connect to Home Assistant WebSocket for restore",
-            ))
+            raise_tool_error(
+                error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket for restore",
+                )
+            )
         ws_client = cast(HomeAssistantWebSocketClient, ws_client)
 
         # Verify backup exists
         backup_info = await ws_client.send_command("backup/info")
         if not backup_info.get("success"):
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                backup_info.get("error", "Failed to retrieve backup information"),
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    backup_info.get("error", "Failed to retrieve backup information"),
+                )
+            )
 
         backups = backup_info.get("result", {}).get("backups", [])
         backup_exists = any(b.get("backup_id") == backup_id for b in backups)
 
         if not backup_exists:
-            raise_tool_error(create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                f"Backup '{backup_id}' not found",
-                suggestions=["Use ha_backup_list() to see available backups"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Backup '{backup_id}' not found",
+                    suggestions=["Use ha_backup_list() to see available backups"],
+                )
+            )
 
         # Discover the local backup agent (Supervisor's hassio.local on
         # Supervised, backup.local on Core). Used for both the safety backup
@@ -456,11 +500,13 @@ async def restore_backup(
                 "note": "A safety backup was created before restore. You can restore from it if needed.",
             }
         else:
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                result.get("error", "Restore operation failed"),
-                context={"backup_id": backup_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Restore operation failed"),
+                    context={"backup_id": backup_id},
+                )
+            )
 
     except ToolError:
         raise
@@ -480,109 +526,299 @@ async def restore_backup(
                 pass  # Ignore errors during cleanup
 
 
-def register_backup_tools(mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any) -> None:
-    """
-    Register backup and restore tools with the MCP server.
+# Valid (scope, action) combinations. Anything outside this set is
+# rejected with a structured VALIDATION_INVALID_PARAMETER error.
+_VALID_COMBOS: set[tuple[str, str]] = {
+    ("snapshot", "create"),
+    ("snapshot", "restore"),
+    ("edits", "list"),
+    ("edits", "view"),
+    ("edits", "restore"),
+    ("edits", "delete"),
+}
 
-    Args:
-        mcp: FastMCP server instance
-        client: Home Assistant REST client
-        **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
+
+def _gate_combo(scope: str, action: str) -> None:
+    """Reject (scope, action) combinations that do not exist.
+
+    Strong gating defends against the LLM accidentally routing "restore
+    my automation" through ``(snapshot, restore)`` (which would restart
+    HA). The error response lists every legal combo so the LLM can
+    self-correct on the next call.
     """
-    # Generate dynamic backup description based on BACKUP_HINT config
+    if (scope, action) in _VALID_COMBOS:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Invalid combination: scope={scope!r}, action={action!r}",
+            context={"scope": scope, "action": action},
+            suggestions=[
+                "Valid combinations: "
+                + ", ".join(sorted(f"({s},{a})" for s, a in _VALID_COMBOS)),
+                "scope='snapshot' is for full HA tarball backups (heavy, restart on restore)",
+                "scope='edits' is for per-entity auto-backups produced by write tools (lightweight)",
+            ],
+        )
+    )
+
+
+def _require(param_name: str, value: Any, scope: str, action: str) -> Any:
+    """Validate a required parameter for the picked (scope, action) cell."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{param_name!r} is required for scope={scope!r}, action={action!r}",
+                context={"scope": scope, "action": action, "missing_param": param_name},
+            )
+        )
+    return value
+
+
+def register_backup_tools(
+    mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any
+) -> None:
+    """Register the polymorphic ``ha_manage_backup`` tool.
+
+    Replaces the previous ``ha_backup_create`` and ``ha_backup_restore``
+    pair (merged into one tool, separated by ``scope``). All existing
+    snapshot functionality is preserved under ``scope="snapshot"``.
+    """
     backup_hint_text = _get_backup_hint_text()
-    backup_create_description = f"""Create a fast Home Assistant backup (local only).
+    manage_backup_description = f"""Manage Home Assistant backups — both full HA snapshots AND per-edit auto-backups.
 
-**What's Included:**
-- Home Assistant configuration (core settings)
-- All add-ons
-- SSL certificates
-- Database is EXCLUDED for faster backup (excludes historical sensor data, statistics, state history)
+**Pick the scope first**, then the action. Wrong scope routes through the wrong code path:
 
-**Password:** Uses Home Assistant's default backup password (if configured)
+| scope | action | What it does |
+|---|---|---|
+| `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Heavy, seconds-long. |
+| `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
+| `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
+| `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
+| `edits` | `restore` | Re-apply one auto-backup. Creates a fresh safety snapshot first. **No HA restart.** |
+| `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
-**Storage:** Local only (the local backup agent — `hassio.local` on HA Supervised, `backup.local` on HA Core)
+**When to use which scope:**
+- Use `scope="edits"` to undo a recent automation/script/scene/dashboard/helper edit by the agent. Lightweight, fast, no restart.
+- Use `scope="snapshot"` only for system-wide recovery (botched add-on update, mass config corruption, etc.).
 
-**Duration:** Typically takes several seconds to complete (without database)
-
-**When to Use:**
+**`scope="snapshot"` backup-hint:**
 {backup_hint_text}
 
-**Example Usage:**
-- Before deleting device: ha_backup_create("Before_Device_Delete")
-- Before modifying system settings: ha_backup_create("Pre_System_Change")
-- Quick safety backup: ha_backup_create()
+**`scope="edits"` requires `enable_auto_backup=true`** in settings to populate the backup directory in the first place. If the listing is empty, check that the toggle is on (web settings UI or `ENABLE_AUTO_BACKUP=true` env var).
 
-**Returns:** Backup ID and job status"""
+**Examples:**
+- Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
+- Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
+- List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
+- View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
+- Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
+- Delete one auto-backup: `ha_manage_backup(scope="edits", action="delete", backup_name="...")`
+- Bulk-delete old auto-backups: `ha_manage_backup(scope="edits", action="delete", older_than_days=30)`
+"""
 
-    @mcp.tool(description=backup_create_description, tags={"System"}, annotations={"destructiveHint": True, "title": "Create Backup"})
+    @mcp.tool(
+        description=manage_backup_description,
+        tags={"System"},
+        annotations={"destructiveHint": True, "title": "Manage Backups"},
+    )
     @log_tool_usage
-    async def ha_backup_create(
+    async def ha_manage_backup(
+        scope: Annotated[
+            Literal["snapshot", "edits"],
+            Field(
+                description="'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups."
+            ),
+        ],
+        action: Annotated[
+            Literal["create", "restore", "list", "view", "delete"],
+            Field(
+                description="Operation to perform. Valid (scope, action) combinations are listed in the tool description."
+            ),
+        ],
+        # snapshot scope params
         name: Annotated[
             str | None,
             Field(
-                description="Backup name (auto-generated if not provided, e.g., 'MCP_Backup_2025-10-05_04:30')",
                 default=None,
+                description="(snapshot.create) Tarball name. Auto-generated if not provided.",
             ),
         ] = None,
-    ) -> dict[str, Any]:
-        """Create a fast Home Assistant backup (local only)."""
-        return await create_backup(client, name)
-
-    @mcp.tool(tags={"System"}, annotations={"destructiveHint": True, "title": "Restore Backup"})
-    @log_tool_usage
-    async def ha_backup_restore(
         backup_id: Annotated[
-            str,
+            str | None,
             Field(
-                description="Backup ID to restore (e.g., 'dd7550ed' from backup list or ha_backup_create result)"
+                default=None,
+                description="(snapshot.restore) Tarball ID to restore (e.g. 'dd7550ed').",
             ),
-        ],
+        ] = None,
         restore_database: Annotated[
             bool,
             Field(
-                description="Restore database (default: false for config-only restore)",
                 default=False,
+                description="(snapshot.restore) Include database in the restore. Default false (config-only).",
             ),
         ] = False,
+        # edits scope params
+        domain: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="(edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer').",
+            ),
+        ] = None,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="(edits.list / edits.delete) Filter auto-backups by entity ID.",
+            ),
+        ] = None,
+        backup_name: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "(edits.view / edits.restore / edits.delete) Auto-backup filename "
+                    "(format '<domain>.<entity_id>.<timestamp>.yaml'). Not a tarball ID."
+                ),
+            ),
+        ] = None,
+        older_than_days: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=0,
+                description="(edits.delete) Bulk-delete auto-backups older than this many days.",
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(
+                default=200,
+                ge=1,
+                le=10_000,
+                description="(edits.list) Maximum number of entries to return.",
+            ),
+        ] = 200,
     ) -> dict[str, Any]:
-        """
-        Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
+        """Polymorphic backup tool. See the tool description for the routing matrix."""
+        _gate_combo(scope, action)
 
-        **⚠️ WARNING - DESTRUCTIVE OPERATION ⚠️**
+        if scope == "snapshot":
+            if action == "create":
+                return await create_backup(client, name)
+            # action == "restore"
+            bid = _require("backup_id", backup_id, scope, action)
+            return await restore_backup(client, bid, restore_database)
 
-        **This tool restarts Home Assistant and restores configuration to a previous state.**
+        # scope == "edits"
+        settings = get_global_settings()
+        mgr = get_backup_manager(client, settings)
 
-        **IMPORTANT CONSIDERATIONS:**
-        1. **Try undo operations first** - Often you can just reverse what you did:
-           - Deleted automation? Recreate it with ha_config_set_automation
-           - Modified script? Use ha_config_set_script to fix it
-           - Most config changes can be rolled back without using restore
+        if action == "list":
+            entries = mgr.list_snapshots(
+                domain=domain, entity_id=entity_id, limit=limit
+            )
+            return {
+                "success": True,
+                "data": {
+                    "backups": entries,
+                    "count": len(entries),
+                    "backup_dir": str(mgr.backup_dir),
+                    "enabled": mgr.enabled,
+                    "throttle_minutes": settings.auto_backup_throttle_minutes,
+                    "retain_per_entity": settings.auto_backup_retain_per_entity,
+                },
+            }
 
-        2. **Safety mechanism:** A NEW backup is automatically created BEFORE restore
-           - This allows you to rollback the restore if needed
-           - You can restore from this pre-restore backup if something goes wrong
+        if action == "view":
+            bname = _require("backup_name", backup_name, scope, action)
+            try:
+                data = mgr.read_snapshot(bname)
+            except FileNotFoundError:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Backup {bname!r} not found",
+                        context={"backup_name": bname},
+                    )
+                )
+            except ValueError as err:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(err),
+                        context={"backup_name": bname},
+                    )
+                )
+            return {"success": True, "data": data}
 
-        3. **What gets restored:**
-           - Home Assistant configuration (automations, scripts, etc.)
-           - Add-ons (if they were in the backup)
-           - Optional: Database - historical sensor data, statistics, state history (set restore_database=true)
+        if action == "restore":
+            bname = _require("backup_name", backup_name, scope, action)
+            try:
+                result = await mgr.restore_snapshot(bname)
+            except FileNotFoundError:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Backup {bname!r} not found",
+                        context={"backup_name": bname},
+                    )
+                )
+            except (ValueError, LookupError) as err:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(err),
+                        context={"backup_name": bname},
+                    )
+                )
+            return {
+                "success": True,
+                "data": result,
+                "warnings": [
+                    "This restore did NOT restart HA. To revert, restore the safety_backup."
+                ]
+                if result.get("safety_backup")
+                else [],
+            }
 
-        4. **Side effects:**
-           - Home Assistant will RESTART during restore
-           - Any changes made after the backup was created will be LOST
-           - Temporary disconnection from all integrations during restart
-
-        **Recommended workflow:**
-        1. Try to undo your changes manually first
-        2. If you must restore, use the most recent backup
-        3. Set restore_database=false unless you need historical data
-        4. Expect a restart and temporary downtime
-
-        **Example Usage:**
-        - Restore config only: ha_backup_restore("dd7550ed")
-        - Full restore with DB: ha_backup_restore("dd7550ed", restore_database=true)
-
-        **Returns:** Restore job status
-        """
-        return await restore_backup(client, backup_id, restore_database)
+        # action == "delete"
+        if backup_name:
+            try:
+                mgr.delete_snapshot(backup_name)
+            except FileNotFoundError:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Backup {backup_name!r} not found",
+                        context={"backup_name": backup_name},
+                    )
+                )
+            except ValueError as err:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(err),
+                        context={"backup_name": backup_name},
+                    )
+                )
+            return {"success": True, "data": {"deleted": [backup_name]}}
+        # Bulk
+        if domain is None and entity_id is None and older_than_days is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "edits.delete requires backup_name OR at least one filter "
+                    "(domain, entity_id, older_than_days)",
+                    suggestions=[
+                        "Pass backup_name to delete one auto-backup",
+                        "Pass domain/entity_id/older_than_days to bulk-delete (requires at least one)",
+                    ],
+                )
+            )
+        deleted = mgr.delete_bulk(
+            domain=domain, entity_id=entity_id, older_than_days=older_than_days
+        )
+        return {"success": True, "data": {"deleted": deleted, "count": len(deleted)}}
