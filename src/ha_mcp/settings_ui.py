@@ -529,6 +529,24 @@ _SETTINGS_HTML = (
 <input type="text" class="search" id="search" placeholder="Search tools...">
 <div id="groups"></div>
 <script>
+// Catch top-level / async script errors and surface them in the
+// status bar so a perpetually-"Loading" page becomes self-diagnosing
+// (no devtools required). Without this, a script-evaluation error
+// in any of the function definitions below would abort the script
+// before loadTools() is even called, leaving the status stuck at
+// the initial "Loading...".
+window.addEventListener('error', (e) => {
+  const el = document.getElementById('status');
+  if (!el) return;
+  const where = e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : 'inline';
+  el.textContent = `JS error: ${e.message} @ ${where}`;
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const el = document.getElementById('status');
+  if (!el) return;
+  el.textContent = `Async error: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`;
+});
+
 let toolData = [];
 let toolStates = {};
 let saveTimer = null;

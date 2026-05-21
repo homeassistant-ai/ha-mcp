@@ -318,30 +318,31 @@ def _do_spawn() -> None:
         "close_fds": True,
     }
     if sys.platform == "win32":
-        # Prefer ``pythonw.exe`` over ``python.exe``. pythonw is the
-        # GUI-subsystem Python interpreter — Windows never allocates a
-        # console window for it. Falls back to python.exe if pythonw
-        # isn't alongside (rare; most CPython distributions ship both,
-        # including the uv-installed Python that uvx uses).
+        # Three-layer defense against the cmd-window-pops-and-closing-
+        # it-kills-the-server bug reported against Claude Desktop:
         #
-        # Why not DETACHED_PROCESS: the prior attempt used
-        # ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW``
-        # and the cmd window still popped under Claude Desktop. Python's
-        # subprocess docs spell out that ``CREATE_NO_WINDOW`` is
-        # IGNORED when ``DETACHED_PROCESS`` is set, and
-        # ``DETACHED_PROCESS`` on a CUI binary auto-allocates a fresh
-        # visible console. pythonw avoids the whole console-allocation
-        # path.
+        # 1. Prefer ``pythonw.exe`` over ``python.exe``. pythonw is the
+        #    GUI-subsystem Python — Windows never allocates a console
+        #    for it. Falls back to python.exe if pythonw isn't there
+        #    (uv-installed Pythons sometimes strip it).
+        # 2. ``STARTUPINFO`` with ``SW_HIDE`` forces any console that
+        #    DOES get allocated to be hidden. Catches the fallback case.
+        # 3. ``CREATE_NO_WINDOW`` suppresses console allocation entirely
+        #    for the python.exe fallback. ``CREATE_NEW_PROCESS_GROUP``
+        #    prevents a CTRL_CLOSE_EVENT (X-button on any console that
+        #    sneaks through) from killing the sidecar.
         #
-        # CREATE_NEW_PROCESS_GROUP is still useful: closing any console
-        # that happens to be attached (if pythonw isn't found and we
-        # fall back to python.exe) sends ``CTRL_CLOSE_EVENT`` to the
-        # console's process group. Putting the child in its own group
-        # prevents that event from killing the sidecar.
-        # CREATE_NO_WINDOW is belt-and-suspenders for the python.exe
-        # fallback path — harmless when pythonw is in use.
+        # Why not DETACHED_PROCESS: prior attempts used it, but Python's
+        # docs spell out that ``CREATE_NO_WINDOW`` is IGNORED when
+        # DETACHED_PROCESS is set, and DETACHED_PROCESS on a CUI binary
+        # auto-allocates a fresh visible console — the exact failure
+        # mode the user saw.
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         cmd_python = str(pythonw) if pythonw.exists() else sys.executable
+        startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+        startupinfo.wShowWindow = subprocess.SW_HIDE  # type: ignore[attr-defined]
+        popen_kwargs["startupinfo"] = startupinfo
         popen_kwargs["creationflags"] = (
             subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
             | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
