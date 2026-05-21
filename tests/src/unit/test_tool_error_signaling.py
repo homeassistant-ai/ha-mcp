@@ -269,58 +269,25 @@ class TestIntegrationWithMCPProtocol:
 
 
 class TestSchemaAndAuthClassification:
-    """Tests for _classify_by_message schema and auth branches (issue #993).
+    """Precedence/gate behaviour and typed-dispatch carve-out for the schema
+    and auth branches of ``_classify_by_message`` (issue #993).
 
-    Pins three behaviours at the classifier boundary:
-    1. Supervisor vol.Invalid messages prefixed with "Command failed:" and
-       carrying any of the schema markers route to VALIDATION_FAILED.
-    2. Messages that merely contain the substring "auth" (e.g.
-       "authorized_keys") are NOT misclassified as AUTH_INVALID_TOKEN.
-       Only the phrase list (unauthorized, authentication, invalid token,
-       access denied) plus the 401 numeric signal match the auth branch.
+    The per-branch parametrize coverage for schema markers, auth phrases,
+    and the 401 numeric signal lives in
+    ``test_helper_classifier.py::TestClassifyByMessageBranches`` — that
+    class is the canonical mutation-grade per-elif pin. This class covers
+    the orthogonal concerns:
+
+    1. The ``Command failed:`` outer gate for schema-marker matching — a
+       schema phrase without the prefix must NOT route to VALIDATION_FAILED.
+    2. The ``authorized_keys`` false-positive guard (root cause of #993):
+       the substring ``"auth"`` inside ``authorized_keys`` must NOT trigger
+       the auth branch.
     3. Typed HA exceptions (HomeAssistantAuthError,
-       HomeAssistantConnectionError, HomeAssistantCommandError) route via
-       type dispatch in _classify_exception, skipping string
+       HomeAssistantConnectionError, HomeAssistantCommandError) routing
+       via ``_classify_exception`` type-dispatch, skipping string
        classification entirely.
     """
-
-    # --- Schema branch: all 5 vol.Invalid markers + the "expected" regex ---
-
-    SCHEMA_MARKER_MESSAGES: tuple[tuple[str, str], ...] = (
-        # marker id, full message
-        ("missing_option", "Command failed: Missing option 'authorized_keys' in ssh"),
-        ("extra_keys", "Command failed: extra keys not allowed @ data['foo']"),
-        ("unknown_secret", "Command failed: Unknown secret 'api_key'"),
-        ("unknown_type", "Command failed: Unknown type 'timedelta'"),
-        ("expected_a", "Command failed: expected a string for dictionary value @ data['host']"),
-        ("expected_str", "Command failed: expected str for 'name'"),
-        ("expected_int", "Command failed: expected int for 'port'"),
-        ("expected_bool", "Command failed: expected bool"),
-        ("expected_dict", "Command failed: expected dict"),
-        ("expected_list", "Command failed: expected list of strings"),
-        ("expected_float", "Command failed: expected float value"),
-        ("expected_type", "Command failed: expected type 'str'"),
-        ("expected_one_of", "Command failed: expected one of ['a', 'b', 'c']"),
-    )
-
-    @pytest.mark.parametrize(
-        "marker_id,message",
-        SCHEMA_MARKER_MESSAGES,
-        ids=[m[0] for m in SCHEMA_MARKER_MESSAGES],
-    )
-    def test_schema_marker_classified_as_validation_failed(self, marker_id, message):
-        """Each vol.Invalid marker under "Command failed:" routes to VALIDATION_FAILED.
-
-        Mutation-testing-style coverage: drop any marker from the source
-        tuple in helpers.py and the corresponding parametrized case fails.
-        """
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        exc = HomeAssistantCommandError(message)
-        result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "VALIDATION_FAILED", (
-            f"marker {marker_id!r} did not route to VALIDATION_FAILED"
-        )
 
     def test_schema_phrase_without_command_prefix_not_validation(self):
         """Negative test for the "command failed:" outer gate.
@@ -332,38 +299,6 @@ class TestSchemaAndAuthClassification:
         exc = Exception("Missing option 'foo' in bar")
         result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] != "VALIDATION_FAILED"
-
-    # --- Auth branch: all 4 phrases + 401 numeric signal ---
-
-    AUTH_PHRASE_MESSAGES: tuple[tuple[str, str], ...] = (
-        ("unauthorized", "unauthorized: invalid bearer token"),
-        ("authentication", "authentication required"),
-        ("invalid_token", "token rejected: invalid token format"),
-        ("access_denied", "access denied for user"),
-    )
-
-    @pytest.mark.parametrize(
-        "phrase_id,message",
-        AUTH_PHRASE_MESSAGES,
-        ids=[m[0] for m in AUTH_PHRASE_MESSAGES],
-    )
-    def test_auth_phrase_classified(self, phrase_id, message):
-        """Each auth phrase routes to AUTH_INVALID_TOKEN.
-
-        Mutation-testing coverage: drop any phrase from the source tuple
-        in helpers.py and the corresponding case fails.
-        """
-        exc = Exception(message)
-        result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "AUTH_INVALID_TOKEN", (
-            f"phrase {phrase_id!r} did not route to AUTH_INVALID_TOKEN"
-        )
-
-    def test_401_status_still_classified_as_auth(self):
-        """401 numeric signal in error text remains an auth error."""
-        exc = Exception("Server returned 401")
-        result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "AUTH_INVALID_TOKEN"
 
     # --- Regression tests: substrings that must NOT trigger auth ---
 
