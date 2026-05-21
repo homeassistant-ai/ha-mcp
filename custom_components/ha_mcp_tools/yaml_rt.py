@@ -74,7 +74,21 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
-_THREAD_LOCAL = threading.local()
+def _build_yaml() -> YAML:
+    """Create a fresh round-trip YAML instance with HA tag support."""
+    ry = YAML(typ="rt")
+    ry.preserve_quotes = True
+    return ry
+
+
+class _YAMLStorage(threading.local):
+    """Thread-local storage for ruamel.yaml instances."""
+
+    def __init__(self) -> None:
+        self.yaml = _build_yaml()
+
+
+_STORAGE = _YAMLStorage()
 
 
 def make_yaml() -> YAML:
@@ -87,11 +101,11 @@ def make_yaml() -> YAML:
     Thread-local storage is used because ruamel.yaml instances are not
     thread-safe.
     """
-    if not hasattr(_THREAD_LOCAL, "yaml"):
-        ry = YAML(typ="rt")
-        ry.preserve_quotes = True
-        _THREAD_LOCAL.yaml = ry
-    return _THREAD_LOCAL.yaml
+    try:
+        return _STORAGE.yaml
+    except AttributeError:
+        _STORAGE.yaml = _build_yaml()
+        return _STORAGE.yaml
 
 
 def yaml_dumps(ry: YAML, data: Any) -> str:
