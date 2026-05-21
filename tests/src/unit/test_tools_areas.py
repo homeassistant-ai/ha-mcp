@@ -253,3 +253,53 @@ class TestHaConfigListAreasFieldsProjection:
         """fields='[\"' (malformed JSON) raises ToolError."""
         with pytest.raises(ToolError):
             await tools.ha_config_list_areas(fields='["')
+
+
+class TestHaConfigListAreasAreaFieldsProjection:
+    """Unit tests for area_fields= per-record projection in ha_config_list_areas."""
+
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(return_value={
+            "success": True,
+            "result": [
+                {"area_id": "kitchen", "name": "Kitchen", "icon": "mdi:home"},
+                {"area_id": "bedroom", "name": "Bedroom", "icon": None},
+            ],
+        })
+        return AreaTools(client)
+
+    async def test_area_fields_projects_each_record(self, tools):
+        """area_fields=['area_id'] returns records with only that key."""
+        result = await tools.ha_config_list_areas(area_fields=["area_id"])
+        assert all(set(a.keys()) == {"area_id"} for a in result["areas"])
+
+    async def test_area_fields_multiple_keys(self, tools):
+        """area_fields=['area_id','name'] returns both keys per record."""
+        result = await tools.ha_config_list_areas(area_fields=["area_id", "name"])
+        for area in result["areas"]:
+            assert set(area.keys()) == {"area_id", "name"}
+
+    async def test_area_fields_unknown_key_emits_warning(self, tools):
+        """area_fields with only unknown keys emits a diagnostic in warnings[].
+
+        Pins the typo-footgun guard: area_fields=["are_id"] (typo for "area_id")
+        silently produced [{}, {}] before this fix.
+        """
+        result = await tools.ha_config_list_areas(area_fields=["are_id"])
+        # Every projected record is empty
+        for area in result["areas"]:
+            assert area == {}
+        # Diagnostic warning is present and names the wrong parameter
+        assert "warnings" in result, "Expected warnings key when all projected records are empty"
+        assert any("are_id" in w for w in result["warnings"]), (
+            f"Expected typo field name in warning, got: {result['warnings']}"
+        )
+
+    async def test_area_fields_does_not_affect_outer_response_keys(self, tools):
+        """area_fields only projects inside areas[]; top-level keys are unchanged."""
+        result = await tools.ha_config_list_areas(area_fields=["area_id"])
+        assert "success" in result
+        assert "count" in result
+        assert "areas" in result

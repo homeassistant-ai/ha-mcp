@@ -318,8 +318,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
                 description=(
                     "Filter results to entities in a specific state "
-                    '(e.g. "on", "off", "unavailable"). Case-sensitive; '
-                    "HA states are typically lowercase. Applied server-side after "
+                    '(e.g. "on", "off", "unavailable"). Case-insensitive — '
+                    "input is lowercased before matching. Applied server-side after "
                     "search results are collected. For exact-match and domain-listing "
                     "searches, total_matches reflects the filtered count. For fuzzy "
                     "searches, state_filter is page-only and total_matches remains "
@@ -1560,12 +1560,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
 
         When `attribute_keys=` is set but has no effect (because `attributes` was
-        excluded by `fields=`), a `warning` key is emitted outside the projected
+        excluded by `fields=`), a `warnings` list is emitted outside the projected
         entity record(s): in bulk mode at the response wrapper level (sibling of
         `success`/`count`/`states`); in single-entity mode at the top-level result
         (sibling of `data`/`metadata`, since the projected record IS `data`).
-        The warning is never a record key, so `fields=["state"]` returns a record
-        with only `state` regardless of whether the no-effect warning fires.
+        The warnings list is never a record key, so `fields=["state"]` returns a
+        record with only `state` regardless of whether the no-effect warning fires.
 
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
@@ -1611,17 +1611,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # in the projected ``fields=`` set. Attach the warning at
                 # the outer wrapper level (sibling of ``data``/``metadata``)
                 # rather than spreading it into ``data`` — the FIELDS
-                # PROJECTION contract is that ``fields=`` filters the keys
-                # of the returned record, and ``warning`` is not a record
-                # key. This mirrors the bulk path's intent of keeping
-                # ``warning`` outside the projected per-entity records
-                # (bulk nests them under ``data.states`` so ``warning`` at
-                # ``data`` level is structurally outside them; in single
+                # PROJECTION contract: ``fields=`` filters the keys of the
+                # returned record; ``warnings`` is not a record key.
+                # Bulk path keeps ``warnings`` outside the per-entity records
+                # (at ``data`` level, sibling of ``states``); in single-entity
                 # mode the projected record IS ``data``, so the analogous
-                # "outside" location is the top-level wrapper).
+                # "outside" location is the top-level wrapper (sibling of
+                # ``data``/``metadata``).
                 # ``add_timezone_metadata`` always returns a dict, so
-                # ``wrapped["warning"] = ...`` is safe regardless of
-                # ``entity_record``'s type — no isinstance guard needed here.
+                # ``wrapped.setdefault("warnings", [])`` is type-safe regardless
+                # of ``entity_record``'s type — no isinstance guard needed.
                 if attribute_keys_no_effect:
                     wrapped.setdefault("warnings", []).append(
                         "attribute_keys was ignored because 'attributes' is not in "
