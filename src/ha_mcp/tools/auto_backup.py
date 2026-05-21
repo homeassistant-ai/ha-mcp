@@ -24,6 +24,7 @@ underlying signature for FastMCP schema generation.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -46,6 +47,35 @@ def _resolve_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def automation_backup_target(kw: dict[str, Any]) -> str:
+    """Resolve the actual storage target for an automation write.
+
+    HA's automation storage uses the body's ``id`` field as the primary
+    key (#1404). When the caller passes both ``identifier`` and a
+    ``config.id`` that differ, HA writes to ``config.id`` — the
+    snapshot must capture *that* entity, not the user-provided
+    ``identifier`` whose target is left untouched.
+
+    Returns ``str(config["id"])`` when present, else
+    ``str(identifier or "")``. Empty string skips capture (matches the
+    create path where there's nothing to back up yet).
+
+    ``config`` accepts dict or JSON-string per the tool signature; both
+    shapes are handled.
+    """
+    config = kw.get("config")
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except (ValueError, TypeError):
+            config = None
+    if isinstance(config, dict):
+        config_id = config.get("id")
+        if config_id:
+            return str(config_id)
+    return _resolve_str(kw.get("identifier"))
 
 
 def with_auto_backup(

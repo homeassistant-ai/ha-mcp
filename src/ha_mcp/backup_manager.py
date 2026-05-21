@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+from fastmcp.exceptions import ToolError
 
 from .client.rest_client import HomeAssistantError
 
@@ -61,6 +62,9 @@ _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
 # Expected failure modes for the capture pipeline. Anything outside this
 # tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
 # propagate to the wrapped tool's caller, not be silently swallowed.
+# ``ToolError`` is included because the fetch path now delegates to the
+# tool-layer ``_get_<entity>_config_internal`` helpers, which raise
+# ``ToolError`` for HA-side fetch failures.
 _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     HomeAssistantError,
     OSError,
@@ -68,6 +72,7 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     ConnectionError,
     yaml.YAMLError,
+    ToolError,
 )
 
 # Soft cap on per-entity throttle/lock tracker size. Auto-pruning kicks
@@ -613,12 +618,25 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
+    """Fetch an automation through the same path the get tool uses.
+
+    Applies ``_normalize_config_for_roundtrip`` so the snapshot matches
+    what ``ha_config_get_automation`` returns and round-trips cleanly
+    back through ``ha_config_set_automation`` on restore. Imported lazily
+    to keep the manager import-cycle-free.
+    """
+    # Lazy import to avoid backup_manager → tools → backup_manager cycle.
+    from .tools.tools_config_automations import _normalize_config_for_roundtrip
+
     try:
-        return await client.get_automation_config(entity_id)
+        raw = await client.get_automation_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
+    if not isinstance(raw, dict):
+        return raw
+    return _normalize_config_for_roundtrip(raw)
 
 
 async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
@@ -659,17 +677,31 @@ async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
 
 
 async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
+    """Fetch a dashboard config via the same helper the get tool uses.
+
+    Delegates to ``tools_config_dashboards._get_dashboard_config_internal``
+    which handles the WS envelope, force-cache-bypass, and structured
+    error wrapping consistently with how the rest of the dashboard surface
+    fetches state. Imported lazily to avoid an import cycle.
+    """
+    from fastmcp.exceptions import ToolError
+
+    from .tools.tools_config_dashboards import _get_dashboard_config_internal
+
     try:
-        return await _ws_send(
-            client, {"type": "lovelace/config", "url_path": entity_id, "force": True}
-        )
+        config, _config_hash = await _get_dashboard_config_internal(client, entity_id)
+    except ToolError as err:
+        # ToolError carries the structured failure payload; treat
+        # missing-dashboard responses as "entity doesn't exist yet".
+        msg = str(err).lower()
+        if "not_found" in msg or "config_not_found" in msg:
+            return None
+        raise
     except HomeAssistantError as err:
-        # HA returns a command error for missing dashboards; the message
-        # contains "not_found" / "config_not_found" — surface as None so
-        # the capture pipeline treats it as "entity doesn't exist yet".
         if "not_found" in str(err).lower() or "config_not_found" in str(err).lower():
             return None
         raise
+    return config
 
 
 async def _restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:

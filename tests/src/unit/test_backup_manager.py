@@ -75,6 +75,72 @@ def _mk_handler(
     return DomainHandler(domain=domain, fetch=fetch, restore=restore)
 
 
+# ---------------------------------------------------------------- automation_backup_target
+
+
+class TestAutomationBackupTarget:
+    """Pins the #1404-aware backup-target resolution for automation.
+
+    HA stores automations by the body's ``id`` field, not the URL's
+    ``unique_id`` — so when caller passes both ``identifier`` and a
+    ``config.id`` that differ, the backup MUST capture the entity at
+    ``config.id`` (the actual victim of the write), not the entity at
+    ``identifier`` (which HA's storage layer ignores).
+    """
+
+    def test_prefers_config_id_over_identifier(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        target = automation_backup_target(
+            {"identifier": "automation.foo", "config": {"id": "BBB", "alias": "x"}}
+        )
+        # config.id wins: BBB is the actual storage target HA will overwrite.
+        assert target == "BBB"
+
+    def test_falls_back_to_identifier_when_no_config_id(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        target = automation_backup_target(
+            {"identifier": "automation.foo", "config": {"alias": "x"}}
+        )
+        assert target == "automation.foo"
+
+    def test_parses_config_as_json_string(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        target = automation_backup_target(
+            {
+                "identifier": "automation.foo",
+                "config": '{"id": "BBB", "alias": "x"}',
+            }
+        )
+        assert target == "BBB"
+
+    def test_invalid_json_falls_back_to_identifier(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        target = automation_backup_target(
+            {"identifier": "automation.foo", "config": "not-json"}
+        )
+        assert target == "automation.foo"
+
+    def test_no_identifier_no_config_id_returns_empty(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        # Create path: no identifier, no config.id yet — nothing to back up.
+        target = automation_backup_target({"config": {"alias": "x"}})
+        assert target == ""
+
+    def test_matched_id_and_identifier(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        # Same target — config.id wins but both point at the same entity.
+        target = automation_backup_target(
+            {"identifier": "automation.foo", "config": {"id": "automation.foo"}}
+        )
+        assert target == "automation.foo"
+
+
 # ---------------------------------------------------------------- filenames
 
 
