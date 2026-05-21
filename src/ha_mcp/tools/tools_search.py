@@ -25,8 +25,10 @@ from .util_helpers import (
     filter_active_repairs,
     parse_string_list_param,
     project_fields,
+    project_records,
     project_repair_fields,
     public_fields,
+    result_fields_warning,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,45 +49,11 @@ def _build_pagination_metadata(
     return meta
 
 
-def _project_records(
-    records: list[dict[str, Any]], fields: list[str] | None
-) -> list[dict[str, Any]]:
-    """Project each record dict to only the specified keys.
-
-    Returns *records* unchanged when *fields* is ``None``.  Unknown keys are
-    silently dropped from each record.  Call :func:`_result_fields_warning`
-    on the original and projected lists if you want a diagnostic when all keys
-    were unknown (typo guard).
-    """
-    if fields is None:
-        return records
-    keep = set(fields)
-    return [{k: v for k, v in r.items() if k in keep} for r in records]
-
-
-def _result_fields_warning(
-    original: list[dict[str, Any]],
-    projected: list[dict[str, Any]],
-    fields: list[str],
-) -> str | None:
-    """Return a diagnostic string when all projected records are empty dicts.
-
-    Fires only when *original* is non-empty and every projected record is
-    ``{}`` — the typical cause is specifying only unknown field names
-    (e.g. a typo in ``result_fields``).  The caller should append the
-    returned string to the response ``warnings`` list.
-    """
-    if not original or not projected:
-        return None
-    if all(not r for r in projected):
-        # Sample up to 3 records for the available-keys hint so we don't
-        # iterate the whole (potentially large) list.
-        available = sorted({k for r in original[:3] for k in r})
-        return (
-            f"result_fields {sorted(fields)!r} matched no record keys — "
-            f"records came out empty. Available keys: {available!r}"
-        )
-    return None
+# Module-level aliases so existing call sites keep their names unchanged.
+# The implementations live in util_helpers so tools_areas / tools_services
+# can share them without a cross-module import.
+_project_records = project_records
+_result_fields_warning = result_fields_warning
 
 
 async def _exact_match_search(
@@ -473,11 +441,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Normalize state_filter — strip surrounding whitespace so
             # "on " and " on" match HA's canonical lowercase state values.
             # HA states are typically lowercase; we don't lowercase here
-            # to keep the filter transparent (callers see what they sent),
-            # but agents that pass "ON" or "Off" will see 0 results and
-            # should use lowercase values.
+            # HA states are always lowercase ("on", "off", "unavailable").
+            # Normalise to avoid silent zero-result surprises from "ON" / " on ".
             if state_filter is not None:
-                state_filter = state_filter.strip()
+                state_filter = state_filter.strip().lower()
                 # Collapse whitespace-only strings to None (no filter)
                 if not state_filter:
                     state_filter = None
@@ -1309,7 +1276,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "system_summary" in result:
                 result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
-            logger.warning(f"Failed to fetch system info for overview: {e}")
+            logger.warning("Failed to fetch system info for overview: %s", e, exc_info=True)
             # Config fetch failed — populate version sentinel so system_summary
             # always has a "version" key regardless of connection state.
             if "system_summary" in result:
@@ -1336,7 +1303,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for n in notifications
                         ]
             except Exception as e:
-                logger.warning(f"Failed to fetch notifications for overview: {e}")
+                logger.warning("Failed to fetch notifications for overview: %s", e, exc_info=True)
 
         # Active repairs only by default — matches the HA Repairs UI so agents
         # don't chase problems the user already dismissed.
@@ -1372,7 +1339,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
                 result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
-            logger.warning("Failed to fetch repairs for overview: %s", e)
+            logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
 
         # Include tool discovery hint when search transform is active
@@ -1637,11 +1604,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             try:
                 result = await client.get_entity_state(entity_id)
                 entity_record = _project_entity(result, parsed_fields, parsed_attribute_keys)
-                # Wrap with timezone metadata first. ``add_timezone_metadata``
-                # returns ``{"data": entity_record, "metadata": {...}}`` — in
-                # single-entity mode the projected record becomes ``data``
-                # directly (its keys are not nested under a sub-key the way
-                # bulk's projected records live under ``data.states``).
+                # Always wrap (include_metadata=True); callers and tests rely on
+                # the ``result["data"]`` envelope even when fields= is active.
                 wrapped = await add_timezone_metadata(client, entity_record)
                 # ``attribute_keys`` was specified but ``attributes`` is not
                 # in the projected ``fields=`` set. Attach the warning at
@@ -1659,7 +1623,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # ``wrapped["warning"] = ...`` is safe regardless of
                 # ``entity_record``'s type — no isinstance guard needed here.
                 if attribute_keys_no_effect:
-                    wrapped["warning"] = (
+                    wrapped.setdefault("warnings", []).append(
                         "attribute_keys was ignored because 'attributes' is not in "
                         "fields=. Add 'attributes' to fields= (or omit fields=) to "
                         "apply attribute_keys."
@@ -1759,7 +1723,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             }
 
             if attribute_keys_no_effect:
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     "attribute_keys was ignored because 'attributes' is not in "
                     "fields=. Add 'attributes' to fields= (or omit fields=) to "
                     "apply attribute_keys."

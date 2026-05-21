@@ -1092,6 +1092,7 @@ class TestSlugParameterIncompatibilityWarning:
     def client_with_logbook(self):
         client = MagicMock()
         client.get_logbook = AsyncMock(return_value=[])
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         return client
 
     @pytest.mark.asyncio

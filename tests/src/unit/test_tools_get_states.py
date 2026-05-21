@@ -298,10 +298,10 @@ class TestHaGetStateSingleEntity:
         # in the projected record. ``warning`` must NOT leak into the record.
         data = result["data"]
         assert data == {"state": "on"}
-        assert "warning" not in data
+        assert "warnings" not in data
         # Warning lives at the top-level result, sibling of ``data``/``metadata``.
-        assert "warning" in result
-        assert "attribute_keys" in result["warning"]
+        assert "warnings" in result
+        assert any("attribute_keys" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_attribute_keys_no_warning_when_attributes_included(
@@ -323,7 +323,7 @@ class TestHaGetStateSingleEntity:
         )
 
         data = result["data"]
-        assert "warning" not in data
+        assert "warnings" not in data
         assert data["attributes"] == {"brightness": 255}
 
     @pytest.mark.asyncio
@@ -344,8 +344,8 @@ class TestHaGetStateSingleEntity:
         )
 
         # Warning must be present at the top level even when entity_record is None
-        assert "warning" in result
-        assert "attribute_keys" in result["warning"]
+        assert "warnings" in result
+        assert any("attribute_keys" in w for w in result["warnings"])
 
 
 class TestHaGetStateAttributeKeysWarningBulk:
@@ -395,8 +395,8 @@ class TestHaGetStateAttributeKeysWarningBulk:
         )
 
         data = result["data"]
-        assert "warning" in data
-        assert "attribute_keys" in data["warning"]
+        assert "warnings" in data
+        assert any("attribute_keys" in w for w in data["warnings"])
         assert data["states"]["light.kitchen"] == {"state": "on"}
 
     @pytest.mark.asyncio
@@ -415,7 +415,7 @@ class TestHaGetStateAttributeKeysWarningBulk:
             attribute_keys=["brightness"],
         )
         data = result["data"]
-        assert "warning" not in data
+        assert "warnings" not in data
         assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 200}
 
 

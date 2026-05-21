@@ -24,6 +24,7 @@ from .util_helpers import (
     coerce_int_param,
     parse_string_list_param,
     project_fields,
+    result_fields_warning,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,10 +166,19 @@ class ServiceDiscoveryTools:
             )
 
             if parsed_service_fields is not None and "services" in result:
+                _orig_svc_vals = list(result["services"].values())
                 result["services"] = {
                     k: {fk: fv for fk, fv in v.items() if fk in parsed_service_fields}
                     for k, v in result["services"].items()
                 }
+                _warn = result_fields_warning(
+                    _orig_svc_vals,
+                    list(result["services"].values()),
+                    parsed_service_fields,
+                    param_name="service_fields",
+                )
+                if _warn:
+                    result.setdefault("warnings", []).append(_warn)
 
             return project_fields(result, parsed_fields)
 

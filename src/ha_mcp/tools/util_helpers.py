@@ -293,16 +293,58 @@ def project_fields(
 ) -> dict[str, Any]:
     """Apply optional field projection to a response data dict.
 
-    Always retains ``success``. Unknown keys in *fields* are silently dropped.
-    Accepts a list or a CSV/JSON-array string for *fields*.
+    Always retains ``success`` and ``warnings``. Unknown keys in *fields* are
+    silently dropped.  Accepts a list or a CSV/JSON-array string for *fields*.
     Apply to the inner payload before any outer wrapper that adds top-level keys
     you want to preserve.
     """
     if fields is None:
         return data
     parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
-    keep = set(parsed) | {"success"}
+    keep = set(parsed) | {"success", "warnings"}
     return {k: v for k, v in data.items() if k in keep}
+
+
+def project_records(
+    records: list[dict[str, Any]], fields: list[str] | None
+) -> list[dict[str, Any]]:
+    """Project each record dict to only the specified keys.
+
+    Returns *records* unchanged when *fields* is ``None``.  Unknown keys are
+    silently dropped from each record.  Call :func:`result_fields_warning`
+    on the original and projected lists if you want a diagnostic when all keys
+    were unknown (typo guard).
+    """
+    if fields is None:
+        return records
+    keep = set(fields)
+    return [{k: v for k, v in r.items() if k in keep} for r in records]
+
+
+def result_fields_warning(
+    original: list[dict[str, Any]],
+    projected: list[dict[str, Any]],
+    fields: list[str],
+    param_name: str = "result_fields",
+) -> str | None:
+    """Return a diagnostic string when all projected records are empty dicts.
+
+    Fires only when *original* is non-empty and every projected record is
+    ``{}`` — the typical cause is specifying only unknown field names
+    (e.g. a typo in ``result_fields``).  The caller should append the
+    returned string to the response ``warnings`` list.
+    """
+    if not original or not projected:
+        return None
+    if all(not r for r in projected):
+        # Sample up to 3 records for the available-keys hint so we don't
+        # iterate the whole (potentially large) list.
+        available = sorted({k for r in original[:3] for k in r})
+        return (
+            f"{param_name} {sorted(fields)!r} matched no record keys — "
+            f"records came out empty. Available keys: {available!r}"
+        )
+    return None
 
 
 def build_pagination_metadata(
@@ -467,9 +509,9 @@ async def add_timezone_metadata(
 ) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses for local time context.
 
-    Pass ``include_metadata=False`` to return *data* unchanged — useful when
-    ``fields=`` projection is already shrinking the response and the caller
-    does not want the ``{"data": ..., "metadata": {...}}`` wrapper.
+    Wraps *data* in ``{"data": ..., "metadata": {...}}``.  Pass
+    ``include_metadata=False`` to return *data* unchanged — the ``metadata``
+    wrapper is then omitted entirely.
     """
     if not include_metadata:
         return data
@@ -485,11 +527,18 @@ async def add_timezone_metadata(
                 "note": f"All timestamps are in UTC. Home Assistant timezone is {ha_timezone}.",
             },
         }
-    except Exception as _tz_exc:
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as _tz_exc:
         logger.warning(
             "add_timezone_metadata: failed to fetch HA timezone config — "
             "falling back to 'Unknown': %s",
             _tz_exc,
+            exc_info=True,
         )
         return {
             "data": data,

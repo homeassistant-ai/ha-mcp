@@ -267,7 +267,9 @@ class HistoryTools:
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
         ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
-        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100)
+        # Default order="desc" returns newest states first.
+        # To paginate oldest-first, use order="asc":
+        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
         ```
 
         **Example -- statistics:**
@@ -492,6 +494,9 @@ async def _fetch_history(
     order: str = "desc",
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
+
+    *order* controls state-list ordering: ``"desc"`` (default) returns the
+    newest states first; ``"asc"`` returns the oldest first.
 
     Returns the unwrapped history dict; the caller is responsible for projection
     and wrapping with ``add_timezone_metadata``.

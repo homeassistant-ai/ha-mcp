@@ -59,6 +59,13 @@ class TestProjectFields:
         project_fields(data, ["results"])
         assert "count" in data
 
+    def test_warnings_always_retained_alongside_success(self):
+        """warnings list survives projection so diagnostic messages are not lost."""
+        data = {"success": True, "results": [], "count": 0, "warnings": ["bad field"]}
+        result = project_fields(data, ["results"])
+        assert "warnings" in result
+        assert result["warnings"] == ["bad field"]
+
     def test_csv_string_input_parsed_correctly(self):
         data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
         result = project_fields(data, "results,count")
@@ -526,3 +533,86 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         data = result["data"]
         for entity in data["results"]:
             assert set(entity.keys()) == {"entity_id"}
+
+
+# Fuzzy results returned by smart_tools.smart_entity_search mock.
+# 5 total matches in the index; this page contains 3, only 1 matches "on".
+_FUZZY_RESULT = {
+    "results": [
+        {"entity_id": "light.kitchen", "state": "on", "domain": "light"},
+        {"entity_id": "light.bedroom", "state": "off", "domain": "light"},
+        {"entity_id": "light.hall", "state": "unavailable", "domain": "light"},
+    ],
+    "total_matches": 5,
+    "has_more": True,
+    "offset": 0,
+    "limit": 3,
+    "count": 3,
+}
+
+
+class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
+    """Tests for state_filter= semantics on the fuzzy (exact_match=False) branch.
+
+    Pins the dual-count contract: total_matches is the unfiltered fuzzy count,
+    count reflects only the entities on this page that matched the state filter.
+    """
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.smart_entity_search = AsyncMock(return_value=dict(_FUZZY_RESULT))
+        return smart
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_state_filter_total_matches_is_unfiltered(self, search_tool):
+        """total_matches stays at the unfiltered fuzzy count; count is post-filter.
+
+        This pins the dual-count contract: the fuzzy engine already paginated
+        internally so total_matches cannot be recomputed after state filtering.
+        """
+        result = await search_tool(
+            query="light", exact_match=False, state_filter="on"
+        )
+        data = result["data"]
+        # count reflects only the filtered page
+        assert data["count"] == 1, "count should reflect only the on-state entity"
+        assert data["results"][0]["entity_id"] == "light.kitchen"
+        # total_matches is the raw fuzzy-engine number, not re-counted
+        assert data["total_matches"] == 5, (
+            "total_matches must remain the unfiltered fuzzy count"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_state_filter_note_present(self, search_tool):
+        """state_filter_note appears in the response to explain the dual-count."""
+        result = await search_tool(
+            query="light", exact_match=False, state_filter="on"
+        )
+        data = result["data"]
+        assert "state_filter_note" in data
+        assert "has_more" in data["state_filter_note"]
+
+    @pytest.mark.asyncio
+    async def test_state_filter_note_survives_fields_projection(self, search_tool):
+        """state_filter_note is force-retained even when not in fields=.
+
+        A caller with fields=["results", "total_matches"] still needs the note
+        to understand that total_matches is the unfiltered count.
+        """
+        result = await search_tool(
+            query="light",
+            exact_match=False,
+            state_filter="on",
+            fields=["results", "total_matches"],
+        )
+        data = result["data"]
+        # state_filter_note must be force-retained even when not listed in fields=
+        assert "state_filter_note" in data, (
+            "state_filter_note must survive fields= projection"
+        )
+        # Projected keys present
+        assert "total_matches" in data
+        assert "results" in data
+        # Non-requested keys absent (count was not in fields=)
+        assert "count" not in data

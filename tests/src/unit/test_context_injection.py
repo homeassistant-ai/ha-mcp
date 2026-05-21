@@ -40,6 +40,8 @@ def _mock_ha_client() -> MagicMock:
     client.base_url = "http://homeassistant.local"
     client.token = "test_token"
     client.verify_ssl = True
+    # add_timezone_metadata awaits get_config() — must be async.
+    client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
     return client
 
 

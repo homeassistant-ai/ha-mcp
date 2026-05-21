@@ -1406,9 +1406,10 @@ class TestAddTimezoneMetadata:
 
     @pytest.mark.asyncio
     async def test_config_failure_falls_back_to_unknown_timezone(self):
-        """On config fetch exception the wrapper still returns with 'Unknown' timezone."""
+        """On connection-class exception the wrapper still returns with 'Unknown' timezone."""
         client = MagicMock()
-        client.get_config = AsyncMock(side_effect=RuntimeError("unreachable"))
+        # Use OSError which is in the narrow exception tuple (connection-class errors).
+        client.get_config = AsyncMock(side_effect=OSError("connection refused"))
         result = await add_timezone_metadata(client, {"success": True})
         # Wrapper is still present; timezone is the fallback sentinel
         assert "data" in result

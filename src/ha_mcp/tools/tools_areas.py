@@ -20,7 +20,12 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import parse_string_list_param, project_fields
+from .util_helpers import (
+    parse_string_list_param,
+    project_fields,
+    project_records,
+    result_fields_warning,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,17 +193,21 @@ class AreaTools:
 
             if result.get("success"):
                 areas = result.get("result", [])
+                _orig_areas = areas
                 if parsed_area_fields is not None:
-                    areas = [
-                        {k: v for k, v in a.items() if k in parsed_area_fields}
-                        for a in areas
-                    ]
+                    areas = project_records(areas, parsed_area_fields)
                 response: dict[str, Any] = {
                     "success": True,
                     "count": len(areas),
                     "areas": areas,
                     "message": f"Found {len(areas)} area(s)",
                 }
+                if parsed_area_fields is not None:
+                    _warn = result_fields_warning(
+                        _orig_areas, areas, parsed_area_fields, param_name="area_fields"
+                    )
+                    if _warn:
+                        response.setdefault("warnings", []).append(_warn)
                 return project_fields(response, parsed_fields)
             else:
                 raise_tool_error(create_error_response(
