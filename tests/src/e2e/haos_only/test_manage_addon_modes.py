@@ -45,6 +45,8 @@ and the prefix is not stable across bakes.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -52,6 +54,16 @@ import pytest
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
 
 pytestmark = [pytest.mark.haos_only]
+
+# Node-RED's container takes 20–60s after install to leave "startup" and
+# enter "started". Any test whose contract requires the addon to actually
+# answer HTTP (i.e. asserts on ``status_code`` rather than tolerating a
+# structured error) must wait for it; otherwise CI flakes whenever the
+# runner is slow enough that the addon isn't ready by test-call time.
+# The bake installs Node-RED with ``start=True`` (build_image.py ADDONS),
+# so we only need to wait — never to start it ourselves.
+_ADDON_RUNNING_TIMEOUT_S = 120.0
+_ADDON_RUNNING_POLL_S = 2.0
 
 
 # Display names as they appear in build_image.py's ADDONS tuple — slugs
@@ -86,6 +98,50 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
         f"Addon {display_name!r} not found in installed listing. "
         f"Installed: {installed}. Check build_image.py ADDONS tuple."
     )
+
+
+async def _wait_addon_running(
+    mcp_client: Any,
+    slug: str,
+    timeout: float = _ADDON_RUNNING_TIMEOUT_S,
+) -> None:
+    """Block until ``ha_get_addon(slug=...)`` reports ``state=started``.
+
+    Use this before any test that asserts on the HTTP/WS contract of an
+    addon (rather than tolerating an addon-not-running structured
+    error). ``ha_manage_addon`` short-circuits with
+    ``{"success": False, "error": {...}, "state": "startup"}`` when
+    Supervisor reports the addon as anything other than ``started``;
+    the bake installs addons with ``start=True`` but their containers
+    can take 20-60s to leave the ``startup`` phase, which is enough to
+    flake any strict-shape assertion. Mirrors the
+    ``wait_for_entity_registered`` discipline already mandated by
+    AGENTS.md for tests that act on freshly created entities.
+
+    Transient ``ToolError`` from ``ha_get_addon`` (e.g. a momentary
+    Supervisor 5xx during boot) is treated as "not ready yet" and the
+    poll continues until the outer timeout. The deadline still fires;
+    transient errors can't mask a wedged addon forever.
+    """
+    from fastmcp.exceptions import ToolError
+
+    deadline = time.monotonic() + timeout
+    last_state: str | None = None
+    while True:
+        try:
+            detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            detail = parse_mcp_result(detail_raw).get("addon") or {}
+            last_state = detail.get("state")
+        except ToolError as e:
+            last_state = f"<ToolError: {e!s}[:60]>"
+        if last_state == "started":
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"Addon {slug!r} did not reach state=started within "
+                f"{timeout:.0f}s (last state: {last_state!r})"
+            )
+        await asyncio.sleep(_ADDON_RUNNING_POLL_S)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +290,9 @@ async def test_proxy_http_request_headers_pass_through(mcp_client: Any) -> None:
     invalid", which proves the value crossed the wire.
     """
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
+    # Strict assertion on ``status_code`` below requires the addon to
+    # actually answer HTTP; wait it out (see ``_wait_addon_running``).
+    await _wait_addon_running(mcp_client, slug)
     without = await safe_call_tool(
         mcp_client,
         "ha_manage_addon",
