@@ -130,14 +130,16 @@ class TestAutomationCaptureRestore:
         suffix = uuid.uuid4().hex[:8]
         identifier = f"e2e_backup_{suffix}"
         original = {
-            "id": identifier,
             "alias": f"E2E Backup Original {suffix}",
             "trigger": [{"platform": "time", "at": "12:00:00"}],
             "action": [{"service": "homeassistant.no_op"}],
         }
-        # Create
+        # Create — pass identifier so the tool doesn't reject the call as
+        # an ambiguous create-with-explicit-id.
         create = await safe_call_tool(
-            mcp_client, "ha_config_set_automation", {"config": original}
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
         )
         assert create.get("success") is not False
 
@@ -433,11 +435,11 @@ class TestToggleOffSkipsCapture:
             "ha_config_set_automation",
             {
                 "config": {
-                    "id": identifier,
                     "alias": "Auto off test",
                     "trigger": [{"platform": "time", "at": "12:00:00"}],
                     "action": [{"service": "homeassistant.no_op"}],
-                }
+                },
+                "identifier": identifier,
             },
         )
         await safe_call_tool(
@@ -445,7 +447,6 @@ class TestToggleOffSkipsCapture:
             "ha_config_set_automation",
             {
                 "config": {
-                    "id": identifier,
                     "alias": "Auto off test edited",
                     "trigger": [{"platform": "time", "at": "12:00:00"}],
                     "action": [{"service": "homeassistant.no_op"}],
