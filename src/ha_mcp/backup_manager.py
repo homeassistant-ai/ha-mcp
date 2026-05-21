@@ -463,11 +463,16 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
 
 
 async def _rest_get_or_none(client: Any, path: str) -> Any:
-    """Fetch a REST path; return None on 404, propagate other errors."""
+    """Fetch via the client's internal ``_request``; return None on 404.
+
+    The client doesn't expose a public ``get(path)`` — the convention is
+    to call the typed wrappers (``get_automation_config``,
+    ``get_states``, etc.) which internally call ``_request``. Domains
+    without a typed wrapper use this helper.
+    """
     try:
-        return await client.get(path)
+        return await client._request("GET", path)
     except Exception as err:
-        # Detect 404 from the HomeAssistantAPIError shape used by rest_client.
         status = getattr(err, "status_code", None)
         if status == 404:
             return None
@@ -475,7 +480,8 @@ async def _rest_get_or_none(client: Any, path: str) -> Any:
 
 
 async def _rest_post(client: Any, path: str, payload: Any) -> Any:
-    return await client.post(path, json_data=payload)
+    """POST via the client's internal ``_request`` helper."""
+    return await client._request("POST", path, json=payload)
 
 
 async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
@@ -508,45 +514,55 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
     return result
 
 
-# Automation / Script / Scene share the /api/config/<domain>/config/<id> shape.
+# Automation / Script / Scene — reuse the typed client helpers, which
+# handle id-resolution (entity_id ↔ unique_id) and unwrap response envelopes
+# identically to how ``ha_config_set_<domain>`` itself fetches state for
+# the existing optimistic-locking flow. Going through these helpers
+# guarantees the snapshot's ``config`` shape matches what the restorer
+# will re-POST.
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
-    eid = (
-        entity_id[len("automation.") :]
-        if entity_id.startswith("automation.")
-        else entity_id
-    )
-    return await _rest_get_or_none(client, f"/api/config/automation/config/{eid}")
+    try:
+        return await client.get_automation_config(entity_id)
+    except Exception as err:
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
 
 
 async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
-    eid = (
-        entity_id[len("automation.") :]
-        if entity_id.startswith("automation.")
-        else entity_id
-    )
-    return await _rest_post(client, f"/api/config/automation/config/{eid}", config)
+    return await client.upsert_automation_config(config, identifier=entity_id)
 
 
 async def _fetch_script(client: Any, entity_id: str) -> Any:
-    sid = entity_id[len("script.") :] if entity_id.startswith("script.") else entity_id
-    return await _rest_get_or_none(client, f"/api/config/script/config/{sid}")
+    try:
+        result = await client.get_script_config(entity_id)
+    except Exception as err:
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
+    # get_script_config returns a wrapper {"config": <body>, "script_id": ...};
+    # the inner body is what upsert_script_config takes.
+    return result.get("config", result) if isinstance(result, dict) else result
 
 
 async def _restore_script(client: Any, entity_id: str, config: Any) -> Any:
-    sid = entity_id[len("script.") :] if entity_id.startswith("script.") else entity_id
-    return await _rest_post(client, f"/api/config/script/config/{sid}", config)
+    return await client.upsert_script_config(config, entity_id)
 
 
 async def _fetch_scene(client: Any, entity_id: str) -> Any:
-    sid = entity_id[len("scene.") :] if entity_id.startswith("scene.") else entity_id
-    return await _rest_get_or_none(client, f"/api/config/scene/config/{sid}")
+    try:
+        result = await client.get_scene_config(entity_id)
+    except Exception as err:
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
+    return result.get("config", result) if isinstance(result, dict) else result
 
 
 async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
-    sid = entity_id[len("scene.") :] if entity_id.startswith("scene.") else entity_id
-    return await _rest_post(client, f"/api/config/scene/config/{sid}", config)
+    return await client.upsert_scene_config(config, entity_id)
 
 
 # Dashboards — WS lovelace/config (fetch) and lovelace/config/save (restore).
