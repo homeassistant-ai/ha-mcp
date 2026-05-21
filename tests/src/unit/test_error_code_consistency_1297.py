@@ -474,13 +474,37 @@ class TestDeleteDashboardNotFoundSurfacesAvailableIds:
             for s in _all_suggestions(error_data["error"])
         )
 
+    async def test_resolver_unexpected_shape_yields_empty_available_ids(
+        self, delete_tool, mock_client
+    ):
+        """When ``_resolve_dashboard`` returns ``(None, None)`` because the
+        WS response shape was unexpected, the structured raise still fires
+        with ``available_dashboard_ids: []`` — the ``(dashboards or [])[:10]``
+        guard at the raise site prevents a NoneType subscript while still
+        surfacing the canonical error shape.
+        """
+        # String response triggers the "unexpected shape" branch in
+        # _fetch_dashboards_list, which causes _resolve_dashboard to return
+        # (None, None).
+        mock_client.send_websocket_message.return_value = "garbage"
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="ghost-dash")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("available_dashboard_ids") == []
+
 
 class TestGetAutomationMissingSurfacesAvailableIds:
     """Regression: ``ha_config_get_automation`` with a 404 from the REST
     client must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
     (first-10 from the entity registry, filtered by ``automation.`` prefix).
-    Pre-#1397-D4 the 404 fell through the generic ``exception_to_structured_error``
-    route, surfacing as ``INTERNAL_ERROR`` without an actionable payload.
+    Pre-#1397-D4 the 404 surfaced as ``RESOURCE_NOT_FOUND`` via the generic
+    ``_classify_api_status`` route (``helpers.py:199-205``), but without
+    ``available_automation_ids`` or the list-tool suggestion that sibling
+    sites populate. The fix adds the payload + suggestion at the central
+    not-found raise inside ``_get_automation_config_internal``.
     """
 
     @pytest.fixture
@@ -558,8 +582,11 @@ class TestGetAutomationMissingSurfacesAvailableIds:
 class TestGetScriptMissingSurfacesAvailableIds:
     """Regression: ``ha_config_get_script`` with a 404 from the REST client
     must surface ``RESOURCE_NOT_FOUND`` + ``available_script_ids`` (first-10
-    from the entity registry, filtered by ``script.`` prefix). Mirrors the
-    automations shape one-for-one.
+    bare IDs from the entity registry, filtered by ``script.`` prefix and
+    stripped to the bare form ``ha_config_get_script(script_id=...)`` takes).
+    Mirrors the automations shape; the only divergence is the prefix strip
+    — automations accept both ``automation.foo`` and bare ``foo``, scripts
+    only accept the bare storage key.
     """
 
     @pytest.fixture
@@ -600,9 +627,11 @@ class TestGetScriptMissingSurfacesAvailableIds:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error_data.get("script_id") == "missing_script"
+        # Bare IDs (stripped of the ``script.`` entity_id prefix) — what
+        # ``ha_config_get_script(script_id=...)`` takes for the retry.
         assert error_data.get("available_script_ids") == [
-            "script.morning_routine",
-            "script.evening_routine",
+            "morning_routine",
+            "evening_routine",
         ]
         assert any(
             "ha_search_entities(domain_filter='script')" in s
@@ -622,3 +651,230 @@ class TestGetScriptMissingSurfacesAvailableIds:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error_data.get("available_script_ids") == []
+
+
+# ---------------------------------------------------------------------------
+# Mutation-path parity for automations / scripts (KP13 #1397 third-pass): the
+# 404 → RESOURCE_NOT_FOUND mapping in ``_classify_api_status`` already routed
+# correctly, but without the ``available_*_ids`` payload + list-tool
+# suggestion that sibling sites surface. The fix wires
+# ``_raise_*_not_found`` into the set/remove except chains so the mutation
+# path matches the GET path one-for-one.
+# ---------------------------------------------------------------------------
+
+
+def _api_404(message: str) -> Any:
+    """Shorthand for an HA REST 404 the helpers should map to RESOURCE_NOT_FOUND."""
+    from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+    return HomeAssistantAPIError(message, status_code=404)
+
+
+class TestSetAutomationMissingSurfacesAvailableIds:
+    """Update path: ``ha_config_set_automation(identifier=..., config=...)``
+    with a 404 from the REST upsert (identifier resolves to a no-longer-
+    existing automation) must surface ``RESOURCE_NOT_FOUND`` with
+    ``available_automation_ids``. The create branch (identifier=None) is
+    guarded by the ``identifier and`` check so it falls through to the
+    generic exception_to_structured_error route untouched.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        # Resolve path (best-effort) — keep it silent for this test.
+        client.get_states = AsyncMock(return_value=[])
+        # Reference validator (validate_config_references) hits get_services
+        # + get_states — both empty is fine.
+        client.get_services = AsyncMock(return_value={})
+        # The actual upsert raises 404 — the audit-family failure mode.
+        client.upsert_automation_config = AsyncMock(
+            side_effect=_api_404("Automation not found: automation.missing")
+        )
+        # Entity registry list for available_automation_ids payload.
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "automation.morning_routine"},
+                    {"entity_id": "automation.evening_routine"},
+                ],
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+
+        return AutomationConfigTools(mock_client)
+
+    async def test_update_with_missing_identifier_surfaces_available_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_automation(
+                identifier="automation.missing",
+                config={
+                    "alias": "X",
+                    "trigger": [{"platform": "time", "at": "07:00:00"}],
+                    "action": [{"service": "light.turn_on"}],
+                },
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("automation_id") == "automation.missing"
+        assert error_data.get("available_automation_ids") == [
+            "automation.morning_routine",
+            "automation.evening_routine",
+        ]
+        assert any(
+            "ha_search_entities(domain_filter='automation')" in s
+            for s in _all_suggestions(error_data["error"])
+        )
+
+
+class TestRemoveAutomationMissingSurfacesAvailableIds:
+    """Delete path: ``ha_config_remove_automation(identifier=...)`` against a
+    no-longer-existing automation must surface ``RESOURCE_NOT_FOUND`` with
+    ``available_automation_ids``.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.delete_automation_config = AsyncMock(
+            side_effect=_api_404("Automation not found: automation.missing")
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "automation.morning_routine"},
+                    {"entity_id": "automation.evening_routine"},
+                ],
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+
+        return AutomationConfigTools(mock_client)
+
+    async def test_remove_with_missing_identifier_surfaces_available_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_automation(identifier="automation.missing")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("automation_id") == "automation.missing"
+        assert error_data.get("available_automation_ids") == [
+            "automation.morning_routine",
+            "automation.evening_routine",
+        ]
+
+
+class TestSetScriptMissingSurfacesAvailableIds:
+    """Update path: ``ha_config_set_script(script_id=..., config=...)`` with
+    a 404 from the REST upsert must surface ``RESOURCE_NOT_FOUND`` with
+    ``available_script_ids`` (bare form, no ``script.`` prefix).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_services = AsyncMock(return_value={})
+        client.get_states = AsyncMock(return_value=[])
+        client.upsert_script_config = AsyncMock(
+            side_effect=_api_404("Script not found: missing_script")
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "script.morning_routine"},
+                    {"entity_id": "script.evening_routine"},
+                ],
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_update_with_missing_script_id_surfaces_available_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="missing_script",
+                config={
+                    "alias": "X",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("script_id") == "missing_script"
+        assert error_data.get("available_script_ids") == [
+            "morning_routine",
+            "evening_routine",
+        ]
+        assert any(
+            "ha_search_entities(domain_filter='script')" in s
+            for s in _all_suggestions(error_data["error"])
+        )
+
+
+class TestRemoveScriptMissingSurfacesAvailableIds:
+    """Delete path: ``ha_config_remove_script(script_id=...)`` against a
+    no-longer-existing script must surface ``RESOURCE_NOT_FOUND`` with
+    ``available_script_ids`` (bare form).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.delete_script_config = AsyncMock(
+            side_effect=_api_404("Script not found: missing_script")
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"entity_id": "script.morning_routine"},
+                    {"entity_id": "script.evening_routine"},
+                ],
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_remove_with_missing_script_id_surfaces_available_ids(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_script(script_id="missing_script")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_data.get("script_id") == "missing_script"
+        assert error_data.get("available_script_ids") == [
+            "morning_routine",
+            "evening_routine",
+        ]

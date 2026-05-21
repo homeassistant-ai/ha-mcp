@@ -172,12 +172,16 @@ class ConfigScriptTools:
             )
 
     async def _list_script_entity_ids(self) -> list[str]:
-        """Best-effort list of script entity_ids from the entity registry.
+        """Best-effort list of bare script IDs (up to 10) from the entity registry.
 
-        Used to populate ``available_script_ids`` in RESOURCE_NOT_FOUND
-        error context. Returns an empty list on any failure — caller
-        treats absence as "no IDs to report" rather than failing the
-        structured error raise.
+        Returns the bare storage keys (e.g. ``morning_routine``), stripping
+        the ``script.`` entity_id prefix — ``ha_config_get_script`` /
+        ``ha_config_set_script`` / ``ha_config_remove_script`` all take the
+        bare form, so the entity_id prefix would force callers to strip it
+        before retry. Returns an empty list on any failure — caller treats
+        absence as "no IDs to report" rather than failing the structured
+        error raise. The 10-entry cap lives here (not at the callers) so a
+        new call site can't accidentally bloat the error payload.
         """
         try:
             result = await self._client.send_websocket_message(
@@ -190,42 +194,51 @@ class ConfigScriptTools:
         if not isinstance(entries, list):
             return []
         return [
-            entry["entity_id"]
+            entry["entity_id"][len("script.") :]
             for entry in entries
             if isinstance(entry, dict)
             and isinstance(entry.get("entity_id"), str)
             and entry["entity_id"].startswith("script.")
-        ]
+        ][:10]
+
+    async def _raise_script_not_found(self, script_id: str) -> None:
+        """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
+
+        Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
+        by the GET path (``_fetch_script_config_envelope``) and the
+        mutation paths (``ha_config_set_script`` update branch,
+        ``ha_config_remove_script``). Populates ``available_script_ids``
+        (up to 10 bare IDs) from the entity registry.
+        """
+        available_ids = await self._list_script_entity_ids()
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Script not found: {script_id}",
+                context={
+                    "script_id": script_id,
+                    "available_script_ids": available_ids,
+                },
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='script') to find existing scripts"
+                ],
+            )
+        )
 
     async def _fetch_script_config_envelope(self, script_id: str) -> dict[str, Any]:
         """Fetch the raw REST envelope, mapping 404 to RESOURCE_NOT_FOUND.
 
         Returns the dict envelope from ``rest_client.get_script_config``
         (``success``/``script_id``/``config`` keys). Raises a structured
-        ``RESOURCE_NOT_FOUND`` ToolError when the REST client returns 404,
-        populating ``available_script_ids`` so agents can recover without
-        a separate search round-trip. Other ``HomeAssistantAPIError``
-        instances propagate unchanged to caller exception handlers.
+        ``RESOURCE_NOT_FOUND`` ToolError via ``_raise_script_not_found`` on
+        404. Other ``HomeAssistantAPIError`` instances propagate unchanged
+        to caller exception handlers.
         """
         try:
             return cast(dict[str, Any], await self._client.get_script_config(script_id))
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                available_ids = await self._list_script_entity_ids()
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Script not found: {script_id}",
-                        context={
-                            "script_id": script_id,
-                            "available_script_ids": available_ids[:10],
-                        },
-                        suggestions=[
-                            "Use ha_search_entities(domain_filter='script') to find existing scripts",
-                            "Verify the script identifier is correct",
-                        ],
-                    )
-                )
+                await self._raise_script_not_found(script_id)
             raise
 
     async def _get_script_config_internal(
@@ -726,6 +739,11 @@ class ConfigScriptTools:
                     "Config had best-practice issues that may be related: "
                     + "; ".join(bp_warnings)
                 )
+            # 404 during update only — the create path raises on its own when
+            # the upsert hits an unknown identifier server-side. The bare
+            # script_id form is what callers pass and what the registry stores.
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_script_not_found(script_id)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
@@ -802,6 +820,8 @@ class ConfigScriptTools:
         except ToolError:
             raise
         except Exception as e:
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_script_not_found(script_id)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},

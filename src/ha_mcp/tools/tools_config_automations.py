@@ -854,6 +854,13 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
+            # 404 during update only — create (identifier=None) never hits this branch.
+            if (
+                identifier
+                and isinstance(e, HomeAssistantAPIError)
+                and e.status_code == 404
+            ):
+                await self._raise_automation_not_found(identifier)
             suggestions = [
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
@@ -873,12 +880,13 @@ class AutomationConfigTools:
             )
 
     async def _list_automation_entity_ids(self) -> list[str]:
-        """Best-effort list of automation entity_ids from the entity registry.
+        """Best-effort list of automation entity_ids (up to 10) from the entity registry.
 
         Used to populate ``available_automation_ids`` in RESOURCE_NOT_FOUND
         error context. Returns an empty list on any failure — caller treats
         absence as "no IDs to report" rather than failing the structured
-        error raise.
+        error raise. The 10-entry cap lives here (not at the callers) so a
+        new call site can't accidentally bloat the error payload.
         """
         try:
             result = await self._client.send_websocket_message(
@@ -896,7 +904,31 @@ class AutomationConfigTools:
             if isinstance(entry, dict)
             and isinstance(entry.get("entity_id"), str)
             and entry["entity_id"].startswith("automation.")
-        ]
+        ][:10]
+
+    async def _raise_automation_not_found(self, identifier: str) -> None:
+        """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.
+
+        Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
+        by both the GET path (``_get_automation_config_internal``) and the
+        mutation paths (``ha_config_set_automation`` update branch,
+        ``ha_config_remove_automation``). Populates
+        ``available_automation_ids`` (up to 10) from the entity registry.
+        """
+        available_ids = await self._list_automation_entity_ids()
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Automation not found: {identifier}",
+                context={
+                    "automation_id": identifier,
+                    "available_automation_ids": available_ids,
+                },
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                ],
+            )
+        )
 
     async def _get_automation_config_internal(
         self, identifier: str
@@ -906,31 +938,16 @@ class AutomationConfigTools:
         Returns (normalized_config, config_hash) tuple.
         Used internally by _fetch_and_verify_hash and ha_config_get_automation.
 
-        Raises a structured ``RESOURCE_NOT_FOUND`` ToolError when the REST
-        client returns 404, populating ``available_automation_ids`` so
-        agents can recover without a separate search round-trip. Other
-        ``HomeAssistantAPIError`` instances propagate unchanged to caller
-        exception handlers (``exception_to_structured_error`` route).
+        Raises a structured ``RESOURCE_NOT_FOUND`` ToolError via
+        ``_raise_automation_not_found`` when the REST client returns 404.
+        Other ``HomeAssistantAPIError`` instances propagate unchanged to
+        caller exception handlers (``exception_to_structured_error`` route).
         """
         try:
             config_result = await self._client.get_automation_config(identifier)
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                available_ids = await self._list_automation_entity_ids()
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Automation not found: {identifier}",
-                        context={
-                            "automation_id": identifier,
-                            "available_automation_ids": available_ids[:10],
-                        },
-                        suggestions=[
-                            "Use ha_search_entities(domain_filter='automation') to find existing automations",
-                            "Verify the entity_id or unique_id is correct",
-                        ],
-                    )
-                )
+                await self._raise_automation_not_found(identifier)
             raise
         normalized_config = _normalize_config_for_roundtrip(config_result)
         config_hash_value = compute_config_hash(normalized_config)
@@ -1210,6 +1227,8 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_automation_not_found(identifier)
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "delete"},
