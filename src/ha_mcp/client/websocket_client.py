@@ -23,6 +23,7 @@ import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
     _is_ssl_error,
 )
@@ -58,6 +59,7 @@ class WebSocketConnectionState:
         )
         self._pending_requests[message_id] = future
         return future
+
     def resolve_pending_request(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]] | None:
@@ -262,7 +264,9 @@ class HomeAssistantWebSocketClient:
                 message_type="auth_required", timeout=5
             )
             if not auth_msg:
-                raise HomeAssistantConnectionError("Did not receive auth_required message")
+                raise HomeAssistantConnectionError(
+                    "Did not receive auth_required message"
+                )
 
             # Send authentication
             await self._send_auth()
@@ -511,7 +515,7 @@ class HomeAssistantWebSocketClient:
 
         except TimeoutError as e:
             self.cancel_pending_response(message_id)
-            raise Exception("Command timeout") from e
+            raise HomeAssistantCommandTimeout("Command timeout") from e
         except Exception:
             self.cancel_pending_response(message_id)
             raise
@@ -572,9 +576,7 @@ class HomeAssistantWebSocketClient:
             raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
         try:
-            event_response = await asyncio.wait_for(
-                event_future, timeout=wait_timeout
-            )
+            event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
         except TimeoutError:
             self.cancel_event_response(message_id)
             raise
@@ -639,13 +641,50 @@ class HomeAssistantWebSocketClient:
 
         error = response.get("error", {})
         error_msg = (
-            error.get("message", str(error))
-            if isinstance(error, dict)
-            else str(error)
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
         )
-        raise HomeAssistantCommandError(
-            f"subscribe_events failed: {error_msg}"
-        )
+        raise HomeAssistantCommandError(f"subscribe_events failed: {error_msg}")
+
+    async def unsubscribe_events(self, subscription_id: int) -> None:
+        """Release a subscription previously returned by ``subscribe_events``.
+
+        Used by short-lived waiters (``util_helpers.wait_for_*``) that need
+        to drop the subscription as soon as their event arrives so the
+        shared socket doesn't accumulate stale ``state_changed`` listeners.
+
+        Exception policy (narrow, distinct log levels — Gemini #1382):
+
+        - Transport-level loss (``OSError``): subscription is implicitly
+          gone with the connection. Logged at ``debug`` so HA-mid-restart
+          cleanup doesn't spam warnings.
+        - HA-side rejection (``HomeAssistantCommandError``, e.g. "Subscription
+          not found" after a server-side reset): unexpected during normal
+          cleanup. Logged at ``warning`` so a real subscription leak is
+          discoverable.
+        - Everything else: propagates to the caller's ``finally`` so a
+          programming bug (TypeError, AttributeError) fails loudly instead
+          of being buried under a broad ``except``.
+        """
+        if not self._state.is_ready:
+            logger.debug(
+                "unsubscribe_events(%s) skipped: WebSocket not ready",
+                subscription_id,
+            )
+            return
+        try:
+            await self.send_command("unsubscribe_events", subscription=subscription_id)
+        except OSError as e:
+            logger.debug(
+                "unsubscribe_events(%s): transport lost during cleanup: %s",
+                subscription_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.warning(
+                "unsubscribe_events(%s) rejected by HA: %s",
+                subscription_id,
+                e,
+            )
 
     def add_event_handler(
         self,
@@ -721,7 +760,6 @@ class HomeAssistantWebSocketClient:
         return self._state.is_ready
 
 
-
 MAX_POOL_SIZE = 50
 
 
@@ -755,7 +793,8 @@ class WebSocketManager:
     def configure(
         self,
         *,
-        client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None,
+        client_factory: Callable[[str, str], HomeAssistantWebSocketClient]
+        | None = None,
     ) -> None:
         """Configure the manager with injectable dependencies."""
         if client_factory is not None:
