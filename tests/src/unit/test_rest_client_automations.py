@@ -317,6 +317,8 @@ class TestPollForAutomationEntity:
         async def fake_sleep(duration: float) -> None:
             return None
 
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
-            with pytest.raises(TypeError, match="bug"):
-                await mock_client._poll_for_automation_entity("unique_42")
+        with (
+            patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep),
+            pytest.raises(TypeError, match="bug"),
+        ):
+            await mock_client._poll_for_automation_entity("unique_42")
