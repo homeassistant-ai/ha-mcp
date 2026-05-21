@@ -435,10 +435,15 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
     """Get-or-create the singleton BackupManager attached to ``client``.
 
     Stored on the client object so tools that share a client share one
-    manager (and one set of per-entity locks).
+    manager (and one set of per-entity locks). Rebuilds when the
+    ``settings`` object identity differs from the cached manager's —
+    runtime env-var changes that reset the global settings singleton
+    (see ``config._reset_global_settings``) yield a fresh ``settings``
+    instance, which forces a manager rebuild so the new
+    ``enable_auto_backup`` / throttle / retention values take effect.
     """
     mgr = getattr(client, "_auto_backup_manager", None)
-    if mgr is None:
+    if mgr is None or mgr._settings is not settings:
         mgr = BackupManager(settings, client)
         register_default_handlers(mgr, client)
         try:
