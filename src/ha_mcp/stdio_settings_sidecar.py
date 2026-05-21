@@ -47,7 +47,7 @@ import socket
 import subprocess
 import sys
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -159,6 +159,71 @@ def _existing_sidecar_alive() -> bool:
     return _pid_alive(pid)
 
 
+def _spawn_lock_path() -> Path:
+    return _sidecar_dir() / "spawn.lock"
+
+
+@contextlib.contextmanager
+def _spawn_lock() -> Iterator[bool]:
+    """Yield True if this caller holds the spawn lock, False if another holds it.
+
+    Serializes concurrent ``maybe_spawn()`` calls so two parent stdio
+    processes starting in rapid succession can't both clear the
+    ``_existing_sidecar_alive()`` check and ``Popen`` a child — the
+    loser of which would race on ``bind()`` and crash into ``sidecar.log``.
+
+    Non-blocking: a caller that can't acquire the lock returns False
+    immediately and the parent should skip spawning (the holding
+    parent is doing it). Released on context exit. Lock file lives at
+    ``~/.ha-mcp/spawn.lock`` (mode 0o600).
+
+    Falls back to no-op (yields True) if the OS-specific lock primitive
+    isn't available or fails — better to risk the rare race than to
+    refuse to spawn at all on an exotic platform.
+    """
+    lock_path = _spawn_lock_path()
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        logger.debug("Cannot open spawn lock file %s; proceeding unlocked", lock_path, exc_info=True)
+        yield True
+        return
+
+    try:
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            try:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            except OSError:
+                logger.debug("fcntl.flock failed on %s; proceeding unlocked", lock_path, exc_info=True)
+                yield True
+                return
+            try:
+                yield True
+            finally:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def _pick_free_port() -> int:
     """Bind a transient socket to an ephemeral port and return it.
 
@@ -179,8 +244,9 @@ def maybe_spawn() -> None:
 
     Called once from stdio ``main()`` after argument validation. No-op
     when the sidecar is disabled (env var or sentinel), when another
-    sidecar is already alive, or when subprocess spawn raises (best
-    effort; the MCP server continues regardless).
+    sidecar is already alive, when a concurrent parent already holds
+    the spawn lock, or when subprocess spawn raises (best effort; the
+    MCP server continues regardless).
     """
     if _is_disabled():
         logger.info(
@@ -189,13 +255,40 @@ def maybe_spawn() -> None:
         )
         return
 
-    if _existing_sidecar_alive():
-        url = read_sidecar_url()
-        if url:
-            print(f"ha-mcp settings UI already running at: {url}", file=sys.stderr)
-        logger.info("Settings UI sidecar already running; skipping spawn.")
-        return
+    # Serialize concurrent spawn attempts. Two parent stdio processes
+    # starting in rapid succession (e.g. user launching Claude Desktop
+    # then Claude Code back-to-back) could both clear the alive-check
+    # and Popen — the loser's child would race on bind() and die into
+    # sidecar.log. The lock ensures only one parent runs the
+    # alive-check + Popen window at a time.
+    with _spawn_lock() as acquired:
+        if not acquired:
+            logger.info(
+                "Another parent process is currently spawning the sidecar; skipping."
+            )
+            return
 
+        # Re-check alive *inside* the lock — a concurrent parent that
+        # held the lock just before us may have already spawned a
+        # sidecar that has now written its pid file.
+        if _existing_sidecar_alive():
+            url = read_sidecar_url()
+            if url:
+                print(
+                    f"ha-mcp settings UI already running at: {url}", file=sys.stderr
+                )
+            logger.info("Settings UI sidecar already running; skipping spawn.")
+            return
+
+        _do_spawn()
+
+
+def _do_spawn() -> None:
+    """Inner spawn — assumes the spawn lock is held and alive-check failed.
+
+    Extracted from :func:`maybe_spawn` so the context manager doesn't
+    indent the full Popen block.
+    """
     # Clean stale pid/url files from a previous crash before spawning.
     for stale in (_pid_file(), _url_file()):
         with contextlib.suppress(FileNotFoundError, OSError):

@@ -486,3 +486,155 @@ class TestDumpCacheFailurePath:
 
         monkeypatch.setattr(Path, "write_text", _raise)
         assert dump_tool_metadata_cache([{"name": "x"}]) is False
+
+
+class TestSpawnLock:
+    """``_spawn_lock`` serializes concurrent ``maybe_spawn()`` callers.
+
+    The race Patch76 flagged: two parent stdio processes starting in
+    rapid succession can both clear the ``_existing_sidecar_alive()``
+    check and ``Popen`` a child; the loser's child then races on
+    ``bind()`` and crashes into ``sidecar.log``. The lock makes the
+    alive-check-plus-Popen window mutually exclusive across parents.
+    """
+
+    def test_second_holder_sees_lock_unacquired(self, tmp_data_dir: Path) -> None:
+        """A second context-manager entry while the first is open MUST yield False."""
+        with sidecar._spawn_lock() as first_acquired:
+            assert first_acquired is True
+            with sidecar._spawn_lock() as second_acquired:
+                assert second_acquired is False, (
+                    "Second concurrent _spawn_lock() must NOT acquire — "
+                    "two parents would both pass the alive-check and Popen, "
+                    "racing on bind()"
+                )
+
+    def test_lock_releases_on_context_exit(self, tmp_data_dir: Path) -> None:
+        """After the first holder exits, the lock is acquirable again."""
+        with sidecar._spawn_lock() as first:
+            assert first is True
+        with sidecar._spawn_lock() as second:
+            assert second is True
+
+    def test_maybe_spawn_held_lock_short_circuits(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If another parent already holds the spawn lock, maybe_spawn() MUST NOT Popen."""
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        with sidecar._spawn_lock() as held:
+            assert held is True
+            with patch("subprocess.Popen") as popen:
+                sidecar.maybe_spawn()
+            popen.assert_not_called()
+
+
+class TestDiscoverabilityFlow:
+    """Pin the end-to-end flow ha_get_overview's settings_url participates in.
+
+    Unit tests elsewhere check that ``ha_get_overview`` includes the URL
+    when ``read_sidecar_url()`` returns one — but they don't verify the
+    URL actually responds at ``/settings``. If the producer (run_main's
+    URL-file writer) and the consumer (the Starlette routes built by
+    _build_app) drift on the secret-path format or the route suffix,
+    Claude would hand users a dead link without any test failing. This
+    suite ties producer + consumer together.
+    """
+
+    def test_url_from_overview_serves_settings_page(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """The URL ``ha_get_overview`` surfaces MUST hit a real /settings page.
+
+        Equivalent to: spawn the sidecar, read ui.url like overview does,
+        fetch the page, get HTML back. Done in-process via TestClient
+        so we don't actually bind a port.
+        """
+        # Use a secret_path shape identical to what run_main() emits.
+        secret_token = "test_token_xyz"
+        secret_path = f"/private_{secret_token}"
+        port = 54321
+        url = f"http://127.0.0.1:{port}{secret_path}/settings"
+        (tmp_data_dir / "ui.url").write_text(url + "\n")
+
+        # The consumer side: ha_get_overview reads via read_sidecar_url.
+        # Confirm the producer's URL round-trips through the consumer
+        # unchanged — otherwise Claude hands the user a truncated URL.
+        surfaced = sidecar.read_sidecar_url()
+        assert surfaced == url
+
+        # The producer side: build the same Starlette app the sidecar
+        # would build with that secret_path, request the surfaced URL,
+        # and verify it returns the settings page (HTML).
+        from urllib.parse import urlparse
+
+        app = sidecar._build_app(host="127.0.0.1", port=port, secret_path=secret_path)
+        client = TestClient(app)
+        parsed = urlparse(surfaced)
+        resp = client.get(
+            parsed.path,
+            headers={"host": f"127.0.0.1:{port}"},
+        )
+        assert resp.status_code == 200, (
+            f"URL surfaced by ha_get_overview returns {resp.status_code} "
+            "from the actual sidecar Starlette app — the producer "
+            "(run_main URL writer) and consumer (Starlette routes) drift"
+        )
+        # Settings page is HTML; if it returns JSON something is wrong.
+        ctype = resp.headers.get("content-type", "")
+        assert ctype.startswith("text/html"), (
+            f"Settings URL must serve text/html; got {ctype!r}"
+        )
+        assert "<html" in resp.text.lower() or "<!doctype" in resp.text.lower()
+
+    def test_url_format_match_between_writer_and_route(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The URL run_main writes to disk must be exactly the path the app routes.
+
+        Catches: run_main changing the secret-path prefix from
+        ``/private_`` to anything else without updating _build_app, or
+        the suffix changing from ``/settings`` to anything else on
+        either side. We extract both via the same code paths the
+        sidecar uses at runtime.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda: 41234)
+
+        captured: dict[str, object] = {}
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self) -> None:
+                # Snapshot the URL the writer chose + the app's routes
+                # at the same instant the listener "starts".
+                captured["url"] = (tmp_data_dir / "ui.url").read_text().strip()
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+
+        rc = sidecar.run_main()
+        assert rc == 0
+        url = str(captured["url"])
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        # Rebuild the app with the secret_path the writer chose and
+        # confirm the parsed URL path resolves on it.
+        secret_path = parsed.path[: -len("/settings")]
+        assert secret_path.startswith("/private_"), (
+            f"writer emitted unexpected path shape: {parsed.path!r}"
+        )
+        app = sidecar._build_app(
+            host="127.0.0.1", port=parsed.port or 0, secret_path=secret_path
+        )
+        client = TestClient(app)
+        resp = client.get(
+            parsed.path,
+            headers={"host": f"127.0.0.1:{parsed.port}"},
+        )
+        assert resp.status_code == 200
