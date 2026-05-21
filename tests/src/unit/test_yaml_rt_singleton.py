@@ -22,7 +22,7 @@ sys.modules["homeassistant.helpers.config_validation"] = (
 )
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
-    _THREAD_LOCAL,
+    _STORAGE,
     make_yaml,
 )
 
@@ -30,11 +30,11 @@ from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
 @pytest.fixture(autouse=True)
 def clear_thread_local():
     """Ensure the thread-local storage is clean before each test."""
-    if hasattr(_THREAD_LOCAL, "yaml"):
-        del _THREAD_LOCAL.yaml
+    if hasattr(_STORAGE, "yaml"):
+        del _STORAGE.yaml
     yield
-    if hasattr(_THREAD_LOCAL, "yaml"):
-        del _THREAD_LOCAL.yaml
+    if hasattr(_STORAGE, "yaml"):
+        del _STORAGE.yaml
 
 
 def test_make_yaml_singleton_in_same_thread():
