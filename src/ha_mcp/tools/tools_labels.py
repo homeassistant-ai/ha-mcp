@@ -245,6 +245,18 @@ class LabelTools:
                     "message": f"Successfully {action_past} label: {name}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Label not found: {label_id}",
+                            context={"name": name, "label_id": label_id},
+                            suggestions=[
+                                "Use ha_config_get_label() without label_id to see all labels",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
@@ -322,6 +334,18 @@ class LabelTools:
                     "message": f"Successfully deleted label: {label_id}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Label not found: {label_id}",
+                            context={"label_id": label_id},
+                            suggestions=[
+                                "Use ha_config_get_label() without label_id to see all labels",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
