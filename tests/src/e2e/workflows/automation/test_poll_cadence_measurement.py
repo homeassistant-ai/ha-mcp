@@ -23,8 +23,8 @@ import statistics
 
 import pytest
 
+from ...conftest import record_poll_cadence_measurement
 from ...utilities.assertions import safe_call_tool
-from .conftest import record_poll_cadence_measurement
 
 logger = logging.getLogger(__name__)
 
