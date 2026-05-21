@@ -16,6 +16,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 
@@ -769,9 +770,7 @@ async def _ws_wait_for_condition(
             # failure modes (connection reset by another caller, send_command
             # timeout) so a cleanup hiccup never masks the wait's real result.
             # Narrow set — programming bugs (TypeError, AttributeError) must
-            # propagate. ``send_command`` currently raises a bare
-            # ``Exception("Command timeout")`` on timeout, which is matched
-            # by name here until that helper is fixed upstream.
+            # propagate.
             try:
                 await ws_client.unsubscribe_events(sub_id)
             except (HomeAssistantConnectionError, OSError, TimeoutError) as e:
@@ -781,19 +780,18 @@ async def _ws_wait_for_condition(
                     sub_id,
                     e,
                 )
-            except Exception as e:
-                # ``send_command`` raises bare Exception("Command timeout") on
-                # WS round-trip timeout. Treat that specifically as cleanup
-                # noise; anything else re-raises.
-                if str(e) == "Command timeout":
-                    logger.warning(
-                        "unsubscribe_events(%s) cleanup timed out on WS "
-                        "round-trip; subscription may leak until WS pool "
-                        "reconnects",
-                        sub_id,
-                    )
-                else:
-                    raise
+            except HomeAssistantCommandTimeout:
+                # ``send_command`` raises this when the WS round-trip exceeds
+                # its own 30s deadline (Patch76 review #1382 — typed
+                # replacement for the previous ``str(e) == "Command timeout"``
+                # string match). Treated as cleanup noise; the subscription
+                # may leak until the WS pool reconnects.
+                logger.warning(
+                    "unsubscribe_events(%s) cleanup timed out on WS "
+                    "round-trip; subscription may leak until WS pool "
+                    "reconnects",
+                    sub_id,
+                )
 
 
 async def wait_for_entity_registered(

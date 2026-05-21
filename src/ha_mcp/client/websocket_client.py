@@ -23,6 +23,7 @@ import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
     _is_ssl_error,
 )
@@ -514,7 +515,7 @@ class HomeAssistantWebSocketClient:
 
         except TimeoutError as e:
             self.cancel_pending_response(message_id)
-            raise Exception("Command timeout") from e
+            raise HomeAssistantCommandTimeout("Command timeout") from e
         except Exception:
             self.cancel_pending_response(message_id)
             raise

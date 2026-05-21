@@ -767,3 +767,27 @@ class TestWsPathUnsubscribeFailureTolerance:
         assert result is True
         # Both sub_ids were attempted even though both raised.
         assert ws_client.unsubscribed == [101, 102]
+
+    async def test_unsubscribe_command_timeout_does_not_mask_result(
+        self, ws_client, mock_client
+    ):
+        """If ``unsubscribe_events`` raises ``HomeAssistantCommandTimeout``
+        on cleanup (WS round-trip exceeded ``send_command``'s 30s
+        deadline), the wait must still return its real result and the
+        second sub_id must still be unsubscribed. Patch76 #1382 typed
+        replacement for the previous ``str(e) == "Command timeout"``
+        substring match."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+
+        mock_client.get_entity_state.return_value = {"state": "on"}
+        ws_client.set_unsubscribe_failure(
+            HomeAssistantCommandTimeout("Command timeout")
+        )
+
+        result = await wait_for_entity_registered(
+            mock_client, "light.test", timeout=2.0
+        )
+
+        assert result is True
+        # Both sub_ids attempted even though each raised CommandTimeout.
+        assert ws_client.unsubscribed == [101, 102]
