@@ -204,12 +204,13 @@ class TestLabelCRUD:
     async def test_get_nonexistent_label(self, mcp_client):
         """
         Test: ha_config_get_label with a nonexistent label_id returns a
-        structured error with code ENTITY_NOT_FOUND, not success=True.
+        structured error with code RESOURCE_NOT_FOUND, not success=True.
 
         Source path: tools_labels.py — after listing labels via WebSocket,
         the requested label_id is looked up in the result. When absent,
-        raise_tool_error is invoked with ErrorCode.ENTITY_NOT_FOUND and the
-        message "Label not found: ...".
+        raise_tool_error is invoked with ErrorCode.RESOURCE_NOT_FOUND and
+        the message "Label not found: ..." (labels are registry metadata,
+        not entities — RESOURCE_NOT_FOUND is the correct category per #1297).
 
         Hardened from success-only check to explicit error-code and
         message-substring assertions.
@@ -225,8 +226,8 @@ class TestLabelCRUD:
         assert data.get("success") is False, (
             f"Should fail for non-existent label: {data}"
         )
-        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
-            f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data['error']}"
         )
         assert "suggestion" in data["error"], (
             "Error response should include a suggestion"
