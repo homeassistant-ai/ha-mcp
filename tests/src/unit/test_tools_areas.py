@@ -244,9 +244,12 @@ class TestHaConfigListAreasFieldsProjection:
         assert "success" in result
         assert result["success"] is True
 
-    async def test_unknown_field_silently_omitted(self, tools):
+    async def test_unknown_field_emits_warning(self, tools):
+        """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
         result = await tools.ha_config_list_areas(fields=["nonexistent_key"])
-        assert set(result.keys()) == {"success"}
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any("nonexistent_key" in w for w in result["warnings"])
 
     async def test_bad_fields_integer_raises_tool_error(self, tools):
         """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.

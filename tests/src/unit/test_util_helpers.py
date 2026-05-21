@@ -1392,3 +1392,66 @@ class TestAddTimezoneMetadata:
         # Wrapper is still present; timezone is the fallback sentinel
         assert "data" in result
         assert result["metadata"]["home_assistant_timezone"] == "Unknown"
+
+
+class TestProjectFieldsTypoGuard:
+    """project_fields() typo guard: warn when requested top-level keys are absent.
+
+    Pins kingpanther13 v11 fix: project_fields() must emit a diagnostic in
+    warnings[] when any requested key doesn't exist, rather than returning a
+    mysteriously empty response (e.g. fields=["entity_history"] on a response
+    whose real key is "entities").
+    """
+
+    def test_unknown_fields_key_emits_warning(self):
+        """All unknown keys: success + warnings listing the available keys."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["nonexistent_key"])
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any("nonexistent_key" in w for w in result["warnings"])
+        # Available keys hint should mention real keys
+        assert any("entities" in w for w in result["warnings"])
+
+    def test_partial_unknown_key_warns_about_missing_only(self):
+        """Mixed valid+invalid: valid key is kept; diagnostic names the unknown one."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["entities", "typo_key"])
+        assert "entities" in result
+        assert result["entities"] == [1, 2]
+        assert "warnings" in result
+        assert any("typo_key" in w for w in result["warnings"])
+        # "entities" is valid — should not appear in the unknown list
+        warn_text = " ".join(result["warnings"])
+        assert "entities" not in warn_text.split("not found")[0]
+
+    def test_all_valid_fields_no_warning(self):
+        """When all requested keys exist, no warning is emitted."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["entities"])
+        assert "entities" in result
+        assert "warnings" not in result
+
+    def test_success_field_request_no_false_warning(self):
+        """fields=["success"] must not warn — success is force-retained, not unknown."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "count": 5}
+        result = project_fields(data, ["success"])
+        assert result["success"] is True
+        assert "warnings" not in result
+
+    def test_warning_survives_projection_because_warnings_is_force_retained(self):
+        """The warning added by the typo guard is itself force-retained."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        data = {"success": True, "entities": [1, 2], "count": 2}
+        result = project_fields(data, ["ghost_key"])
+        # warnings must be in the output even though it was not in fields=
+        assert "warnings" in result

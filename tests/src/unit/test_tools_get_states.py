@@ -487,3 +487,157 @@ class TestHaGetStateFieldsValidation:
         assert error["error"]["code"] == "VALIDATION_FAILED"
         # parameter is surfaced at the top level of the error response
         assert error.get("parameter") == "attribute_keys"
+
+
+class TestAttributeKeysTypoGuardSingleEntity:
+    """attribute_keys typo guard: warn when filtered attrs empty but original had keys.
+
+    Mirrors the *_fields typo guard added in v11 — if an agent writes
+    attribute_keys=["brightnes"] (typo for "brightness") it gets a diagnostic
+    listing the available keys rather than a silent attributes: {}.
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.bedroom",
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp": 3500},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def ha_get_state(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_attribute_key_emits_warning(self, ha_get_state):
+        """attribute_keys with only unknown keys emits a diagnostic in warnings[].
+
+        Reproduces kingpanther13 v11 repro: ha_get_state("light.bedroom",
+        attribute_keys=["nonexistent_attr"]) must surface a warning rather than
+        silently returning attributes: {}.
+        """
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["nonexistent_attr"],
+        )
+        assert result["data"]["attributes"] == {}
+        assert "warnings" in result, (
+            "Expected warnings at top-level when attribute filter empties attrs"
+        )
+        assert any("attribute_keys" in w for w in result["warnings"]), (
+            f"Expected attribute_keys diagnostic in warnings, got: {result['warnings']}"
+        )
+        # Available keys hint must mention the real attribute names
+        assert any("brightness" in w for w in result["warnings"]), (
+            "Available keys hint should include 'brightness'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_known_attribute_key_no_warning(self, ha_get_state):
+        """When attribute_keys matches at least one key, no warning is emitted."""
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["brightness"],
+        )
+        assert result["data"]["attributes"] == {"brightness": 200}
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_mixed_known_unknown_attribute_keys_no_warning(self, ha_get_state):
+        """Partial match (some keys found) does not trigger the typo guard."""
+        result = await ha_get_state(
+            entity_id="light.bedroom",
+            attribute_keys=["brightness", "nonexistent"],
+        )
+        # brightness matched — attrs is non-empty, so no warning
+        assert result["data"]["attributes"] == {"brightness": 200}
+        assert "warnings" not in result
+
+
+class TestAttributeKeysTypoGuardBulk:
+    """Bulk-path attribute_keys typo guard."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_entity_state = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "state": "on",
+                "attributes": {"brightness": 255, "color_temp": 4000},
+            }
+        )
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        return client
+
+    @pytest.fixture
+    def get_states_tool(self, mock_mcp, mock_client):
+        register_search_tools(mock_mcp, mock_client, smart_tools=MagicMock())
+        return self.registered_tools["ha_get_state"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_attribute_key_bulk_emits_warning(self, get_states_tool):
+        """Bulk: attribute_keys typo surfaces as a top-level warning."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            attribute_keys=["typo_attr"],
+        )
+        data = result["data"]
+        assert data["states"]["light.kitchen"]["attributes"] == {}
+        assert "warnings" in data
+        assert any("attribute_keys" in w for w in data["warnings"])
+        assert any("brightness" in w for w in data["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_known_attribute_key_bulk_no_warning(self, get_states_tool):
+        """Bulk: no warning when attribute_keys matches at least one key."""
+        result = await get_states_tool(
+            entity_id=["light.kitchen"],
+            attribute_keys=["brightness"],
+        )
+        data = result["data"]
+        assert data["states"]["light.kitchen"]["attributes"] == {"brightness": 255}
+        assert "warnings" not in data
+
+
+# Note: project_fields() typo-guard unit tests live in test_util_helpers.py
+# (TestProjectFieldsTypoGuard). ha_get_state uses _project_entity for its
+# fields= parameter — not project_fields — so integration tests through
+# ha_get_state cannot reach the project_fields code path.

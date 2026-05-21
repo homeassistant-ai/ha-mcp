@@ -40,10 +40,13 @@ class TestProjectFields:
         assert "success" in result
         assert result["success"] is True
 
-    def test_unknown_field_silently_omitted(self):
+    def test_unknown_field_emits_warning(self):
+        """Unknown fields key now emits a warning instead of being silently dropped."""
         data = {"success": True, "results": []}
         result = project_fields(data, ["nonexistent"])
-        assert set(result.keys()) == {"success"}
+        assert result["success"] is True
+        assert "warnings" in result
+        assert any("nonexistent" in w for w in result["warnings"])
 
     def test_empty_fields_list_returns_only_success(self):
         data = {"success": True, "results": [], "count": 0}

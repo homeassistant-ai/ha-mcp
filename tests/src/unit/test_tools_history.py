@@ -173,7 +173,8 @@ class TestHaGetHistoryFieldsProjection:
         assert result["data"]["success"] is True
 
     @pytest.mark.asyncio
-    async def test_unknown_field_silently_omitted(self, history_tool):
+    async def test_unknown_field_emits_warning(self, history_tool):
+        """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
         with (
             self._ws_patch(),
             patch(
@@ -185,7 +186,10 @@ class TestHaGetHistoryFieldsProjection:
             result = await history_tool(
                 entity_ids="sensor.temp", fields=["nonexistent"]
             )
-        assert set(result["data"].keys()) == {"success"}
+        data = result["data"]
+        assert data["success"] is True
+        assert "warnings" in data
+        assert any("nonexistent" in w for w in data["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, history_tool):
@@ -325,7 +329,8 @@ class TestHaGetHistoryStatisticsFieldsProjection:
         assert result["data"]["success"] is True
 
     @pytest.mark.asyncio
-    async def test_unknown_field_omitted(self, history_tool):
+    async def test_unknown_field_emits_warning(self, history_tool):
+        """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
         with (
             self._ws_patch(),
             patch(
@@ -337,7 +342,10 @@ class TestHaGetHistoryStatisticsFieldsProjection:
             result = await history_tool(
                 entity_ids="sensor.energy", source="statistics", fields=["nonexistent"]
             )
-        assert set(result["data"].keys()) == {"success"}
+        data = result["data"]
+        assert data["success"] is True
+        assert "warnings" in data
+        assert any("nonexistent" in w for w in data["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, history_tool):

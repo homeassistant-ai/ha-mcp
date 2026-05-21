@@ -291,16 +291,31 @@ def project_fields(
 ) -> dict[str, Any]:
     """Apply optional field projection to a response data dict.
 
-    Always retains ``success`` and ``warnings``. Unknown keys in *fields* are
-    silently dropped.  Accepts a list or a CSV/JSON-array string for *fields*.
-    Apply to the inner payload before any outer wrapper that adds top-level keys
-    you want to preserve.
+    Always retains ``success`` and ``warnings``.  Accepts a list or a
+    CSV/JSON-array string for *fields*.  Apply to the inner payload before any
+    outer wrapper that adds top-level keys you want to preserve.
+
+    Typo guard: if any requested key does not exist in *data* (excluding the
+    always-retained ``success``/``warnings`` keys), a diagnostic is appended to
+    ``result["warnings"]`` listing the unknown keys and the available ones.
+    This mirrors the per-record ``result_fields_warning`` guard and ensures
+    callers get a signal rather than a mysteriously empty response.
     """
     if fields is None:
         return data
     parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
     keep = set(parsed) | {"success", "warnings"}
-    return {k: v for k, v in data.items() if k in keep}
+    result = {k: v for k, v in data.items() if k in keep}
+    # Typo guard — flag any requested keys that are absent from the response.
+    # Exclude the always-retained sentinels so fields=["success"] never warns.
+    _force_retain = {"success", "warnings"}
+    unknown = sorted(set(parsed) - set(data.keys()) - _force_retain)
+    if unknown:
+        available = sorted(k for k in data.keys() if k not in _force_retain)
+        result.setdefault("warnings", []).append(
+            f"fields {unknown!r} not found in response — available keys: {available!r}"
+        )
+    return result
 
 
 def project_records(

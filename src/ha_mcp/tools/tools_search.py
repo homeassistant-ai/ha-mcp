@@ -170,12 +170,19 @@ def _project_entity(
     record: dict[str, Any],
     fields: list[str] | None,
     attribute_keys: list[str] | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str | None]:
     """Apply optional field projection to a HA entity record.
 
     ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
     ``attribute_keys`` further filters the ``attributes`` sub-dict.
     Both default None = full payload (no-op).
+
+    Returns ``(projected_record, warning_string | None)``.  *warning_string* is
+    non-None when ``attribute_keys`` was specified, the original ``attributes``
+    dict was non-empty, and the filter produced an empty result — i.e. the caller
+    supplied only unknown attribute keys (typo guard).  Callers should append the
+    warning to the response ``warnings`` list so the user receives a diagnostic
+    rather than a silently empty ``attributes: {}``.
 
     Both parameters are already parsed into ``list[str] | None`` — string/CSV inputs
     must be normalised at the call site via ``parse_string_list_param`` (see
@@ -193,22 +200,38 @@ def _project_entity(
     ``warning``-level log line records the short-circuit so it is visible
     at default log levels. The bulk path shares this helper, so
     both single- and bulk-entity calls behave identically here. This is
-    deliberately silent (no warning to the caller) because malformed
+    deliberately silent (no caller-facing warning) because malformed
     ``attributes`` is rare and the call still produces a usable record.
     """
     if not isinstance(record, dict):
-        return record  # non-dict (e.g. error path returning None) — skip projection
+        return (
+            record,
+            None,
+        )  # non-dict (e.g. error path returning None) — skip projection
     if fields is not None:
         keep = set(fields)
         record = {k: v for k, v in record.items() if k in keep}
+    attr_warn: str | None = None
     if attribute_keys is not None:
         attrs = record.get("attributes")
         if isinstance(attrs, dict):
             attr_keep = set(attribute_keys)
-            record = {
-                **record,
-                "attributes": {k: v for k, v in attrs.items() if k in attr_keep},
-            }
+            filtered_attrs = {k: v for k, v in attrs.items() if k in attr_keep}
+            # Typo guard: if the original had keys AND the caller specified at least
+            # one key AND the filter yielded nothing, the caller likely mistyped an
+            # attribute name.  Return a diagnostic so the agent gets
+            # "attributes came out empty — available: [...]" instead of silently
+            # receiving ``attributes: {}``.
+            # Exclude the attribute_keys=[] case — an empty list is an explicit
+            # "keep nothing" request, not a typo.
+            if attrs and attribute_keys and not filtered_attrs:
+                available = sorted(attrs.keys())
+                attr_warn = (
+                    f"attribute_keys {sorted(attribute_keys)!r} matched no attribute "
+                    f"keys — attributes came out empty. "
+                    f"Available keys: {available!r}"
+                )
+            record = {**record, "attributes": filtered_attrs}
         elif "attributes" in record:
             # ``attributes`` is present but not a dict — filter cannot apply.
             # Log at warning so the no-op is visible at default log levels
@@ -219,7 +242,7 @@ def _project_entity(
                 type(attrs).__name__,
                 list(record.keys()),
             )
-    return record
+    return record, attr_warn
 
 
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -1645,7 +1668,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
-                entity_record = _project_entity(
+                entity_record, attr_warn = _project_entity(
                     result, parsed_fields, parsed_attribute_keys
                 )
                 # Always wrap (include_metadata=True); callers and tests rely on
@@ -1671,6 +1694,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         "fields=. Add 'attributes' to fields= (or omit fields=) to "
                         "apply attribute_keys."
                     )
+                if attr_warn:
+                    wrapped.setdefault("warnings", []).append(attr_warn)
                 return wrapped
             except ToolError:
                 raise
@@ -1739,12 +1764,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             states: dict[str, Any] = {}
             errors: list[dict[str, Any]] = []
+            _bulk_attr_warns: list[str] = []
 
             for eid, result in zip(unique_ids, results, strict=True):
                 if result.get("success") is True and "state" in result:
-                    states[eid] = _project_entity(
+                    state_record, attr_warn = _project_entity(
                         result["state"], parsed_fields, parsed_attribute_keys
                     )
+                    states[eid] = state_record
+                    # Collect unique attribute-typo warnings across entities
+                    # (different entities may report different available keys).
+                    if attr_warn and attr_warn not in _bulk_attr_warns:
+                        _bulk_attr_warns.append(attr_warn)
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:
@@ -1771,6 +1802,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "fields=. Add 'attributes' to fields= (or omit fields=) to "
                     "apply attribute_keys."
                 )
+
+            for _w in _bulk_attr_warns:
+                response.setdefault("warnings", []).append(_w)
 
             if errors:
                 response["errors"] = errors
