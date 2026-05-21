@@ -318,19 +318,35 @@ def _do_spawn() -> None:
         "close_fds": True,
     }
     if sys.platform == "win32":
-        # Detach from the parent console so closing the parent doesn't
-        # take the child down with it. CREATE_NEW_PROCESS_GROUP also
-        # prevents the parent's CTRL_C_EVENT (issued by the console
-        # window) from reaching the child process group.
-        # CREATE_NO_WINDOW suppresses the empty console window that
-        # ``python.exe`` (a console app) would otherwise pop up under
-        # Claude Desktop — DETACHED_PROCESS by itself doesn't reuse
-        # the parent's console, it just creates a fresh one.
+        # Prefer ``pythonw.exe`` over ``python.exe``. pythonw is the
+        # GUI-subsystem Python interpreter — Windows never allocates a
+        # console window for it. Falls back to python.exe if pythonw
+        # isn't alongside (rare; most CPython distributions ship both,
+        # including the uv-installed Python that uvx uses).
+        #
+        # Why not DETACHED_PROCESS: the prior attempt used
+        # ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW``
+        # and the cmd window still popped under Claude Desktop. Python's
+        # subprocess docs spell out that ``CREATE_NO_WINDOW`` is
+        # IGNORED when ``DETACHED_PROCESS`` is set, and
+        # ``DETACHED_PROCESS`` on a CUI binary auto-allocates a fresh
+        # visible console. pythonw avoids the whole console-allocation
+        # path.
+        #
+        # CREATE_NEW_PROCESS_GROUP is still useful: closing any console
+        # that happens to be attached (if pythonw isn't found and we
+        # fall back to python.exe) sends ``CTRL_CLOSE_EVENT`` to the
+        # console's process group. Putting the child in its own group
+        # prevents that event from killing the sidecar.
+        # CREATE_NO_WINDOW is belt-and-suspenders for the python.exe
+        # fallback path — harmless when pythonw is in use.
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        cmd_python = str(pythonw) if pythonw.exists() else sys.executable
         popen_kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
-            | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
             | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
         )
+        cmd = [cmd_python, "-m", "ha_mcp.stdio_settings_sidecar"]
     else:
         # New session leader → parent SIGTERM / shell exit doesn't
         # cascade. Detaches from the parent's session so SIGHUP /
@@ -339,8 +355,7 @@ def _do_spawn() -> None:
         # isn't needed here since the parent stdio process already has
         # no TTY to inherit.
         popen_kwargs["start_new_session"] = True
-
-    cmd = [sys.executable, "-m", "ha_mcp.stdio_settings_sidecar"]
+        cmd = [sys.executable, "-m", "ha_mcp.stdio_settings_sidecar"]
     try:
         proc = subprocess.Popen(cmd, **popen_kwargs)
     except OSError:
