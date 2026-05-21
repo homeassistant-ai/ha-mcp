@@ -246,7 +246,7 @@ class LabelTools:
                 }
             else:
                 error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str:
+                if "not found" in error_str or "doesn't exist" in error_str:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.RESOURCE_NOT_FOUND,
@@ -335,7 +335,7 @@ class LabelTools:
                 }
             else:
                 error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str:
+                if "not found" in error_str or "doesn't exist" in error_str:
                     raise_tool_error(
                         create_error_response(
                             ErrorCode.RESOURCE_NOT_FOUND,

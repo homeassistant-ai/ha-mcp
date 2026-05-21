@@ -340,6 +340,25 @@ class TestCategoryMutationRoutesNotFoundToResourceNotFound:
             "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
         )
 
+    async def test_remove_with_doesnt_exist_phrasing(self, tools, mock_ws_client):
+        """HA Core's category-registry remove path surfaces the not-found case
+        with the phrasing ``"Category ID doesn't exist"`` rather than the more
+        common ``"not found"`` (observed live in PR #1397 CI on commit 70b9edf).
+        The substring check must accept both phrasings.
+        """
+        mock_ws_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": "Category ID doesn't exist",
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_category(
+                scope="automation", category_id="missing"
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+
 
 class TestZoneMutationRoutesNotFoundToResourceNotFound:
     """Zone set-update / remove with a non-existent ``zone_id`` must surface
