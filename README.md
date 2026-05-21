@@ -354,6 +354,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
 - **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` proxy mode on addon installs.
 - **[@tomwilkie](https://github.com/tomwilkie)** — JMESPath middleware exploration (#1147) whose review-time token-measurement data informed the design of #1199 and #1225.
+- **[@SealKan](https://github.com/SealKan)** — `fields=`/`attribute_keys=` projection on six read-heavy tools (#1225), `ha_call_event` tool (#1239), and dashboards-list helper refactor (#1207).
+- **[@KarelTestSpecial](https://github.com/KarelTestSpecial)** — Cached YAML instance to prevent CPU spikes during bulk edits (#1371).
+- **[@corgan2222](https://github.com/corgan2222)** — HA brand assets for custom integration (#1317).
+- **[@drseanwing](https://github.com/drseanwing)** — Progress emission via FastMCP `Context` in long-running tools (#1124); tool-discovery / categorized-search docs (#1123).
+- **[@fnordpig](https://github.com/fnordpig)** — Config subentry support (#1393) and Assist pipeline management tool (#1392).
+- **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_addon` for atomic GET-modify-POST (#1063).
 
 ---
 
