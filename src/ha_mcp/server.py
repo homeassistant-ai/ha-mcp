@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
 from mcp.types import Icon
 from pydantic import Field
