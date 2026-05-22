@@ -13,6 +13,7 @@ interface end-to-end.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -47,6 +48,18 @@ def _backups_for(
     entries: list[dict[str, Any]], *, domain: str, entity_id: str
 ) -> list[dict[str, Any]]:
     return [e for e in entries if e["domain"] == domain and e["entity_id"] == entity_id]
+
+
+# Fixed delay between create and edit to let HA's WS-backed registries
+# index the freshly-created entity before the decorator's pre-edit
+# fetch fires. The decorator is best-effort: if fetch returns None
+# (entity not in the registry list yet), the snapshot is silently
+# skipped — and polling the backup file afterwards can't recover that.
+# 2 s is the empirically-stable mark on HAOS testcontainer runners;
+# automation's REST upsert path settles faster and doesn't need this,
+# but every WS-backed domain (label, category, zone, area, helper,
+# dashboard_resource) does.
+_HA_PROPAGATION_SETTLE_SECONDS = 2.0
 
 
 async def _wait_for_backup(
@@ -267,6 +280,9 @@ class TestHelperCaptureRestore:
             },
         )
         assert create.get("success") is not False
+        # Let HA index the new helper before the edit fires; otherwise the
+        # decorator's pre-edit fetch via ``input_boolean/list`` may miss it.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
         # Edit so capture fires (the create call may or may not capture
         # depending on whether helper_id is None — edit definitely does).
         edit = await safe_call_tool(
@@ -354,6 +370,9 @@ class TestComplexHelperCaptureRestore:
         }
         create = await safe_call_tool(mcp_client, "ha_config_set_helper", original)
         assert create.get("success") is not False
+        # Let HA index the new helper before the edit fires; the decorator's
+        # pre-edit fetch via ``schedule/list`` needs the entity present.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         # Edit — shrink Monday, split Tuesday, drop Wednesday entirely.
         # ``name`` is required by HA's schedule schema on every update
@@ -451,6 +470,8 @@ class TestDashboardCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"dashboard create unsupported on this HA: {create}")
+        # Let HA settle the new lovelace config before the edit fires.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
         # Edit so the decorator captures the pre-edit state.
         await safe_call_tool(
             mcp_client,
@@ -517,6 +538,8 @@ class TestScriptCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"script create unsupported: {create}")
+        # Settle so the decorator's pre-edit fetch finds the script.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
         # Edit triggers capture.
         await safe_call_tool(
             mcp_client,
@@ -583,6 +606,8 @@ class TestSceneCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"scene create unsupported: {create}")
+        # Settle so the decorator's pre-edit fetch finds the scene.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
         await safe_call_tool(
             mcp_client,
             "ha_config_set_scene",
@@ -716,6 +741,8 @@ class TestLabelCaptureRestore:
             pytest.skip(f"label create unsupported: {create}")
         label_id = create.get("data", {}).get("label_id") or create.get("label_id")
         assert label_id, f"label_id missing from create response: {create}"
+        # Settle so the decorator's pre-edit fetch finds the label.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         # Edit — change name + color so capture fires.
         edit = await safe_call_tool(
@@ -787,6 +814,8 @@ class TestCategoryCaptureRestore:
         cat_id = create.get("data", {}).get("category_id") or create.get("category_id")
         assert cat_id, f"category_id missing: {create}"
         composite = f"{scope}:{cat_id}"
+        # Settle so the decorator's pre-edit fetch finds the category.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         edit = await safe_call_tool(
             mcp_client,
@@ -859,6 +888,8 @@ class TestZoneCaptureRestore:
             pytest.skip(f"zone create unsupported: {create}")
         zone_id = create.get("data", {}).get("zone_id") or create.get("zone_id")
         assert zone_id, f"zone_id missing: {create}"
+        # Settle so the decorator's pre-edit fetch finds the zone.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         edit = await safe_call_tool(
             mcp_client,
@@ -926,6 +957,8 @@ class TestAreaCaptureRestore:
         area_id = create.get("data", {}).get("area_id") or create.get("area_id")
         assert area_id, f"area_id missing: {create}"
         composite = f"area:{area_id}"
+        # Settle so the decorator's pre-edit fetch finds the area.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         edit = await safe_call_tool(
             mcp_client,
@@ -995,6 +1028,8 @@ class TestGroupCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"group create unsupported: {create}")
+        # Settle so the decorator's pre-edit fetch finds the group state.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         edit = await safe_call_tool(
             mcp_client,
@@ -1132,6 +1167,8 @@ class TestDashboardResourceCaptureRestore:
             "resource_id"
         )
         assert resource_id, f"resource_id missing: {create}"
+        # Settle so the decorator's pre-edit fetch finds the resource.
+        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
         # Edit — change the URL so capture fires.
         edit = await safe_call_tool(

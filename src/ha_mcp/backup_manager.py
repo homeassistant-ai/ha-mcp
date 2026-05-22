@@ -870,11 +870,12 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     )
 
 
-# Zones — config/zone/{list,update}
+# Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API;
+# matches ``tools_zones.py`` which is the authoritative usage).
 
 
 async def _fetch_zone(client: Any, entity_id: str) -> Any:
-    items = await _ws_send(client, {"type": "config/zone/list"})
+    items = await _ws_send(client, {"type": "zone/list"})
     if not isinstance(items, list):
         return None
     for item in items:
@@ -885,7 +886,7 @@ async def _fetch_zone(client: Any, entity_id: str) -> Any:
 
 async def _restore_zone(client: Any, entity_id: str, config: Any) -> Any:
     payload = {k: v for k, v in config.items() if k != "id"}
-    payload["type"] = "config/zone/update"
+    payload["type"] = "zone/update"
     payload["zone_id"] = config.get("id", entity_id)
     return await _ws_send(client, payload)
 
