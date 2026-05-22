@@ -278,10 +278,17 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
     Raises OSError on filesystem failure — same surface as the previous
     ``path.write_text`` so caller try/except shapes don't need updating.
+    On failure, the ``.tmp`` file is cleaned up so a previous partial
+    write does not accumulate next to the real file.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2))
-    os.replace(str(tmp), str(path))
+    try:
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(str(tmp), str(path))
+    except OSError:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            tmp.unlink()
+        raise
 
 
 def save_tool_config(config: dict[str, Any]) -> bool:
@@ -1924,7 +1931,6 @@ def build_settings_handlers(
             _FEATURE_FLAG_INT_BOUNDS,
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
             get_feature_flag_origin,
         )
         from .utils.data_paths import get_data_dir

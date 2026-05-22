@@ -599,28 +599,66 @@ def get_backup_setting_origin(env_name: str) -> str:
 def _read_backup_override_file() -> dict[str, object]:
     """Return the contents of the auto-backup override file, or ``{}``.
 
-    Malformed JSON / missing file / unreadable file all return ``{}``
-    silently; the override file is best-effort and a corrupt file
-    should not break Settings loading. Reads are not cached — callers
-    (Settings construction, the GET endpoint) hit disk each time, which
-    is fine for a small JSON file behind a singleton-cached Settings.
+    Best-effort: a corrupt file MUST NOT break Settings loading. The
+    failure modes split into two categories that need different
+    treatment (mirrors ``_read_feature_flag_override_file``):
+
+    * **Silent**: file does not exist. The override layer is opt-in;
+      a missing file is the normal "user has never edited" state and
+      should not log.
+    * **Loud (WARNING)**: file exists but is unreadable
+      (``PermissionError``, broken filesystem) or unparseable
+      (``JSONDecodeError``). The user toggled something, the UI said
+      "Saved", and the value is silently being ignored. Without a
+      log line they have no diagnostic; with one, the sidecar/server
+      log tells them exactly what to fix.
+
+    Reads are not cached — callers (Settings construction, the GET
+    endpoint) hit disk each time, which is fine for a small JSON file
+    behind a singleton-cached Settings.
     """
+    import json
     from pathlib import Path
 
-    from .utils.data_paths import get_data_dir
+    try:
+        from .utils.data_paths import get_data_dir
 
-    path: Path = get_data_dir() / _BACKUP_OVERRIDE_FILENAME
+        path: Path = get_data_dir() / _BACKUP_OVERRIDE_FILENAME
+    except (RuntimeError, OSError):
+        # Couldn't resolve the data dir at all — user has no override
+        # file by definition. Silent.
+        return {}
     try:
         raw = path.read_text()
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logger.warning(
+            "Auto-backup override file at %s exists but is unreadable; "
+            "falling back to defaults. Check filesystem permissions.",
+            path,
+            exc_info=True,
+        )
         return {}
     try:
-        import json
-
         data = json.loads(raw)
     except ValueError:
+        logger.warning(
+            "Auto-backup override file at %s is not valid JSON; "
+            "falling back to defaults. Delete or fix the file to "
+            "re-enable persisted toggles.",
+            path,
+        )
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "Auto-backup override file at %s is not a JSON object "
+            "(got %s); falling back to defaults.",
+            path,
+            type(data).__name__,
+        )
+        return {}
+    return data
 
 
 def _apply_backup_overrides(settings: "Settings") -> None:
