@@ -91,7 +91,10 @@ class ConfigScriptTools:
     async def ha_config_get_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier (e.g., 'morning_routine')")
+            str,
+            Field(
+                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
     ) -> dict[str, Any]:
         """
@@ -101,11 +104,11 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — symmetry with `ha_config_get_automation`.
 
         EXAMPLES:
-        - Get script: ha_config_get_script("morning_routine")
-        - Get script: ha_config_get_script("backup_script")
+        - Get script (bare form): ha_config_get_script("morning_routine")
+        - Get script (entity_id form): ha_config_get_script("script.morning_routine")
 
         For detailed script configuration help, use ha_get_skill_guide.
         """
@@ -123,6 +126,14 @@ class ConfigScriptTools:
                     "Use ha_search_entities(domain_filter='script') to list scripts",
                 ],
             )
+            # Accept entity_id form (``script.foo``) and bare storage
+            # key (``foo``) — mirrors ``ha_config_get_automation``.
+            # ``_raise_script_not_found`` suggests
+            # ``ha_search_entities(domain_filter='script')`` which
+            # returns entity_ids; without this strip, feeding that
+            # output back into the GET tool fails and reseeds the
+            # wrong-tool spiral that #1297 closes.
+            script_id = script_id.removeprefix("script.")
             config_result = await self._fetch_script_config_envelope(script_id)
             # Extract actual script config body and compute hash before category injection
             actual_config = config_result.get("config", config_result)

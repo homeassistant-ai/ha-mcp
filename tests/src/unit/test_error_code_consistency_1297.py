@@ -584,9 +584,9 @@ class TestGetScriptMissingSurfacesAvailableIds:
     must surface ``RESOURCE_NOT_FOUND`` + ``available_script_ids`` (first-10
     bare IDs from the entity registry, filtered by ``script.`` prefix and
     stripped to the bare form ``ha_config_get_script(script_id=...)`` takes).
-    Mirrors the automations shape; the only divergence is the prefix strip
-    — automations accept both ``automation.foo`` and bare ``foo``, scripts
-    only accept the bare storage key.
+    Mirrors the automations shape — both tools now accept either the bare
+    storage key (``foo``) or the entity_id form (``script.foo`` /
+    ``automation.foo``) via a leading-prefix strip at the function head.
     """
 
     @pytest.fixture
@@ -651,6 +651,68 @@ class TestGetScriptMissingSurfacesAvailableIds:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error_data.get("available_script_ids") == []
+
+
+class TestGetScriptAcceptsEntityIdForm:
+    """Regression: ``ha_config_get_script`` strips a leading ``script.``
+    prefix so the entity_id form (``script.foo``) and the bare storage key
+    (``foo``) both route to the same REST call. Closes the wrong-tool spiral
+    where ``_raise_script_not_found`` suggests
+    ``ha_search_entities(domain_filter='script')`` which returns entity_ids
+    — feeding that output back into a bare-only GET would re-fail at the
+    same site that #1297 closes (KP13 #1397 fourth-pass).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_script_config = AsyncMock(
+            return_value={
+                "script_id": "morning_routine",
+                "config": {"sequence": [], "mode": "single"},
+            }
+        )
+        # fetch_entity_category goes through send_websocket_message
+        # and expects ``result.result.categories`` — return an empty
+        # categories map so category-injection is a no-op.
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"categories": {}}}
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_entity_id_form_routes_to_bare_storage_key(self, tools, mock_client):
+        result = await tools.ha_config_get_script(script_id="script.morning_routine")
+
+        mock_client.get_script_config.assert_awaited_once_with("morning_routine")
+        assert result["success"] is True
+        assert result["script_id"] == "morning_routine"
+
+    async def test_bare_form_unchanged(self, tools, mock_client):
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        mock_client.get_script_config.assert_awaited_once_with("morning_routine")
+        assert result["success"] is True
+        assert result["script_id"] == "morning_routine"
+
+    async def test_only_leading_prefix_is_stripped(self, tools, mock_client):
+        # A bare key that happens to contain ``script.`` as a substring
+        # (not as a prefix) must pass through untouched.
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "script_id": "my_script.backup",
+                "config": {"sequence": []},
+            }
+        )
+        result = await tools.ha_config_get_script(script_id="my_script.backup")
+
+        mock_client.get_script_config.assert_awaited_once_with("my_script.backup")
+        assert result["script_id"] == "my_script.backup"
 
 
 # ---------------------------------------------------------------------------
