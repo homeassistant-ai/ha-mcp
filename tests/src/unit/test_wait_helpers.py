@@ -1022,46 +1022,42 @@ class TestWsPathAutomationDiscovery:
     async def test_connection_drop_during_discovery_falls_back_to_rest(
         self, ws_client, mock_client
     ):
-        """If the WS drops mid-wait during a discovery wait, the helper
+        """If the WS drops while a discovery wait is in flight, the helper
         must fall back to REST polling using the discovery-shaped
-        ``get_states()`` sample — not the entity-id-shaped sample used by
-        the other waiters. Mirrors ``TestWsPathConnectionDrop`` coverage
-        for the entity_id wait path; this pins the discovery path against
-        a regression that wires the wrong fallback sample."""
-        # Post-subscribe sample returns nothing; after the noise event
-        # nudges the loop, the WS goes dead and the helper falls back to
-        # REST polling, which then resolves the match.
-        mock_client.get_states = AsyncMock(
-            side_effect=[
-                [],  # post-subscribe sample: empty
-                [],  # nudge re-sample after noise event: empty (WS now dead)
-                [  # REST fallback path resolves
-                    {
-                        "entity_id": "automation.found_via_rest",
-                        "attributes": {"id": "uid_drop"},
-                    }
-                ],
+        ``get_states()`` sample — not the entity-id-shaped
+        ``get_entity_state()`` used by sibling waiters. Mirrors
+        ``TestWsPathConnectionDrop::test_connection_drop_before_wait_loop_falls_back_to_rest``
+        for the discovery path; pins against a regression that wires
+        the wrong fallback sample."""
+        call_count = {"n": 0}
+
+        async def get_states_dropping_ws():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Post-subscribe sample: empty AND drops the WS so the
+                # connection-drop-before-wait-loop branch runs (the
+                # ``is_connected`` check between sample and wait loop
+                # routes us to ``_legacy_poll_until`` for the remaining
+                # budget — no backstop interval wasted).
+                ws_client.is_connected = False
+                return []
+            # REST fallback calls find the matching automation.
+            return [
+                {
+                    "entity_id": "automation.found_via_rest",
+                    "attributes": {"id": "uid_drop"},
+                }
             ]
-        )
 
-        async def drop_after_noise():
-            await asyncio.sleep(0.05)
-            # Fire a noise event so the wait loop wakes and re-samples,
-            # THEN drop the WS so the next loop tick takes the REST
-            # fallback path.
-            await ws_client.fire_state_changed(
-                "automation.unrelated",
-                new_state={"attributes": {"id": "uid_other"}},
-            )
-            ws_client.is_connected = False
+        mock_client.get_states = AsyncMock(side_effect=get_states_dropping_ws)
 
-        drop_task = asyncio.create_task(drop_after_noise())
         result = await wait_for_automation_entity_by_unique_id(
             mock_client, "uid_drop", timeout=2.0, poll_interval=0.05
         )
-        await drop_task
 
         assert result == "automation.found_via_rest"
-        # REST fallback was actually exercised — at least one
-        # ``get_states()`` call past the initial post-subscribe sample.
-        assert mock_client.get_states.call_count >= 2
+        # At least one extra REST sample happened after the drop —
+        # proves the fallback path actually ran the discovery sample.
+        assert call_count["n"] >= 2
+        # Cleanup of the subscription we did establish still ran.
+        assert len(ws_client.unsubscribed) == 1

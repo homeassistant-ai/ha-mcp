@@ -1131,10 +1131,13 @@ async def wait_for_automation_entity_by_unique_id(
         The discovered entity_id (e.g. ``"automation.morning_routine"``)
         or ``None`` on timeout.
     """
-    # Mutable closure cell: when an event carries the match, the filter
-    # stashes the discovered entity_id so sample() can short-circuit the
-    # full get_states() scan on the next loop tick.
-    captured: dict[str, str | None] = {"entity_id": None}
+    # Mutable closure cells: ``entity_id`` stashes the discovered
+    # entity_id when the filter sees a matching event (sample() then
+    # short-circuits the full get_states() scan). ``last_api_error``
+    # tracks the most recent transient API failure during sampling so
+    # the final timeout warning can distinguish "automation truly not
+    # found" from "REST channel wedged the whole budget."
+    captured: dict[str, str | None] = {"entity_id": None, "last_api_error": None}
 
     async def sample() -> str | None:
         if captured["entity_id"] is not None:
@@ -1142,9 +1145,13 @@ async def wait_for_automation_entity_by_unique_id(
         try:
             states = await client.get_states()
         except HomeAssistantAPIError as e:
+            # Debug-level here is intentional — the waiter retries on
+            # transient errors. The wedged-channel signal goes in the
+            # final timeout warning via ``captured["last_api_error"]``.
             logger.debug(
                 f"API error sampling get_states() for unique_id {unique_id}: {e}"
             )
+            captured["last_api_error"] = str(e)
             return None
         for state in states:
             entity_id = state.get("entity_id")
@@ -1207,9 +1214,18 @@ async def wait_for_automation_entity_by_unique_id(
     )
     if isinstance(result, str):
         return result
-    logger.warning(
-        f"Automation with unique_id {unique_id} was not found in HA state after creation"
-    )
+    # `_ws_wait_for_condition` / `_legacy_poll_until` already logged the
+    # generic "timed out" warning before returning None; just surface the
+    # discovery-specific signal when REST sampling was wedged the whole
+    # budget so operators can distinguish "automation never published"
+    # from "REST channel down."
+    if captured["last_api_error"] is not None:
+        logger.warning(
+            "Automation discovery for unique_id %s timed out with every "
+            "REST sample failing; last error: %s",
+            unique_id,
+            captured["last_api_error"],
+        )
     return None
 
 

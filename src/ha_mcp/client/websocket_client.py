@@ -400,7 +400,18 @@ class HomeAssistantWebSocketClient:
                 try:
                     await handler(data["event"])
                 except Exception as e:
-                    logger.error(f"Error in event handler: {e}")
+                    # ``exc_info=True`` so handler bugs (AttributeError /
+                    # KeyError / TypeError from schema-drift on the
+                    # incoming event payload) leave a traceback rather
+                    # than a one-line obscured error. Without this the
+                    # dispatch loop keeps a single buggy handler from
+                    # killing the WS, but the bug itself becomes
+                    # invisible — handlers wired to ``asyncio.Event``
+                    # nudges (see ``util_helpers._ws_wait_for_condition``)
+                    # silently stop nudging and the calling waiter times
+                    # out reporting "not found." #1395 silent-failure
+                    # audit.
+                    logger.error("Error in event handler: %s", e, exc_info=True)
 
     def _ensure_send_lock(self) -> None:
         """Ensure the send lock belongs to the current event loop."""
