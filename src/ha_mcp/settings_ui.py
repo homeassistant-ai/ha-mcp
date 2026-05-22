@@ -246,7 +246,9 @@ def _load_backup_settings_override() -> dict[str, Any]:
     except FileNotFoundError:
         return {}
     except OSError:
-        logger.warning("Cannot read backup settings override at %s", path, exc_info=True)
+        logger.warning(
+            "Cannot read backup settings override at %s", path, exc_info=True
+        )
         return {}
     try:
         data: Any = json.loads(raw)

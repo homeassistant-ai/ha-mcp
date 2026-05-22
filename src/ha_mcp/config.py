@@ -396,7 +396,10 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                 coerced = int(raw)
             except (ValueError, TypeError):
                 continue
-            if field_name == "auto_backup_throttle_minutes" and not 0 <= coerced <= 1440:
+            if (
+                field_name == "auto_backup_throttle_minutes"
+                and not 0 <= coerced <= 1440
+            ):
                 continue
             if (
                 field_name == "auto_backup_retain_per_entity"
