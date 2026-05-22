@@ -278,11 +278,7 @@ class BackupManager:
             if config is None:
                 # Entity didn't exist at fetch time (create operation, or
                 # already-deleted at remove time before our pre-fetch).
-                # Logged at INFO so e2e diagnostics surface the
-                # "entity-not-yet-indexed" case without polluting prod
-                # WARNING streams; downgrade to DEBUG later once #1288
-                # full-loop e2e coverage is stable.
-                logger.info(
+                logger.debug(
                     "Auto-backup: fetch returned None for %s — skipping snapshot",
                     key,
                 )
@@ -601,7 +597,7 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         raise RuntimeError(msg)
     try:
         cmd_type = message.pop("type")
-        result = await ws_client.send_command(cmd_type, **message)
+        envelope = await ws_client.send_command(cmd_type, **message)
     finally:
         # Best-effort close: narrow to transport/network errors; let
         # other exceptions propagate so they show up in logs rather
@@ -614,7 +610,17 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
                 type(err).__name__,
                 err,
             )
-    return result
+    # ``send_command`` returns ``{"success": True, "result": <inner>}``
+    # — unwrap so every fetch / restore handler downstream sees the
+    # inner ``<inner>`` shape directly (list for ``<type>/list`` calls,
+    # dict for ``execute_script`` calls, etc.). Without this unwrap the
+    # ``isinstance(items, list)`` guards in every fetch handler return
+    # None silently, the snapshot is skipped, and the auto-backup loop
+    # never captures anything for WS-backed domains (#1288 full-loop
+    # e2e regression — only the REST-backed automation lane worked).
+    if isinstance(envelope, dict) and "result" in envelope:
+        return envelope["result"]
+    return envelope
 
 
 # Automation / Script / Scene — reuse the typed client helpers, which
