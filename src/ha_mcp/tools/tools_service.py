@@ -26,7 +26,11 @@ from .helpers import (
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
 
 
-def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
+def _parse_json_dict_param(
+    data: str | dict[str, Any] | None,
+    *,
+    type_error_message: str,
+) -> dict[str, Any] | None:
     if data is None:
         return None
     raw: Any = None
@@ -43,12 +47,18 @@ def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | Non
     if raw is not None and not isinstance(raw, dict):
         raise_tool_error(
             create_validation_error(
-                "Event data must be a JSON object (dict)",
+                type_error_message,
                 parameter="data",
                 details=f"Received type: {type(raw).__name__}",
             )
         )
     return raw if isinstance(raw, dict) else None
+
+
+def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    return _parse_json_dict_param(
+        data, type_error_message="Event data must be a JSON object (dict)"
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -126,33 +136,14 @@ class ServiceTools:
         entity_id: str | None,
     ) -> dict[str, Any]:
         """Parse and validate the data parameter into a service_data dict."""
-        try:
-            parsed_data = parse_json_param(data, "data")
-        except ValueError as e:
-            raise_tool_error(
-                create_validation_error(
-                    f"Invalid data parameter: {e}",
-                    parameter="data",
-                    invalid_json=True,
-                )
+        service_data: dict[str, Any] = (
+            _parse_json_dict_param(
+                data, type_error_message="Data parameter must be a JSON object"
             )
-
-        service_data: dict[str, Any] = {}
-        if parsed_data is not None:
-            if isinstance(parsed_data, dict):
-                service_data = parsed_data
-            else:
-                raise_tool_error(
-                    create_validation_error(
-                        "Data parameter must be a JSON object",
-                        parameter="data",
-                        details=f"Received type: {type(parsed_data).__name__}",
-                    )
-                )
-
+            or {}
+        )
         if entity_id:
             service_data["entity_id"] = entity_id
-
         return service_data
 
     @staticmethod
