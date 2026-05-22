@@ -47,7 +47,19 @@ def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch) -> None:
 def _backups_for(
     entries: list[dict[str, Any]], *, domain: str, entity_id: str
 ) -> list[dict[str, Any]]:
-    return [e for e in entries if e["domain"] == domain and e["entity_id"] == entity_id]
+    """Filter list-snapshots entries by domain + entity_id.
+
+    Snapshot filenames are sanitized (``_safe_entity_id`` replaces every
+    char outside ``[A-Za-z0-9._-]`` with ``_``), and ``list_snapshots``
+    returns the parsed-from-filename entity_id — so a caller filtering
+    with a composite ID like ``area:foo`` would otherwise never match
+    the stored ``area_foo``. Sanitize both sides through the same
+    function for a symmetric comparison.
+    """
+    from ha_mcp.backup_manager import _safe_entity_id
+
+    safe_id = _safe_entity_id(entity_id)
+    return [e for e in entries if e["domain"] == domain and e["entity_id"] == safe_id]
 
 
 # Fixed delay between create and edit to let HA's WS-backed registries
@@ -1027,19 +1039,21 @@ class TestGroupCaptureRestore:
             pytest.skip(f"group create unsupported: {create}")
         # Group entity is created via the ``group.set`` service call —
         # state machine registration is async and a fixed sleep is racy.
-        # Poll ``ha_get_state`` until ``group.<object_id>`` is queryable
-        # so the decorator's pre-edit ``/api/states`` GET finds it.
+        # Poll ``ha_config_list_groups`` until our group appears in the
+        # configured-groups list, which surfaces sooner than the
+        # ``/api/states/group.<id>`` propagation (the latter can lag by
+        # several seconds on fresh testcontainers; the previous
+        # ``ha_get_state`` poll timed out at 15 s).
         await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_get_state",
-            arguments={"entity_id": f"group.{object_id}"},
-            predicate=lambda d: (
-                d.get("success") is True
-                or d.get("state") is not None
-                or d.get("entity_id") == f"group.{object_id}"
+            tool_name="ha_config_list_groups",
+            arguments={},
+            predicate=lambda d: any(
+                g.get("object_id") == object_id
+                for g in (d.get("groups", []) or d.get("data", {}).get("groups", []))
             ),
-            description=f"group.{object_id} state visible",
-            timeout=15,
+            description=f"group {object_id} in list_groups",
+            timeout=20,
         )
 
         edit = await safe_call_tool(
