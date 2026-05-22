@@ -100,6 +100,8 @@ def test_backend_dispatch_matches_workflow_env(
             f"wrong endpoint."
         )
         assert ha_container_with_fresh_config["container"] is None
+        assert ha_container_with_fresh_config["port"] is None
+        assert ha_container_with_fresh_config["config_path"] is None
     elif image_path:
         assert backend == "haos", (
             f"Workflow set HAOS_TEST_IMAGE_PATH but dispatch picked "
@@ -118,6 +120,11 @@ def test_backend_dispatch_matches_workflow_env(
         )
         assert ha_container_with_fresh_config["container"] is not None
         assert ha_container_with_fresh_config["port"] is not None
+        assert ha_container_with_fresh_config["config_path"] is not None
+        # The container branch (conftest.py:1698-1706) does NOT include
+        # an addon_mcp_url key at all, unlike the HAOS branches. Use
+        # .get() so the assertion holds against either absence or None.
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
 
 
 async def test_supervisor_addon_tool_behavior_matches_backend(
