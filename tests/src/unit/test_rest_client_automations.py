@@ -183,7 +183,12 @@ class TestUpsertAutomationConfigIdMismatch:
 
     @pytest.mark.asyncio
     async def test_update_with_matching_inner_id_proceeds(self, mock_client):
-        """identifier and config.id both resolve to the same unique_id → ok."""
+        """identifier and config.id both resolve to the same unique_id → ok.
+
+        Asserts URL and body id both equal the resolved unique_id so a future
+        refactor that mutates one without the other (the exact failure mode
+        this PR fixes) would regress.
+        """
         mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
         mock_client._request = AsyncMock(return_value={"result": "ok"})
         mock_client._poll_for_automation_entity = AsyncMock(return_value=None)
@@ -196,6 +201,44 @@ class TestUpsertAutomationConfigIdMismatch:
         assert result["unique_id"] == "AAA"
         assert result["operation"] == "updated"
         mock_client._request.assert_called_once()
+        method, url = mock_client._request.call_args.args
+        assert method == "POST"
+        assert url == "/config/automation/config/AAA"
+        assert mock_client._request.call_args.kwargs["json"]["id"] == "AAA"
+
+    @pytest.mark.asyncio
+    async def test_update_with_int_vs_str_id_equivalence_passes(self, mock_client):
+        """``config['id']`` as int matching the resolved str id is treated as
+        a match. HA accepts both shapes and stringifies on storage, so the
+        guard's ``str(...)`` coercion is intentional — pin it so a future
+        tightening to strict-type compare is a deliberate decision."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="1234")
+        mock_client._request = AsyncMock(return_value={"result": "ok"})
+        mock_client._poll_for_automation_entity = AsyncMock(return_value=None)
+
+        result = await mock_client.upsert_automation_config(
+            {"id": 1234, "alias": "x", "trigger": [], "action": []},
+            identifier="automation.foo",
+        )
+
+        assert result["unique_id"] == "1234"
+        mock_client._request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_with_empty_string_inner_id_is_rejected(self, mock_client):
+        """``config['id']=''`` is a real agent-slip pattern (templating with an
+        empty variable). It is not None, so the guard fires and rejects."""
+        mock_client._resolve_automation_id = AsyncMock(return_value="AAA")
+        mock_client._request = AsyncMock()
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await mock_client.upsert_automation_config(
+                {"id": "", "alias": "x", "trigger": [], "action": []},
+                identifier="automation.foo",
+            )
+
+        assert exc_info.value.status_code == 400
+        mock_client._request.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_update_without_inner_id_proceeds(self, mock_client):
