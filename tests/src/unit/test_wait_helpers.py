@@ -23,6 +23,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import util_helpers
 from ha_mcp.tools.util_helpers import (
+    wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
     wait_for_state_change,
@@ -395,12 +396,21 @@ class FakeWebSocketClient:
         if self._unsubscribe_failure is not None:
             raise self._unsubscribe_failure
 
-    async def fire_state_changed(self, entity_id: str) -> None:
-        """Dispatch a state_changed event to every registered handler."""
+    async def fire_state_changed(
+        self, entity_id: str, *, new_state: dict | None = None
+    ) -> None:
+        """Dispatch a state_changed event to every registered handler.
+
+        Default payload mirrors the legacy "entity_id only" shape used by
+        the ``wait_for_entity_*`` waiters. Pass ``new_state={...}`` to
+        include ``data.new_state`` — needed by discovery waiters (#1395)
+        whose filter inspects ``new_state.attributes``.
+        """
+        data: dict = {"entity_id": entity_id}
+        if new_state is not None:
+            data["new_state"] = new_state
         for handler in list(self.handlers.get("state_changed", [])):
-            await handler(
-                {"event_type": "state_changed", "data": {"entity_id": entity_id}}
-            )
+            await handler({"event_type": "state_changed", "data": data})
 
 
 @pytest.fixture
@@ -791,3 +801,177 @@ class TestWsPathUnsubscribeFailureTolerance:
         assert result is True
         # Both sub_ids attempted even though each raised CommandTimeout.
         assert ws_client.unsubscribed == [101, 102]
+
+
+# ---------------------------------------------------------------------------
+# wait_for_automation_entity_by_unique_id (#1395) — discovery waits
+# ---------------------------------------------------------------------------
+
+
+class TestRestPathAutomationDiscovery:
+    """REST-fallback coverage for wait_for_automation_entity_by_unique_id.
+
+    Uses the autouse ``force_rest_fallback`` fixture so the WS path is
+    skipped; verifies the REST sample finds the entity by unique_id."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_states = AsyncMock()
+        client.base_url = "http://example.invalid"
+        client.token = "test-token"
+        return client
+
+    async def test_resolves_via_rest_when_state_already_published(self, mock_client):
+        """REST sample finds the matching automation in get_states()."""
+        mock_client.get_states.return_value = [
+            {"entity_id": "automation.target", "attributes": {"id": "uid_42"}}
+        ]
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=1.0
+        )
+
+        assert result == "automation.target"
+
+    async def test_ignores_non_automation_entities_with_matching_id(self, mock_client):
+        """A script (or other domain) sharing the same id attribute must
+        NOT match — the filter pins ``entity_id.startswith("automation.")``
+        so we don't mis-resolve to a sibling-domain entity."""
+        mock_client.get_states.return_value = [
+            {"entity_id": "script.distractor", "attributes": {"id": "uid_42"}},
+            {"entity_id": "automation.real", "attributes": {"id": "uid_42"}},
+        ]
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=1.0
+        )
+
+        assert result == "automation.real"
+
+    async def test_returns_none_on_full_miss(self, mock_client):
+        """When the entity never appears within the budget, the wait
+        times out and returns None."""
+        mock_client.get_states.return_value = []
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_missing", timeout=0.2, poll_interval=0.05
+        )
+
+        assert result is None
+
+    async def test_transient_api_error_swallowed_by_sample(self, mock_client):
+        """Transient ``HomeAssistantAPIError`` from ``get_states()`` is
+        swallowed inside the sample callback — the waiter keeps polling
+        until budget exhaustion rather than propagating."""
+        mock_client.get_states.side_effect = HomeAssistantAPIError("transient")
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=0.2, poll_interval=0.05
+        )
+
+        assert result is None
+        # Sample was called at least once — verifies the catch path was
+        # exercised, not the wait-loop short-circuited at setup.
+        assert mock_client.get_states.call_count >= 1
+
+
+class TestWsPathAutomationDiscovery:
+    """WS-driven coverage for wait_for_automation_entity_by_unique_id (#1395)."""
+
+    async def test_post_subscribe_sample_resolves_immediately(
+        self, ws_client, mock_client
+    ):
+        """If HA already has the automation registered when the waiter
+        subscribes, the post-subscribe REST sample resolves and no event
+        is needed."""
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "automation.early",
+                    "attributes": {"id": "uid_early"},
+                }
+            ]
+        )
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_early", timeout=2.0
+        )
+
+        assert result == "automation.early"
+        # Only the single state_changed subscription is opened.
+        assert ws_client.subscribed == ["state_changed"]
+        assert len(ws_client.unsubscribed) == 1
+        # Handler was cleaned up.
+        assert ws_client.handlers.get("state_changed") == []
+
+    async def test_event_arrival_resolves_discovery(self, ws_client, mock_client):
+        """A state_changed event for an automation whose
+        ``new_state.attributes.id`` matches the unique_id wakes the wait
+        loop. The discovered entity_id is captured by the filter and
+        returned from sample() on the next tick — no second REST scan
+        needed."""
+        # Post-subscribe sample finds nothing; the discovered entity_id
+        # comes from the event itself via the filter's capture cell.
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_after_subscribe():
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed(
+                "automation.discovered",
+                new_state={"attributes": {"id": "uid_99"}},
+            )
+
+        fire_task = asyncio.create_task(fire_after_subscribe())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_99", timeout=2.0
+        )
+        await fire_task
+
+        assert result == "automation.discovered"
+
+    async def test_event_for_non_automation_does_not_wake_wait(
+        self, ws_client, mock_client
+    ):
+        """Events for non-automation entities (e.g. ``light.kitchen``)
+        must not nudge the wait loop, even if the new_state happens to
+        carry an ``id`` attribute. Filter pins the entity_id prefix."""
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_noise():
+            await asyncio.sleep(0.02)
+            await ws_client.fire_state_changed(
+                "light.kitchen",
+                new_state={"attributes": {"id": "uid_42"}},
+            )
+
+        noise_task = asyncio.create_task(fire_noise())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=0.2, poll_interval=0.05
+        )
+        await noise_task
+
+        assert result is None
+
+    async def test_event_for_other_automation_does_not_wake_wait(
+        self, ws_client, mock_client
+    ):
+        """An automation event for a *different* unique_id must not nudge —
+        otherwise concurrent automation creates would race for the same
+        wait loop. Filter pins ``new_state.attributes.id == unique_id``."""
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_noise():
+            await asyncio.sleep(0.02)
+            await ws_client.fire_state_changed(
+                "automation.other",
+                new_state={"attributes": {"id": "uid_other"}},
+            )
+
+        noise_task = asyncio.create_task(fire_noise())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_target", timeout=0.2, poll_interval=0.05
+        )
+        await noise_task
+
+        assert result is None

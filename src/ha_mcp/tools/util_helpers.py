@@ -614,7 +614,7 @@ costs at most ~6 REST calls per wait (one post-subscribe sample plus
 
 
 async def _legacy_poll_until(
-    entity_id: str,
+    identifier: str,
     sample: Callable[[], Awaitable[Any]],
     *,
     timeout: float,
@@ -627,7 +627,10 @@ async def _legacy_poll_until(
     backstop tick — it returns a truthy value when the wait should
     succeed, ``None`` otherwise. Connection / auth errors propagate
     (callers care about those); other transient errors raised inside
-    ``sample`` are swallowed there.
+    ``sample`` are swallowed there. ``identifier`` is the human-readable
+    name used in log lines — usually an entity_id but may be a
+    descriptor like ``automation[unique_id=...]`` for discovery waits
+    that don't know the entity_id up front.
     """
     start = time.monotonic()
     while time.monotonic() - start < timeout:
@@ -635,7 +638,7 @@ async def _legacy_poll_until(
             result = await sample()
             if result is not None:
                 logger.debug(
-                    f"REST waiter: {description} for {entity_id} resolved "
+                    f"REST waiter: {description} for {identifier} resolved "
                     f"after {time.monotonic() - start:.2f}s"
                 )
                 return result
@@ -643,7 +646,7 @@ async def _legacy_poll_until(
             raise
         await asyncio.sleep(poll_interval)
     logger.warning(
-        f"REST fallback: {description} for {entity_id} timed out after {timeout}s"
+        f"REST fallback: {description} for {identifier} timed out after {timeout}s"
     )
     return None
 
@@ -690,22 +693,23 @@ async def _get_waiter_ws_client(client: Any) -> Any:
 
 async def _ws_wait_for_condition(
     client: Any,
-    entity_id: str,
+    identifier: str,
     sample: Callable[[], Awaitable[Any]],
     *,
     event_types: tuple[str, ...],
     timeout: float,
     poll_interval: float,
     description: str,
+    event_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> Any:
     """Subscribe to ``event_types``, sample after subscribe, wait on event.
 
     Implements the standard "subscribe → sample → wait" pattern from #1152:
 
     - The handler nudges a single ``asyncio.Event`` whenever HA pushes an
-      event for our ``entity_id``. The main loop wakes on that nudge or on
-      the polling-backstop timeout, then re-runs ``sample`` (the REST
-      source-of-truth check) to decide whether the wait succeeded.
+      event matching ``event_filter``. The main loop wakes on that nudge
+      or on the polling-backstop timeout, then re-runs ``sample`` (the
+      REST source-of-truth check) to decide whether the wait succeeded.
     - Sample-after-subscribe (not before) closes the gap between the
       caller's write returning and our subscription landing on the HA
       side. The event for the write may have already fired by the time we
@@ -714,12 +718,22 @@ async def _ws_wait_for_condition(
       we fall back to ``_legacy_poll_until``. The helpers' contract is
       identical to the pre-#1152 REST loop in that case.
 
+    ``identifier`` is used only for log lines — usually an entity_id but
+    may be a descriptor like ``automation[unique_id=...]`` for discovery
+    waits (#1395) that don't know the entity_id up front. When
+    ``event_filter`` is None the default predicate matches events whose
+    ``data["entity_id"]`` equals ``identifier`` — i.e. the standard
+    "watch this entity_id" shape used by ``wait_for_entity_*`` /
+    ``wait_for_state_change``. Callers that need a different match shape
+    (e.g. "any automation with attributes.id == unique_id") pass a custom
+    ``event_filter``.
+
     Returns ``sample``'s truthy return value, or ``None`` on timeout.
     """
     ws_client = await _get_waiter_ws_client(client)
     if ws_client is None:
         return await _legacy_poll_until(
-            entity_id,
+            identifier,
             sample,
             timeout=timeout,
             poll_interval=poll_interval,
@@ -728,14 +742,19 @@ async def _ws_wait_for_condition(
 
     nudge = asyncio.Event()
 
-    async def handler(event: dict[str, Any]) -> None:
+    def _default_filter(event: dict[str, Any]) -> bool:
         # HA nests ``entity_id`` under ``event["data"]`` for both
         # state_changed and entity_registry_updated. The top-level fallback
         # is defensive only — it lets a future schema drift degrade to a
         # missed nudge rather than an AttributeError.
         data = event.get("data") or {}
         evt_entity = data.get("entity_id") or event.get("entity_id")
-        if evt_entity == entity_id:
+        return bool(evt_entity == identifier)
+
+    filter_fn = event_filter if event_filter is not None else _default_filter
+
+    async def handler(event: dict[str, Any]) -> None:
+        if filter_fn(event):
             nudge.set()
 
     # Track which handlers / subscriptions we actually attached so cleanup
@@ -763,11 +782,11 @@ async def _ws_wait_for_condition(
                     "falling back to REST polling",
                     et,
                     description,
-                    entity_id,
+                    identifier,
                     e,
                 )
                 return await _legacy_poll_until(
-                    entity_id,
+                    identifier,
                     sample,
                     timeout=timeout,
                     poll_interval=poll_interval,
@@ -782,7 +801,7 @@ async def _ws_wait_for_condition(
             result = await sample()
             if result is not None:
                 logger.debug(
-                    f"WS waiter: {description} for {entity_id} resolved by "
+                    f"WS waiter: {description} for {identifier} resolved by "
                     f"post-subscribe sample after {time.monotonic() - start:.2f}s"
                 )
                 return result
@@ -798,13 +817,13 @@ async def _ws_wait_for_condition(
                 "WS connection dropped before wait loop for %s on %s — "
                 "completing via REST polling",
                 description,
-                entity_id,
+                identifier,
             )
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
                 return None
             return await _legacy_poll_until(
-                entity_id,
+                identifier,
                 sample,
                 timeout=remaining,
                 poll_interval=poll_interval,
@@ -834,13 +853,13 @@ async def _ws_wait_for_condition(
                     "WS connection dropped during %s for %s — completing "
                     "wait via REST polling",
                     description,
-                    entity_id,
+                    identifier,
                 )
                 remaining = timeout - (time.monotonic() - start)
                 if remaining <= 0:
                     return None
                 return await _legacy_poll_until(
-                    entity_id,
+                    identifier,
                     sample,
                     timeout=remaining,
                     poll_interval=poll_interval,
@@ -851,7 +870,7 @@ async def _ws_wait_for_condition(
                 result = await sample()
                 if result is not None:
                     logger.debug(
-                        f"WS waiter: {description} for {entity_id} resolved "
+                        f"WS waiter: {description} for {identifier} resolved "
                         f"after {time.monotonic() - start:.2f}s"
                     )
                     return result
@@ -859,7 +878,7 @@ async def _ws_wait_for_condition(
                 raise
 
         logger.warning(
-            f"WS waiter: {description} for {entity_id} timed out after {timeout}s"
+            f"WS waiter: {description} for {identifier} timed out after {timeout}s"
         )
         return None
     finally:
@@ -1081,6 +1100,92 @@ async def wait_for_state_change(
     if isinstance(result, dict):
         return result
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
+    return None
+
+
+async def wait_for_automation_entity_by_unique_id(
+    client: Any,
+    unique_id: str,
+    timeout: float = 6.0,
+    poll_interval: float = 0.3,
+) -> str | None:
+    """
+    Discover the entity_id assigned to a newly-created automation by unique_id.
+
+    Used after ``POST /config/automation/config/{unique_id}`` to resolve the
+    ``automation.<slug>`` entity_id Home Assistant assigned. Listens to
+    ``state_changed`` events filtered to ``automation.*`` entities whose
+    ``new_state.attributes.id`` equals ``unique_id`` — HA's
+    ``BaseAutomationEntity.capability_attributes`` exposes ``unique_id`` as
+    ``CONF_ID`` on every emit, so the first state event for a fresh
+    automation carries the match. Falls back to REST polling of
+    ``get_states()`` when the WebSocket is unavailable. See #1152 / #1395.
+
+    Args:
+        client: HomeAssistantClient instance
+        unique_id: The unique_id passed to ``POST /config/automation/config/{unique_id}``
+        timeout: Maximum time to wait in seconds (preserves the legacy 6s budget)
+        poll_interval: REST poll interval used for the WS-unavailable fallback
+
+    Returns:
+        The discovered entity_id (e.g. ``"automation.morning_routine"``)
+        or ``None`` on timeout.
+    """
+    # Mutable closure cell: when an event carries the match, the filter
+    # stashes the discovered entity_id so sample() can short-circuit the
+    # full get_states() scan on the next loop tick.
+    captured: dict[str, str | None] = {"entity_id": None}
+
+    async def sample() -> str | None:
+        if captured["entity_id"] is not None:
+            return captured["entity_id"]
+        try:
+            states = await client.get_states()
+        except HomeAssistantAPIError as e:
+            logger.debug(
+                f"API error sampling get_states() for unique_id {unique_id}: {e}"
+            )
+            return None
+        for state in states:
+            entity_id = state.get("entity_id")
+            if not isinstance(entity_id, str) or not entity_id.startswith(
+                "automation."
+            ):
+                continue
+            if state.get("attributes", {}).get("id") == unique_id:
+                return entity_id
+        return None
+
+    def event_filter(event: dict[str, Any]) -> bool:
+        # state_changed payload shape:
+        #   event["data"] = {"entity_id": ..., "new_state": {"attributes": {...}}}
+        # capability_attributes on BaseAutomationEntity guarantees attributes.id
+        # carries the unique_id on the first state emission.
+        data = event.get("data") or {}
+        evt_entity = data.get("entity_id") or ""
+        if not evt_entity.startswith("automation."):
+            return False
+        new_state = data.get("new_state") or {}
+        if (new_state.get("attributes") or {}).get("id") == unique_id:
+            captured["entity_id"] = evt_entity
+            return True
+        return False
+
+    result = await _ws_wait_for_condition(
+        client,
+        identifier=f"automation[unique_id={unique_id}]",
+        sample=sample,
+        event_types=("state_changed",),
+        timeout=timeout,
+        poll_interval=poll_interval,
+        description="automation entity discovery",
+        event_filter=event_filter,
+    )
+    if isinstance(result, str):
+        return result
+    logger.warning(
+        f"Automation with unique_id {unique_id} was not found in HA state after creation"
+    )
     return None
 
 
