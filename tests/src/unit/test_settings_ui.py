@@ -245,9 +245,7 @@ class TestSaveToolConfig:
         def fake_atomic_write(path: Path, payload: dict) -> None:
             raise OSError(30, "Read-only file system")
 
-        monkeypatch.setattr(
-            "ha_mcp.settings_ui._atomic_write_json", fake_atomic_write
-        )
+        monkeypatch.setattr("ha_mcp.settings_ui._atomic_write_json", fake_atomic_write)
         assert save_tool_config({"tools": {"x": "disabled"}}) is False
 
 
