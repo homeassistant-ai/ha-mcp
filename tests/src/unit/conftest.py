@@ -1,26 +1,20 @@
 """Unit-test fixtures: default ``enable_auto_backup`` off process-wide.
 
-#1288 flipped the production default to ``True`` so addon users get the
-safety net out of the box. That broke ~half a dozen pre-existing unit
-tests for label / category / helper / discriminator code that mock the
-underlying HA client — with the toggle on, the ``@with_auto_backup``
-decorator fires for every wrapped call, then ``maybe_snapshot``'s
-fetch path tries ``urlparse(MagicMock_client.base_url)`` and trips
-``TypeError: '>' not supported between instances of 'MagicMock' and 'int'``.
+Unit tests for tool code (label, category, helper, discriminator, etc.)
+use ``MagicMock`` HA clients. The production default for
+``enable_auto_backup`` is ``True``, which means the
+``@with_auto_backup`` decorator's pre-write hook fires on every wrapped
+call — and the hook eventually calls ``urlparse(client.base_url)``,
+which raises ``TypeError`` against a ``MagicMock`` attribute.
 
-The right home for the fix is the unit-test process boundary, not each
-individual test file: unit tests for unrelated tool code shouldn't have
-to know about auto-backup, and a process-wide off default in the unit
-tier matches what the tests already assumed implicitly. Tests that DO
-want to exercise the auto-backup path (``test_backup_manager.py``,
-``test_settings_ui.py``) set ``ENABLE_AUTO_BACKUP=true`` explicitly via
-``monkeypatch`` and reset the global settings singleton — that path is
-unaffected by this conftest.
-
-The autouse session fixture sets the env var once and resets the
-``ha_mcp.config`` singleton so the next ``get_global_settings()`` call
-sees the off value. Per-test monkeypatching overrides this for the
-specific tests that need it.
+To keep tool unit tests free of that coupling, this conftest sets
+``ENABLE_AUTO_BACKUP=false`` once at session start and clears the
+cached ``Settings`` singleton so subsequent ``get_global_settings()``
+calls observe the off value. Tests that want to exercise the
+auto-backup path (e.g. ``test_backup_manager.py``,
+``test_settings_ui.py``) opt in via ``monkeypatch.setenv``, which
+pytest reverts on teardown — those overrides take precedence and
+remain self-contained.
 """
 
 from __future__ import annotations

@@ -2,6 +2,7 @@
 Configuration management for Home Assistant MCP Server.
 """
 
+import logging
 import os
 
 # Load environment variables from .env file with HAMCP_ENV_FILE support
@@ -13,6 +14,8 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ha_mcp._version import get_version
+
+logger = logging.getLogger(__name__)
 
 _PACKAGE_VERSION = get_version()
 
@@ -390,30 +393,62 @@ def _apply_backup_overrides(settings: "Settings") -> None:
         raw = overrides[field_name]
         if ftype is bool:
             if not isinstance(raw, bool | int):
+                logger.warning(
+                    "backup_settings.json: %s expects bool, got %s; ignoring",
+                    field_name,
+                    type(raw).__name__,
+                )
                 continue
             coerced: bool | int = bool(raw)
         elif ftype is int:
             if not isinstance(raw, bool | int):
+                logger.warning(
+                    "backup_settings.json: %s expects int, got %s; ignoring",
+                    field_name,
+                    type(raw).__name__,
+                )
                 continue
             try:
                 coerced = int(raw)
             except (ValueError, TypeError):
+                logger.warning(
+                    "backup_settings.json: %s value %r is not coercible to int; ignoring",
+                    field_name,
+                    raw,
+                )
                 continue
             if (
                 field_name == "auto_backup_throttle_minutes"
                 and not 0 <= coerced <= 1440
             ):
+                logger.warning(
+                    "backup_settings.json: auto_backup_throttle_minutes=%d out of "
+                    "range 0..1440; ignoring",
+                    coerced,
+                )
                 continue
             if (
                 field_name == "auto_backup_retain_per_entity"
                 and not 1 <= coerced <= 10_000
             ):
+                logger.warning(
+                    "backup_settings.json: auto_backup_retain_per_entity=%d out of "
+                    "range 1..10000; ignoring",
+                    coerced,
+                )
                 continue
         else:
             continue
         try:
             setattr(settings, field_name, coerced)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as err:
+            logger.warning(
+                "backup_settings.json: setattr(%s, %r) rejected by Settings (%s); "
+                "ignoring",
+                field_name,
+                coerced,
+                err,
+            )
             continue
 
 

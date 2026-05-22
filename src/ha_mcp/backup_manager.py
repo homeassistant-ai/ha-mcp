@@ -52,7 +52,7 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
 
-from .client.rest_client import HomeAssistantError
+from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +223,16 @@ class BackupManager:
     def handler_for(self, domain: str) -> DomainHandler | None:
         return self._handlers.get(domain)
 
+    def supported_domains(self) -> list[str]:
+        """Return the sorted list of registered backup-domain keys.
+
+        Public accessor for callers that need to surface "what domains
+        are supported?" in user-facing error messages (e.g., the
+        ``ha_manage_backup(scope='edits', action='create')`` handler
+        when ``domain`` is unknown). Sorted for stable output.
+        """
+        return sorted(self._handlers.keys())
+
     # ----- capture -------------------------------------------------------
 
     async def maybe_snapshot(
@@ -231,14 +241,26 @@ class BackupManager:
         entity_id: str,
         *,
         tool_name: str | None = None,
+        force: bool = False,
     ) -> Path | None:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
         Returns the Path written or None if skipped. Never raises — all
         errors are logged at WARNING and swallowed so the wrapped write
         can proceed regardless.
+
+        ``force=True`` bypasses the ``enable_auto_backup`` toggle and the
+        per-entity throttle window so the caller can drive an explicit
+        on-demand capture (the ``(edits, create)`` action on
+        ``ha_manage_backup``). Init-dir errors still short-circuit —
+        without a writable backup dir there's nothing to do regardless.
+        The ``handler is None`` and ``config is None`` skips still
+        apply (force can't conjure a snapshot for an entity that
+        doesn't exist or has no registered handler).
         """
-        if not self.enabled or self._init_dir_error is not None:
+        if self._init_dir_error is not None:
+            return None
+        if not force and not self.enabled:
             return None
         if not entity_id:
             # Create-mode call with no ID yet — nothing to back up.
@@ -262,7 +284,8 @@ class BackupManager:
             # in CI), since 0.0 would be treated as "last snapshot at
             # monotonic time 0".
             if (
-                throttle
+                not force
+                and throttle
                 and key in self._last_snapshot
                 and (now - self._last_snapshot[key]) < throttle
             ):
@@ -604,7 +627,11 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
             ) or error.get("message", "WS connect failed")
         else:
             msg = "WS connect failed"
-        raise RuntimeError(msg)
+        # Typed connection error so the outer ``_CAPTURE_TRANSIENT_ERRORS``
+        # tuple catches it; a bare ``RuntimeError`` would propagate past
+        # ``maybe_snapshot``'s catch and break the wrapped write — exactly
+        # what the best-effort contract on the decorator forbids.
+        raise HomeAssistantConnectionError(msg)
     try:
         cmd_type = message.pop("type")
         envelope = await ws_client.send_command(cmd_type, **message)
@@ -621,13 +648,11 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
                 err,
             )
     # ``send_command`` returns ``{"success": True, "result": <inner>}``
-    # — unwrap so every fetch / restore handler downstream sees the
-    # inner ``<inner>`` shape directly (list for ``<type>/list`` calls,
-    # dict for ``execute_script`` calls, etc.). Without this unwrap the
-    # ``isinstance(items, list)`` guards in every fetch handler return
-    # None silently, the snapshot is skipped, and the auto-backup loop
-    # never captures anything for WS-backed domains (#1288 full-loop
-    # e2e regression — only the REST-backed automation lane worked).
+    # — unwrap so fetch / restore handlers downstream see the inner
+    # shape directly (list for ``<type>/list`` calls, dict for
+    # ``execute_script`` calls, etc.). Without the unwrap the
+    # ``isinstance(items, list)`` guards in every fetch handler would
+    # treat the envelope as a non-list and silently return None.
     if isinstance(envelope, dict) and "result" in envelope:
         return envelope["result"]
     return envelope
@@ -891,8 +916,15 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     }
     try:
         result = await _ws_send(client, payload)
-    except HomeAssistantError:
-        return None
+    except HomeAssistantError as err:
+        # Only treat 404 (calendar entity not present) as "skip silently".
+        # Auth/transport/server errors deserve a WARNING so an operator
+        # can spot a misconfigured calendar integration; matches the
+        # ``status_code == 404`` narrowing the automation/script/scene
+        # fetchers use.
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
     if not isinstance(result, dict):
         return None
     events = result.get("response", {}).get("events", {}).get(cal, {}).get("events", [])
@@ -993,8 +1025,14 @@ async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
     }
     try:
         result = await _ws_send(client, payload)
-    except HomeAssistantError:
-        return None
+    except HomeAssistantError as err:
+        # Same narrow-to-404 rule as the calendar fetcher: only treat
+        # "todo entity not present" as a clean skip; let auth/transport
+        # errors propagate to the WARNING log via the manager's outer
+        # _CAPTURE_TRANSIENT_ERRORS catch.
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
     if not isinstance(result, dict):
         return None
     items = result.get("response", {}).get("items", {}).get(cal, {}).get("items", [])

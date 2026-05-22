@@ -204,6 +204,26 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {}
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` to ``path`` atomically.
+
+    Writes to ``<path>.tmp`` first and ``os.replace``s into place so a
+    crash or out-of-space mid-write cannot leave a partial/empty file —
+    callers that read the file back (``load_tool_config`` /
+    ``_load_backup_settings_override``) would otherwise treat a
+    half-written file as "no config" and silently fall back to defaults
+    (e.g. re-enabling auto-backup or re-enabling tools the user
+    disabled). Mirrors the pattern ``BackupManager._write_snapshot``
+    already uses for snapshot files.
+
+    Raises OSError on filesystem failure — same surface as the previous
+    ``path.write_text`` so caller try/except shapes don't need updating.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(str(tmp), str(path))
+
+
 def save_tool_config(config: dict[str, Any]) -> bool:
     """Persist tool config to disk.
 
@@ -215,7 +235,7 @@ def save_tool_config(config: dict[str, Any]) -> bool:
     """
     path = _get_config_path()
     try:
-        path.write_text(json.dumps(config, indent=2))
+        _atomic_write_json(path, config)
     except OSError:
         logger.exception("Failed to save tool config to %s", path)
         return False
@@ -261,10 +281,17 @@ def _load_backup_settings_override() -> dict[str, Any]:
 
 
 def _save_backup_settings_override(data: dict[str, Any]) -> bool:
-    """Persist the auto-backup override file. Returns True on success."""
+    """Persist the auto-backup override file. Returns True on success.
+
+    Uses ``_atomic_write_json`` so a crash mid-write leaves the previous
+    file (or no file) intact rather than a half-written one — the latter
+    would parse as JSON-decode-fail in ``_load_backup_settings_override``
+    and silently restore defaults (re-enabling auto-backup when the user
+    had opted out).
+    """
     path = _get_backup_settings_override_path()
     try:
-        path.write_text(json.dumps(data, indent=2))
+        _atomic_write_json(path, data)
     except OSError:
         logger.exception("Failed to save backup settings override to %s", path)
         return False

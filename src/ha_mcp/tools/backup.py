@@ -496,16 +496,36 @@ async def restore_backup(
         result = await ws_client.send_command("backup/restore", **restore_params)
 
         if result.get("success"):
+            # Honest note + warnings depending on whether the safety
+            # backup actually landed. When ``password is None`` (default
+            # password unavailable / not configured), ``_create_safety_backup``
+            # returned None; telling the user "a safety backup was created"
+            # in that case is user-visible misinformation.
+            warnings = [
+                "Home Assistant is restarting. Connection will be temporarily lost."
+            ]
+            if safety_backup_id is None:
+                warnings.append(
+                    "No safety backup was created (the default backup "
+                    "password is not set). If the restore corrupts state, "
+                    "there is no automatic rollback — configure the "
+                    "default password in Settings → System → Backups and "
+                    "retry to get a safety net."
+                )
+                note = "Restore proceeding WITHOUT a safety backup. See warnings above."
+            else:
+                note = (
+                    "A safety backup was created before restore. You can "
+                    "restore from it if needed."
+                )
             return {
                 "success": True,
                 "backup_id": backup_id,
                 "status": "Restore initiated - Home Assistant will restart",
                 "safety_backup_id": safety_backup_id,
                 "restore_database": restore_database,
-                "warnings": [
-                    "Home Assistant is restarting. Connection will be temporarily lost."
-                ],
-                "note": "A safety backup was created before restore. You can restore from it if needed.",
+                "warnings": warnings,
+                "note": note,
             }
         else:
             raise_tool_error(
@@ -621,7 +641,7 @@ def register_backup_tools(
 **`scope="snapshot"` backup-hint:**
 {backup_hint_text}
 
-**`scope="edits"` requires `enable_auto_backup=true`** in settings to populate the backup directory in the first place. If the listing is empty, check that the toggle is on (web settings UI or `ENABLE_AUTO_BACKUP=true` env var).
+**`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
@@ -734,52 +754,31 @@ def register_backup_tools(
 
         if action == "create":
             # On-demand snapshot for "I'm about to edit this in the HA UI,
-            # save the current state first." Mirrors the path the
-            # ``@with_auto_backup`` decorator takes on writes — same
-            # handler registry, same throttle/rotation rules — but
-            # triggered explicitly by the caller for entities they're
-            # about to mutate outside the MCP-tool surface. Bypasses
-            # ``enable_auto_backup`` because the request is explicit.
+            # save the current state first." Drives the same handler path
+            # the ``@with_auto_backup`` decorator uses on writes, but goes
+            # through ``mgr.maybe_snapshot(force=True)`` which bypasses
+            # both the ``enable_auto_backup`` toggle and the per-entity
+            # throttle window — the request is explicit, so neither
+            # should suppress it.
             dom = _require("domain", domain, scope, action)
             eid = _require("entity_id", entity_id, scope, action)
-            if mgr._handlers.get(dom) is None:
+            if mgr.handler_for(dom) is None:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"No backup handler registered for domain={dom!r}",
                         context={"domain": dom, "entity_id": eid},
                         suggestions=[
-                            "Supported domains: "
-                            + ", ".join(sorted(mgr._handlers.keys())),
+                            "Supported domains: " + ", ".join(mgr.supported_domains()),
                         ],
                     )
                 )
-            # ``maybe_snapshot`` returns None when ``enable_auto_backup``
-            # is off OR throttle blocks. For an explicit on-demand call,
-            # the off-state and the throttle-block are both wrong reasons
-            # to skip — temporarily flip the toggle + clear the throttle
-            # tracker entry so the capture always fires.
-            was_enabled = mgr.enabled
-            prev_ts = mgr._last_snapshot.pop(f"{dom}:{eid}", None)
-            path = None
-            try:
-                # Force-enable for this call: read the live attr, override,
-                # restore after. Settings object is shared with other
-                # callers, so the override must be tight to this scope.
-                if not was_enabled:
-                    object.__setattr__(settings, "enable_auto_backup", True)
-                path = await mgr.maybe_snapshot(
-                    dom, eid, tool_name="ha_manage_backup.edits.create"
-                )
-            finally:
-                if not was_enabled:
-                    object.__setattr__(settings, "enable_auto_backup", False)
-                if path is None and prev_ts is not None:
-                    # Restore the throttle tracker only when the capture
-                    # didn't write (e.g. entity didn't exist at fetch
-                    # time). A successful capture sets a new timestamp
-                    # already.
-                    mgr._last_snapshot[f"{dom}:{eid}"] = prev_ts
+            path = await mgr.maybe_snapshot(
+                dom,
+                eid,
+                tool_name="ha_manage_backup.edits.create",
+                force=True,
+            )
             if path is None:
                 raise_tool_error(
                     create_error_response(
@@ -868,6 +867,31 @@ def register_backup_tools(
                         str(err),
                         context={"backup_name": bname},
                     )
+                )
+            except ToolError:
+                raise
+            except Exception as err:
+                # ``handler.restore`` is domain-specific and can surface
+                # HA-side rejections (schema-validation failures, 4xx/5xx
+                # responses, WS command errors). Without this catch those
+                # propagate as opaque INTERNAL_ERROR with no
+                # ``backup_name`` / ``domain`` context — the user is left
+                # to read the FastMCP traceback. Funnel through
+                # ``exception_to_structured_error`` so the structured
+                # response carries enough context to retry.
+                exception_to_structured_error(
+                    err,
+                    context={"backup_name": bname, "action": "restore"},
+                    suggestions=[
+                        "Verify the entity referenced by the backup still "
+                        "exists; restore re-POSTs to its current registry "
+                        "key",
+                        "Compare the captured schema vs current HA — HA "
+                        "minor versions occasionally drop/rename fields",
+                        "Inspect the snapshot YAML via "
+                        "ha_manage_backup(scope='edits', action='view', "
+                        "backup_name=...)",
+                    ],
                 )
             return {
                 "success": True,

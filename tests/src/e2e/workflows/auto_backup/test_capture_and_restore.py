@@ -1379,6 +1379,14 @@ class TestCalendarTodoIntegrationCaptureOnly:
     """
 
     async def test_documentation_marker(self) -> None:
-        """No-op anchor so pytest reports this class explicitly in
-        ``-v`` output, surfacing the documented coverage gap.
+        """Skipped anchor so pytest -v lists this class explicitly,
+        making the documented coverage gap visible alongside passes/
+        fails. ``pytest.skip(reason=...)`` is the right surface for
+        "deliberately not tested" — a passing no-op assertion would
+        misleadingly inflate the green-bar count.
         """
+        pytest.skip(
+            "calendar_event / todo_item / integration have no real-HA "
+            "full-loop e2e — see class docstring for why; payload-shape "
+            "coverage lives in tests/src/unit/test_backup_manager.py"
+        )

@@ -564,3 +564,79 @@ class TestEnabledRespectsDirError:
         mgr._init_dir_error = "OSError: read-only filesystem"
         assert mgr.enabled is False
         assert mgr.init_dir_error == "OSError: read-only filesystem"
+
+
+class TestForceSnapshot:
+    """Pins the ``force=True`` path on ``maybe_snapshot`` — exercised by
+    the ``ha_manage_backup(scope='edits', action='create')`` on-demand
+    action. ``force`` must bypass the ``enable_auto_backup`` toggle and
+    the per-entity throttle window, but the handler-missing and
+    fetch-returned-None skips still apply (force can't conjure data
+    that doesn't exist).
+    """
+
+    async def test_force_bypasses_disabled_toggle(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path, enable_auto_backup=False)
+        mgr.register(_mk_handler(fetched={"alias": "x"}))
+        # Without force, disabled → None.
+        path = await mgr.maybe_snapshot("automation", "foo")
+        assert path is None
+        # With force, writes the snapshot.
+        path = await mgr.maybe_snapshot("automation", "foo", force=True)
+        assert path is not None
+        assert path.exists()
+
+    async def test_force_bypasses_throttle_window(self, tmp_path: Path) -> None:
+        # Throttle=60s; first capture lands, second within window normally
+        # blocks — force=True must override.
+        mgr = _mk_manager(
+            tmp_path, enable_auto_backup=True, auto_backup_throttle_minutes=1
+        )
+        mgr.register(_mk_handler(fetched={"alias": "x"}))
+        first = await mgr.maybe_snapshot("automation", "foo")
+        assert first is not None
+        # Sleep less than the throttle window — without force, returns None.
+        second = await mgr.maybe_snapshot("automation", "foo")
+        assert second is None
+        # With force, captures again despite the window. (Both calls may
+        # land in the same wall-clock second and overwrite the same
+        # filename — what matters here is that ``maybe_snapshot``
+        # returned a Path rather than the throttle-skip None.)
+        third = await mgr.maybe_snapshot("automation", "foo", force=True)
+        assert third is not None
+
+    async def test_force_still_skips_when_handler_missing(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        # No handler registered for "automation".
+        path = await mgr.maybe_snapshot("automation", "foo", force=True)
+        assert path is None
+
+    async def test_force_still_skips_when_fetch_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(fetched=None))
+        path = await mgr.maybe_snapshot("automation", "foo", force=True)
+        assert path is None
+
+    async def test_force_still_respects_init_dir_error(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(fetched={"alias": "x"}))
+        mgr._init_dir_error = "OSError: read-only filesystem"
+        # Even with force, an unreachable backup dir can't accept writes.
+        path = await mgr.maybe_snapshot("automation", "foo", force=True)
+        assert path is None
+
+
+class TestSupportedDomains:
+    def test_returns_sorted_registered_domains(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(domain="zone"))
+        mgr.register(_mk_handler(domain="automation"))
+        mgr.register(_mk_handler(domain="label"))
+        # Sorted output for stable user-facing error messages.
+        assert mgr.supported_domains() == ["automation", "label", "zone"]
+
+    def test_empty_when_no_handlers(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        assert mgr.supported_domains() == []
