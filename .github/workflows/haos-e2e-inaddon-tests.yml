@@ -27,6 +27,10 @@ on:
       - 'homeassistant-addon/**'
       - 'homeassistant-addon-dev/**'
       - '.github/workflows/haos-e2e-inaddon-tests.yml'
+      # Trigger on external workflow changes too — both lanes share the
+      # qcow2 cache key, so a change to either workflow's cache logic
+      # needs the other lane to re-run for parity verification.
+      - '.github/workflows/haos-e2e-tests.yml'
   workflow_dispatch:
     inputs:
       pytest_args:
