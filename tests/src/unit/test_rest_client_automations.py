@@ -34,7 +34,9 @@ class TestDeleteAutomationConfig:
         mock_client._request = AsyncMock(return_value={"result": "ok"})
         mock_client._resolve_automation_id = AsyncMock(return_value="test_unique_id")
 
-        result = await mock_client.delete_automation_config("automation.test_automation")
+        result = await mock_client.delete_automation_config(
+            "automation.test_automation"
+        )
 
         assert result["identifier"] == "automation.test_automation"
         assert result["unique_id"] == "test_unique_id"
@@ -117,9 +119,7 @@ class TestDeleteAutomationConfig:
     async def test_delete_automation_generic_exception_propagates(self, mock_client):
         """Non-API exceptions should propagate."""
         mock_client._resolve_automation_id = AsyncMock(return_value="test_unique_id")
-        mock_client._request = AsyncMock(
-            side_effect=RuntimeError("Unexpected error")
-        )
+        mock_client._request = AsyncMock(side_effect=RuntimeError("Unexpected error"))
 
         with pytest.raises(RuntimeError) as exc_info:
             await mock_client.delete_automation_config("automation.test_automation")
@@ -392,9 +392,7 @@ class TestPollForAutomationEntity:
         assert mock_client.get_states.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_poll_swallows_get_states_exception_on_iteration_2(
-        self, mock_client
-    ):
+    async def test_poll_swallows_get_states_exception_on_iteration_2(self, mock_client):
         """Mid-loop transient also exits early — locks the wrap-scope: the
         ``try`` covers the entire ``for`` (not the loop body), so a transient
         on iteration 2 hits the ``except HomeAssistantError`` clause and
@@ -415,9 +413,7 @@ class TestPollForAutomationEntity:
         assert mock_client.get_states.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_poll_propagates_typeerror_for_unexpected_errors(
-        self, mock_client
-    ):
+    async def test_poll_propagates_typeerror_for_unexpected_errors(self, mock_client):
         """Programming bugs (TypeError, KeyError, AttributeError, …) must
         propagate — they are not transient, and swallowing them would mask
         the bug as ``entity_not_verified=True``. Locks the narrowed
