@@ -506,19 +506,22 @@ _SETTINGS_HTML = (
     font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
   .danger-btn:hover { background: #2a0e0e; }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  /* Feature-flags panel (#863). One row per FEATURE_FLAG_FIELDS
+  /* Tabs — kept identical to the structure PR #1403 introduces for
+     its Backups tab so the two PRs stack as parallel tabs after
+     merge (Tools / Server Settings / Backups) without HTML/CSS
+     conflicts. When both land, the .tabs nav div picks up both
+     new tab buttons and the panel-* sections concatenate. */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 16px; border: none; background: transparent; color: var(--text-secondary);
+    font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  /* Server-settings rows (#863). One row per FEATURE_FLAG_FIELDS
      entry. Locked rows (env / addon origin) get the dim treatment +
      a small inline note pointing at the env var to adjust. */
-  .features-panel { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-  .features-header { display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; cursor: pointer; user-select: none; gap: 12px; }
-  .features-header h2 { font-size: 1rem; font-weight: 600; margin: 0; }
-  .features-header-sub { font-size: 0.75rem; color: var(--text-secondary); }
-  .features-chevron { transition: transform 0.2s; flex-shrink: 0; color: var(--text-secondary); }
-  .features-chevron.open { transform: rotate(90deg); }
-  .features-body { display: none; padding: 4px 16px 12px 16px; }
-  .features-body.open { display: block; }
+  .features-sub { font-size: 0.75rem; color: var(--text-secondary);
+    margin-bottom: 8px; }
   .feature-row { display: flex; align-items: flex-start; justify-content: space-between;
     gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
   .feature-row:first-child { border-top: none; }
@@ -540,43 +543,46 @@ _SETTINGS_HTML = (
 </head>
 <body>
 <div class="header">
-  <h1>Tool Settings</h1>
+  <h1>HA-MCP Settings</h1>
   <span id="status" class="status">Loading...</span>
 </div>
-<div class="readonly-notice">
-  Safety toggles (Tool Search, YAML Config Editing) are managed in the
-  add-on configuration page and require a restart to change.
+<div class="tabs">
+  <button class="tab active" data-panel="tools">Tools</button>
+  <button class="tab" data-panel="server">Server Settings</button>
 </div>
-<div class="pin-notice show" id="pinNotice">
-  Pin toggles only take effect when Tool Search is enabled in the add-on
-  configuration. Without Tool Search, all enabled tools are always visible
-  and pinning has no extra effect.
-</div>
-<div class="restart-notice" id="restartNotice">
-  <span class="restart-notice-text" id="restartNoticeText">
-    ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
-    tools will be fully removed from the MCP tool list on next startup.
-  </span>
-  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
-</div>
-<div id="sidecarStopRow" style="display:none; margin: 12px 0; text-align: right;">
-  <button class="danger-btn" id="stopSidecarBtn"
-          title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
-  >Permanently disable settings server</button>
-</div>
-<div class="features-panel" id="featuresPanel">
-  <div class="features-header" id="featuresHeader">
-    <div>
-      <h2>Server Settings</h2>
-      <div class="features-header-sub">Tool Search, beta-flagged features. Requires restart to apply.</div>
-    </div>
-    <span class="features-chevron open" id="featuresChevron">▶</span>
+<div class="panel active" id="panel-tools">
+  <div class="readonly-notice">
+    Safety toggles (Tool Search, YAML Config Editing) are managed in the
+    add-on configuration page and require a restart to change.
   </div>
-  <div class="features-body open" id="featuresBody"></div>
+  <div class="pin-notice show" id="pinNotice">
+    Pin toggles only take effect when Tool Search is enabled in the add-on
+    configuration. Without Tool Search, all enabled tools are always visible
+    and pinning has no extra effect.
+  </div>
+  <div class="restart-notice" id="restartNotice">
+    <span class="restart-notice-text" id="restartNoticeText">
+      ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
+      tools will be fully removed from the MCP tool list on next startup.
+    </span>
+    <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
+  </div>
+  <div class="summary" id="summary"></div>
+  <input type="text" class="search" id="search" placeholder="Search tools...">
+  <div id="groups"></div>
 </div>
-<div class="summary" id="summary"></div>
-<input type="text" class="search" id="search" placeholder="Search tools...">
-<div id="groups"></div>
+<div class="panel" id="panel-server">
+  <div class="features-sub">
+    Tool Search, beta-flagged features. Changes require an MCP-host restart
+    to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
+  </div>
+  <div id="featuresBody"></div>
+  <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
+    <button class="danger-btn" id="stopSidecarBtn"
+            title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
+    >Permanently disable settings server</button>
+  </div>
+</div>
 <script>
 // Catch top-level / async script errors and surface them in the
 // status bar so a perpetually-"Loading" page becomes self-diagnosing
@@ -1148,15 +1154,27 @@ async function saveFeatureFlag(fieldName, value) {
     updateStatus(msg);
     return;
   }
+  // Don't toggle the in-tab restartNotice — it lives in panel-tools
+  // and would be hidden behind a tab the user isn't on. The page-level
+  // status badge (set above) is visible across every tab and the
+  // panel sub-header up top already warns "Changes require restart".
   updateStatus('Saved — restart required', true);
-  document.getElementById('restartNotice').classList.add('show');
 }
 
-document.getElementById('featuresHeader').addEventListener('click', () => {
-  const body = document.getElementById('featuresBody');
-  const chev = document.getElementById('featuresChevron');
-  body.classList.toggle('open');
-  chev.classList.toggle('open');
+// ===== Tab switching =====
+// Mirrors the exact pattern PR #1403 uses for the Backups tab so the
+// two PRs stack as parallel tabs (Tools / Server Settings / Backups)
+// without divergent switching logic to reconcile at merge time.
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t =>
+      t.classList.toggle('active', t === tab)
+    );
+    const target = tab.dataset.panel;
+    document.querySelectorAll('.panel').forEach(p =>
+      p.classList.toggle('active', p.id === 'panel-' + target)
+    );
+  });
 });
 
 loadFeatureFlags();
