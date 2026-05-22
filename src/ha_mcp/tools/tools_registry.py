@@ -374,14 +374,20 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     (d for d in all_devices if d.get("id") == device_id), None
                 )
                 if not device:
+                    available_device_ids = [
+                        d.get("id") for d in all_devices[:10] if d.get("id")
+                    ]
                     raise_tool_error(
                         create_error_response(
-                            ErrorCode.ENTITY_NOT_FOUND,
+                            ErrorCode.RESOURCE_NOT_FOUND,
                             f"Device not found: {device_id}",
                             suggestions=[
                                 "Use ha_get_device() to find valid device IDs",
                             ],
-                            context={"device_id": device_id},
+                            context={
+                                "device_id": device_id,
+                                "available_device_ids": available_device_ids,
+                            },
                         )
                     )
 
@@ -741,14 +747,20 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             device = next((d for d in devices if d.get("id") == device_id), None)
 
             if not device:
+                available_device_ids = [
+                    d.get("id") for d in devices[:10] if d.get("id")
+                ]
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Device not found: {device_id}",
                         suggestions=[
                             "Use ha_get_device() to find valid device IDs",
                         ],
-                        context={"device_id": device_id},
+                        context={
+                            "device_id": device_id,
+                            "available_device_ids": available_device_ids,
+                        },
                     )
                 )
 

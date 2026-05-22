@@ -648,17 +648,19 @@ class TestDeviceGetNegativeInputs:
 
     Methodology: source-verified against tools_registry.py. When the
     requested device_id is not present in the device registry list,
-    raise_tool_error is invoked with ErrorCode.ENTITY_NOT_FOUND and the
-    message "Device not found: ...".
+    raise_tool_error is invoked with ErrorCode.RESOURCE_NOT_FOUND and the
+    message "Device not found: ..." (devices live in the device registry,
+    addressed by device_id UUID — not entities, so RESOURCE_NOT_FOUND is
+    the correct category per #1297).
     """
 
     async def test_get_device_nonexistent_device_id(self, mcp_client):
         """
         Test: ha_get_device(device_id="<nonexistent>") returns a structured
-        error with code ENTITY_NOT_FOUND, not success=True.
+        error with code RESOURCE_NOT_FOUND, not success=True.
 
         Source path: tools_registry.py — single-device lookup branch returns
-        ENTITY_NOT_FOUND when the device_id is absent from
+        RESOURCE_NOT_FOUND when the device_id is absent from
         config/device_registry/list.
         """
         data = await safe_call_tool(
@@ -670,8 +672,8 @@ class TestDeviceGetNegativeInputs:
         assert not data.get("success"), (
             f"Expected failure for nonexistent device_id, got success=True: {data}"
         )
-        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
-            f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data['error']}"
         )
         assert "suggestion" in data["error"], (
             "Error response should include a suggestion"

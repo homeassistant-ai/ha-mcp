@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -53,6 +54,17 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Distinctive prefix of the soft-failure warning emitted by
+# ``ha_config_set_automation`` when ``_poll_for_automation_entity``
+# exhausts ``_POLL_CADENCE`` without matching the new automation.
+# Exported so tests (e.g. ``test_poll_cadence_measurement.py``) can
+# detect a missed registration without hard-coding the literal —
+# rewording the warning becomes a compile-time coupling rather than
+# a silent test drift.
+NOT_VERIFIED_WARNING_PREFIX = (
+    "Automation was submitted to Home Assistant but the entity was not found"
+)
 
 
 def _normalize_automation_config(
@@ -795,7 +807,7 @@ class AutomationConfigTools:
             # If the client could not verify the entity was registered, warn but don't hard-fail.
             if result.get("entity_not_verified"):
                 result.setdefault("warnings", []).append(
-                    "Automation was submitted to Home Assistant but the entity was not found "
+                    f"{NOT_VERIFIED_WARNING_PREFIX} "
                     "after polling. The automation may still have been created -- check Home "
                     "Assistant logs and try reloading automations. Common causes: "
                     "automations.yaml vs automation.yaml filename mismatch, invalid config "
@@ -855,6 +867,13 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
+            # 404 during update only — create (identifier=None) never hits this branch.
+            if (
+                identifier
+                and isinstance(e, HomeAssistantAPIError)
+                and e.status_code == 404
+            ):
+                await self._raise_automation_not_found(identifier)
             suggestions = [
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
@@ -873,6 +892,57 @@ class AutomationConfigTools:
                 suggestions=suggestions,
             )
 
+    async def _list_automation_entity_ids(self) -> list[str]:
+        """Best-effort list of automation entity_ids (up to 10) from the entity registry.
+
+        Used to populate ``available_automation_ids`` in RESOURCE_NOT_FOUND
+        error context. Returns an empty list on any failure — caller treats
+        absence as "no IDs to report" rather than failing the structured
+        error raise. The 10-entry cap lives here (not at the callers) so a
+        new call site can't accidentally bloat the error payload.
+        """
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+        except Exception as e:
+            logger.debug("Failed to list automation entity_ids from registry: %s", e)
+            return []
+        entries = result.get("result", []) if isinstance(result, dict) else result
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry["entity_id"]
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("entity_id"), str)
+            and entry["entity_id"].startswith("automation.")
+        ][:10]
+
+    async def _raise_automation_not_found(self, identifier: str) -> None:
+        """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.
+
+        Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
+        by both the GET path (``_get_automation_config_internal``) and the
+        mutation paths (``ha_config_set_automation`` update branch,
+        ``ha_config_remove_automation``). Populates
+        ``available_automation_ids`` (up to 10) from the entity registry.
+        """
+        available_ids = await self._list_automation_entity_ids()
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Automation not found: {identifier}",
+                context={
+                    "automation_id": identifier,
+                    "available_automation_ids": available_ids,
+                },
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                ],
+            )
+        )
+
     async def _get_automation_config_internal(
         self, identifier: str
     ) -> tuple[dict[str, Any], str]:
@@ -880,8 +950,18 @@ class AutomationConfigTools:
 
         Returns (normalized_config, config_hash) tuple.
         Used internally by _fetch_and_verify_hash and ha_config_get_automation.
+
+        Raises a structured ``RESOURCE_NOT_FOUND`` ToolError via
+        ``_raise_automation_not_found`` when the REST client returns 404.
+        Other ``HomeAssistantAPIError`` instances propagate unchanged to
+        caller exception handlers (``exception_to_structured_error`` route).
         """
-        config_result = await self._client.get_automation_config(identifier)
+        try:
+            config_result = await self._client.get_automation_config(identifier)
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                await self._raise_automation_not_found(identifier)
+            raise
         normalized_config = _normalize_config_for_roundtrip(config_result)
         config_hash_value = compute_config_hash(normalized_config)
         return normalized_config, config_hash_value
@@ -1161,6 +1241,8 @@ class AutomationConfigTools:
         except ToolError:
             raise
         except Exception as e:
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_automation_not_found(identifier)
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "delete"},

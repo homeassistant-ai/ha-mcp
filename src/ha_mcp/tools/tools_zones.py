@@ -98,7 +98,7 @@ class ZoneTools:
                 available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Zone not found: {zone_id}",
                         context={
                             "zone_id": zone_id,
@@ -126,7 +126,7 @@ class ZoneTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
-                    "Use ha_search_entities(domain_filter='zone') as alternative",
+                    "Use ha_get_zone() without zone_id to see all available zones",
                 ],
             )
 
@@ -318,6 +318,18 @@ class ZoneTools:
                     response["updated_fields"] = list(fields_to_update.keys())
                 return response
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Zone not found: {zone_id}",
+                            context={"zone_id": zone_id, "operation": operation},
+                            suggestions=[
+                                "Use ha_get_zone() without zone_id to see all available zones",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
@@ -394,6 +406,18 @@ class ZoneTools:
                     "message": f"Successfully removed zone: {zone_id}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Zone not found: {zone_id}",
+                            context={"zone_id": zone_id},
+                            suggestions=[
+                                "Use ha_get_zone() without zone_id to see all available zones",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,

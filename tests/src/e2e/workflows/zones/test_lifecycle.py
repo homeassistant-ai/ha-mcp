@@ -181,9 +181,7 @@ class TestZoneLifecycle:
 
             for zone in list_data.get("zones", []):
                 if zone.get("id") == zone_id:
-                    assert zone.get("passive") is True, (
-                        f"Passive mode not set: {zone}"
-                    )
+                    assert zone.get("passive") is True, f"Passive mode not set: {zone}"
                     break
             logger.info("Passive mode verified")
 
@@ -416,9 +414,7 @@ class TestZoneLifecycle:
             zone_ids_in_list = [z.get("id") for z in list_data.get("zones", [])]
 
             for zone_id in created_zone_ids:
-                assert zone_id in zone_ids_in_list, (
-                    f"Zone {zone_id} not found in list"
-                )
+                assert zone_id in zone_ids_in_list, f"Zone {zone_id} not found in list"
             logger.info("All zones verified in list")
 
             # Update all zones
@@ -450,9 +446,13 @@ class TestZoneLifecycle:
                 )
             logger.info("All zone deletions verified")
 
-
     async def test_zone_get_nonexistent(self, mcp_client):
-        """Test ha_get_zone returns ENTITY_NOT_FOUND for unknown zone_id."""
+        """Test ha_get_zone returns RESOURCE_NOT_FOUND for unknown zone_id.
+
+        Zones are addressed by registry-internal ``zone_id`` here (not by
+        their ``zone.<name>`` entity_id), so RESOURCE_NOT_FOUND is the
+        correct category per #1297.
+        """
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_failure(
                 "ha_get_zone",
@@ -460,7 +460,8 @@ class TestZoneLifecycle:
                 expected_error="Zone not found",
             )
 
-        assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
+
 
 async def test_zone_search_discovery(mcp_client):
     """

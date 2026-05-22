@@ -1533,8 +1533,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 ],
                 context={"action": "delete"},
             )
-            resolved, _ = await _resolve_dashboard(client, url_path)
+            resolved, dashboards = await _resolve_dashboard(client, url_path)
             if resolved is None:
+                available_ids = [
+                    d.get("url_path")
+                    for d in (dashboards or [])[:10]
+                    if d.get("url_path")
+                ]
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
@@ -1544,7 +1549,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                             "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                             "YAML-mode and default dashboards are not deletable via this tool",
                         ],
-                        context={"action": "delete", "url_path": url_path},
+                        context={
+                            "action": "delete",
+                            "url_path": url_path,
+                            "available_dashboard_ids": available_ids,
+                        },
                     )
                 )
             resolved_id = resolved["id"]

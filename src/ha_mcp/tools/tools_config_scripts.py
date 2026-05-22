@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
@@ -91,7 +92,10 @@ class ConfigScriptTools:
     async def ha_config_get_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier (e.g., 'morning_routine')")
+            str,
+            Field(
+                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
     ) -> dict[str, Any]:
         """
@@ -101,15 +105,28 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
 
         EXAMPLES:
-        - Get script: ha_config_get_script("morning_routine")
-        - Get script: ha_config_get_script("backup_script")
+        - Get script (bare form): ha_config_get_script("morning_routine")
+        - Get script (entity_id form): ha_config_get_script("script.morning_routine")
 
         For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # 404-ing at ``get_script_config("")``. Accept entity_id form
+            # (``script.foo``) and bare storage key (``foo``) — behavioral
+            # parity with ``ha_config_get_automation`` (mechanism differs:
+            # automations resolve via state lookup; scripts strip the
+            # prefix). ``_raise_script_not_found`` suggests
+            # ``ha_search_entities(domain_filter='script')`` which returns
+            # entity_ids; without this strip, feeding that output back into
+            # the GET tool fails and reseeds the wrong-tool spiral that
+            # #1297 closes.
+            script_id = script_id.removeprefix("script.")
             # Empty/whitespace script_id would propagate to
             # ``get_script_config`` and surface as a misleading
             # ``RESOURCE_NOT_FOUND``. Extension of the #1312
@@ -123,7 +140,7 @@ class ConfigScriptTools:
                     "Use ha_search_entities(domain_filter='script') to list scripts",
                 ],
             )
-            config_result = await self._client.get_script_config(script_id)
+            config_result = await self._fetch_script_config_envelope(script_id)
             # Extract actual script config body and compute hash before category injection
             actual_config = config_result.get("config", config_result)
             config_hash_value = compute_config_hash(actual_config)
@@ -171,6 +188,76 @@ class ConfigScriptTools:
                 ],
             )
 
+    async def _list_script_entity_ids(self) -> list[str]:
+        """Best-effort list of bare script IDs (up to 10) from the entity registry.
+
+        Returns the bare storage keys (e.g. ``morning_routine``), stripping
+        the ``script.`` entity_id prefix — ``ha_config_get_script`` /
+        ``ha_config_set_script`` / ``ha_config_remove_script`` all take the
+        bare form, so the entity_id prefix would force callers to strip it
+        before retry. Returns an empty list on any failure — caller treats
+        absence as "no IDs to report" rather than failing the structured
+        error raise. The 10-entry cap lives here (not at the callers) so a
+        new call site can't accidentally bloat the error payload.
+        """
+        try:
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+        except Exception as e:
+            logger.debug("Failed to list script entity_ids from registry: %s", e)
+            return []
+        entries = result.get("result", []) if isinstance(result, dict) else result
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry["entity_id"][len("script.") :]
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("entity_id"), str)
+            and entry["entity_id"].startswith("script.")
+        ][:10]
+
+    async def _raise_script_not_found(self, script_id: str) -> None:
+        """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
+
+        Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
+        by the GET path (``_fetch_script_config_envelope``) and the
+        mutation paths (``ha_config_set_script`` update branch,
+        ``ha_config_remove_script``). Populates ``available_script_ids``
+        (up to 10 bare IDs) from the entity registry.
+        """
+        available_ids = await self._list_script_entity_ids()
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Script not found: {script_id}",
+                context={
+                    "script_id": script_id,
+                    "available_script_ids": available_ids,
+                },
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='script') to find existing scripts"
+                ],
+            )
+        )
+
+    async def _fetch_script_config_envelope(self, script_id: str) -> dict[str, Any]:
+        """Fetch the raw REST envelope, mapping 404 to RESOURCE_NOT_FOUND.
+
+        Returns the dict envelope from ``rest_client.get_script_config``
+        (``success``/``script_id``/``config`` keys). Raises a structured
+        ``RESOURCE_NOT_FOUND`` ToolError via ``_raise_script_not_found`` on
+        404. Other ``HomeAssistantAPIError`` instances propagate unchanged
+        to caller exception handlers.
+        """
+        try:
+            return cast(dict[str, Any], await self._client.get_script_config(script_id))
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                await self._raise_script_not_found(script_id)
+            raise
+
     async def _get_script_config_internal(
         self, script_id: str
     ) -> tuple[dict[str, Any], str]:
@@ -179,8 +266,11 @@ class ConfigScriptTools:
         Returns (actual_config, config_hash) tuple where actual_config is
         the inner script body (not the REST wrapper).
         Used internally by _fetch_and_verify_hash and ha_config_get_script.
+
+        404 responses from the REST client are mapped to a structured
+        ``RESOURCE_NOT_FOUND`` ToolError via ``_fetch_script_config_envelope``.
         """
-        config_result = await self._client.get_script_config(script_id)
+        config_result = await self._fetch_script_config_envelope(script_id)
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
         return actual_config, config_hash_value
@@ -287,7 +377,10 @@ class ConfigScriptTools:
     async def ha_config_set_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier (e.g., 'morning_routine')")
+            str,
+            Field(
+                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
         config: Annotated[
             str | dict[str, Any] | None,
@@ -464,6 +557,18 @@ class ConfigScriptTools:
         """
         bp_warnings: list[str] = []
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # writing a phantom ``script.foo`` storage key — HA keys writes
+            # by the literal ``script_id``, so passing ``"script.foo"``
+            # unchanged makes the row invisible to a later
+            # ``ha_config_get_script("foo")``. Behavioral parity with
+            # ``ha_config_get_script`` so an agent that received an
+            # entity_id (``script.foo``) from
+            # ``ha_search_entities(domain_filter='script')`` can update it
+            # without a manual prefix-strip step.
+            script_id = script_id.removeprefix("script.")
             # ``script_id`` is required (always non-None). Reject empty/
             # whitespace up-front so the caller gets a structured parameter
             # error instead of a misleading ``RESOURCE_NOT_FOUND`` from
@@ -667,6 +772,11 @@ class ConfigScriptTools:
                     "Config had best-practice issues that may be related: "
                     + "; ".join(bp_warnings)
                 )
+            # 404 during update only — the create path raises on its own when
+            # the upsert hits an unknown identifier server-side. The bare
+            # script_id form is what callers pass and what the registry stores.
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_script_not_found(script_id)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
@@ -687,7 +797,10 @@ class ConfigScriptTools:
     async def ha_config_remove_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier to delete (e.g., 'old_script')")
+            str,
+            Field(
+                description="Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
         wait: Annotated[
             bool | str,
@@ -714,6 +827,14 @@ class ConfigScriptTools:
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # producing a ``script.script.foo`` entity_id for the
+            # ``wait_for_entity_removed`` watcher below — that mis-formed
+            # entity_id never registers so the watcher times out on a
+            # phantom. Behavioral parity with ``ha_config_get_script``.
+            script_id = script_id.removeprefix("script.")
             # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
                 script_id,
@@ -744,6 +865,8 @@ class ConfigScriptTools:
         except ToolError:
             raise
         except Exception as e:
+            if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+                await self._raise_script_not_found(script_id)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},

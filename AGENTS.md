@@ -705,7 +705,7 @@ results.append(create_error_response(
 
 Only use `raise_error=False` on `exception_to_structured_error` when you need to mutate the dict before raising. Never add `add_timezone_metadata` to errors.
 
-`exception_to_structured_error` auto-classifies 404s, auth errors, timeouts by exception type. Pass `context={"entity_id": ...}` for automatic `ENTITY_NOT_FOUND` on 404s. Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_resource_not_found_error`, `create_error_response`.
+`exception_to_structured_error` auto-classifies 404s, auth errors, timeouts by exception type. Pass `context={"entity_id": ...}` for automatic `ENTITY_NOT_FOUND` on 404s. Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_error_response`.
 
 ### Return Values
 ```python

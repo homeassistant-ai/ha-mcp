@@ -89,6 +89,21 @@ logger = logging.getLogger(__name__)
 _READINESS_TIMINGS: list[dict[str, Any]] = []
 _ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 
+# Parallel channel for the #1389 ``_POLL_CADENCE`` measurement —
+# mirrors the xdist round-trip used by ``_READINESS_TIMINGS`` above.
+_POLL_CADENCE_MEASUREMENTS: list[dict[str, Any]] = []
+_ALL_POLL_CADENCE_MEASUREMENTS: list[dict[str, Any]] = []
+
+
+def record_poll_cadence_measurement(measurement: dict[str, Any]) -> None:
+    """Record a single #1389 measurement run from a test method.
+
+    See the call site in
+    ``workflows/automation/test_poll_cadence_measurement.py`` for the
+    measurement dict shape — that file owns the schema.
+    """
+    _POLL_CADENCE_MEASUREMENTS.append(measurement)
+
 
 def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     """Record a fixture-side readiness-gate timing data point.
@@ -178,6 +193,8 @@ def pytest_sessionfinish(session, exitstatus):
     workeroutput = getattr(session.config, "workeroutput", None)
     if workeroutput is not None and _READINESS_TIMINGS:
         workeroutput["readiness_timings"] = list(_READINESS_TIMINGS)
+    if workeroutput is not None and _POLL_CADENCE_MEASUREMENTS:
+        workeroutput["poll_cadence_measurements"] = list(_POLL_CADENCE_MEASUREMENTS)
 
 
 def pytest_testnodedown(node, error):
@@ -187,8 +204,11 @@ def pytest_testnodedown(node, error):
     the worker crashed — we still try to drain whatever it managed to
     record.
     """
-    timings = getattr(node, "workeroutput", {}).get("readiness_timings", [])
-    _ALL_READINESS_TIMINGS.extend(timings)
+    workeroutput = getattr(node, "workeroutput", {})
+    _ALL_READINESS_TIMINGS.extend(workeroutput.get("readiness_timings", []))
+    _ALL_POLL_CADENCE_MEASUREMENTS.extend(
+        workeroutput.get("poll_cadence_measurements", [])
+    )
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -230,6 +250,24 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             f"finished async_setup_entry after CoreState.RUNNING; "
             f"follow-up gate justified."
         )
+
+    # #1389 _POLL_CADENCE measurement section — same xdist-aware plumbing
+    # as the readiness gates above. Falls back to the local list when running
+    # without xdist (no ``pytest_testnodedown`` fires in that mode).
+    poll_measurements = _ALL_POLL_CADENCE_MEASUREMENTS or _POLL_CADENCE_MEASUREMENTS
+    if poll_measurements:
+        terminalreporter.section("#1389 _POLL_CADENCE measurement")
+        for m in poll_measurements:
+            terminalreporter.write_line(
+                f"[POLL_CADENCE_1389] N={m['n']}/{m.get('attempts', m['n'])} "
+                f"p50={m['p50']:.1f}ms p90={m['p90']:.1f}ms "
+                f"worst={m['worst']:.1f}ms "
+                f"min={m['min']:.1f}ms max={m['max']:.1f}ms "
+                f"not_verified={m['not_verified']} VERDICT={m['verdict']}"
+            )
+            terminalreporter.write_line(
+                f"[POLL_CADENCE_1389] samples_ms={m['samples']}"
+            )
 
 
 def _is_missing_column_or_table_error(exc: sqlite3.OperationalError) -> bool:
