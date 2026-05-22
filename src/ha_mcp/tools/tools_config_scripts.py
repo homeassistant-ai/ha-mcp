@@ -104,7 +104,7 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — symmetry with `ha_config_get_automation`.
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
 
         EXAMPLES:
         - Get script (bare form): ha_config_get_script("morning_routine")
@@ -113,6 +113,19 @@ class ConfigScriptTools:
         For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # 404-ing at ``get_script_config("")``. Accept entity_id form
+            # (``script.foo``) and bare storage key (``foo``) — behavioral
+            # parity with ``ha_config_get_automation`` (mechanism differs:
+            # automations resolve via state lookup; scripts strip the
+            # prefix). ``_raise_script_not_found`` suggests
+            # ``ha_search_entities(domain_filter='script')`` which returns
+            # entity_ids; without this strip, feeding that output back into
+            # the GET tool fails and reseeds the wrong-tool spiral that
+            # #1297 closes.
+            script_id = script_id.removeprefix("script.")
             # Empty/whitespace script_id would propagate to
             # ``get_script_config`` and surface as a misleading
             # ``RESOURCE_NOT_FOUND``. Extension of the #1312
@@ -126,14 +139,6 @@ class ConfigScriptTools:
                     "Use ha_search_entities(domain_filter='script') to list scripts",
                 ],
             )
-            # Accept entity_id form (``script.foo``) and bare storage
-            # key (``foo``) — mirrors ``ha_config_get_automation``.
-            # ``_raise_script_not_found`` suggests
-            # ``ha_search_entities(domain_filter='script')`` which
-            # returns entity_ids; without this strip, feeding that
-            # output back into the GET tool fails and reseeds the
-            # wrong-tool spiral that #1297 closes.
-            script_id = script_id.removeprefix("script.")
             config_result = await self._fetch_script_config_envelope(script_id)
             # Extract actual script config body and compute hash before category injection
             actual_config = config_result.get("config", config_result)
@@ -370,7 +375,10 @@ class ConfigScriptTools:
     async def ha_config_set_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier (e.g., 'morning_routine')")
+            str,
+            Field(
+                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
         config: Annotated[
             str | dict[str, Any] | None,
@@ -547,6 +555,18 @@ class ConfigScriptTools:
         """
         bp_warnings: list[str] = []
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # writing a phantom ``script.foo`` storage key — HA keys writes
+            # by the literal ``script_id``, so passing ``"script.foo"``
+            # unchanged makes the row invisible to a later
+            # ``ha_config_get_script("foo")``. Behavioral parity with
+            # ``ha_config_get_script`` so an agent that received an
+            # entity_id (``script.foo``) from
+            # ``ha_search_entities(domain_filter='script')`` can update it
+            # without a manual prefix-strip step.
+            script_id = script_id.removeprefix("script.")
             # ``script_id`` is required (always non-None). Reject empty/
             # whitespace up-front so the caller gets a structured parameter
             # error instead of a misleading ``RESOURCE_NOT_FOUND`` from
@@ -774,7 +794,10 @@ class ConfigScriptTools:
     async def ha_config_remove_script(
         self,
         script_id: Annotated[
-            str, Field(description="Script identifier to delete (e.g., 'old_script')")
+            str,
+            Field(
+                description="Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup."
+            ),
         ],
         wait: Annotated[
             bool | str,
@@ -801,6 +824,14 @@ class ConfigScriptTools:
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
+            # Strip BEFORE validate so a bare ``"script."`` (empty after
+            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
+            # than slipping through validate (non-empty pre-strip) and
+            # producing a ``script.script.foo`` entity_id for the
+            # ``wait_for_entity_removed`` watcher below — that mis-formed
+            # entity_id never registers so the watcher times out on a
+            # phantom. Behavioral parity with ``ha_config_get_script``.
+            script_id = script_id.removeprefix("script.")
             # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
                 script_id,

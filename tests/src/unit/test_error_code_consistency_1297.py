@@ -584,9 +584,12 @@ class TestGetScriptMissingSurfacesAvailableIds:
     must surface ``RESOURCE_NOT_FOUND`` + ``available_script_ids`` (first-10
     bare IDs from the entity registry, filtered by ``script.`` prefix and
     stripped to the bare form ``ha_config_get_script(script_id=...)`` takes).
-    Mirrors the automations shape — both tools now accept either the bare
-    storage key (``foo``) or the entity_id form (``script.foo`` /
-    ``automation.foo``) via a leading-prefix strip at the function head.
+    Behavioral parity with ``ha_config_get_automation`` — both tools accept
+    either the bare storage key (``foo``) or the entity_id form
+    (``script.foo`` / ``automation.foo``). The mechanism differs: automations
+    resolve via state lookup (``_resolve_automation_entity_id``); scripts
+    strip a leading ``script.`` prefix at the function head before the REST
+    call.
     """
 
     @pytest.fixture
@@ -713,6 +716,145 @@ class TestGetScriptAcceptsEntityIdForm:
 
         mock_client.get_script_config.assert_awaited_once_with("my_script.backup")
         assert result["script_id"] == "my_script.backup"
+
+    async def test_nested_prefix_one_layer_strip(self, tools, mock_client):
+        # ``removeprefix`` strips exactly one leading occurrence, so
+        # ``script.script.foo`` becomes ``script.foo`` (not ``foo``). The
+        # second ``script.`` is preserved as part of the bare key.
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "script_id": "script.foo",
+                "config": {"sequence": []},
+            }
+        )
+        result = await tools.ha_config_get_script(script_id="script.script.foo")
+
+        mock_client.get_script_config.assert_awaited_once_with("script.foo")
+        assert result["script_id"] == "script.foo"
+
+
+class TestScriptStripBeforeValidate:
+    """Regression: ``"script."`` (entity_id form with empty bare key) must
+    surface ``VALIDATION_INVALID_PARAMETER`` from
+    ``validate_identifier_not_empty``, not slip through validate
+    (non-empty pre-strip) and 404 at the downstream REST call. Pinned for
+    all three tools that perform the strip (KP13 #1397 fifth-pass).
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_services = AsyncMock(return_value={})
+        client.get_states = AsyncMock(return_value=[])
+        client.get_script_config = AsyncMock(
+            return_value={"script_id": "", "config": {}}
+        )
+        client.upsert_script_config = AsyncMock(return_value={})
+        client.delete_script_config = AsyncMock(return_value={})
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_get_script_empty_after_strip_is_invalid_parameter(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_get_script(script_id="script.")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.get_script_config.assert_not_called()
+
+    async def test_set_script_empty_after_strip_is_invalid_parameter(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="script.",
+                config={"sequence": [{"delay": {"seconds": 1}}]},
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_remove_script_empty_after_strip_is_invalid_parameter(
+        self, tools, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_remove_script(script_id="script.")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.delete_script_config.assert_not_called()
+
+
+class TestSetRemoveScriptAcceptEntityIdForm:
+    """Regression: ``ha_config_set_script`` and ``ha_config_remove_script``
+    strip a leading ``script.`` prefix at the function head, mirroring
+    ``ha_config_get_script`` (KP13 #1397 fifth-pass). Closes the wrong-tool
+    spiral where ``ha_search_entities(domain_filter='script')`` returns
+    entity_ids that would otherwise produce phantom ``script.script.foo``
+    storage keys on upsert / ``script.script.foo`` watcher targets on remove.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_services = AsyncMock(return_value={})
+        client.get_states = AsyncMock(return_value=[])
+        client.upsert_script_config = AsyncMock(
+            return_value={"script_id": "morning_routine"}
+        )
+        client.delete_script_config = AsyncMock(return_value={"success": True})
+        client.get_script_config = AsyncMock(
+            return_value={
+                "script_id": "morning_routine",
+                "config": {"sequence": [], "mode": "single"},
+            }
+        )
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+        return ConfigScriptTools(mock_client)
+
+    async def test_set_script_entity_id_form_routes_to_bare_key(
+        self, tools, mock_client
+    ):
+        await tools.ha_config_set_script(
+            script_id="script.morning_routine",
+            config={"sequence": [{"delay": {"seconds": 1}}]},
+            wait=False,
+        )
+
+        # Upsert is called with the bare storage key — not the entity_id
+        # form — so the registry doesn't get a phantom ``script.script.*``.
+        mock_client.upsert_script_config.assert_awaited_once()
+        _, called_script_id = mock_client.upsert_script_config.call_args[0]
+        assert called_script_id == "morning_routine"
+
+    async def test_remove_script_entity_id_form_routes_to_bare_key(
+        self, tools, mock_client
+    ):
+        await tools.ha_config_remove_script(
+            script_id="script.morning_routine",
+            wait=False,
+        )
+
+        mock_client.delete_script_config.assert_awaited_once_with("morning_routine")
 
 
 # ---------------------------------------------------------------------------
