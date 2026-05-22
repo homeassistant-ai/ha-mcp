@@ -1231,7 +1231,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "area_analysis, ai_insights, pagination, partial, warnings, "
                     "device_types, service_availability, system_info, "
                     "notification_count, notifications, repair_count, repairs, "
-                    "repairs_error, tool_discovery."
+                    "repairs_error, tool_discovery. The ``settings_url`` "
+                    "field (stdio mode only, see tool description) is not "
+                    "subject to this projection — it is always included "
+                    "when the settings-UI sidecar is running."
                 ),
             ),
         ] = None,
@@ -1249,6 +1252,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use fields= to project the response to only the keys you need — a
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
+
+        When the ha-mcp settings-UI sidecar is running (stdio mode, e.g.
+        Claude Desktop / Claude Code), the response always includes a
+        ``settings_url`` field — the local URL to the tool-configuration
+        page. Hand this URL to the user when they ask how to enable or
+        disable tools or change server settings. ``settings_url`` is
+        emitted regardless of ``fields=`` projection so it stays
+        discoverable even when callers minimize the response.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so
@@ -1441,16 +1452,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # the FastMCP server directly. A leftover URL file from a prior
         # stdio run on the same machine could in principle be surfaced
         # by an HTTP-mode process — acceptable because the URL itself
-        # is gated by the random secret path either way. Added before
-        # the fields= projection so callers can request just
-        # ``settings_url`` via ``fields=["settings_url"]``.
+        # is gated by the random secret path either way.
+        #
+        # Added *after* ``project_fields`` so it survives every
+        # ``fields=`` projection — even an LLM that calls
+        # ``fields=["system_info"]`` (to minimize payload) still sees
+        # the URL and can hand it to the user. Hiding it behind the
+        # projection made it effectively invisible to less-attentive
+        # LLMs that scanned only the documented ``fields=`` enum.
         from ..stdio_settings_sidecar import read_sidecar_url
 
+        projected = project_fields(result, parsed_fields)
         sidecar_url = read_sidecar_url()
         if sidecar_url:
-            result["settings_url"] = sidecar_url
+            projected["settings_url"] = sidecar_url
 
-        return project_fields(result, parsed_fields)
+        return projected
 
     @mcp.tool(
         tags={"Search & Discovery"},

@@ -610,7 +610,7 @@ async function loadTools() {
 async function stopSidecar() {
   const btn = document.getElementById('stopSidecarBtn');
   if (!confirm(
-    'Stop the settings server?\n\n' +
+    'Stop the settings server?\\n\\n' +
     'A "disabled" sentinel file will be written so the server does not ' +
     'respawn the next time ha-mcp starts. To re-enable, delete the file ' +
     'at ~/.ha-mcp/settings_ui_disabled (or unset HA_MCP_DISABLE_SETTINGS_UI).'

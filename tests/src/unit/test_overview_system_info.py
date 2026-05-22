@@ -372,3 +372,28 @@ class TestHaGetOverviewSettingsUrl:
         )
         result = await overview_tool(detail_level="minimal")
         assert "settings_url" not in result
+
+    @pytest.mark.asyncio
+    async def test_settings_url_survives_fields_projection(
+        self, overview_tool, monkeypatch
+    ):
+        """``settings_url`` MUST be returned even when ``fields=`` filters
+        the rest of the payload.
+
+        A less-attentive LLM that minimizes payload via
+        ``fields=["system_info"]`` (or any narrow projection) would
+        otherwise lose the URL silently — and the LLM cannot hand the
+        user a URL it never receives. Pinning the post-projection
+        emission keeps ``settings_url`` discoverable regardless of how
+        the caller scopes the overview response.
+        """
+        url = "http://127.0.0.1:8099/private_abc/settings"
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url",
+            lambda: url,
+        )
+        result = await overview_tool(fields=["system_info"])
+        assert result.get("settings_url") == url
+        # system_info is still projected; settings_url is the only
+        # extra survivor (plus the always-retained success/warnings).
+        assert "system_info" in result
