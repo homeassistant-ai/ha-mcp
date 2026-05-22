@@ -856,6 +856,30 @@ class TestSetRemoveScriptAcceptEntityIdForm:
 
         mock_client.delete_script_config.assert_awaited_once_with("morning_routine")
 
+    async def test_remove_script_wait_watcher_target_is_post_strip(
+        self, tools, mock_client
+    ):
+        # The strip's load-bearing job on the remove path is preventing the
+        # ``script.script.foo`` watcher phantom — ``entity_id = f"script.
+        # {script_id}"`` at tools_config_scripts.py:848 builds the watcher
+        # target post-strip. A future refactor that drops the strip would
+        # regress silently if only the ``wait=False`` test exists.
+        from unittest.mock import patch
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_removed",
+            new=AsyncMock(return_value=True),
+        ) as mock_watcher:
+            await tools.ha_config_remove_script(
+                script_id="script.morning_routine",
+                wait=True,
+            )
+
+        mock_client.delete_script_config.assert_awaited_once_with("morning_routine")
+        mock_watcher.assert_awaited_once()
+        _, watcher_entity_id = mock_watcher.call_args[0]
+        assert watcher_entity_id == "script.morning_routine"
+
 
 # ---------------------------------------------------------------------------
 # Mutation-path parity for automations / scripts (KP13 #1397 third-pass): the
