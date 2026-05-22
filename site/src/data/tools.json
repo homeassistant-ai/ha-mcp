@@ -2777,52 +2777,6 @@
     "source_file": "tools_services.py"
   },
   {
-    "name": "ha_backup_create",
-    "title": "Create Backup",
-    "description": "Create a fast Home Assistant backup (local only).",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "type": "Annotated[str | None, Field(description=\"Backup name (auto-generated if not provided, e.g., 'MCP_Backup_2025-10-05_04:30')\", default=None)]",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "System"
-    ],
-    "source_file": "backup.py"
-  },
-  {
-    "name": "ha_backup_restore",
-    "title": "Restore Backup",
-    "description": "Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).\n\n**⚠️ WARNING - DESTRUCTIVE OPERATION ⚠️**\n\n**This tool restarts Home Assistant and restores configuration to a previous state.**\n\n**IMPORTANT CONSIDERATIONS:**\n1. **Try undo operations first** - Often you can just reverse what you did:\n   - Deleted automation? Recreate it with ha_config_set_automation\n   - Modified script? Use ha_config_set_script to fix it\n   - Most config changes can be rolled back without using restore\n\n2. **Safety mechanism:** A NEW backup is automatically created BEFORE restore\n   - This allows you to rollback the restore if needed\n   - You can restore from this pre-restore backup if something goes wrong\n\n3. **What gets restored:**\n   - Home Assistant configuration (automations, scripts, etc.)\n   - Add-ons (if they were in the backup)\n   - Optional: Database - historical sensor data, statistics, state history (set restore_database=true)\n\n4. **Side effects:**\n   - Home Assistant will RESTART during restore\n   - Any changes made after the backup was created will be LOST\n   - Temporary disconnection from all integrations during restart\n\n**Recommended workflow:**\n1. Try to undo your changes manually first\n2. If you must restore, use the most recent backup\n3. Set restore_database=false unless you need historical data\n4. Expect a restart and temporary downtime\n\n**Example Usage:**\n- Restore config only: ha_backup_restore(\"dd7550ed\")\n- Full restore with DB: ha_backup_restore(\"dd7550ed\", restore_database=true)\n\n**Returns:** Restore job status",
-    "inputSchema": {
-      "properties": {
-        "backup_id": {
-          "type": "Annotated[str, Field(description=\"Backup ID to restore (e.g., 'dd7550ed' from backup list or ha_backup_create result)\")]"
-        },
-        "restore_database": {
-          "type": "Annotated[bool, Field(description='Restore database (default: false for config-only restore)', default=False)]",
-          "default": false
-        }
-      },
-      "required": [
-        "backup_id"
-      ]
-    },
-    "annotations": {
-      "destructiveHint": true
-    },
-    "tags": [
-      "System"
-    ],
-    "source_file": "backup.py"
-  },
-  {
     "name": "ha_check_config",
     "title": "Check Configuration",
     "description": "Check Home Assistant configuration for errors.\n\nValidates configuration files without applying changes.\nAlways run this before ha_restart() to ensure configuration is valid.",
@@ -2905,6 +2859,64 @@
       "System"
     ],
     "source_file": "tools_updates.py"
+  },
+  {
+    "name": "ha_manage_backup",
+    "title": "Manage Backups",
+    "description": "Polymorphic backup tool. See the tool description for the routing matrix.",
+    "inputSchema": {
+      "properties": {
+        "scope": {
+          "type": "Annotated[Literal['snapshot', 'edits'], Field(description=\"'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups.\")]"
+        },
+        "action": {
+          "type": "Annotated[Literal['create', 'restore', 'list', 'view', 'delete'], Field(description='Operation to perform. Valid (scope, action) combinations are listed in the tool description.')]"
+        },
+        "name": {
+          "type": "Annotated[str | None, Field(default=None, description='(snapshot.create) Tarball name. Auto-generated if not provided.')]",
+          "default": null
+        },
+        "backup_id": {
+          "type": "Annotated[str | None, Field(default=None, description=\"(snapshot.restore) Tarball ID to restore (e.g. 'dd7550ed').\")]",
+          "default": null
+        },
+        "restore_database": {
+          "type": "Annotated[bool, Field(default=False, description='(snapshot.restore) Include database in the restore. Default false (config-only).')]",
+          "default": false
+        },
+        "domain": {
+          "type": "Annotated[str | None, Field(default=None, description=\"(edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer').\")]",
+          "default": null
+        },
+        "entity_id": {
+          "type": "Annotated[str | None, Field(default=None, description='(edits.list / edits.delete) Filter auto-backups by entity ID.')]",
+          "default": null
+        },
+        "backup_name": {
+          "type": "Annotated[str | None, Field(default=None, description=\"(edits.view / edits.restore / edits.delete) Auto-backup filename (format '<domain>.<entity_id>.<timestamp>.yaml'). Not a tarball ID.\")]",
+          "default": null
+        },
+        "older_than_days": {
+          "type": "Annotated[int | None, Field(default=None, ge=0, description='(edits.delete) Bulk-delete auto-backups older than this many days.')]",
+          "default": null
+        },
+        "limit": {
+          "type": "Annotated[int, Field(default=200, ge=1, le=10000, description='(edits.list) Maximum number of entries to return.')]",
+          "default": 200
+        }
+      },
+      "required": [
+        "scope",
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "System"
+    ],
+    "source_file": "backup.py"
   },
   {
     "name": "ha_manage_custom_tool",
