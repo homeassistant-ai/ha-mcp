@@ -895,8 +895,6 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAPIError: If configuration invalid or API error
         """
-        import time
-
         # Generate unique_id for new automation if not provided
         if identifier is None:
             unique_id = str(int(time.time() * 1000))
@@ -964,51 +962,51 @@ class HomeAssistantClient:
                 ) from e
             raise
 
-    # 3-attempt × 6s upper-bound budget; first poll 0.025s is a 5×
-    # cushion above the ~4ms HA-Core entity-registration latency
-    # measured by ``test_poll_cadence_measurement.py`` (#1389 — p50
-    # 104.1-104.8 ms on the prior 0.1s first-poll, all from the sleep
-    # itself with ~4 ms of real registration work).
-    _POLL_CADENCE: tuple[float, ...] = (0.025, 1.0, 4.975)
+    # Upper-bound budget for the WS-driven discovery wait (and its REST
+    # fallback). Preserves the 6s ceiling PR #1384 tuned for the legacy
+    # cadence loop; the WS path resolves in <1s on the happy path because
+    # ``state_changed`` fires as soon as HA hydrates the new entity. The
+    # cadence tuple itself is gone — uniform polling at ``poll_interval``
+    # is fine when the WS happy path is the primary route. #1389's
+    # cadence-measurement instrumentation also retired with the loop;
+    # the WS waiter logs `time.monotonic()` elapsed via its own debug
+    # line at ``util_helpers._ws_wait_for_condition``.
+    _POLL_BUDGET_S: float = 6.0
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
-        """Poll HA state to find the entity_id assigned to a newly created automation."""
-        # Measure cumulative elapsed from function entry to first successful match.
-        # Feeds the #1389 p50/p99 validation of `_POLL_CADENCE`.
-        start_monotonic = time.monotonic()
+        """Discover the entity_id assigned to a newly created automation.
+
+        Delegates to ``wait_for_automation_entity_by_unique_id`` which uses
+        a ``state_changed`` WebSocket subscription filtered on
+        ``new_state.attributes.id == unique_id`` and falls back to REST
+        polling of ``get_states()`` when the WebSocket is unavailable.
+        See #1152 / #1395 for context.
+        """
+        # Local import: ``util_helpers`` imports from ``rest_client`` for
+        # the typed-error classes, so a module-level import here would be
+        # circular. Mirrors the same pattern in ``_get_waiter_ws_client``.
+        from ..tools.util_helpers import wait_for_automation_entity_by_unique_id
+
         try:
-            for sleep_time in self._POLL_CADENCE:
-                await asyncio.sleep(sleep_time)
-                states = await self.get_states()
-                for state in states:
-                    if not state.get("entity_id", "").startswith("automation."):
-                        continue
-                    if state.get("attributes", {}).get("id") == unique_id:
-                        entity_id = state.get("entity_id")
-                        elapsed_ms = (time.monotonic() - start_monotonic) * 1000.0
-                        logger.debug(
-                            "entity-registration-elapsed: %.1fms "
-                            "(unique_id=%s, entity_id=%s)",
-                            elapsed_ms,
-                            unique_id,
-                            entity_id,
-                        )
-                        return entity_id
+            entity_id = await wait_for_automation_entity_by_unique_id(
+                self, unique_id, timeout=self._POLL_BUDGET_S
+            )
         except HomeAssistantError as e:
             # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
             # Mirrors test-side _POLLING_TRANSIENT_ERRORS in
             # tests/src/e2e/utilities/wait_helpers.py and styleguide §
             # "Exception Handling in Test Polling Loops".
             logger.warning(
-                f"Failed to query actual entity_id for unique_id {unique_id}: {e}",
+                f"Failed to discover entity_id for unique_id {unique_id}: {e}",
                 exc_info=True,
             )
             return None
 
-        logger.warning(
-            f"Automation with unique_id {unique_id} was not found in HA state after creation"
-        )
-        return None
+        if entity_id is not None:
+            logger.debug(
+                f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
+            )
+        return entity_id
 
     async def delete_automation_config(self, identifier: str) -> dict[str, Any]:
         """
