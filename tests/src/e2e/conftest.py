@@ -89,13 +89,8 @@ logger = logging.getLogger(__name__)
 _READINESS_TIMINGS: list[dict[str, Any]] = []
 _ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 
-# Same shape as ``_READINESS_TIMINGS``, parallel channel for the #1389
-# ``_POLL_CADENCE`` measurement. Lives at this conftest level (not deeper)
-# because pytest-xdist's master only loads conftests up to where tests
-# are collected; deeper subdir conftests don't get their hooks invoked
-# on the master, which is where ``pytest_terminal_summary`` writes to
-# the visible terminal output. See ``record_poll_cadence_measurement``
-# call site in ``workflows/automation/test_poll_cadence_measurement.py``.
+# Parallel channel for the #1389 ``_POLL_CADENCE`` measurement —
+# mirrors the xdist round-trip used by ``_READINESS_TIMINGS`` above.
 _POLL_CADENCE_MEASUREMENTS: list[dict[str, Any]] = []
 _ALL_POLL_CADENCE_MEASUREMENTS: list[dict[str, Any]] = []
 
@@ -103,8 +98,9 @@ _ALL_POLL_CADENCE_MEASUREMENTS: list[dict[str, Any]] = []
 def record_poll_cadence_measurement(measurement: dict[str, Any]) -> None:
     """Record a single #1389 measurement run from a test method.
 
-    Expected keys: ``n``, ``attempts``, ``p50``, ``p90``, ``p99``, ``min``,
-    ``max``, ``not_verified``, ``verdict``, ``samples``.
+    See the call site in
+    ``workflows/automation/test_poll_cadence_measurement.py`` for the
+    measurement dict shape — that file owns the schema.
     """
     _POLL_CADENCE_MEASUREMENTS.append(measurement)
 
@@ -264,7 +260,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         for m in poll_measurements:
             terminalreporter.write_line(
                 f"[POLL_CADENCE_1389] N={m['n']}/{m.get('attempts', m['n'])} "
-                f"p50={m['p50']:.1f}ms p90={m['p90']:.1f}ms p99={m['p99']:.1f}ms "
+                f"p50={m['p50']:.1f}ms p90={m['p90']:.1f}ms "
+                f"worst={m['worst']:.1f}ms "
                 f"min={m['min']:.1f}ms max={m['max']:.1f}ms "
                 f"not_verified={m['not_verified']} VERDICT={m['verdict']}"
             )

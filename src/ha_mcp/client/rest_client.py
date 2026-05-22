@@ -964,9 +964,12 @@ class HomeAssistantClient:
                 ) from e
             raise
 
-    # 3-attempt × 6s upper-bound budget; first poll 0.1s catches the
-    # typical sub-1s entity-publish window.
-    _POLL_CADENCE: tuple[float, ...] = (0.1, 1.0, 4.9)
+    # 3-attempt × 6s upper-bound budget; first poll 0.025s is a 5×
+    # cushion above the ~4ms HA-Core entity-registration latency
+    # measured by ``test_poll_cadence_measurement.py`` (#1389 — p50
+    # 104.1-104.8 ms on the prior 0.1s first-poll, all from the sleep
+    # itself with ~4 ms of real registration work).
+    _POLL_CADENCE: tuple[float, ...] = (0.025, 1.0, 4.975)
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Poll HA state to find the entity_id assigned to a newly created automation."""
