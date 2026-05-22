@@ -23,6 +23,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import util_helpers
 from ha_mcp.tools.util_helpers import (
+    wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
     wait_for_state_change,
@@ -395,12 +396,21 @@ class FakeWebSocketClient:
         if self._unsubscribe_failure is not None:
             raise self._unsubscribe_failure
 
-    async def fire_state_changed(self, entity_id: str) -> None:
-        """Dispatch a state_changed event to every registered handler."""
+    async def fire_state_changed(
+        self, entity_id: str, *, new_state: dict | None = None
+    ) -> None:
+        """Dispatch a state_changed event to every registered handler.
+
+        Default payload mirrors the legacy "entity_id only" shape used by
+        the ``wait_for_entity_*`` waiters. Pass ``new_state={...}`` to
+        include ``data.new_state`` — needed by discovery waiters (#1395)
+        whose filter inspects ``new_state.attributes``.
+        """
+        data: dict = {"entity_id": entity_id}
+        if new_state is not None:
+            data["new_state"] = new_state
         for handler in list(self.handlers.get("state_changed", [])):
-            await handler(
-                {"event_type": "state_changed", "data": {"entity_id": entity_id}}
-            )
+            await handler({"event_type": "state_changed", "data": data})
 
 
 @pytest.fixture
@@ -791,3 +801,361 @@ class TestWsPathUnsubscribeFailureTolerance:
         assert result is True
         # Both sub_ids attempted even though each raised CommandTimeout.
         assert ws_client.unsubscribed == [101, 102]
+
+
+# ---------------------------------------------------------------------------
+# wait_for_automation_entity_by_unique_id (#1395) — discovery waits
+# ---------------------------------------------------------------------------
+
+
+class TestRestPathAutomationDiscovery:
+    """REST-fallback coverage for wait_for_automation_entity_by_unique_id.
+
+    Uses the autouse ``force_rest_fallback`` fixture so the WS path is
+    skipped; verifies the REST sample finds the entity by unique_id."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_states = AsyncMock()
+        client.base_url = "http://example.invalid"
+        client.token = "test-token"
+        return client
+
+    async def test_resolves_via_rest_when_state_already_published(self, mock_client):
+        """REST sample finds the matching automation in get_states()."""
+        mock_client.get_states.return_value = [
+            {"entity_id": "automation.target", "attributes": {"id": "uid_42"}}
+        ]
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=1.0
+        )
+
+        assert result == "automation.target"
+
+    async def test_ignores_non_automation_entities_with_matching_id(self, mock_client):
+        """A script (or other domain) sharing the same id attribute must
+        NOT match — the filter pins ``entity_id.startswith("automation.")``
+        so we don't mis-resolve to a sibling-domain entity."""
+        mock_client.get_states.return_value = [
+            {"entity_id": "script.distractor", "attributes": {"id": "uid_42"}},
+            {"entity_id": "automation.real", "attributes": {"id": "uid_42"}},
+        ]
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=1.0
+        )
+
+        assert result == "automation.real"
+
+    async def test_returns_none_on_full_miss(self, mock_client):
+        """When the entity never appears within the budget, the wait
+        times out and returns None."""
+        mock_client.get_states.return_value = []
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_missing", timeout=0.2, poll_interval=0.05
+        )
+
+        assert result is None
+
+    async def test_transient_api_error_swallowed_by_sample(self, mock_client):
+        """Transient ``HomeAssistantAPIError`` from ``get_states()`` is
+        swallowed inside the sample callback — the waiter keeps polling
+        until budget exhaustion rather than propagating."""
+        mock_client.get_states.side_effect = HomeAssistantAPIError("transient")
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=0.2, poll_interval=0.05
+        )
+
+        assert result is None
+        # Sample was called at least once — verifies the catch path was
+        # exercised, not the wait-loop short-circuited at setup.
+        assert mock_client.get_states.call_count >= 1
+
+
+class TestWsPathAutomationDiscovery:
+    """WS-driven coverage for wait_for_automation_entity_by_unique_id (#1395)."""
+
+    async def test_post_subscribe_sample_resolves_immediately(
+        self, ws_client, mock_client
+    ):
+        """If HA already has the automation registered when the waiter
+        subscribes, the post-subscribe REST sample resolves and no event
+        is needed."""
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "automation.early",
+                    "attributes": {"id": "uid_early"},
+                }
+            ]
+        )
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_early", timeout=2.0
+        )
+
+        assert result == "automation.early"
+        # Only the single state_changed subscription is opened.
+        assert ws_client.subscribed == ["state_changed"]
+        assert len(ws_client.unsubscribed) == 1
+        # Handler was cleaned up.
+        assert ws_client.handlers.get("state_changed") == []
+
+    async def test_event_arrival_resolves_discovery(self, ws_client, mock_client):
+        """A state_changed event for an automation whose
+        ``new_state.attributes.id`` matches the unique_id wakes the wait
+        loop. The discovered entity_id is captured by the filter and
+        returned from sample() on the next tick — no second REST scan
+        needed."""
+        # Post-subscribe sample finds nothing; the discovered entity_id
+        # comes from the event itself via the filter's capture cell.
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_after_subscribe():
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed(
+                "automation.discovered",
+                new_state={"attributes": {"id": "uid_99"}},
+            )
+
+        fire_task = asyncio.create_task(fire_after_subscribe())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_99", timeout=2.0
+        )
+        await fire_task
+
+        assert result == "automation.discovered"
+
+    async def test_event_for_non_automation_does_not_wake_wait(
+        self, ws_client, mock_client
+    ):
+        """Events for non-automation entities (e.g. ``light.kitchen``)
+        must not nudge the wait loop, even if the new_state happens to
+        carry an ``id`` attribute. Filter pins the entity_id prefix."""
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_noise():
+            await asyncio.sleep(0.02)
+            await ws_client.fire_state_changed(
+                "light.kitchen",
+                new_state={"attributes": {"id": "uid_42"}},
+            )
+
+        noise_task = asyncio.create_task(fire_noise())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_42", timeout=0.2, poll_interval=0.05
+        )
+        await noise_task
+
+        assert result is None
+
+    async def test_event_for_other_automation_does_not_wake_wait(
+        self, ws_client, mock_client
+    ):
+        """An automation event for a *different* unique_id must not nudge —
+        otherwise concurrent automation creates would race for the same
+        wait loop. Filter pins ``new_state.attributes.id == unique_id``."""
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_noise():
+            await asyncio.sleep(0.02)
+            await ws_client.fire_state_changed(
+                "automation.other",
+                new_state={"attributes": {"id": "uid_other"}},
+            )
+
+        noise_task = asyncio.create_task(fire_noise())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_target", timeout=0.2, poll_interval=0.05
+        )
+        await noise_task
+
+        assert result is None
+
+    async def test_event_capture_short_circuits_rest_scan(self, ws_client, mock_client):
+        """When the matching event arrives, the discovered entity_id is
+        captured in the closure cell so the post-nudge ``sample()`` returns
+        the captured value WITHOUT re-scanning ``get_states()``.
+
+        Deterministic discriminator (Patch76 #1406 review): seeding
+        ``get_states()`` to return a *different* matching automation on
+        every call — but ONLY after the post-subscribe sample has run with
+        empty results — produces different outcomes for the two paths:
+
+        - Working (cell short-circuits): post-subscribe sample returns
+          empty → loop enters → event fires + filter captures
+          ``automation.from_event`` → re-sample sees ``captured["entity_id"]``
+          is set → returns ``automation.from_event`` without calling
+          ``get_states()`` again.
+        - Regression (cell check removed from ``sample()``): re-sample
+          falls through to ``get_states()`` → finds ``automation.from_rest``
+          → returns ``automation.from_rest``.
+
+        Asserting equality (not ``in``) is what makes this a real
+        discriminator — the previous ``in {...}`` assertion accepted both
+        outcomes and would silently pass a short-circuit regression.
+        """
+        call_count = {"n": 0}
+
+        async def get_states_seq():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Post-subscribe sample: empty so the loop must enter.
+                return []
+            # Any subsequent call (which the working short-circuit makes
+            # us skip): returns the REST entity that would override the
+            # captured cell if the short-circuit were broken.
+            return [
+                {
+                    "entity_id": "automation.from_rest",
+                    "attributes": {"id": "uid_dup"},
+                }
+            ]
+
+        mock_client.get_states = AsyncMock(side_effect=get_states_seq)
+
+        async def fire_after_subscribe():
+            # Small delay so the post-subscribe sample completes and the
+            # wait loop is parked on ``nudge.wait()`` before the event
+            # arrives — guarantees the event-path wins.
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed(
+                "automation.from_event",
+                new_state={"attributes": {"id": "uid_dup"}},
+            )
+
+        fire_task = asyncio.create_task(fire_after_subscribe())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_dup", timeout=2.0
+        )
+        await fire_task
+
+        # Working short-circuit: event payload's entity_id wins.
+        # Regression (no short-circuit): REST entity would override.
+        assert result == "automation.from_event"
+        # Tighter pin: ``get_states()`` was called exactly once (the
+        # post-subscribe sample). The post-event re-sample short-circuits
+        # via the captured cell and never touches REST.
+        assert call_count["n"] == 1
+
+    async def test_connection_drop_during_discovery_falls_back_to_rest(
+        self, ws_client, mock_client
+    ):
+        """If the WS drops while a discovery wait is in flight, the helper
+        must fall back to REST polling using the discovery-shaped
+        ``get_states()`` sample — not the entity-id-shaped
+        ``get_entity_state()`` used by sibling waiters. Mirrors
+        ``TestWsPathConnectionDrop::test_connection_drop_before_wait_loop_falls_back_to_rest``
+        for the discovery path; pins against a regression that wires
+        the wrong fallback sample."""
+        call_count = {"n": 0}
+
+        async def get_states_dropping_ws():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Post-subscribe sample: empty AND drops the WS so the
+                # connection-drop-before-wait-loop branch runs (the
+                # ``is_connected`` check between sample and wait loop
+                # routes us to ``_legacy_poll_until`` for the remaining
+                # budget — no backstop interval wasted).
+                ws_client.is_connected = False
+                return []
+            # REST fallback calls find the matching automation.
+            return [
+                {
+                    "entity_id": "automation.found_via_rest",
+                    "attributes": {"id": "uid_drop"},
+                }
+            ]
+
+        mock_client.get_states = AsyncMock(side_effect=get_states_dropping_ws)
+
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_drop", timeout=2.0, poll_interval=0.05
+        )
+
+        assert result == "automation.found_via_rest"
+        # At least one extra REST sample happened after the drop —
+        # proves the fallback path actually ran the discovery sample.
+        assert call_count["n"] >= 2
+        # Cleanup of the subscription we did establish still ran.
+        assert len(ws_client.unsubscribed) == 1
+
+    async def test_duplicate_unique_id_collision_first_wins(
+        self, ws_client, mock_client, caplog
+    ):
+        """If two matching events arrive for the same unique_id (HA
+        storage forbids it, but the filter's first-wins guard exists for
+        the "if it ever happens" path), the FIRST observed entity_id is
+        captured and a warning is logged on the collision. Pins the
+        first-wins contract against a regression that flips back to
+        last-writer-wins. Patch76 #1406 review."""
+        import logging
+
+        # Post-subscribe sample finds nothing; both events arrive after
+        # subscribe.
+        mock_client.get_states = AsyncMock(return_value=[])
+
+        async def fire_two_matches():
+            await asyncio.sleep(0.05)
+            # Both events carry the same unique_id but different
+            # entity_ids — only the first should win.
+            await ws_client.fire_state_changed(
+                "automation.first",
+                new_state={"attributes": {"id": "uid_dup"}},
+            )
+            await ws_client.fire_state_changed(
+                "automation.second",
+                new_state={"attributes": {"id": "uid_dup"}},
+            )
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.util_helpers"):
+            fire_task = asyncio.create_task(fire_two_matches())
+            result = await wait_for_automation_entity_by_unique_id(
+                mock_client, "uid_dup", timeout=2.0
+            )
+            await fire_task
+
+        assert result == "automation.first"
+        # Collision warning emitted naming both entity_ids.
+        collision_logs = [
+            r for r in caplog.records if "Duplicate automation match" in r.getMessage()
+        ]
+        assert len(collision_logs) == 1
+        assert "automation.first" in collision_logs[0].getMessage()
+        assert "automation.second" in collision_logs[0].getMessage()
+
+    async def test_wedged_rest_channel_surfaces_last_api_error(
+        self, mock_client, caplog
+    ):
+        """When every REST sample raises ``HomeAssistantAPIError`` across
+        the timeout budget, the final timeout warning surfaces the last
+        error so operators can distinguish "automation truly not
+        published" from "REST channel down." Pins the
+        ``captured["last_api_error"]`` discrimination branch. Patch76
+        #1406 review. Uses the autouse ``force_rest_fallback`` fixture so
+        no WS subscription is created — the REST sample callback is the
+        only path."""
+        import logging
+
+        mock_client.get_states = AsyncMock(
+            side_effect=HomeAssistantAPIError("HA REST 503 transient")
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.util_helpers"):
+            result = await wait_for_automation_entity_by_unique_id(
+                mock_client, "uid_wedged", timeout=0.2, poll_interval=0.05
+            )
+
+        assert result is None
+        # The conditional wedged-channel warning fires with the last
+        # error string embedded.
+        wedged_logs = [
+            r for r in caplog.records if "every REST sample failing" in r.getMessage()
+        ]
+        assert len(wedged_logs) == 1
+        assert "HA REST 503 transient" in wedged_logs[0].getMessage()

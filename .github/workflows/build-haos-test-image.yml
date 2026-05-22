@@ -8,14 +8,28 @@ name: Build HAOS Test Image (Publish to GHCR)
 # this workflow only runs to publish stable tags after merge to master.
 #
 # Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
-# and push to master that touches the build script.
+# and push to master that touches any input baked into the qcow2.
+#
+# INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
+# that haos-e2e-tests.yml hashes into its image cache key (see the
+# "Compute image cache key" step). When master commits change a baked
+# input that isn't listed here, GHCR stays at the previous SHA and every
+# subsequent PR that doesn't itself touch a bake input pulls the stale
+# image — which is exactly how the #1374 (knx allowlist) merge broke
+# every open PR's HAOS E2E run until a manual dispatch. Keep both lists
+# in sync.
 
 on:
   workflow_dispatch:
   push:
     branches: [master]
     paths:
+      # Bake inputs — must match haos-e2e-tests.yml cache-key paths.
       - 'tests/haos_image_build/**'
+      - 'tests/initial_test_state/**'
+      - 'custom_components/ha_mcp_tools/**'
+      - 'homeassistant-addon-webhook-proxy/mcp_proxy/**'
+      # The workflow itself — bumping the build script or env triggers a republish.
       - '.github/workflows/build-haos-test-image.yml'
   schedule:
     # Weekly Monday 06:00 UTC — keeps the image current with addon updates

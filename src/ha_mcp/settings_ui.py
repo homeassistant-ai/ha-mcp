@@ -10,6 +10,7 @@ Works across all installation methods (add-on, Docker, standalone).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -153,6 +154,65 @@ def _get_config_path() -> Path:
     home-dir, and tmpdir fallback (memoized).
     """
     return get_data_dir() / "tool_config.json"
+
+
+def _get_tool_metadata_cache_path() -> Path:
+    """Return the path to the cached tool metadata JSON file.
+
+    The stdio settings sidecar (a separate process spawned by stdio mode)
+    reads this cache instead of constructing a full FastMCP server, so it
+    stays lightweight. Refreshed by ``dump_tool_metadata_cache()`` on
+    every parent stdio startup.
+    """
+    return get_data_dir() / "tool_metadata.json"
+
+
+def dump_tool_metadata_cache(metadata: list[dict[str, Any]]) -> bool:
+    """Persist tool metadata to disk for the sidecar to consume.
+
+    Returns True on success, False on any OSError. Failures are logged
+    but non-fatal — the sidecar will fall back to an empty list and the
+    UI will show "no tools" rather than blocking startup of the MCP
+    server itself.
+    """
+    path = _get_tool_metadata_cache_path()
+    try:
+        path.write_text(json.dumps(metadata))
+    except OSError:
+        logger.warning("Failed to dump tool metadata cache to %s", path, exc_info=True)
+        return False
+    return True
+
+
+def load_tool_metadata_cache() -> list[dict[str, Any]]:
+    """Read cached tool metadata from disk.
+
+    Returns an empty list if the cache is missing, unreadable, or
+    malformed — the sidecar must still serve the settings page (even
+    with no tools listed) so the user can disable the sidecar itself
+    via the ``HA_MCP_DISABLE_SETTINGS_UI`` toggle.
+    """
+    path = _get_tool_metadata_cache_path()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        logger.warning("Cannot read tool metadata cache at %s", path, exc_info=True)
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # exc_info preserves the line / column of the failure so a
+        # truncated-write looks distinguishable from corrupted-mid-file
+        # in the logs.
+        logger.warning(
+            "Tool metadata cache at %s is not valid JSON", path, exc_info=True
+        )
+        return []
+    if not isinstance(data, list):
+        return []
+    return data
 
 
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
@@ -521,7 +581,19 @@ _SETTINGS_HTML = (
     font-size: 0.85rem; flex-shrink: 0; }
   .restart-btn:hover { background: var(--accent-hover); }
   .restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  /* Tabs */
+  /* Destructive variant — visually distinct from the primary accent
+     so a glance at the page makes "Disable settings server"
+     obviously not a routine click. Matches the restart-notice red
+     family so the danger semantic reads even without label text. */
+  .danger-btn { padding: 7px 14px; border-radius: 8px;
+    border: 1px solid #7a1a1a; background: transparent; color: #ff9090;
+    font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
+  .danger-btn:hover { background: #2a0e0e; }
+  .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Tabs — generic structure other tabs can stack onto without
+     touching existing markup. New tabs add a button to .tabs and
+     a sibling .panel below; the JS switcher dispatches via the
+     data-panel attribute. */
   .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
   .tab { padding: 10px 16px; border: none; background: transparent; color: var(--text-secondary);
     font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
@@ -588,6 +660,28 @@ _SETTINGS_HTML = (
   .diff-add { color: #6bff6b; }
   .diff-rem { color: #ff6b6b; }
   .diff-hdr { color: #6cb4ff; }
+  /* Server-settings rows (#863). One row per FEATURE_FLAG_FIELDS
+     entry. Locked rows (env / addon origin) get the dim treatment +
+     a small inline note pointing at the env var to adjust. */
+  .features-sub { font-size: 0.75rem; color: var(--text-secondary);
+    margin-bottom: 8px; }
+  .feature-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .feature-row:first-child { border-top: none; }
+  .feature-info { flex: 1; min-width: 0; }
+  .feature-name { font-size: 0.9rem; font-weight: 500; }
+  .feature-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .feature-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .feature-control { flex-shrink: 0; display: flex; align-items: center; }
+  .feature-control input[type="number"] { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; }
+  .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
+  .feature-row.locked .feature-name { color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -597,21 +691,29 @@ _SETTINGS_HTML = (
 </div>
 <div class="tabs">
   <button class="tab active" data-panel="tools">Tools</button>
+  <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
 </div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
-    Safety toggles (Tool Search, YAML Config Editing) are managed in the
-    add-on configuration page and require a restart to change.
+    Server-wide features (Tool Search, YAML config editing, filesystem
+    tools, etc.) appear in both the <strong>Server Settings</strong>
+    tab and the add-on Configuration page — they're the same settings
+    either way. Add-on users edit them on the Configuration page;
+    every other install (Claude Desktop, Docker, standalone) edits
+    them in the Server Settings tab. Changes require an MCP-host
+    restart to apply.
   </div>
   <div class="pin-notice show" id="pinNotice">
-    Pin toggles only take effect when Tool Search is enabled in the add-on
-    configuration. Without Tool Search, all enabled tools are always visible
-    and pinning has no extra effect.
+    Pin toggles only take effect when Tool Search is enabled — either
+    in the Server Settings tab or, for add-on users, the add-on
+    Configuration page (same setting either way). Without Tool Search,
+    all enabled tools are always visible and pinning has no extra
+    effect.
   </div>
   <div class="restart-notice" id="restartNotice">
-    <span class="restart-notice-text">
-      ⚠ Changes saved. Restart the add-on for them to take effect — disabled
+    <span class="restart-notice-text" id="restartNoticeText">
+      ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
       tools will be fully removed from the MCP tool list on next startup.
     </span>
     <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
@@ -619,6 +721,18 @@ _SETTINGS_HTML = (
   <div class="summary" id="summary"></div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
   <div id="groups"></div>
+</div>
+<div class="panel" id="panel-server">
+  <div class="features-sub">
+    Tool Search, beta-flagged features. Changes require an MCP-host restart
+    to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
+  </div>
+  <div id="featuresBody"></div>
+  <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
+    <button class="danger-btn" id="stopSidecarBtn"
+            title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
+    >Permanently disable settings server</button>
+  </div>
 </div>
 <div class="panel" id="panel-backups">
   <div class="backup-state" id="backupState">Loading backup state…</div>
@@ -647,27 +761,152 @@ _SETTINGS_HTML = (
   </div>
 </div>
 <script>
+// Catch top-level / async script errors and surface them in the
+// status bar so a perpetually-"Loading" page becomes self-diagnosing
+// (no devtools required). Without this, a script-evaluation error
+// in any of the function definitions below would abort the script
+// before loadTools() is even called, leaving the status stuck at
+// the initial "Loading...".
+window.addEventListener('error', (e) => {
+  const el = document.getElementById('status');
+  if (!el) return;
+  const where = e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : 'inline';
+  el.textContent = `JS error: ${e.message} @ ${where}`;
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const el = document.getElementById('status');
+  if (!el) return;
+  el.textContent = `Async error: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`;
+});
+
 let toolData = [];
 let toolStates = {};
 let saveTimer = null;
 let openGroups = new Set();
 
 async function loadTools() {
-  const resp = await fetch('./api/settings/tools');
-  const data = await resp.json();
-  toolData = data.tools;
-  toolStates = data.states;
-  render();
+  let resp;
+  try {
+    resp = await fetch('./api/settings/tools');
+  } catch (e) {
+    updateStatus('Network error reaching /api/settings/tools: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    updateStatus(`/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`);
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    updateStatus('Failed to parse /api/settings/tools response as JSON: ' + e.message);
+    return;
+  }
+  toolData = data.tools || [];
+  toolStates = data.states || {};
+  if (toolData.length === 0) {
+    // Empty tool list is a sidecar misconfiguration — usually the
+    // parent stdio process couldn't dump the metadata cache. Tell
+    // the user where to look instead of leaving them on "Loading".
+    updateStatus(
+      'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json — ' +
+      'if missing/empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.'
+    );
+    return;
+  }
+  try {
+    render();
+  } catch (e) {
+    updateStatus('Render failed: ' + e.message + ' (open browser devtools for the stack)');
+    throw e;
+  }
   updateStatus('Loaded');
 
-  // Show restart button if running as add-on
+  // Show restart button if running as add-on; show Stop Sidecar
+  // button only when this page is served by the stdio sidecar
+  // (HTTP modes serve the same HTML but is_sidecar=false there, so
+  // clicking Stop wouldn't make sense — it would kill the MCP server).
+  // Also tailor the restart-notice copy to the install mode so the
+  // user is told exactly what action they need to take ("close and
+  // reopen Claude Desktop" vs "click Restart Add-on" vs "restart
+  // your Docker container") instead of a generic "restart the add-on"
+  // that only matches one of three real deployment surfaces.
   try {
     const infoResp = await fetch('./api/settings/info');
     const info = await infoResp.json();
+    const noticeEl = document.getElementById('restartNoticeText');
     if (info.is_addon) {
       document.getElementById('restartBtn').style.display = '';
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Click "Restart Add-on" for them to take ' +
+          'effect — disabled tools will be fully removed from the MCP ' +
+          'tool list on next startup.';
+      }
+    } else if (info.is_sidecar) {
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Fully quit and reopen your MCP client ' +
+          '(Claude Desktop: right-click the tray icon → Quit, then ' +
+          'relaunch; Claude Code: close the terminal session) for them ' +
+          'to take effect. Disabled tools will be fully removed from the ' +
+          'MCP tool list on next startup.';
+      }
+      document.getElementById('sidecarStopRow').style.display = '';
+    } else if (noticeEl) {
+      // HTTP / Docker / standalone — no button we can wire to a restart,
+      // so describe the action in process terms.
+      noticeEl.textContent =
+        '⚠ Changes saved. Restart your ha-mcp process (Docker ' +
+        'container, systemd service, or however you launch it) for them ' +
+        'to take effect. Disabled tools will be fully removed from the ' +
+        'MCP tool list on next startup.';
     }
   } catch (_e) {}
+}
+
+async function stopSidecar() {
+  const btn = document.getElementById('stopSidecarBtn');
+  // Two-part confirm wording: lead with the *permanence* (this is not a
+  // routine "stop now, autostart later" — the server will refuse to
+  // restart on every future ha-mcp launch until the user manually
+  // intervenes), then spell out the exact re-enable steps. The button
+  // is right-aligned near the top of a list of toggle controls, so
+  // accidental clicks are easy; the dialog needs to read like a
+  // commitment, not a soft prompt.
+  if (!confirm(
+    '⚠ PERMANENTLY disable the settings server?\\n\\n' +
+    'This stops the running server AND writes a disable marker so it ' +
+    'will NOT respawn on future ha-mcp launches — every restart of ' +
+    'Claude Desktop / Docker / your MCP host will continue to skip it ' +
+    'until you manually re-enable.\\n\\n' +
+    'To restore access later you must:\\n' +
+    '  1. Delete  ~/.ha-mcp/settings_ui_disabled  (the marker file), AND\\n' +
+    '  2. Unset  HA_MCP_DISABLE_SETTINGS_UI  if that env var was set.\\n\\n' +
+    'You will lose the in-browser tool-configuration UI until both ' +
+    'conditions are met. Continue?'
+  )) return;
+  btn.disabled = true;
+  btn.textContent = 'Stopping...';
+  try {
+    const resp = await fetch('./api/settings/shutdown', {method: 'POST'});
+    if (resp.ok) {
+      btn.textContent = 'Stopped — this page will go offline';
+    } else {
+      let msg = 'Stop failed';
+      try {
+        const err = await resp.json();
+        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
+      } catch (_e) {}
+      btn.textContent = msg;
+      btn.disabled = false;
+      alert(msg);
+    }
+  } catch (_e) {
+    // Connection drop is expected — the sidecar process is exiting.
+    btn.textContent = 'Stopped (connection dropped)';
+  }
 }
 
 async function restartAddon() {
@@ -932,16 +1171,6 @@ document.getElementById('search').addEventListener('input', (e) => {
 });
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
-
-// ===== Tab switching =====
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
-    const target = tab.dataset.panel;
-    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
-    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-  });
-});
 
 // ===== Backups tab =====
 let backupEntries = [];
@@ -1209,6 +1438,191 @@ document.getElementById('modalBackdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modalBackdrop') closeModal();
 });
 
+document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
+
+// Feature-flag metadata (display labels + help text). Keyed by the
+// Settings field name. The strings are intentionally copied verbatim
+// from ``homeassistant-addon-dev/translations/en.yaml`` so the web
+// UI and the add-on Configuration tab read identically — a user who
+// flips between the two surfaces never wonders if the option name
+// or warning text shifted meaning. Keep them in sync when one side
+// changes; the addon-dev translations file is the source of truth.
+const FEATURE_META = {
+  enable_tool_search: {
+    label: "Enable tool search",
+    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes — those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
+  },
+  tool_search_max_results: {
+    label: "Tool search max results",
+    help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
+  },
+  enable_yaml_config_editing: {
+    label: "Enable YAML config editing (beta)",
+    help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
+  },
+  enable_lite_docstrings: {
+    label: "Enable lite tool docstrings (beta)",
+    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
+  },
+  enable_filesystem_tools: {
+    label: "Enable filesystem tools (beta)",
+    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
+  },
+  enable_custom_component_integration: {
+    label: "Enable custom component integration (beta)",
+    help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
+  },
+};
+
+const ORIGIN_LOCKED_NOTE = {
+  env: 'Set via environment variable — unset it to edit here.',
+  addon: 'Managed by the add-on Configuration tab — open Settings → Add-ons → ha-mcp → Configuration to edit.',
+};
+
+async function loadFeatureFlags() {
+  let resp;
+  try {
+    resp = await fetch('./api/settings/features');
+  } catch (_e) {
+    // Surface as a row inside the panel rather than the page status —
+    // the panel is collapsible and the user can ignore this if they
+    // do not care about feature flags right now.
+    document.getElementById('featuresBody').innerHTML =
+      '<div class="feature-row"><div class="feature-help">' +
+      'Feature flags unavailable (network error reaching ' +
+      '/api/settings/features).</div></div>';
+    return;
+  }
+  if (!resp.ok) {
+    document.getElementById('featuresBody').innerHTML =
+      `<div class="feature-row"><div class="feature-help">` +
+      `Feature flags unavailable (HTTP ${resp.status}).</div></div>`;
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (_e) {
+    document.getElementById('featuresBody').innerHTML =
+      '<div class="feature-row"><div class="feature-help">' +
+      'Feature flags response was not valid JSON.</div></div>';
+    return;
+  }
+  renderFeatureFlags(data.flags || {});
+}
+
+function renderFeatureFlags(flags) {
+  const body = document.getElementById('featuresBody');
+  body.innerHTML = '';
+  // Render in the order FEATURE_META declares — gives consistent
+  // grouping (Tool Search rows together, beta toggles together)
+  // regardless of dict iteration order returned by the server.
+  Object.keys(FEATURE_META).forEach(fieldName => {
+    const f = flags[fieldName];
+    if (!f) return;
+    const meta = FEATURE_META[fieldName];
+    const row = document.createElement('div');
+    row.className = 'feature-row' + (f.editable ? '' : ' locked');
+
+    const info = document.createElement('div');
+    info.className = 'feature-info';
+    const envVarSuffix = f.origin === 'env'
+      ? ` (<code>${escapeHtml(f.env_var)}</code>)`
+      : '';
+    const lockedNote = !f.editable
+      ? `<div class="feature-locked-note">` +
+        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')}${envVarSuffix}` +
+        `</div>`
+      : '';
+    info.innerHTML =
+      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      lockedNote;
+
+    const control = document.createElement('div');
+    control.className = 'feature-control';
+    if (f.type === 'bool') {
+      const label = document.createElement('label');
+      label.className = 'switch';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!f.value;
+      input.disabled = !f.editable;
+      input.addEventListener('change', () =>
+        saveFeatureFlag(fieldName, input.checked)
+      );
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      label.appendChild(input);
+      label.appendChild(slider);
+      control.appendChild(label);
+    } else if (f.type === 'int') {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = f.value;
+      if (typeof f.min === 'number') input.min = f.min;
+      if (typeof f.max === 'number') input.max = f.max;
+      input.disabled = !f.editable;
+      input.addEventListener('change', () => {
+        const parsed = parseInt(input.value, 10);
+        if (Number.isFinite(parsed)) saveFeatureFlag(fieldName, parsed);
+      });
+      control.appendChild(input);
+    }
+
+    row.appendChild(info);
+    row.appendChild(control);
+    body.appendChild(row);
+  });
+}
+
+async function saveFeatureFlag(fieldName, value) {
+  updateStatus('Saving server setting...');
+  let resp;
+  try {
+    resp = await fetch('./api/settings/features', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({flags: {[fieldName]: value}}),
+    });
+  } catch (e) {
+    updateStatus('Save failed: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    let msg = `Save failed (HTTP ${resp.status})`;
+    try {
+      const err = await resp.json();
+      if (err.error && err.error.message) msg = 'Save failed: ' + err.error.message;
+    } catch (_e) {}
+    updateStatus(msg);
+    return;
+  }
+  // Don't toggle the in-tab restartNotice — it lives in panel-tools
+  // and would be hidden behind a tab the user isn't on. The page-level
+  // status badge (set above) is visible across every tab and the
+  // panel sub-header up top already warns "Changes require restart".
+  updateStatus('Saved — restart required', true);
+}
+
+// ===== Tab switching =====
+// Generic dispatcher — every .tab button names its target panel via
+// data-panel, every .panel has matching id="panel-<name>". Adding a
+// new tab is one button + one panel div; no JS change needed.
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t =>
+      t.classList.toggle('active', t === tab)
+    );
+    const target = tab.dataset.panel;
+    document.querySelectorAll('.panel').forEach(p =>
+      p.classList.toggle('active', p.id === 'panel-' + target)
+    );
+    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
+  });
+});
+
+loadFeatureFlags();
 loadTools();
 </script>
 </body>
@@ -1217,30 +1631,34 @@ loadTools();
 )
 
 
-def register_settings_routes(
-    mcp: FastMCP,
-    server: HomeAssistantSmartMCPServer,
-    secret_path: str = "",
-) -> None:
-    """Register the settings UI HTTP routes.
+def build_settings_handlers(
+    server: HomeAssistantSmartMCPServer | None,
+    *,
+    is_sidecar: bool = False,
+) -> dict[str, Any]:
+    """Construct the settings UI route handlers.
 
-    The routes are mounted under ``secret_path`` so HTTP clients (Docker
-    / standalone) need the same secret to reach the UI as they do to
-    reach the MCP endpoint itself — there's no native auth on FastMCP
-    custom routes (they bypass ``RequireAuthMiddleware``), so this
-    matches the auth-by-obscurity model the rest of the server uses for
-    those modes. In add-on mode (``SUPERVISOR_TOKEN`` set) the routes
-    are *also* mounted at root so HA ingress can proxy to ``localhost:9583/``
-    and serve the "Open Web UI" button. Stdio transports never call this
-    function.
+    When ``server`` is provided (HTTP modes), the tools list and restart
+    handler use the live FastMCP server / Supervisor client. When
+    ``server`` is ``None`` (stdio sidecar process, which has no live MCP
+    server), the tools list is read from the on-disk metadata cache and
+    the restart handler returns 400 (the sidecar is not an add-on).
 
-    Args:
-        mcp: The FastMCP instance to register routes on.
-        server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
-        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
-            ``/mcp``). Required for non-add-on HTTP modes; if empty in
-            non-add-on mode, the function logs a warning and registers
-            nothing rather than expose the routes publicly.
+    ``is_sidecar`` forces the ``settings_info`` handler to report
+    ``is_addon=False`` regardless of the inherited ``SUPERVISOR_TOKEN``
+    env var. The sidecar process inherits parent env unchanged
+    (``subprocess.Popen`` with default ``env=None``), so if the parent
+    stdio process happens to run under Supervisor (e.g. an interactive
+    debug shell inside the add-on container) the served HTML would
+    otherwise show the "Restart Add-on" button that POSTs to a route
+    the sidecar doesn't expose, surfacing as a broken UI. The sidecar
+    is *by construction* not the add-on entrypoint — pin the flag
+    accordingly.
+
+    Returns a dict mapping handler names to async Starlette handlers.
+    Both ``register_settings_routes`` (FastMCP mounting) and the stdio
+    sidecar's standalone Starlette app consume the same set of handlers
+    so the served page is identical regardless of transport.
     """
 
     async def _root_page(_: Request) -> HTMLResponse:
@@ -1250,7 +1668,25 @@ def register_settings_routes(
         return HTMLResponse(_SETTINGS_HTML)
 
     async def _get_tools(_: Request) -> JSONResponse:
-        tools = await _get_tool_metadata(server)
+        if server is not None:
+            tools = await _get_tool_metadata(server)
+        else:
+            tools = load_tool_metadata_cache()
+            if not tools:
+                # The sidecar's main failure mode (and the most common
+                # reason a user lands on a perpetually-loading settings
+                # page) is that the parent stdio process didn't write
+                # the metadata cache before the sidecar served its
+                # first tools request. Log loudly to the sidecar log
+                # so post-mortem is one ``cat ~/.ha-mcp/sidecar.log``
+                # away. The JS shows a matching diagnostic to the user.
+                logger.warning(
+                    "tool metadata cache is empty or missing at %s — "
+                    "the parent stdio process likely did not dump it. "
+                    "Check the MCP-client log for 'Failed to dump tool "
+                    "metadata cache' from ha_mcp.__main__.",
+                    _get_tool_metadata_cache_path(),
+                )
         config = load_tool_config()
         states = config.get("tools", {})
         for name in DEFAULT_PINNED_TOOLS:
@@ -1334,7 +1770,11 @@ def register_settings_routes(
         )
 
     async def _restart_addon(request: Request) -> JSONResponse:
-        if not os.environ.get("SUPERVISOR_TOKEN"):
+        # The sidecar process (server is None) has no Supervisor context
+        # and no live server settings — refuse cleanly. The HTTP modes
+        # that do pass a server still go through the SUPERVISOR_TOKEN
+        # check below, preserving the original behavior.
+        if server is None or not os.environ.get("SUPERVISOR_TOKEN"):
             return JSONResponse(
                 create_error_response(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
@@ -1420,11 +1860,262 @@ def register_settings_routes(
         return JSONResponse({"success": True, "message": "Restart initiated"})
 
     async def _settings_info(_: Request) -> JSONResponse:
-        return JSONResponse(
-            {
-                "is_addon": is_running_in_addon(),
-            }
+        # Sidecar is never the add-on entrypoint regardless of inherited
+        # SUPERVISOR_TOKEN — see docstring above for the broken-button
+        # rationale. ``is_sidecar`` flag drives the in-page Stop Sidecar
+        # button (HTML show/hide); it MUST NOT leak True for HTTP modes
+        # since stopping the FastMCP-mounted route would mean killing
+        # the MCP server itself.
+        addon = False if is_sidecar else is_running_in_addon()
+        return JSONResponse({"is_addon": addon, "is_sidecar": is_sidecar})
+
+    async def _get_feature_flags(_: Request) -> JSONResponse:
+        """Return live feature-flag values + per-field origin + editable flag.
+
+        Per-field origin/editable matrix (see
+        :func:`config.get_feature_flag_origin`):
+
+            origin = get_feature_flag_origin(env_name)
+            editable = origin in ("file", "default")
+
+        ``"addon"`` and ``"env"`` are non-editable from the web UI;
+        the user is told which env var (or addon option) to change
+        instead. The envelope shape (``flags`` dict of
+        ``{value, origin, editable, type, env_var, min?, max?}``
+        entries) is intentionally generic so other settings
+        surfaces can render rows with the same JS code.
+        """
+        from .config import (
+            _FEATURE_FLAG_INT_BOUNDS,
+            FEATURE_FLAG_FIELDS,
+            get_feature_flag_origin,
+            get_global_settings,
         )
+
+        settings = get_global_settings()
+        flags: dict[str, Any] = {}
+        for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
+            origin = get_feature_flag_origin(env_name)
+            value = getattr(settings, field_name)
+            entry: dict[str, Any] = {
+                "value": value,
+                "origin": origin,
+                "editable": origin in ("file", "default"),
+                "type": ftype.__name__,
+                "env_var": env_name,
+            }
+            if ftype is int:
+                bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
+                if bounds is not None:
+                    entry["min"], entry["max"] = bounds
+            flags[field_name] = entry
+        return JSONResponse({"flags": flags})
+
+    async def _save_feature_flags(request: Request) -> JSONResponse:
+        """Persist UI-edited feature-flag values.
+
+        Only ``editable`` fields (origin = ``file`` or ``default``)
+        accept writes; an attempt to write an env-locked or addon-
+        locked field returns ``VALIDATION_INVALID_PARAMETER`` so the
+        client surfaces the locking source instead of silently
+        discarding the change.
+        """
+        from .config import (
+            _FEATURE_FLAG_INT_BOUNDS,
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+            get_feature_flag_origin,
+        )
+        from .utils.data_paths import get_data_dir
+
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "Invalid JSON body",
+                ),
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Request body must be a JSON object",
+                ),
+                status_code=400,
+            )
+        raw_flags = body.get("flags", {})
+        if not isinstance(raw_flags, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'flags' must be an object mapping field names to values",
+                ),
+                status_code=400,
+            )
+
+        # Build the validated override dict. Reject unknown fields and
+        # env/addon-locked fields up front so the user gets a precise
+        # error instead of a silent no-op.
+        known: dict[str, tuple[str, type]] = {
+            fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS
+        }
+        new_overrides: dict[str, Any] = {}
+        for field_name, raw in raw_flags.items():
+            if field_name not in known:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown feature flag: {field_name!r}",
+                    ),
+                    status_code=400,
+                )
+            env_name, ftype = known[field_name]
+            origin = get_feature_flag_origin(env_name)
+            if origin not in ("file", "default"):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (
+                            f"{field_name!r} is locked by {origin} — "
+                            f"adjust the {env_name} env var "
+                            "(or addon configuration) instead."
+                        ),
+                    ),
+                    status_code=400,
+                )
+            if ftype is bool:
+                if not isinstance(raw, bool):
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{field_name!r} must be a boolean",
+                        ),
+                        status_code=400,
+                    )
+                new_overrides[field_name] = bool(raw)
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int):
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{field_name!r} must be an integer",
+                        ),
+                        status_code=400,
+                    )
+                bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
+                if bounds is not None and not bounds[0] <= raw <= bounds[1]:
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            (
+                                f"{field_name!r} must be between "
+                                f"{bounds[0]} and {bounds[1]}"
+                            ),
+                        ),
+                        status_code=400,
+                    )
+                new_overrides[field_name] = int(raw)
+            else:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (f"{field_name!r} has an unsupported type for UI editing"),
+                    ),
+                    status_code=400,
+                )
+
+        # Merge with the existing override file so a partial POST
+        # only updates the keys it actually included — the front-end
+        # POSTs individual changes, not the entire matrix.
+        #
+        # Three failure modes for the read:
+        #
+        # * file missing → fresh dict, normal first-write path.
+        # * file unreadable (PermissionError, etc.) → 500. We can't
+        #   silently fall back to {} and overwrite, because that
+        #   would silently drop every flag the user had previously
+        #   persisted (the same data we can't read is still on
+        #   disk).
+        # * file present but corrupt JSON → 409. Same data-loss
+        #   hazard: a partial write from a prior crash, blindly
+        #   overwriting, erases anything past the corruption point.
+        #   Return a clear error so the user can inspect / delete
+        #   the file manually.
+        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+        existing: dict[str, Any] = {}
+        try:
+            existing_raw = path.read_text()
+        except FileNotFoundError:
+            existing_raw = None
+        except OSError as exc:
+            logger.warning("Cannot read %s", path, exc_info=True)
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    (
+                        f"Could not read existing feature flags "
+                        f"({type(exc).__name__}: {exc}); refusing to "
+                        "overwrite to avoid losing prior toggles. "
+                        "Check filesystem permissions and retry."
+                    ),
+                ),
+                status_code=500,
+            )
+        if existing_raw is not None:
+            try:
+                parsed = json.loads(existing_raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (
+                            f"Existing override file at {path} is not "
+                            f"valid JSON ({exc}); refusing to overwrite "
+                            "to avoid losing prior toggles. Inspect or "
+                            "delete the file manually and retry."
+                        ),
+                    ),
+                    status_code=409,
+                )
+            if isinstance(parsed, dict):
+                existing = parsed
+            # else: non-dict JSON (list, scalar) — treat as empty;
+            # we're about to write a dict either way and there's no
+            # prior toggle state to preserve from a non-object root.
+        existing.update(new_overrides)
+
+        # Atomic write: tmp + rename. ``path.write_text`` is O_TRUNC +
+        # write — a crash mid-write leaves an empty/truncated file
+        # that the next ``_read_feature_flag_override_file`` call
+        # would refuse, losing every prior toggle.
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(json.dumps(existing, indent=2))
+            os.replace(tmp, path)
+        except OSError as exc:
+            logger.warning("Could not write %s", path, exc_info=True)
+            with contextlib.suppress(FileNotFoundError, OSError):
+                tmp.unlink()
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Could not persist feature flags: {exc}",
+                ),
+                status_code=500,
+            )
+
+        # Publish the change so the same process picks it up on the
+        # next ``get_global_settings()`` call (server-restart still
+        # required for many flags — the UI surfaces that — but the
+        # cached singleton must not return the stale pre-write
+        # values to subsequent /api/settings/features GETs).
+        _reset_global_settings()
+        return JSONResponse({"success": True})
 
     # ---- Auto-backup routes (#1288) ----
 
@@ -1720,6 +2411,16 @@ def register_settings_routes(
                     ),
                     status_code=400,
                 )
+            if server is None:
+                # Addon mode without a live server means we're in the
+                # stdio sidecar — but addon detection should already be
+                # False there. Defensive guard for type-checker + future
+                # refactors.
+                return _bad_request(
+                    "Backup settings POST requires a live MCP server",
+                    code=ErrorCode.INTERNAL_ERROR,
+                    status=500,
+                )
             options_body = {"options": clean}
             try:
                 async with make_supervisor_httpx_client(
@@ -1836,6 +2537,52 @@ def register_settings_routes(
             }
         )
 
+    return {
+        "root_page": _root_page,
+        "settings_page": _settings_page,
+        "get_tools": _get_tools,
+        "save_tools": _save_tools,
+        "restart_addon": _restart_addon,
+        "settings_info": _settings_info,
+        "get_feature_flags": _get_feature_flags,
+        "save_feature_flags": _save_feature_flags,
+        "list_backups": _list_backups,
+        "view_backup": _view_backup,
+        "diff_backup": _diff_backup,
+        "restore_backup": _restore_backup,
+        "delete_backup": _delete_backup,
+        "delete_backups_bulk": _delete_backups_bulk,
+        "get_backup_config": _get_backup_config,
+        "save_backup_config": _save_backup_config,
+    }
+
+
+def register_settings_routes(
+    mcp: FastMCP,
+    server: HomeAssistantSmartMCPServer,
+    secret_path: str = "",
+) -> None:
+    """Register the settings UI HTTP routes on the FastMCP Starlette app.
+
+    The routes are mounted under ``secret_path`` so HTTP clients (Docker
+    / standalone) need the same secret to reach the UI as they do to
+    reach the MCP endpoint itself — there's no native auth on FastMCP
+    custom routes (they bypass ``RequireAuthMiddleware``), so this
+    matches the auth-by-obscurity model the rest of the server uses for
+    those modes. In add-on mode (``SUPERVISOR_TOKEN`` set) the routes
+    are *also* mounted at root so HA ingress can proxy to ``localhost:9583/``
+    and serve the "Open Web UI" button. Stdio transports use a separate
+    side-process sidecar instead — see :mod:`ha_mcp.stdio_settings_sidecar`.
+
+    Args:
+        mcp: The FastMCP instance to register routes on.
+        server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
+        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
+            ``/mcp``). Required for non-add-on HTTP modes; if empty in
+            non-add-on mode, the function logs a warning and registers
+            nothing rather than expose the routes publicly.
+    """
+    handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
@@ -1853,32 +2600,48 @@ def register_settings_routes(
         # respect they share the existing add-on networking model where
         # port 9583 is exposed via host_network and the secret path is
         # the auth for direct access. Document this in DOCS.md.
-        mcp.custom_route("/", methods=["GET"])(_root_page)
-        mcp.custom_route("/settings", methods=["GET"])(_settings_page)
-        mcp.custom_route("/api/settings/tools", methods=["GET"])(_get_tools)
-        mcp.custom_route("/api/settings/tools", methods=["POST"])(_save_tools)
-        mcp.custom_route("/api/settings/restart", methods=["POST"])(_restart_addon)
-        mcp.custom_route("/api/settings/info", methods=["GET"])(_settings_info)
-        # Auto-backup endpoints (#1288)
-        mcp.custom_route("/api/settings/backups", methods=["GET"])(_list_backups)
-        mcp.custom_route("/api/settings/backups", methods=["DELETE"])(
-            _delete_backups_bulk
+        mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
+        mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
+        mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
+        mcp.custom_route("/api/settings/tools", methods=["POST"])(
+            handlers["save_tools"]
         )
-        mcp.custom_route("/api/settings/backups/{name}", methods=["GET"])(_view_backup)
+        mcp.custom_route("/api/settings/restart", methods=["POST"])(
+            handlers["restart_addon"]
+        )
+        mcp.custom_route("/api/settings/info", methods=["GET"])(
+            handlers["settings_info"]
+        )
+        mcp.custom_route("/api/settings/features", methods=["GET"])(
+            handlers["get_feature_flags"]
+        )
+        mcp.custom_route("/api/settings/features", methods=["POST"])(
+            handlers["save_feature_flags"]
+        )
+        # Auto-backup endpoints (#1288)
+        mcp.custom_route("/api/settings/backups", methods=["GET"])(
+            handlers["list_backups"]
+        )
+        mcp.custom_route("/api/settings/backups", methods=["DELETE"])(
+            handlers["delete_backups_bulk"]
+        )
+        mcp.custom_route("/api/settings/backups/{name}", methods=["GET"])(
+            handlers["view_backup"]
+        )
         mcp.custom_route("/api/settings/backups/{name}/diff", methods=["GET"])(
-            _diff_backup
+            handlers["diff_backup"]
         )
         mcp.custom_route("/api/settings/backups/{name}/restore", methods=["POST"])(
-            _restore_backup
+            handlers["restore_backup"]
         )
         mcp.custom_route("/api/settings/backups/{name}", methods=["DELETE"])(
-            _delete_backup
+            handlers["delete_backup"]
         )
         mcp.custom_route("/api/settings/backup-config", methods=["GET"])(
-            _get_backup_config
+            handlers["get_backup_config"]
         )
         mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
-            _save_backup_config
+            handlers["save_backup_config"]
         )
 
     if secret_prefix:
@@ -1886,41 +2649,49 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint. The frontend uses relative fetches (./api/settings/...)
         # so the JS works at either prefix unchanged.
-        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(_settings_page)
+        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(
+            handlers["settings_page"]
+        )
         mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
-            _get_tools
+            handlers["get_tools"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(
-            _save_tools
+            handlers["save_tools"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(
-            _restart_addon
+            handlers["restart_addon"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
-            _settings_info
+            handlers["settings_info"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["GET"])(
+            handlers["get_feature_flags"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
+            handlers["save_feature_flags"]
         )
         # Auto-backup endpoints (#1288)
         mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(
-            _list_backups
+            handlers["list_backups"]
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["DELETE"])(
-            _delete_backups_bulk
+            handlers["delete_backups_bulk"]
         )
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backups/{{name}}", methods=["GET"]
-        )(_view_backup)
+        )(handlers["view_backup"])
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backups/{{name}}/diff", methods=["GET"]
-        )(_diff_backup)
+        )(handlers["diff_backup"])
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backups/{{name}}/restore", methods=["POST"]
-        )(_restore_backup)
+        )(handlers["restore_backup"])
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backups/{{name}}", methods=["DELETE"]
-        )(_delete_backup)
+        )(handlers["delete_backup"])
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["GET"]
-        )(_get_backup_config)
+        )(handlers["get_backup_config"])
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
-        )(_save_backup_config)
+        )(handlers["save_backup_config"])

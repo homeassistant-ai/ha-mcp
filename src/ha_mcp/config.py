@@ -127,6 +127,22 @@ class Settings(BaseSettings):
     # env-var users see the trade-off in their logs.
     enable_lite_docstrings: bool = Field(False, alias="ENABLE_LITE_DOCSTRINGS")
 
+    # Filesystem tools — read/write/delete/list under the HA config dir.
+    # Previously gated by a direct ``os.getenv`` call in
+    # ``tools/tools_filesystem.py`` so callers (and the settings UI)
+    # couldn't see it through ``Settings``. Promoted to a first-class
+    # Settings field so the same precedence path applies as for every
+    # other gated capability.
+    enable_filesystem_tools: bool = Field(False, alias="HAMCP_ENABLE_FILESYSTEM_TOOLS")
+
+    # Custom-component installer (``ha_install_mcp_tools``) — pulls the
+    # ``ha_mcp_tools`` integration into HACS. Same env-var-direct
+    # background as ``enable_filesystem_tools``; promoted for the same
+    # reason.
+    enable_custom_component_integration: bool = Field(
+        False, alias="HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"
+    )
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
@@ -188,6 +204,24 @@ class Settings(BaseSettings):
     auto_backup_calendar_lookahead_days: int = Field(
         7, ge=1, le=365, alias="HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS"
     )
+
+    # Mirror the legacy ``os.getenv("FLAG", "").lower() in ("true", ...)``
+    # semantics for the two ex-direct-getenv flags: an empty env var
+    # value MUST be treated as False rather than raising
+    # ``ValidationError``. Pydantic v2's bool parser raises on ``""``
+    # which broke ``test_tools_filesystem.py::TestFeatureFlag::
+    # test_disabled_with_empty_string`` after the migration; this
+    # validator restores the contract callers rely on.
+    @field_validator(
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        mode="before",
+    )
+    @classmethod
+    def _empty_string_means_false(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return False
+        return v
 
     @property
     def env_file_name(self) -> str:
@@ -275,6 +309,226 @@ def validate_settings() -> tuple[bool, str | None]:
         return True, None
     except Exception as e:
         return False, str(e)
+
+
+# Runtime-editable feature flags surfaced in the /settings web UI
+# (issue #863). Each entry is (field_name, env_var_name, python_type).
+# The web UI's /api/settings/features GET/POST endpoints iterate this
+# tuple to advertise per-field origin (env / addon / file / default)
+# and to validate incoming writes. Precedence: explicit env var beats
+# the override file, addon mode (SUPERVISOR_TOKEN set) ignores the
+# file entirely (start.py owns env vars from config.yaml in that
+# mode), and the pydantic field default is the fallback.
+FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
+    ("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
+    ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
+    ("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
+    ("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
+    ("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
+    (
+        "enable_custom_component_integration",
+        "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
+        bool,
+    ),
+)
+
+# Override-file location is the same data dir that holds tool_config.json
+# (resolved via ``utils.data_paths.get_data_dir`` — addon ``/data``,
+# ``HA_MCP_CONFIG_DIR``, ``XDG_DATA_HOME``, or a tmpdir fallback).
+# Imported lazily inside helpers to avoid a circular import at module
+# load.
+_FEATURE_FLAG_OVERRIDE_FILENAME = "feature_flags.json"
+
+# Per-field validation bounds for non-bool fields. Only fields with
+# range constraints need entries here; bools are handled by the
+# coercion in ``_apply_feature_flag_overrides``. Mirrors the pydantic
+# Field bounds on the same fields so a corrupt override file can't
+# push values out of range.
+_FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "tool_search_max_results": (2, 10),
+}
+
+
+def get_feature_flag_origin(env_name: str) -> str:
+    """Return where the live value for ``env_name`` is sourced from.
+
+    Used by the web UI to label each feature-flag field with its
+    source and decide whether the field is editable from the web UI:
+
+    - ``"addon"``: running inside the HA add-on. ``start.py`` always
+      writes these env vars from ``config.yaml`` on every addon
+      start; the override file is ignored. Web UI edits are routed
+      through Supervisor ``/addons/self/options`` so ``config.yaml``
+      stays authoritative. (The current PR exposes flags read-only
+      in addon mode; routing addon edits through Supervisor is
+      tracked separately.)
+    - ``"env"``: env var explicitly set in the process environment
+      (includes values loaded from ``.env`` via ``load_dotenv`` at
+      module import — those land in ``os.environ`` and are
+      indistinguishable from ``docker -e`` / shell-set values,
+      which is intentional). Web UI shows the field read-only;
+      user must unset the env var to edit.
+    - ``"file"``: standalone deployment with a value persisted in
+      ``<data_dir>/feature_flags.json``. Web UI edits update the
+      file in place.
+    - ``"default"``: no env var and no override file entry; the
+      pydantic field default applies. Web UI edits create the file.
+    """
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return "addon"
+    if os.environ.get(env_name) is not None:
+        return "env"
+    field_name = next(
+        (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
+        None,
+    )
+    if field_name is None:
+        return "default"
+    overrides = _read_feature_flag_override_file()
+    if field_name in overrides:
+        return "file"
+    return "default"
+
+
+def _read_feature_flag_override_file() -> dict[str, object]:
+    """Return the contents of the feature-flag override file, or ``{}``.
+
+    Best-effort: a corrupt file MUST NOT break Settings loading. But
+    the failure modes split into two categories that need different
+    treatment:
+
+    * **Silent**: file does not exist. The override layer is opt-in;
+      a missing file is the normal "user has never edited" state and
+      should not log.
+    * **Loud (WARNING)**: file exists but is unreadable
+      (``PermissionError``, broken filesystem) or unparseable
+      (``JSONDecodeError``). The user toggled something, the UI said
+      "Saved", and the value is silently being ignored. Without a log
+      line they have no diagnostic; with one, the sidecar/server log
+      tells them exactly what to fix.
+
+    Data-dir resolution itself can raise (``RuntimeError`` when
+    ``Path.home()`` cannot determine a home directory — typical of
+    pytest's ``patch.dict(os.environ, {}, clear=True)``), so the
+    ``get_data_dir()`` call is inside the try/except too. That branch
+    is treated as silent: the user could not have created an override
+    file in a directory we cannot resolve.
+    """
+    import json
+    from pathlib import Path
+
+    try:
+        from .utils.data_paths import get_data_dir
+
+        path: Path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+    except (RuntimeError, OSError):
+        # Couldn't resolve the data dir at all — user has no override
+        # file by definition. Silent.
+        return {}
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logger.warning(
+            "Feature-flag override file at %s exists but is unreadable; "
+            "falling back to defaults. Check filesystem permissions.",
+            path,
+            exc_info=True,
+        )
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.warning(
+            "Feature-flag override file at %s is not valid JSON; "
+            "falling back to defaults. Delete or fix the file to "
+            "re-enable persisted toggles.",
+            path,
+        )
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "Feature-flag override file at %s is not a JSON object "
+            "(got %s); falling back to defaults.",
+            path,
+            type(data).__name__,
+        )
+        return {}
+    return data
+
+
+def _apply_feature_flag_overrides(settings: "Settings") -> None:
+    """Patch ``settings`` with values from the override file, in place.
+
+    Honors the "env var wins" contract: a field whose env var is set
+    in the process environment is never overwritten. Addon mode
+    short-circuits — ``start.py`` already wrote env vars from
+    ``config.yaml`` and the override file is ignored. Range / type
+    coercion mirrors the pydantic Field bounds so a corrupt file
+    can't push values out of range; out-of-range or untypable
+    entries are logged at WARNING and skipped rather than crashing
+    every consumer of ``get_global_settings()``.
+    """
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return
+    overrides = _read_feature_flag_override_file()
+    if not overrides:
+        return
+    for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
+        if os.environ.get(env_name) is not None:
+            continue
+        if field_name not in overrides:
+            continue
+        raw = overrides[field_name]
+        coerced: bool | int
+        if ftype is bool:
+            if not isinstance(raw, bool | int):
+                logger.warning(
+                    "Override for %r is %s; expected bool — ignoring.",
+                    field_name,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = bool(raw)
+        elif ftype is int:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                # Reject bool-typed ints (since ``bool`` subclasses
+                # ``int``, a stray ``true`` would otherwise coerce to
+                # ``1``).
+                logger.warning(
+                    "Override for %r is %s; expected int — ignoring.",
+                    field_name,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = int(raw)
+            bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
+            if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+                logger.warning(
+                    "Override for %r is %d, outside %d-%d — ignoring.",
+                    field_name,
+                    coerced,
+                    bounds[0],
+                    bounds[1],
+                )
+                continue
+        else:
+            continue
+        try:
+            setattr(settings, field_name, coerced)
+        except Exception:
+            # Pydantic field validators may raise types other than the
+            # ones we expect (ValidationError is a ValueError subclass
+            # but mode='before' validators can route weird shapes
+            # through arbitrary code). Log at WARNING and skip rather
+            # than letting a malformed override crash every consumer of
+            # ``get_global_settings()``.
+            logger.warning(
+                "Override for %r could not be applied to Settings; ignoring.",
+                field_name,
+                exc_info=True,
+            )
 
 
 # Global settings instance
@@ -455,14 +709,17 @@ def _apply_backup_overrides(settings: "Settings") -> None:
 def get_global_settings() -> Settings:
     """Get global settings instance (singleton pattern).
 
-    Applies the auto-backup override file at first read so web-UI edits
-    (persisted to ``<data_dir>/backup_settings.json``) take effect on
-    the next ``get_global_settings()`` call after
-    ``_reset_global_settings()`` is called by the POST handler.
+    Applies override files at first read so web-UI edits take effect
+    on the next ``get_global_settings()`` call after
+    ``_reset_global_settings()`` is called by the POST handler:
+
+    - Feature flags persisted to ``<data_dir>/feature_flags.json``
+    - Auto-backup settings persisted to ``<data_dir>/backup_settings.json``
     """
     global _settings
     if _settings is None:
         _settings = get_settings()
+        _apply_feature_flag_overrides(_settings)
         _apply_backup_overrides(_settings)
     return _settings
 
@@ -470,11 +727,12 @@ def get_global_settings() -> Settings:
 def _reset_global_settings() -> None:
     """Drop the cached settings singleton.
 
-    Test-only seam so suites that mutate ``HA_*`` env vars can force a
-    re-read without reaching into module-private state. Also used by
-    the auto-backup settings POST handler to publish a freshly edited
-    override file value to runtime consumers (the ``@with_auto_backup``
-    decorator reads ``get_global_settings()`` per tool call).
+    Test seam so suites that mutate env vars can force a re-read
+    without reaching into module-private state. Also used by the
+    feature-flag and auto-backup settings POST handlers to publish a
+    freshly edited override file value to runtime consumers
+    (``get_global_settings`` is the only documented read path; the
+    ``@with_auto_backup`` decorator reads it per tool call).
     """
     global _settings
     _settings = None

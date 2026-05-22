@@ -294,15 +294,23 @@ class TestUpsertAutomationConfigIdMismatch:
 
 
 class TestPollForAutomationEntity:
-    """Tests for the poll cadence in _poll_for_automation_entity (issue #1380).
+    """Tests for ``_poll_for_automation_entity`` (issues #1152, #1380, #1395).
 
-    Patch-path note: tests patch ``ha_mcp.client.rest_client.asyncio.sleep``
-    by attribute access. A refactor to ``from asyncio import sleep`` in the
-    production module would silently let real sleeps run — the full-miss
-    test would hang for ~6s instead of completing instantly. If that
-    refactor lands, update the patch target to
-    ``ha_mcp.client.rest_client.sleep``.
+    Since #1395, this method is a thin wrapper around
+    ``wait_for_automation_entity_by_unique_id``. The bulk of the
+    discovery semantics — WS subscribe/sample/wait, REST fallback,
+    event-filter shape — is covered by ``test_wait_helpers.py``. The
+    tests here lock the delegation contract: the method passes the
+    unique_id through, swallows transient HA errors, and propagates
+    programming bugs.
+
+    Patch path: ``_poll_for_automation_entity`` does a *local* import of
+    ``wait_for_automation_entity_by_unique_id`` from
+    ``ha_mcp.tools.util_helpers``. Patching that name before each call
+    means the local import resolves to the patched function.
     """
+
+    HELPER_PATH = "ha_mcp.tools.util_helpers.wait_for_automation_entity_by_unique_id"
 
     @pytest.fixture
     def mock_client(self):
@@ -315,147 +323,61 @@ class TestPollForAutomationEntity:
             client.httpx_client = MagicMock()
             return client
 
-    def test_poll_cadence_shape(self):
-        """Pin the cadence tuple plus the sub-100ms first-poll bound — length
-        and sum are derivable from the tuple and would fail redundantly on a
-        mutation. First-poll was tightened from 0.1s to 0.025s after the
-        #1389 measurement showed HA-Core's entity-registration latency is
-        ~4ms (well below the prior 100ms sleep floor)."""
-        assert HomeAssistantClient._POLL_CADENCE == (0.025, 1.0, 4.975)
-        assert HomeAssistantClient._POLL_CADENCE[0] <= 0.1
+    def test_poll_budget_shape(self):
+        """Pin the upper-bound budget. Preserves the 6s ceiling PR #1384
+        tuned for the legacy cadence loop — exceeding it would change the
+        ``ha_config_set_automation`` latency contract."""
+        assert HomeAssistantClient._POLL_BUDGET_S == 6.0
 
     @pytest.mark.asyncio
-    async def test_poll_returns_entity_id_on_first_attempt(self, mock_client):
-        """When HA publishes the entity within the first 0.025s window, the
-        poll returns on iteration 1 and only sleeps once."""
-        mock_client.get_states = AsyncMock(
-            return_value=[
-                {
-                    "entity_id": "automation.test_target",
-                    "attributes": {"id": "unique_42"},
-                }
-            ]
-        )
-        sleep_calls: list[float] = []
+    async def test_poll_returns_entity_id_from_helper(self, mock_client):
+        """When the helper resolves a match, the discovered entity_id is
+        returned verbatim and the unique_id / timeout are forwarded
+        through."""
+        captured: dict[str, object] = {}
 
-        async def fake_sleep(duration: float) -> None:
-            sleep_calls.append(duration)
+        async def fake_helper(client, unique_id, *, timeout):
+            captured["client"] = client
+            captured["unique_id"] = unique_id
+            captured["timeout"] = timeout
+            return "automation.test_target"
 
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+        with patch(self.HELPER_PATH, new=fake_helper):
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result == "automation.test_target"
-        assert sleep_calls == [0.025]
-        assert mock_client.get_states.call_count == 1
+        assert captured["client"] is mock_client
+        assert captured["unique_id"] == "unique_42"
+        assert captured["timeout"] == HomeAssistantClient._POLL_BUDGET_S
 
     @pytest.mark.asyncio
-    async def test_poll_returns_none_on_full_miss(self, mock_client):
-        """When the entity never appears, the poll exhausts the cadence,
-        sleeps for the full 6s budget across 3 attempts, and returns None."""
-        mock_client.get_states = AsyncMock(return_value=[])
-        sleep_calls: list[float] = []
+    async def test_poll_returns_none_when_helper_times_out(self, mock_client):
+        """Helper ``None`` (budget exhausted) surfaces as
+        ``entity_not_verified=True`` upstream — verified here as the
+        ``None`` return contract."""
 
-        async def fake_sleep(duration: float) -> None:
-            sleep_calls.append(duration)
+        async def fake_helper(client, unique_id, *, timeout):
+            return None
 
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+        with patch(self.HELPER_PATH, new=fake_helper):
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result is None
-        assert sleep_calls == [0.025, 1.0, 4.975]
-        assert mock_client.get_states.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_poll_returns_entity_id_on_later_attempt(self, mock_client):
-        """When HA publishes after the first poll, later iterations succeed
-        without sleeping for the full cadence."""
-        # First call returns no match, second call returns the match.
-        mock_client.get_states = AsyncMock(
-            side_effect=[
-                [],
-                [
-                    {
-                        "entity_id": "automation.slow_target",
-                        "attributes": {"id": "unique_99"},
-                    }
-                ],
-            ]
-        )
-        sleep_calls: list[float] = []
+    async def test_poll_swallows_homeassistant_error(self, mock_client):
+        """Transient HA errors from the helper yield ``None`` rather than
+        propagating — preserves the pre-#1395 contract so the caller
+        records ``entity_not_verified=True`` and continues. Mirrors
+        ``_POLLING_TRANSIENT_ERRORS`` in ``wait_helpers.py``."""
 
-        async def fake_sleep(duration: float) -> None:
-            sleep_calls.append(duration)
+        async def fake_helper(client, unique_id, *, timeout):
+            raise HomeAssistantAPIError("transient")
 
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
-            result = await mock_client._poll_for_automation_entity("unique_99")
-
-        assert result == "automation.slow_target"
-        assert sleep_calls == [0.025, 1.0]
-        assert mock_client.get_states.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_poll_ignores_non_automation_entities(self, mock_client):
-        """States not starting with `automation.` are skipped so we don't
-        match a script/scene that happens to carry the same id attribute."""
-        mock_client.get_states = AsyncMock(
-            return_value=[
-                {"entity_id": "script.distractor", "attributes": {"id": "unique_42"}},
-                {
-                    "entity_id": "automation.actual",
-                    "attributes": {"id": "unique_42"},
-                },
-            ]
-        )
-
-        async def fake_sleep(duration: float) -> None:
-            return None
-
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
-            result = await mock_client._poll_for_automation_entity("unique_42")
-
-        assert result == "automation.actual"
-
-    @pytest.mark.asyncio
-    async def test_poll_swallows_get_states_exception(self, mock_client):
-        """Transient ``get_states`` failures yield None (and
-        ``entity_not_verified=True`` upstream), not a propagated exception.
-        Uses ``HomeAssistantAPIError`` — the realistic transient class,
-        mirrors ``_POLLING_TRANSIENT_ERRORS`` in ``wait_helpers.py``.
-        ``call_count == 1`` locks the wrap-scope: the ``try`` covers the
-        entire ``for``, so iteration-1 transients exit immediately."""
-        mock_client.get_states = AsyncMock(
-            side_effect=HomeAssistantAPIError("transient")
-        )
-
-        async def fake_sleep(duration: float) -> None:
-            return None
-
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
+        with patch(self.HELPER_PATH, new=fake_helper):
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result is None
-        assert mock_client.get_states.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_poll_swallows_get_states_exception_on_iteration_2(self, mock_client):
-        """Mid-loop transient also exits early — locks the wrap-scope: the
-        ``try`` covers the entire ``for`` (not the loop body), so a transient
-        on iteration 2 hits the ``except HomeAssistantError`` clause and
-        returns immediately. ``call_count == 2`` would fail if a future
-        refactor moved the ``try`` inside the loop (which would retry
-        transients until cadence exhaustion)."""
-        mock_client.get_states = AsyncMock(
-            side_effect=[[], HomeAssistantAPIError("transient on iteration 2")]
-        )
-
-        async def fake_sleep(duration: float) -> None:
-            return None
-
-        with patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep):
-            result = await mock_client._poll_for_automation_entity("unique_42")
-
-        assert result is None
-        assert mock_client.get_states.call_count == 2
 
     @pytest.mark.asyncio
     async def test_poll_propagates_typeerror_for_unexpected_errors(self, mock_client):
@@ -464,13 +386,12 @@ class TestPollForAutomationEntity:
         the bug as ``entity_not_verified=True``. Locks the narrowed
         ``except HomeAssistantError`` clause: a future widen-back to
         ``except Exception`` would fail this test."""
-        mock_client.get_states = AsyncMock(side_effect=TypeError("bug"))
 
-        async def fake_sleep(duration: float) -> None:
-            return None
+        async def fake_helper(client, unique_id, *, timeout):
+            raise TypeError("bug")
 
         with (
-            patch("ha_mcp.client.rest_client.asyncio.sleep", new=fake_sleep),
+            patch(self.HELPER_PATH, new=fake_helper),
             pytest.raises(TypeError, match="bug"),
         ):
             await mock_client._poll_for_automation_entity("unique_42")

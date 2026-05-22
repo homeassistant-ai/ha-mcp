@@ -123,9 +123,7 @@ class TestHaGetOverviewRepairs:
         client = self._make_client(issues)
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
 
-        result = await tool(
-            detail_level="minimal", include_dismissed_repairs=True
-        )
+        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
 
         assert result["repair_count"] == 2
         assert "dismissed_repair_count" not in result
@@ -143,9 +141,7 @@ class TestHaGetOverviewRepairs:
         client = self._make_client(issues)
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
 
-        result = await tool(
-            detail_level="minimal", include_dismissed_repairs=True
-        )
+        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
 
         for entry in result["repairs"]:
             for field in (
@@ -165,11 +161,13 @@ class TestHaGetOverviewRepairs:
         assert by_id["dismissed_one"]["dismissed_version"] == "2026.4.0"
 
     @pytest.mark.asyncio
-    async def test_no_repairs_yields_zero_counts(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """Empty issue list keeps repair_count = 0 and omits the `repairs`
-        key (existing contract — don't regress).
+    async def test_no_repairs_yields_zero_counts(self, mock_mcp, mock_smart_tools):
+        """Empty issue list yields repair_count = 0 and ``repairs == []``.
+
+        ``repairs`` is advertised in the ``fields=`` docstring as an
+        available key, so it must always be present (even as an empty
+        list) — otherwise ``fields=["repairs"]`` trips
+        ``project_fields``' typo-guard warning on a clean instance.
         """
         client = self._make_client([])
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
@@ -177,7 +175,7 @@ class TestHaGetOverviewRepairs:
         result = await tool(detail_level="minimal")
 
         assert result["repair_count"] == 0
-        assert "repairs" not in result
+        assert result["repairs"] == []
         assert "dismissed_repair_count" not in result
 
     @pytest.mark.asyncio
@@ -185,7 +183,8 @@ class TestHaGetOverviewRepairs:
         self, mock_mcp, mock_smart_tools
     ):
         """When every repair is dismissed, repair_count=0 (agents see clean
-        state) and `dismissed_repair_count` reports the hidden total.
+        state), ``repairs == []`` (no visible issues), and
+        ``dismissed_repair_count`` reports the hidden total.
         """
         issues = [_ignored_issue(f"dismissed_{i}") for i in range(3)]
         client = self._make_client(issues)
@@ -194,7 +193,7 @@ class TestHaGetOverviewRepairs:
         result = await tool(detail_level="minimal")
 
         assert result["repair_count"] == 0
-        assert "repairs" not in result
+        assert result["repairs"] == []
         assert result["dismissed_repair_count"] == 3
 
     @pytest.mark.asyncio
@@ -210,9 +209,7 @@ class TestHaGetOverviewRepairs:
         client = self._make_client(issues)
         tool = self._build_tool(mock_mcp, client, mock_smart_tools)
 
-        result = await tool(
-            detail_level="minimal", include_dismissed_repairs=value
-        )
+        result = await tool(detail_level="minimal", include_dismissed_repairs=value)
 
         assert result["repair_count"] == expected_count
 
@@ -238,7 +235,11 @@ class TestHaGetOverviewRepairs:
         result = await tool(detail_level="minimal")
 
         assert result["repair_count"] == 0
-        assert "repairs" not in result
+        # Error path: ``repairs`` stays as the default empty list
+        # (set before the try/except so the docstring contract holds
+        # even when the WS call fails); ``repairs_error`` carries the
+        # diagnostic.
+        assert result["repairs"] == []
         assert "repairs_error" in result
         assert "ws disconnect" in result["repairs_error"]
 
@@ -267,5 +268,5 @@ class TestHaGetOverviewRepairs:
         result = await tool(detail_level="minimal")
 
         assert result["repair_count"] == 0
-        assert "repairs" not in result
+        assert result["repairs"] == []
         assert "boom" in result["repairs_error"]

@@ -7,12 +7,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.config import _reset_global_settings
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
     _is_mcp_tools_available,
     is_filesystem_tools_enabled,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_singleton():
+    """Reset the cached ``Settings`` between tests.
+
+    ``is_filesystem_tools_enabled()`` reads through
+    ``get_global_settings()``, which caches the parsed Settings on
+    first read. Tests that mutate ``HAMCP_ENABLE_FILESYSTEM_TOOLS``
+    via ``patch.dict(os.environ, ...)`` need the cache invalidated
+    or every test after the first sees a stale value frozen at
+    import time.
+    """
+    _reset_global_settings()
+    yield
+    _reset_global_settings()
 
 
 def test_filesystem_constants_include_dashboards():
@@ -146,6 +163,7 @@ class TestRegisterFilesystemTools:
         def mock_tool(**kwargs):
             def decorator(func):
                 return func
+
             return decorator
 
         mcp.tool = mock_tool
@@ -179,6 +197,7 @@ class TestHaListFilesTool:
                 if "ha_list_files" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -189,7 +208,11 @@ class TestHaListFilesTool:
         # Call the captured function
         if registered_func:
             # Need to unwrap from log_tool_usage decorator
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="www/")
 
@@ -219,6 +242,7 @@ class TestHaListFilesTool:
                 if "ha_list_files" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -227,7 +251,11 @@ class TestHaListFilesTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(path="www/", pattern="*.css")
 
             client.call_service.assert_called_once_with(
@@ -260,6 +288,7 @@ class TestHaReadFileTool:
                 if "ha_read_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -268,7 +297,11 @@ class TestHaReadFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="configuration.yaml")
 
@@ -294,6 +327,7 @@ class TestHaWriteFileTool:
                 if "ha_write_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -302,7 +336,11 @@ class TestHaWriteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="www/test.css", content=".test { color: red; }")
 
@@ -332,6 +370,7 @@ class TestHaWriteFileTool:
                 if "ha_write_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -340,7 +379,11 @@ class TestHaWriteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(
                 path="www/test.css",
                 content=".test { color: red; }",
@@ -385,6 +428,7 @@ class TestHaDeleteFileTool:
                 if "ha_delete_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -393,7 +437,11 @@ class TestHaDeleteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError) as exc_info:
                 await inner_func(path="www/test.css", confirm=False)
 
@@ -428,6 +476,7 @@ class TestHaDeleteFileTool:
                 if "ha_delete_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -436,7 +485,11 @@ class TestHaDeleteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(path="www/test.css", confirm=True)
 
             client.call_service.assert_called_once_with(
