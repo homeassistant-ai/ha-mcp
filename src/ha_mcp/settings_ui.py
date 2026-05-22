@@ -552,13 +552,20 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
-    Safety toggles (Tool Search, YAML Config Editing) are managed in the
-    add-on configuration page and require a restart to change.
+    Server-wide features (Tool Search, YAML config editing, filesystem
+    tools, etc.) appear in both the <strong>Server Settings</strong>
+    tab and the add-on Configuration page — they're the same settings
+    either way. Add-on users edit them on the Configuration page;
+    every other install (Claude Desktop, Docker, standalone) edits
+    them in the Server Settings tab. Changes require an MCP-host
+    restart to apply.
   </div>
   <div class="pin-notice show" id="pinNotice">
-    Pin toggles only take effect when Tool Search is enabled in the add-on
-    configuration. Without Tool Search, all enabled tools are always visible
-    and pinning has no extra effect.
+    Pin toggles only take effect when Tool Search is enabled — either
+    in the Server Settings tab or, for add-on users, the add-on
+    Configuration page (same setting either way). Without Tool Search,
+    all enabled tools are always visible and pinning has no extra
+    effect.
   </div>
   <div class="restart-notice" id="restartNotice">
     <span class="restart-notice-text" id="restartNoticeText">
