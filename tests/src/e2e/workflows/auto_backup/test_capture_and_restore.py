@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import safe_call_tool
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,42 @@ def _backups_for(
     entries: list[dict[str, Any]], *, domain: str, entity_id: str
 ) -> list[dict[str, Any]]:
     return [e for e in entries if e["domain"] == domain and e["entity_id"] == entity_id]
+
+
+async def _wait_for_backup(
+    mcp_client, *, domain: str, entity_id: str, timeout: int = 15
+) -> str:
+    """Poll the backup list until at least one snapshot for ``domain:entity_id``
+    appears, returning the first backup name.
+
+    Captures are written synchronously by the decorator before the wrapped
+    write returns, but HA storage propagation between create and edit can
+    delay when the decorator's pre-edit fetch sees the freshly-created
+    entity. The poll absorbs that delay rather than asserting on the first
+    list call (which would fail with ``assert 0 >= 1`` for slow rigs).
+    """
+    data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_manage_backup",
+        arguments={
+            "scope": "edits",
+            "action": "list",
+            "domain": domain,
+            "entity_id": entity_id,
+        },
+        predicate=lambda d: bool(
+            _backups_for(
+                d.get("backups", []) or d.get("data", {}).get("backups", []),
+                domain=domain,
+                entity_id=entity_id,
+            )
+        ),
+        description=f"auto-backup snapshot for {domain}:{entity_id}",
+        timeout=timeout,
+    )
+    entries = data.get("backups", []) or data.get("data", {}).get("backups", [])
+    mine = _backups_for(entries, domain=domain, entity_id=entity_id)
+    return mine[0]["name"]
 
 
 # ---------------------------------------------------------------- gating
@@ -238,23 +275,17 @@ class TestHelperCaptureRestore:
             {
                 "helper_type": "input_boolean",
                 "helper_id": helper_id,
+                "name": helper_id,
                 "icon": "mdi:test-tube-empty",
             },
         )
         assert edit.get("success") is not False
 
-        # List backups in the helper_input_boolean domain.
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {"scope": "edits", "action": "list", "domain": "helper_input_boolean"},
+        # Poll until the snapshot file appears — absorbs HA storage
+        # propagation delay between create and edit on slower rigs.
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="helper_input_boolean", entity_id=helper_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="helper_input_boolean", entity_id=helper_id)
-        assert len(mine) >= 1
-
-        backup_name = mine[0]["name"]
 
         # Restore — exercises ``input_boolean/update`` WS command.
         restore = await safe_call_tool(
@@ -325,9 +356,12 @@ class TestComplexHelperCaptureRestore:
         assert create.get("success") is not False
 
         # Edit — shrink Monday, split Tuesday, drop Wednesday entirely.
+        # ``name`` is required by HA's schedule schema on every update
+        # (validator rejects the WS payload otherwise).
         edited = {
             "helper_type": "schedule",
             "helper_id": helper_id,
+            "name": helper_id,
             "icon": "mdi:calendar-remove",
             "monday": [{"from": "10:00:00", "to": "12:00:00"}],
             "tuesday": [
@@ -340,22 +374,11 @@ class TestComplexHelperCaptureRestore:
         edit = await safe_call_tool(mcp_client, "ha_config_set_helper", edited)
         assert edit.get("success") is not False
 
-        # List + verify the snapshot captured the pre-edit nested structure.
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "helper_schedule",
-                "entity_id": helper_id,
-            },
+        # Poll until the schedule snapshot appears so an HA storage
+        # propagation race doesn't masquerade as a real assert.
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="helper_schedule", entity_id=helper_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="helper_schedule", entity_id=helper_id)
-        assert len(mine) >= 1, "snapshot not captured for schedule edit"
-        backup_name = mine[0]["name"]
 
         # View — assert the nested arrays survived YAML round-trip into
         # the snapshot file. Schedule shape:
@@ -437,21 +460,9 @@ class TestDashboardCaptureRestore:
                 "config": {"views": [{"title": "Updated"}]},
             },
         )
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "dashboard",
-                "entity_id": url_path,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="dashboard", entity_id=url_path
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="dashboard", entity_id=url_path)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         # Restore — fires ``lovelace/config/save``.
         restore = await safe_call_tool(
@@ -518,21 +529,9 @@ class TestScriptCaptureRestore:
                 },
             },
         )
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "script",
-                "entity_id": script_id,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="script", entity_id=script_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="script", entity_id=script_id)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -595,21 +594,9 @@ class TestSceneCaptureRestore:
                 },
             },
         )
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "scene",
-                "entity_id": scene_id,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="scene", entity_id=scene_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="scene", entity_id=scene_id)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -742,21 +729,9 @@ class TestLabelCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "label",
-                "entity_id": label_id,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="label", entity_id=label_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="label", entity_id=label_id)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -825,21 +800,9 @@ class TestCategoryCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "category",
-                "entity_id": composite,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="category", entity_id=composite
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="category", entity_id=composite)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -908,21 +871,9 @@ class TestZoneCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "zone",
-                "entity_id": zone_id,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="zone", entity_id=zone_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="zone", entity_id=zone_id)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -988,21 +939,9 @@ class TestAreaCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "area_or_floor",
-                "entity_id": composite,
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="area_or_floor", entity_id=composite
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="area_or_floor", entity_id=composite)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -1068,22 +1007,11 @@ class TestGroupCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        entity_id = f"group.{object_id}"
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "group",
-                "entity_id": entity_id,
-            },
+        # Decorator uses ``id_param="object_id"`` so the snapshot keys on
+        # the object_id, not the full ``group.<id>`` entity_id form.
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="group", entity_id=object_id
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="group", entity_id=entity_id)
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -1141,25 +1069,15 @@ class TestEntityStateCaptureRestore:
         if edit.get("success") is False:
             pytest.skip(f"ha_set_entity unsupported on this HA: {edit}")
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "entity",
-                "entity_id": entity_id,
-            },
-        )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(entries, domain="entity", entity_id=entity_id)
-        if not mine:
+        try:
+            backup_name = await _wait_for_backup(
+                mcp_client, domain="entity", entity_id=entity_id, timeout=10
+            )
+        except TimeoutError:
             # ha_set_entity may take the entity-registry path (no /api/states
             # POST) on some HA versions; if so the entity-domain handler
             # won't fire. Surface clearly rather than asserting wrong.
             pytest.skip("entity-domain handler did not capture for this edit")
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
@@ -1226,23 +1144,9 @@ class TestDashboardResourceCaptureRestore:
         )
         assert edit.get("success") is not False
 
-        listing = await safe_call_tool(
-            mcp_client,
-            "ha_manage_backup",
-            {
-                "scope": "edits",
-                "action": "list",
-                "domain": "dashboard_resource",
-                "entity_id": str(resource_id),
-            },
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="dashboard_resource", entity_id=str(resource_id)
         )
-        assert listing.get("success") is True
-        entries = listing.get("data", {}).get("backups", [])
-        mine = _backups_for(
-            entries, domain="dashboard_resource", entity_id=str(resource_id)
-        )
-        assert len(mine) >= 1
-        backup_name = mine[0]["name"]
 
         restore = await safe_call_tool(
             mcp_client,
