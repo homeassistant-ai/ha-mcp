@@ -224,7 +224,9 @@ def main() -> int:
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
     enable_lite_docstrings = False  # default
-    enable_auto_backup = False  # default (#1288)
+    enable_auto_backup = (
+        True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
+    )
     auto_backup_throttle_minutes = 0  # default — every write
     auto_backup_retain_per_entity = 100  # default
     tool_search_max_results = 5  # default
@@ -269,7 +271,7 @@ def main() -> int:
             enable_lite_docstrings = (
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
             )
-            raw_auto_backup = config.get("enable_auto_backup", False)
+            raw_auto_backup = config.get("enable_auto_backup", True)
             enable_auto_backup = (
                 raw_auto_backup if isinstance(raw_auto_backup, bool) else False
             )

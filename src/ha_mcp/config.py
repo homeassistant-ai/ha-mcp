@@ -154,9 +154,12 @@ class Settings(BaseSettings):
 
     # Auto-backup of edited entities (#1288).
     # Captures the pre-write state of every wrapped write/destructive tool
-    # to a local directory. Disabled by default; captures are best-effort
-    # and never block the underlying write.
-    enable_auto_backup: bool = Field(False, alias="ENABLE_AUTO_BACKUP")
+    # to a local directory. Enabled by default — captures are best-effort
+    # (failures log a WARNING but never block the wrapped write) and the
+    # disk footprint is small (typically <10 KB per snapshot; default
+    # retention is 100/entity, see ``auto_backup_retain_per_entity``).
+    # Set ``ENABLE_AUTO_BACKUP=false`` to opt out.
+    enable_auto_backup: bool = Field(True, alias="ENABLE_AUTO_BACKUP")
 
     # Per-entity throttle window. 0 (default) = backup every write; N>0 =
     # at most one snapshot per N minutes per entity. Upper bound 1440

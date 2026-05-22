@@ -27,7 +27,7 @@ options:
   enable_yaml_config_editing: false
   enable_code_mode: false
   enable_lite_docstrings: false
-  enable_auto_backup: false
+  enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
   tool_search_max_results: 5

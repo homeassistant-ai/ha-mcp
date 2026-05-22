@@ -100,10 +100,24 @@ class TestAutomationBackupTarget:
     def test_falls_back_to_identifier_when_no_config_id(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
 
+        # The fallback path strips a leading ``automation.`` so the
+        # snapshot filename doesn't end up with a doubled domain segment
+        # like ``automation.automation.foo.<ts>.yaml``.
         target = automation_backup_target(
             {"identifier": "automation.foo", "config": {"alias": "x"}}
         )
-        assert target == "automation.foo"
+        assert target == "foo"
+
+    def test_falls_back_to_identifier_bare_id_unchanged(self) -> None:
+        from ha_mcp.tools.auto_backup import automation_backup_target
+
+        # Bare-id identifiers (no ``automation.`` prefix) pass through
+        # unchanged so callers that already supply the unique_id form
+        # aren't surprised.
+        target = automation_backup_target(
+            {"identifier": "my_unique_id", "config": {"alias": "x"}}
+        )
+        assert target == "my_unique_id"
 
     def test_parses_config_as_json_string(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
@@ -119,10 +133,12 @@ class TestAutomationBackupTarget:
     def test_invalid_json_falls_back_to_identifier(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
 
+        # Falls through to the identifier fallback path, which strips
+        # the leading ``automation.`` prefix.
         target = automation_backup_target(
             {"identifier": "automation.foo", "config": "not-json"}
         )
-        assert target == "automation.foo"
+        assert target == "foo"
 
     def test_no_identifier_no_config_id_returns_empty(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target

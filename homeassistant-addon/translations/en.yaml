@@ -30,8 +30,8 @@ configuration:
       /data/ha_mcp_backups/ (override via HAMCP_BACKUP_DIR) and listed,
       restored, or deleted via the Backups tab in the web settings UI or
       via ha_manage_backup(scope='edits', ...). Best-effort — failures log
-      a WARNING but never block the underlying write. Off by default. No
-      restart required to take effect.
+      a WARNING but never block the underlying write. On by default;
+      uncheck to opt out. Requires restart to take effect.
   auto_backup_throttle_minutes:
     name: Auto-backup throttle (minutes)
     description: >-
