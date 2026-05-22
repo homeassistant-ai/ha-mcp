@@ -1231,7 +1231,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "area_analysis, ai_insights, pagination, partial, warnings, "
                     "device_types, service_availability, system_info, "
                     "notification_count, notifications, repair_count, repairs, "
-                    "repairs_error, tool_discovery."
+                    "repairs_error, tool_discovery. The ``settings_url`` "
+                    "field (stdio mode only, see tool description) is not "
+                    "subject to this projection — it is always included "
+                    "when the settings-UI sidecar is running."
                 ),
             ),
         ] = None,
@@ -1249,6 +1252,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use fields= to project the response to only the keys you need — a
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
+
+        When (and only when) the ha-mcp settings-UI sidecar is running
+        (stdio mode, e.g. Claude Desktop / Claude Code), the response
+        includes a ``settings_url`` field — the local URL to the
+        tool-configuration page. Hand this URL to the user when they
+        ask how to enable or disable tools or change server settings.
+        ``settings_url`` is emitted regardless of ``fields=``
+        projection (so it stays discoverable even when callers
+        minimize the response) but only when the sidecar URL file
+        actually exists.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so
@@ -1345,9 +1358,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
-        # Include active persistent notifications
+        # Include active persistent notifications. ``notifications`` is
+        # advertised in the ``fields=`` docstring as an available key,
+        # so it must be present whenever ``include_notifications`` is on
+        # — even if the list comes back empty — so ``fields=
+        # ["notifications"]`` doesn't trip the ``project_fields``
+        # "key not found" warning on an instance with no active alerts.
         if include_notifications_bool:
             result["notification_count"] = 0
+            result["notifications"] = []
             try:
                 ws_result = await client.send_websocket_message(
                     {"type": "persistent_notification/get"}
@@ -1355,24 +1374,27 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if ws_result.get("success"):
                     notifications = ws_result.get("result", [])
                     result["notification_count"] = len(notifications)
-                    if notifications:
-                        result["notifications"] = [
-                            {
-                                "notification_id": n.get("notification_id"),
-                                "title": n.get("title"),
-                                "message": n.get("message"),
-                                "created_at": n.get("created_at"),
-                            }
-                            for n in notifications
-                        ]
+                    result["notifications"] = [
+                        {
+                            "notification_id": n.get("notification_id"),
+                            "title": n.get("title"),
+                            "message": n.get("message"),
+                            "created_at": n.get("created_at"),
+                        }
+                        for n in notifications
+                    ]
             except Exception as e:
                 logger.warning(
                     "Failed to fetch notifications for overview: %s", e, exc_info=True
                 )
 
         # Active repairs only by default — matches the HA Repairs UI so agents
-        # don't chase problems the user already dismissed.
+        # don't chase problems the user already dismissed. ``repairs`` is
+        # always emitted (empty list when none) for the same reason
+        # ``notifications`` is — the ``fields=`` docstring advertises it
+        # as available unconditionally.
         result["repair_count"] = 0
+        result["repairs"] = []
         try:
             repairs_result = await client.send_websocket_message(
                 {"type": "repairs/list_issues"}
@@ -1388,10 +1410,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     dismissed_count = len(all_issues) - len(visible_issues)
                     if dismissed_count:
                         result["dismissed_repair_count"] = dismissed_count
-                if visible_issues:
-                    result["repairs"] = [
-                        project_repair_fields(r) for r in visible_issues
-                    ]
+                result["repairs"] = [project_repair_fields(r) for r in visible_issues]
             else:
                 err = repairs_result.get("error") or {}
                 err_msg = (
@@ -1431,7 +1450,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
-        return project_fields(result, parsed_fields)
+        # Surface the stdio settings UI sidecar URL when a URL file is
+        # present (issue #863). The LLM can hand this URL to the user
+        # when they ask how to change settings — the sidecar process
+        # outlives the stdio MCP subprocess, so the URL stays reachable.
+        # Surfacing is advisory: a missing or unreadable URL file
+        # MUST NOT fail the overview tool. The file is normally only
+        # present in stdio mode; HTTP modes mount the settings page on
+        # the FastMCP server directly. A leftover URL file from a prior
+        # stdio run on the same machine could in principle be surfaced
+        # by an HTTP-mode process — acceptable because the URL itself
+        # is gated by the random secret path either way.
+        #
+        # Added *after* ``project_fields`` so it survives every
+        # ``fields=`` projection — even an LLM that calls
+        # ``fields=["system_info"]`` (to minimize payload) still sees
+        # the URL and can hand it to the user. Hiding it behind the
+        # projection made it effectively invisible to less-attentive
+        # LLMs that scanned only the documented ``fields=`` enum.
+        from ..stdio_settings_sidecar import read_sidecar_url
+
+        projected = project_fields(result, parsed_fields)
+        sidecar_url = read_sidecar_url()
+        if sidecar_url:
+            projected["settings_url"] = sidecar_url
+
+        return projected
 
     @mcp.tool(
         tags={"Search & Discovery"},

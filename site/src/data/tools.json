@@ -2460,7 +2460,7 @@
   {
     "name": "ha_get_overview",
     "title": "Get System Overview",
-    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\nStandard/full modes paginate entities (default 200 per page) — use offset\nto fetch more. Use 'domains' filter to narrow scope.\n\nUse fields= to project the response to only the keys you need — a\nsignificantly smaller payload when fetching a single sub-section (e.g.\nfields=[\"system_info\"] returns just that section instead of the full overview).",
+    "description": "Get AI-friendly system overview with intelligent categorization.\n\nReturns comprehensive system information at the requested detail level,\nincluding Home Assistant base_url, version, location, timezone, entity overview,\nand active persistent notifications (if any).\nUse 'minimal' (default) for most queries. Domain counts and states_summary\nare always complete regardless of entity pagination.\nStandard/full modes paginate entities (default 200 per page) — use offset\nto fetch more. Use 'domains' filter to narrow scope.\n\nUse fields= to project the response to only the keys you need — a\nsignificantly smaller payload when fetching a single sub-section (e.g.\nfields=[\"system_info\"] returns just that section instead of the full overview).\n\nWhen (and only when) the ha-mcp settings-UI sidecar is running\n(stdio mode, e.g. Claude Desktop / Claude Code), the response\nincludes a ``settings_url`` field — the local URL to the\ntool-configuration page. Hand this URL to the user when they\nask how to enable or disable tools or change server settings.\n``settings_url`` is emitted regardless of ``fields=``\nprojection (so it stays discoverable even when callers\nminimize the response) but only when the sidecar URL file\nactually exists.",
     "inputSchema": {
       "properties": {
         "detail_level": {
@@ -2500,7 +2500,7 @@
           "default": false
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domains\"]). None = full response (default). Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, repairs, repairs_error, tool_discovery.')]",
+          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domains\"]). None = full response (default). Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, repairs, repairs_error, tool_discovery. The ``settings_url`` field (stdio mode only, see tool description) is not subject to this projection — it is always included when the settings-UI sidecar is running.')]",
           "default": null
         }
       }

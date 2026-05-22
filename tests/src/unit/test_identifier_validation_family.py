@@ -53,7 +53,7 @@ class TestValidateIdentifierNotEmptyHelper:
             "\r",
             "\v",
             "\xa0",  # non-breaking space (U+00A0)
-            "　",  # ideographic space (U+3000)
+            "\u3000",  # ideographic space (U+3000)
         ],
     )
     def test_rejects_empty_or_whitespace(self, bad):
@@ -219,9 +219,7 @@ class TestCategoriesIdentifierValidation:
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_remove_rejects_empty_category_id(self, tools, bad):
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_config_remove_category(
-                scope="automation", category_id=bad
-            )
+            await tools.ha_config_remove_category(scope="automation", category_id=bad)
         _assert_invalid_param(excinfo)
         tools._client.send_websocket_message.assert_not_called()
 
@@ -327,9 +325,7 @@ class TestSetHelperWhitespaceUpgrade:
     async def test_create_rejects_whitespace_name(self, register_tools, mock_ws_client):
         set_helper = register_tools["ha_config_set_helper"]
         with pytest.raises(ToolError) as excinfo:
-            await set_helper(
-                helper_type="input_boolean", action="create", name="   "
-            )
+            await set_helper(helper_type="input_boolean", action="create", name="   ")
         _assert_invalid_param(excinfo)
         mock_ws_client.send_websocket_message.assert_not_called()
 
@@ -364,9 +360,7 @@ class TestSetHelperWhitespaceUpgrade:
         for bad in ("", "   "):
             mock_ws_client.send_websocket_message.reset_mock()
             with pytest.raises(ToolError) as excinfo:
-                await set_helper(
-                    helper_type=helper_type, helper_id=bad, name="X"
-                )
+                await set_helper(helper_type=helper_type, helper_id=bad, name="X")
             _assert_invalid_param(excinfo)
             mock_ws_client.send_websocket_message.assert_not_called()
 
@@ -378,9 +372,7 @@ class TestSetHelperWhitespaceUpgrade:
         # downstream config-flow build proceeds with a name HA cannot use.
         set_helper = register_tools["ha_config_set_helper"]
         with pytest.raises(ToolError) as excinfo:
-            await set_helper(
-                helper_type="utility_meter", action="create", name="   "
-            )
+            await set_helper(helper_type="utility_meter", action="create", name="   ")
         _assert_invalid_param(excinfo)
         # The pre-flow gate runs before any flow start — no WS round-trip.
         mock_ws_client.send_websocket_message.assert_not_called()
@@ -439,9 +431,7 @@ class TestCheckNameCollisionWhitespaceSkip:
         from ha_mcp.tools.tools_config_helpers import _check_name_collision
 
         # The early-return runs before any WS message is constructed.
-        result = await _check_name_collision(
-            mock_ws_client, "input_boolean", bad_name
-        )
+        result = await _check_name_collision(mock_ws_client, "input_boolean", bad_name)
         assert result is None
         mock_ws_client.send_websocket_message.assert_not_called()
 
@@ -562,9 +552,7 @@ class TestAutomationsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_get_automation(identifier=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "identifier"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "identifier"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
         # Also no REST GET on the automation config.
         tools._client.get_automation_config.assert_not_called()
@@ -583,9 +571,7 @@ class TestAutomationsIdentifierValidation:
                 identifier=bad,
             )
         _assert_invalid_param(excinfo)
-        assert '"parameter": "identifier"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "identifier"' in str(excinfo.value), str(excinfo.value)
         # Guard fires before any upsert / WS round-trip.
         tools._client.upsert_automation_config.assert_not_called()
 
@@ -638,9 +624,7 @@ class TestScriptsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_config_get_script(script_id=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "script_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "script_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.get_script_config.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
@@ -654,9 +638,7 @@ class TestScriptsIdentifierValidation:
                 config={"sequence": [{"delay": {"seconds": 1}}]},
             )
         _assert_invalid_param(excinfo)
-        assert '"parameter": "script_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "script_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.upsert_script_config.assert_not_called()
 
 
@@ -689,9 +671,7 @@ def _register_dashboard_tools_and_capture(mock_client):
 
 class TestDashboardsIdentifierValidation:
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_get_dashboard_rejects_empty_url_path(
-        self, mock_ws_client, bad
-    ):
+    async def test_get_dashboard_rejects_empty_url_path(self, mock_ws_client, bad):
         # ``url_path`` is optional (omit + ``list_only=True`` lists all).
         # When provided, empty/whitespace would slip past the list_only
         # check and reach the search-mode / get-mode WS dispatch. Guard
@@ -702,9 +682,7 @@ class TestDashboardsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_config_get_dashboard(url_path=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "url_path"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "url_path"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
     async def test_get_dashboard_list_only_skips_guard(self, mock_ws_client):
@@ -764,9 +742,7 @@ class TestDashboardsIdentifierValidation:
         )
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_dashboard_rejects_empty_url_path(
-        self, mock_ws_client, bad
-    ):
+    async def test_set_dashboard_rejects_empty_url_path(self, mock_ws_client, bad):
         # ``url_path`` is required for set_dashboard. Empty/whitespace
         # would pass the ``"default"`` alias (False), reach the
         # pre-resolver / hyphen-check, and surface as a misleading
@@ -778,15 +754,11 @@ class TestDashboardsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_config_set_dashboard(url_path=bad, config={"views": []})
         _assert_invalid_param(excinfo)
-        assert '"parameter": "url_path"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "url_path"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_delete_dashboard_rejects_empty_url_path(
-        self, mock_ws_client, bad
-    ):
+    async def test_delete_dashboard_rejects_empty_url_path(self, mock_ws_client, bad):
         # ``url_path`` is required for delete_dashboard. Empty/whitespace
         # would reach ``_resolve_dashboard`` and surface as a misleading
         # "no dashboard found" — the guard names the actual problem
@@ -797,9 +769,7 @@ class TestDashboardsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_config_delete_dashboard(url_path=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "url_path"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "url_path"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
 
@@ -835,9 +805,7 @@ class TestGroupsIdentifierValidation:
         # misleading HA service-call failure. Symmetric with the
         # ``ha_config_remove_group`` pre-flight added in this PR.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_config_set_group(
-                object_id=bad, entities=["light.example"]
-            )
+            await tools.ha_config_set_group(object_id=bad, entities=["light.example"])
         _assert_invalid_param(excinfo)
         assert '"parameter": "object_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.call_service.assert_not_called()
@@ -958,9 +926,7 @@ class TestIntegrationsIdentifierValidation:
         tools._client.delete_config_entry.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_integration_enabled_rejects_empty_entry_id(
-        self, tools, bad
-    ):
+    async def test_set_integration_enabled_rejects_empty_entry_id(self, tools, bad):
         # ``entry_id`` is passed straight into ``config_entries/disable``;
         # without the guard, ``entry_id=""`` would surface as a misleading
         # HA "config entry not found".
@@ -1012,17 +978,13 @@ class TestTodoIdentifierValidation:
         # new guard, ``item=""`` would surface as a misleading HA
         # "item not found".
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_remove_todo_item(
-                entity_id="todo.shopping_list", item=bad
-            )
+            await tools.ha_remove_todo_item(entity_id="todo.shopping_list", item=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "item"' in str(excinfo.value), str(excinfo.value)
         tools._client.call_service.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_item_rejects_empty_item_on_implicit_update(
-        self, tools, bad
-    ):
+    async def test_set_item_rejects_empty_item_on_implicit_update(self, tools, bad):
         # ``item`` is the implicit create/update discriminator: ``None``
         # routes to create, non-None to update. Without the new guard,
         # ``item=""`` would route to update (``"" is None`` is False) and
@@ -1069,9 +1031,7 @@ def _register_entity_tools_and_capture(mock_client):
 
 class TestEntitiesIdentifierValidation:
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_remove_entity_rejects_empty_entity_id(
-        self, mock_ws_client, bad
-    ):
+    async def test_remove_entity_rejects_empty_entity_id(self, mock_ws_client, bad):
         # ``entity_id`` is passed straight into the
         # ``config/entity_registry/remove`` WS message; without the new
         # guard, ``entity_id=""`` surfaces as a misleading HA
@@ -1082,15 +1042,11 @@ class TestEntitiesIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_remove_entity(entity_id=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "entity_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_set_entity_rejects_empty_entity_id_str(
-        self, mock_ws_client, bad
-    ):
+    async def test_set_entity_rejects_empty_entity_id_str(self, mock_ws_client, bad):
         # ``ha_set_entity`` accepts ``entity_id: str | list[str]``. The
         # existing list-empty check rejects ``[]`` but lets ``[""]``
         # through; for the string input path, ``""`` was normalised to
@@ -1102,9 +1058,7 @@ class TestEntitiesIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_set_entity(entity_id=bad, name="New Name")
         _assert_invalid_param(excinfo)
-        assert '"parameter": "entity_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
@@ -1123,9 +1077,7 @@ class TestEntitiesIdentifierValidation:
                 categories={"automation": "cat_id"},
             )
         _assert_invalid_param(excinfo)
-        assert '"parameter": "entity_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "entity_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
 
@@ -1152,9 +1104,7 @@ def _register_registry_tools_and_capture(mock_client):
 
 class TestRegistryIdentifierValidation:
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_remove_device_rejects_empty_device_id(
-        self, mock_ws_client, bad
-    ):
+    async def test_remove_device_rejects_empty_device_id(self, mock_ws_client, bad):
         # Empty/whitespace ``device_id`` would slip past the local-filter
         # check (``next((d for d in devices if d.get("id") == device_id)...)``)
         # after wasting a ``config/device_registry/list`` round-trip, and
@@ -1166,15 +1116,11 @@ class TestRegistryIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_remove_device(device_id=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "device_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "device_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_update_device_rejects_empty_device_id(
-        self, mock_ws_client, bad
-    ):
+    async def test_update_device_rejects_empty_device_id(self, mock_ws_client, bad):
         # ``device_id`` is passed straight through ``ha_update_device`` to
         # ``_update_device_internal`` which builds a
         # ``config/device_registry/update`` WS message; without the new
@@ -1187,9 +1133,7 @@ class TestRegistryIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await ha_update_device(device_id=bad, name="New Name")
         _assert_invalid_param(excinfo)
-        assert '"parameter": "device_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "device_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
 
 
@@ -1295,7 +1239,5 @@ class TestHacsIdentifierValidation:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_hacs_download(repository_id=bad)
         _assert_invalid_param(excinfo)
-        assert '"parameter": "repository_id"' in str(excinfo.value), str(
-            excinfo.value
-        )
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()

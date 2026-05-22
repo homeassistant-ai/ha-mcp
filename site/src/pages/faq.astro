@@ -25,6 +25,7 @@ const withBase = (path: string) => {
       <h2 class="text-lg font-semibold text-white mb-4">On this page</h2>
       <ul class="space-y-2 text-sm">
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
+        <li class="ml-4"><a href="#tool-settings-page" class="text-blue-400 hover:underline">Changing Which Tools Are Enabled</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
@@ -98,6 +99,17 @@ const withBase = (path: string) => {
             </table>
           </div>
           <p class="text-slate-400 text-sm mt-3">Built-in = operate devices. ha-mcp = administer your system.</p>
+        </div>
+
+        <div class="faq-item" id="tool-settings-page">
+          <h3 class="text-lg font-medium text-white mb-2">How do I change which tools are enabled / pinned?</h3>
+          <p class="text-slate-300">ha-mcp ships a small settings page where you can enable, disable, and pin individual MCP tools. It's reachable a few different ways depending on how you installed:</p>
+          <ul class="list-disc pl-6 text-slate-300 mt-3 space-y-2">
+            <li><strong>Claude Desktop / Claude Code / any stdio install (<code class="bg-slate-800 px-1 rounded">uvx ha-mcp</code>):</strong> a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to <strong>ask the AI</strong> something like <em>"how do I change which MCP tools are enabled?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code>. The URL is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path generated on first launch.</li>
+            <li><strong>HA Add-on:</strong> use the "Open Web UI" button on the add-on page, or visit <code class="bg-slate-800 px-1 rounded">http://homeassistant.local:9583/settings</code>.</li>
+            <li><strong><code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> / Docker HTTP:</strong> append <code class="bg-slate-800 px-1 rounded">/settings</code> to your MCP secret-path URL (e.g. <code class="bg-slate-800 px-1 rounded">http://127.0.0.1:8086/private_xxx/settings</code>).</li>
+          </ul>
+          <p class="text-slate-400 text-sm mt-3">Changes apply on the next MCP-server restart. To stop the stdio sidecar entirely, click the "Stop settings server" button on the page, set <code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI=1</code> in your MCP client config, or create an empty <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/settings_ui_disabled</code> file.</p>
         </div>
       </div>
     </section>
@@ -475,9 +487,14 @@ source ~/.zshrc
                   <td class="py-2">Long-lived access token (or <code class="bg-slate-800 px-1 rounded">demo</code>)</td>
                   <td class="py-2 text-amber-400">Yes</td>
                 </tr>
-                <tr>
+                <tr class="border-b border-slate-800">
                   <td class="py-2"><code class="bg-slate-800 px-1 rounded">BACKUP_HINT</code></td>
                   <td class="py-2">Backup recommendation level</td>
+                  <td class="py-2 text-slate-500">No</td>
+                </tr>
+                <tr>
+                  <td class="py-2"><code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI</code></td>
+                  <td class="py-2">Set to <code class="bg-slate-800 px-1 rounded">1</code> to skip the localhost settings-page sidecar that stdio installs spawn by default (<a href="#tool-settings-page" class="text-blue-400 hover:underline">details</a>).</td>
                   <td class="py-2 text-slate-500">No</td>
                 </tr>
               </tbody>
