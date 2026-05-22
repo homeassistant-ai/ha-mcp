@@ -1356,9 +1356,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
-        # Include active persistent notifications
+        # Include active persistent notifications. ``notifications`` is
+        # advertised in the ``fields=`` docstring as an available key,
+        # so it must be present whenever ``include_notifications`` is on
+        # — even if the list comes back empty — so ``fields=
+        # ["notifications"]`` doesn't trip the ``project_fields``
+        # "key not found" warning on an instance with no active alerts.
         if include_notifications_bool:
             result["notification_count"] = 0
+            result["notifications"] = []
             try:
                 ws_result = await client.send_websocket_message(
                     {"type": "persistent_notification/get"}
@@ -1366,24 +1372,27 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 if ws_result.get("success"):
                     notifications = ws_result.get("result", [])
                     result["notification_count"] = len(notifications)
-                    if notifications:
-                        result["notifications"] = [
-                            {
-                                "notification_id": n.get("notification_id"),
-                                "title": n.get("title"),
-                                "message": n.get("message"),
-                                "created_at": n.get("created_at"),
-                            }
-                            for n in notifications
-                        ]
+                    result["notifications"] = [
+                        {
+                            "notification_id": n.get("notification_id"),
+                            "title": n.get("title"),
+                            "message": n.get("message"),
+                            "created_at": n.get("created_at"),
+                        }
+                        for n in notifications
+                    ]
             except Exception as e:
                 logger.warning(
                     "Failed to fetch notifications for overview: %s", e, exc_info=True
                 )
 
         # Active repairs only by default — matches the HA Repairs UI so agents
-        # don't chase problems the user already dismissed.
+        # don't chase problems the user already dismissed. ``repairs`` is
+        # always emitted (empty list when none) for the same reason
+        # ``notifications`` is — the ``fields=`` docstring advertises it
+        # as available unconditionally.
         result["repair_count"] = 0
+        result["repairs"] = []
         try:
             repairs_result = await client.send_websocket_message(
                 {"type": "repairs/list_issues"}
@@ -1399,10 +1408,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     dismissed_count = len(all_issues) - len(visible_issues)
                     if dismissed_count:
                         result["dismissed_repair_count"] = dismissed_count
-                if visible_issues:
-                    result["repairs"] = [
-                        project_repair_fields(r) for r in visible_issues
-                    ]
+                result["repairs"] = [project_repair_fields(r) for r in visible_issues]
             else:
                 err = repairs_result.get("error") or {}
                 err_msg = (
