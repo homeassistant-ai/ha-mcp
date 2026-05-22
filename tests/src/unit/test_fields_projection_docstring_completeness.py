@@ -2,14 +2,18 @@
 must be enumerated in the tool's ``fields=`` parameter description so AI
 agents know it can be projected via ``fields=[...]``.
 
-Caught ``dismissed_repair_count`` missing from ``ha_get_overview`` — added
-in PR #1309 but not enumerated when PR #1225 introduced the ``Available
-keys: ...`` docstring list.
-
 The check is purely static. For each tool with a ``fields=`` parameter
 we AST-walk the function(s) that build the projectable dict, collect
 every string-literal key that gets assigned at the top level, and
-assert that set is documented.
+assert that set is documented in both directions:
+
+- ``emitted ⊄ documented`` — code emits a key the docstring doesn't list,
+  so AI agents reading the description never learn it can be requested.
+- ``documented ⊄ emitted-anywhere-in-scanned-source`` — the docstring
+  promises a key that's no longer assigned (e.g. an assignment was
+  removed in a refactor but the enumeration wasn't updated). Static AST
+  flags "never assigned anywhere"; conditional-only assignment requires
+  runtime checking.
 """
 
 from __future__ import annotations
@@ -172,11 +176,16 @@ def _find_function(
 
 
 def _parse_documented_keys(desc: str) -> set[str]:
-    """Pull identifier tokens from any ``Available/History/Statistics keys: ...`` sentence."""
+    """Pull identifier tokens from any ``Available/History/Statistics keys: ...`` sentence.
+
+    Parenthesised notes are stripped before the section regex runs so a
+    period inside a note (e.g. ``foo (since v1.2)``) doesn't truncate the
+    enumeration.
+    """
+    desc = _PAREN_NOTE_RE.sub("", desc)
     keys: set[str] = set()
     for m in _KEYS_SECTION_RE.finditer(desc):
-        chunk = _PAREN_NOTE_RE.sub("", m.group(1))
-        for tok in _IDENT_RE.finditer(chunk):
+        for tok in _IDENT_RE.finditer(m.group(1)):
             keys.add(tok.group(1))
     return keys
 
@@ -385,11 +394,9 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
         )
     # Dual direction: documented keys must appear somewhere in the
     # scanned response builders. Catches "docstring lists key, code
-    # deleted the assignment" — sibling drift to #1381's bug where
-    # `notifications`/`repairs` were documented but only assigned
-    # conditionally. (Static AST can flag "never assigned anywhere";
-    # "assigned only inside `if x:`" requires runtime checking — see
-    # PR #1381's `TestHaGetOverviewAlwaysEmittedKeys` for that pattern.)
+    # deleted the assignment". Static AST flags "never assigned
+    # anywhere"; "assigned only inside `if x:`" (conditional emission
+    # of a documented-as-always-present key) is a runtime concern.
     if not spec.get("skip_dual_check"):
         missing_from_code = documented - emitted - _AUTO_RETAINED
         if missing_from_code:
@@ -402,3 +409,92 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
             )
 
     assert not errors, f"{spec['tool']}: " + " | ".join(errors)
+
+
+# ---------------------------------------------------------------------------
+# Meta-tests: pin the scanner's own invariants so they can't silently drift.
+# ---------------------------------------------------------------------------
+
+
+def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
+    """The bug this whole test file exists to prevent.
+
+    ``dismissed_repair_count`` is conditionally assigned to ``result`` inside
+    ``ha_get_overview``. If the AST harvest ever stops finding it (e.g. a
+    refactor moves the assignment into a helper not listed in the spec, or
+    the harvester loses subscript-assignment handling), the parametrized
+    case for ``ha_get_overview`` would still pass — both sides of the diff
+    would shrink in lockstep. Pin the find here so regressions surface.
+    """
+    keys = _harvest_var_keys("tools/tools_search.py", "ha_get_overview", "result")
+    assert "dismissed_repair_count" in keys, (
+        "AST harvest of `ha_get_overview` lost `dismissed_repair_count`. "
+        "The regression-catch guarantee this test file provides is broken."
+    )
+    documented = _extract_documented_keys("tools/tools_search.py", "ha_get_overview")
+    assert "dismissed_repair_count" in documented, (
+        "`dismissed_repair_count` was removed from `ha_get_overview`'s "
+        "`Available keys:` enumeration. If the response key was genuinely "
+        "removed, update this meta-test too; otherwise restore the docstring."
+    )
+
+
+def test_tool_specs_covers_every_fields_using_tool() -> None:
+    """Discover every tool with a ``fields`` parameter and assert TOOL_SPECS
+    enumerates them all.
+
+    Without this guard, deleting a TOOL_SPECS entry shrinks the
+    parametrize silently — the remaining cases still pass and the dropped
+    tool gets no drift coverage.
+    """
+    tools_dir = SRC_ROOT / "tools"
+    discovered: set[str] = set()
+    for path in sorted(tools_dir.glob("tools_*.py")):
+        module = ast.parse(path.read_text())
+        for node in ast.walk(module):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("ha_"):
+                continue
+            for arg in (*node.args.args, *node.args.kwonlyargs):
+                if arg.arg == "fields":
+                    discovered.add(node.name)
+                    break
+
+    covered = {spec["tool"] for spec in TOOL_SPECS}
+    missing = discovered - covered
+    assert not missing, (
+        f"Tools with a `fields=` parameter are missing from TOOL_SPECS: "
+        f"{sorted(missing)!r}. Add a spec entry so the drift check covers "
+        f"them, or document why the tool is intentionally excluded."
+    )
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [s for s in TOOL_SPECS if s.get("exclude_internal")],
+    ids=lambda s: s["tool"],
+)
+def test_exclude_internal_keys_actually_appear_in_raw_harvest(
+    spec: dict[str, Any],
+) -> None:
+    """``exclude_internal`` entries should still be present in the raw
+    AST harvest. If a key listed there stops being emitted (e.g. the
+    helper rename it documents was undone, or the internal field was
+    deleted), the exclusion is dead code — silently masking nothing.
+    """
+    raw: set[str] = set()
+    for mod, fn, var in spec["var_harvest"]:
+        raw |= _harvest_var_keys(mod, fn, var)
+    for mod, fn in spec["return_harvest"]:
+        raw |= _harvest_return_keys(mod, fn)
+    for mod, fn, markers in spec.get("marker_harvest", []):
+        raw |= _harvest_marker_dicts(mod, fn, markers)
+
+    dead = spec["exclude_internal"] - raw
+    assert not dead, (
+        f"{spec['tool']}: `exclude_internal` lists key(s) {sorted(dead)!r} "
+        f"that no longer appear in the AST harvest — the exclusion is "
+        f"masking nothing. Either remove from `exclude_internal` or "
+        f"investigate whether the rename it documents was undone."
+    )
