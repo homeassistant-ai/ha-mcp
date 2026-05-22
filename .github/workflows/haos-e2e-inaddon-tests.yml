@@ -60,27 +60,28 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
+          # Full history needed for the bake-changes detection step below
+          # (``git diff origin/<base>...HEAD``). Default depth=1 doesn't
+          # have the base ref locally.
+          fetch-depth: 0
 
       - name: Compute image cache key
         id: key
-        # Distinct ``-inaddon`` suffix from haos-e2e-tests.yml's cache
-        # key. The inaddon tier requires the bake-installed dev addon
-        # to be present in the qcow2, but the GHCR ``:HAOS_VERSION-latest``
-        # tag the external tier falls back to is published from master
-        # and doesn't yet include the addon. Sharing the cache would
-        # let an external-tier run save a GHCR-served (addon-less)
-        # qcow2 into the cache, breaking inaddon for everyone hitting
-        # that cache.
+        # Shared with haos-e2e-tests.yml — both lanes consume the same
+        # qcow2. The bake (build_image.py::build) unconditionally calls
+        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the
+        # GHCR-published image is already addon-baked and works for both
+        # tiers. Inaddon's refresh_dev_addon_source_in_qcow2 overwrites
+        # the addon source at test time, so PR-level addon changes
+        # don't need to invalidate the cache here.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
             tests/initial_test_state \
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy/mcp_proxy \
-            homeassistant-addon \
-            homeassistant-addon-dev \
             | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-image-inaddon-$hash" >> "$GITHUB_OUTPUT"
+          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore image from cache
         id: restore-cache
@@ -103,23 +104,55 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # No GHCR fallback for the inaddon tier: GHCR's ``:HAOS_VERSION-latest``
-      # tag is published from master by build-haos-test-image.yml, but the
-      # addon-install bake step lives on this PR branch. Until the PR
-      # lands and the publish workflow re-bakes, GHCR doesn't have an
-      # inaddon-ready image. Cache miss here always means local build.
+      - name: Detect PR-modified bake inputs
+        # Same logic as haos-e2e-tests.yml: PR branches that modify any
+        # bake input would otherwise see GHCR's stale master-baked image.
+        # The cache key already invalidates on these paths (see ``Compute
+        # image cache key`` above), but the GHCR fallback below would
+        # still hand back master's image. Detect the condition here and
+        # skip GHCR — fall straight through to the local-build step
+        # instead. Keep this list in sync with the cache key's
+        # ``git ls-tree`` paths.
+        id: bake-changes
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only \
+              "origin/${{ github.base_ref }}...HEAD" \
+              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/mcp_proxy/)'; then
+            echo "bake_inputs_changed=true" >> "$GITHUB_OUTPUT"
+            echo "PR modifies bake inputs; skipping GHCR fallback (would return stale master image)."
+          fi
 
-      - name: Install build-script Python deps (cache miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true'
+      - name: Try pulling from GHCR
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.bake-changes.outputs.bake_inputs_changed != 'true'
+        id: ghcr-pull
+        continue-on-error: true
+        run: |
+          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
+          tag="${IMAGE_REPO}:${version}-latest"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u ${{ github.actor }} --password-stdin
+          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+            | tar -xz -C /tmp oras
+          mkdir -p /tmp/haos-pull
+          (cd /tmp/haos-pull && /tmp/oras pull "$tag")
+          mv /tmp/haos-pull/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
+
+      - name: Install build-script Python deps (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true'
+      - name: Build image locally (cache miss + GHCR miss)
+        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
       - name: Save image to cache (cache miss only)
+        # Save whenever the runtime cache missed — covers both the
+        # local-build path AND a successful GHCR pull. Without saving on
+        # the GHCR-served branch, the actions/cache entry stays empty
+        # forever and every future run pays the GHCR pull cost again.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
