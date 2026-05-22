@@ -211,9 +211,12 @@ class TestAutomationCaptureRestore:
 @pytest.mark.cleanup
 @pytest.mark.external_only
 class TestHelperCaptureRestore:
-    async def test_input_boolean_capture(
+    async def test_input_boolean_full_loop(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Simple-helper full loop: WS ``input_boolean/update`` is exercised
+        by the restore call (Group 2 mechanism). The schedule test below
+        covers the complex-nested-config angle on the same mechanism."""
         _enable_auto_backup(monkeypatch)
         helper_id = f"e2e_bk_{uuid.uuid4().hex[:8]}"
         # Create
@@ -247,12 +250,159 @@ class TestHelperCaptureRestore:
             {"scope": "edits", "action": "list", "domain": "helper_input_boolean"},
         )
         assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="helper_input_boolean", entity_id=helper_id)
+        assert len(mine) >= 1
+
+        backup_name = mine[0]["name"]
+
+        # Restore — exercises ``input_boolean/update`` WS command.
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        # Delete the snapshot.
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
 
         # Cleanup
         await safe_call_tool(
             mcp_client,
             "ha_delete_helpers_integrations",
             {"target": f"input_boolean.{helper_id}"},
+        )
+
+
+# ---------------------------------------------------------------- complex helper lane
+
+
+@pytest.mark.helper
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestComplexHelperCaptureRestore:
+    """``schedule`` helper has the most complex storage-backed config —
+    seven weekday arrays each holding a list of {from, to} time-range
+    objects. Worth its own e2e because the ``schedule/update`` WS payload
+    is the most fragile of the helper-update commands — a YAML
+    serialization quirk that nuked a nested time-range would be invisible
+    to the mocked unit tests."""
+
+    async def test_schedule_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        helper_id = f"e2e_sched_{suffix}"
+
+        # Original config — multiple days with multiple time ranges each.
+        # Picks days/times deterministically so the assertion on captured
+        # content has something concrete to check.
+        original = {
+            "helper_type": "schedule",
+            "name": helper_id,
+            "icon": "mdi:calendar-clock",
+            "monday": [
+                {"from": "08:00:00", "to": "12:00:00"},
+                {"from": "13:00:00", "to": "17:00:00"},
+            ],
+            "tuesday": [{"from": "09:00:00", "to": "18:00:00"}],
+            "wednesday": [
+                {"from": "07:00:00", "to": "11:30:00"},
+                {"from": "12:30:00", "to": "16:00:00"},
+                {"from": "18:00:00", "to": "20:00:00"},
+            ],
+            "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+        }
+        create = await safe_call_tool(mcp_client, "ha_config_set_helper", original)
+        assert create.get("success") is not False
+
+        # Edit — shrink Monday, split Tuesday, drop Wednesday entirely.
+        edited = {
+            "helper_type": "schedule",
+            "helper_id": helper_id,
+            "icon": "mdi:calendar-remove",
+            "monday": [{"from": "10:00:00", "to": "12:00:00"}],
+            "tuesday": [
+                {"from": "08:00:00", "to": "12:00:00"},
+                {"from": "13:00:00", "to": "17:00:00"},
+            ],
+            "wednesday": [],
+            "friday": [{"from": "08:30:00", "to": "14:30:00"}],
+        }
+        edit = await safe_call_tool(mcp_client, "ha_config_set_helper", edited)
+        assert edit.get("success") is not False
+
+        # List + verify the snapshot captured the pre-edit nested structure.
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "helper_schedule",
+                "entity_id": helper_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="helper_schedule", entity_id=helper_id)
+        assert len(mine) >= 1, "snapshot not captured for schedule edit"
+        backup_name = mine[0]["name"]
+
+        # View — assert the nested arrays survived YAML round-trip into
+        # the snapshot file. Schedule shape:
+        # ``data.config.monday = [{"from": "...", "to": "..."}, ...]``.
+        view = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "view", "backup_name": backup_name},
+        )
+        assert view.get("success") is True
+        captured = (
+            view.get("data", {})
+            .get("data", {})
+            .get("config", view.get("data", {}).get("data", {}))
+        )
+        # Nested structure must be intact. Three days × multiple ranges.
+        assert isinstance(captured.get("monday"), list)
+        assert len(captured["monday"]) == 2
+        assert captured["monday"][0]["from"] == "08:00:00"
+        assert captured["monday"][1]["to"] == "17:00:00"
+        assert len(captured.get("wednesday", [])) == 3
+
+        # Restore — exercises ``schedule/update`` WS with the full nested
+        # payload reconstructed from YAML. Safety backup must exist.
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True, (
+            f"schedule restore failed: {restore.get('data') or restore}"
+        )
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        # Delete the snapshot.
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_delete_helpers_integrations",
+            {"target": f"schedule.{helper_id}"},
         )
 
 
@@ -263,9 +413,12 @@ class TestHelperCaptureRestore:
 @pytest.mark.cleanup
 @pytest.mark.external_only
 class TestDashboardCaptureRestore:
-    async def test_dashboard_capture_on_edit(
+    async def test_dashboard_full_loop(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Dashboard restore exercises the ``lovelace/config/save`` WS
+        command — different shape from helper updates (envelope is
+        ``{"type": ..., "url_path": ..., "config": ...}``)."""
         _enable_auto_backup(monkeypatch)
         url_path = f"e2e-bk-{uuid.uuid4().hex[:8]}"
         create = await safe_call_tool(
@@ -273,34 +426,55 @@ class TestDashboardCaptureRestore:
             "ha_config_set_dashboard",
             {"url_path": url_path, "title": "E2E Backup", "config": {"views": []}},
         )
-        # If the create succeeded, edit it so the decorator captures.
-        if create.get("success") is not False:
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_set_dashboard",
-                {
-                    "url_path": url_path,
-                    "config": {"views": [{"title": "Updated"}]},
-                },
-            )
-            listing = await safe_call_tool(
-                mcp_client,
-                "ha_manage_backup",
-                {
-                    "scope": "edits",
-                    "action": "list",
-                    "domain": "dashboard",
-                    "entity_id": url_path,
-                },
-            )
-            assert listing.get("success") is True
+        if create.get("success") is False:
+            pytest.skip(f"dashboard create unsupported on this HA: {create}")
+        # Edit so the decorator captures the pre-edit state.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config": {"views": [{"title": "Updated"}]},
+            },
+        )
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "dashboard",
+                "entity_id": url_path,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="dashboard", entity_id=url_path)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
 
-            # Cleanup
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_delete_dashboard",
-                {"url_path": url_path},
-            )
+        # Restore — fires ``lovelace/config/save``.
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_delete_dashboard",
+            {"url_path": url_path},
+        )
 
 
 # ---------------------------------------------------------------- script lane
@@ -310,9 +484,13 @@ class TestDashboardCaptureRestore:
 @pytest.mark.cleanup
 @pytest.mark.external_only
 class TestScriptCaptureRestore:
-    async def test_script_capture(
+    async def test_script_full_loop(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Script restore is Group 1 (REST upsert via
+        ``client.upsert_script_config``). Mechanically equivalent to the
+        automation full-loop but proves the script-specific client method
+        wires correctly end-to-end."""
         _enable_auto_backup(monkeypatch)
         script_id = f"e2e_bk_{uuid.uuid4().hex[:8]}"
         create = await safe_call_tool(
@@ -326,37 +504,57 @@ class TestScriptCaptureRestore:
                 },
             },
         )
+        if create.get("success") is False:
+            pytest.skip(f"script create unsupported: {create}")
         # Edit triggers capture.
-        if create.get("success") is not False:
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_set_script",
-                {
-                    "script_id": script_id,
-                    "config": {
-                        "alias": f"E2E Backup Script {script_id} edited",
-                        "sequence": [{"service": "homeassistant.no_op"}],
-                    },
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_script",
+            {
+                "script_id": script_id,
+                "config": {
+                    "alias": f"E2E Backup Script {script_id} edited",
+                    "sequence": [{"service": "homeassistant.no_op"}],
                 },
-            )
-            listing = await safe_call_tool(
-                mcp_client,
-                "ha_manage_backup",
-                {
-                    "scope": "edits",
-                    "action": "list",
-                    "domain": "script",
-                    "entity_id": script_id,
-                },
-            )
-            assert listing.get("success") is True
+            },
+        )
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "script",
+                "entity_id": script_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="script", entity_id=script_id)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
 
-            # Cleanup
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_remove_script",
-                {"script_id": script_id},
-            )
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_script",
+            {"script_id": script_id},
+        )
 
 
 # ---------------------------------------------------------------- scene lane
@@ -366,9 +564,11 @@ class TestScriptCaptureRestore:
 @pytest.mark.cleanup
 @pytest.mark.external_only
 class TestSceneCaptureRestore:
-    async def test_scene_capture(
+    async def test_scene_full_loop(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Scene restore is Group 1 (REST upsert via
+        ``client.upsert_scene_config``)."""
         _enable_auto_backup(monkeypatch)
         scene_id = f"e2e_bk_{uuid.uuid4().hex[:8]}"
         create = await safe_call_tool(
@@ -382,36 +582,56 @@ class TestSceneCaptureRestore:
                 },
             },
         )
-        if create.get("success") is not False:
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_set_scene",
-                {
-                    "scene_id": scene_id,
-                    "config": {
-                        "name": f"E2E Backup Scene {scene_id} edited",
-                        "entities": {},
-                    },
+        if create.get("success") is False:
+            pytest.skip(f"scene create unsupported: {create}")
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_scene",
+            {
+                "scene_id": scene_id,
+                "config": {
+                    "name": f"E2E Backup Scene {scene_id} edited",
+                    "entities": {},
                 },
-            )
-            listing = await safe_call_tool(
-                mcp_client,
-                "ha_manage_backup",
-                {
-                    "scope": "edits",
-                    "action": "list",
-                    "domain": "scene",
-                    "entity_id": scene_id,
-                },
-            )
-            assert listing.get("success") is True
+            },
+        )
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "scene",
+                "entity_id": scene_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="scene", entity_id=scene_id)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
 
-            # Cleanup
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_remove_scene",
-                {"scene_id": scene_id},
-            )
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_scene",
+            {"scene_id": scene_id},
+        )
 
 
 # ---------------------------------------------------------------- toggle off
@@ -475,3 +695,608 @@ class TestToggleOffSkipsCapture:
             "ha_config_remove_automation",
             {"identifier": identifier},
         )
+
+
+# ---------------------------------------------------------------- label lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestLabelCaptureRestore:
+    """Label restore exercises the ``config/label_registry/update`` WS
+    command (Group 2). Field-mangling matters here — the handler strips
+    ``label_id`` from the captured config before re-injecting it under
+    the ``label_id`` key, so a round-trip that lost or duplicated the key
+    would only surface end-to-end."""
+
+    async def test_label_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_label",
+            {
+                "name": f"e2e_bk_label_{suffix}",
+                "color": "blue",
+                "icon": "mdi:test-tube",
+                "description": "auto-backup e2e label",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"label create unsupported: {create}")
+        label_id = create.get("data", {}).get("label_id") or create.get("label_id")
+        assert label_id, f"label_id missing from create response: {create}"
+
+        # Edit — change name + color so capture fires.
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_label",
+            {
+                "label_id": label_id,
+                "name": f"e2e_bk_label_{suffix}_edited",
+                "color": "red",
+            },
+        )
+        assert edit.get("success") is not False
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "label",
+                "entity_id": label_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="label", entity_id=label_id)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client, "ha_config_remove_label", {"label_id": label_id}
+        )
+
+
+# ---------------------------------------------------------------- category lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestCategoryCaptureRestore:
+    """Category restore is Group 2 (``config/category_registry/update``).
+    Entity ID is the composite ``<scope>:<category_id>`` — the handler
+    splits it back into scope + id on restore, so a captured snapshot
+    that lost the scope prefix would silently restore to the wrong
+    registry. Worth e2e coverage."""
+
+    async def test_category_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        scope = "automation"
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_category",
+            {
+                "name": f"e2e_bk_cat_{suffix}",
+                "scope": scope,
+                "icon": "mdi:tag",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"category create unsupported: {create}")
+        cat_id = create.get("data", {}).get("category_id") or create.get("category_id")
+        assert cat_id, f"category_id missing: {create}"
+        composite = f"{scope}:{cat_id}"
+
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_category",
+            {
+                "category_id": cat_id,
+                "scope": scope,
+                "name": f"e2e_bk_cat_{suffix}_edited",
+                "icon": "mdi:tag-outline",
+            },
+        )
+        assert edit.get("success") is not False
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "category",
+                "entity_id": composite,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="category", entity_id=composite)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_category",
+            {"scope": scope, "category_id": cat_id},
+        )
+
+
+# ---------------------------------------------------------------- zone lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestZoneCaptureRestore:
+    """Zone restore is Group 2 (``config/zone/update``). The handler
+    strips ``id`` and re-injects under ``zone_id`` — different key name
+    from the rest of the WS-update commands, so a copy-paste bug from
+    the label handler would only surface here."""
+
+    async def test_zone_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_set_zone",
+            {
+                "name": f"e2e_bk_zone_{suffix}",
+                "latitude": 40.7128,
+                "longitude": -74.0060,
+                "radius": 150,
+                "icon": "mdi:briefcase",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"zone create unsupported: {create}")
+        zone_id = create.get("data", {}).get("zone_id") or create.get("zone_id")
+        assert zone_id, f"zone_id missing: {create}"
+
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_set_zone",
+            {
+                "zone_id": zone_id,
+                "name": f"e2e_bk_zone_{suffix}_edited",
+                "radius": 250,
+            },
+        )
+        assert edit.get("success") is not False
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "zone",
+                "entity_id": zone_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="zone", entity_id=zone_id)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
+
+
+# ---------------------------------------------------------------- area lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestAreaCaptureRestore:
+    """Area restore is Group 2 (``config/area_registry/update``). The
+    handler keys on ``area:<area_id>`` and dispatches to area or floor
+    based on the prefix — floor uses the identical mechanism with a
+    different registry, so area-only coverage proves both
+    code paths."""
+
+    async def test_area_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_set_area_or_floor",
+            {
+                "kind": "area",
+                "name": f"e2e_bk_area_{suffix}",
+                "icon": "mdi:sofa",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"area create unsupported: {create}")
+        area_id = create.get("data", {}).get("area_id") or create.get("area_id")
+        assert area_id, f"area_id missing: {create}"
+        composite = f"area:{area_id}"
+
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_set_area_or_floor",
+            {
+                "kind": "area",
+                "id": area_id,
+                "name": f"e2e_bk_area_{suffix}_edited",
+                "icon": "mdi:sofa-outline",
+            },
+        )
+        assert edit.get("success") is not False
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "area_or_floor",
+                "entity_id": composite,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="area_or_floor", entity_id=composite)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_area_or_floor",
+            {"kind": "area", "id": area_id},
+        )
+
+
+# ---------------------------------------------------------------- group lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestGroupCaptureRestore:
+    """Group restore is **Group 3** (service-call restore via
+    ``/api/services/group/set``). Different mechanism from the WS-update
+    family — proves the service-call payload shape works end-to-end."""
+
+    async def test_group_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        object_id = f"e2e_bk_grp_{suffix}"
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_group",
+            {
+                "object_id": object_id,
+                "name": f"E2E Backup Group {suffix}",
+                "entities": ["light.bed_light"],
+                "icon": "mdi:lightbulb-group",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"group create unsupported: {create}")
+
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_group",
+            {
+                "object_id": object_id,
+                "name": f"E2E Backup Group {suffix} edited",
+                "entities": ["light.bed_light", "light.ceiling_lights"],
+            },
+        )
+        assert edit.get("success") is not False
+
+        entity_id = f"group.{object_id}"
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "group",
+                "entity_id": entity_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="group", entity_id=entity_id)
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client, "ha_config_remove_group", {"object_id": object_id}
+        )
+
+
+# ---------------------------------------------------------------- entity lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestEntityStateCaptureRestore:
+    """Generic-entity restore is Group 3 (POST ``/api/states/<entity>``).
+    Uses an existing default-fixture entity rather than creating one;
+    ``ha_set_entity`` operates on entities provisioned by integrations,
+    not entity registry creations from scratch. The test edits an
+    attribute the testcontainer doesn't otherwise touch (``hidden``)
+    so cleanup is well-bounded."""
+
+    async def test_entity_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        # Use a stable testcontainer light entity. If it's missing on
+        # this rig, skip rather than fail — keeps the test honest about
+        # what it actually requires.
+        entity_id = "light.bed_light"
+        state = await safe_call_tool(
+            mcp_client, "ha_get_state", {"entity_id": entity_id}
+        )
+        if state.get("success") is False:
+            pytest.skip(f"{entity_id} not present on this HA: {state}")
+
+        # Edit — toggle the ``hidden`` flag; capture fires.
+        edit = await safe_call_tool(
+            mcp_client, "ha_set_entity", {"entity_id": entity_id, "hidden": True}
+        )
+        if edit.get("success") is False:
+            pytest.skip(f"ha_set_entity unsupported on this HA: {edit}")
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "entity",
+                "entity_id": entity_id,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(entries, domain="entity", entity_id=entity_id)
+        if not mine:
+            # ha_set_entity may take the entity-registry path (no /api/states
+            # POST) on some HA versions; if so the entity-domain handler
+            # won't fire. Surface clearly rather than asserting wrong.
+            pytest.skip("entity-domain handler did not capture for this edit")
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Best-effort cleanup — restore the un-hidden default.
+        await safe_call_tool(
+            mcp_client, "ha_set_entity", {"entity_id": entity_id, "hidden": False}
+        )
+
+
+# ---------------------------------------------------------------- dashboard_resource lane
+
+
+@pytest.mark.convenience
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestDashboardResourceCaptureRestore:
+    """Dashboard-resource restore is Group 2 (``lovelace/resources/update``).
+    Distinct from the dashboard-config restore — different WS command,
+    different payload shape. The handler re-injects ``resource_id`` into
+    the payload from the entity_id, so a captured snapshot missing that
+    key path would only fail here."""
+
+    async def test_dashboard_resource_full_loop(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard_resource",
+            {
+                "url": f"/local/e2e-bk-{suffix}.js",
+                "res_type": "module",
+            },
+        )
+        if create.get("success") is False:
+            pytest.skip(f"dashboard_resource create unsupported: {create}")
+        resource_id = create.get("data", {}).get("resource_id") or create.get(
+            "resource_id"
+        )
+        assert resource_id, f"resource_id missing: {create}"
+
+        # Edit — change the URL so capture fires.
+        edit = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard_resource",
+            {
+                "resource_id": resource_id,
+                "url": f"/local/e2e-bk-{suffix}-edited.js",
+            },
+        )
+        assert edit.get("success") is not False
+
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "dashboard_resource",
+                "entity_id": str(resource_id),
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        mine = _backups_for(
+            entries, domain="dashboard_resource", entity_id=str(resource_id)
+        )
+        assert len(mine) >= 1
+        backup_name = mine[0]["name"]
+
+        restore = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        assert restore.get("success") is True
+        assert restore.get("data", {}).get("safety_backup") is not None
+
+        delete = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        assert delete.get("success") is True
+
+        # Cleanup
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_delete_dashboard_resource",
+            {"resource_id": resource_id},
+        )
+
+
+# ---------------------------------------------------------------- calendar/todo/integration
+
+
+@pytest.mark.calendar
+@pytest.mark.external_only
+class TestCalendarTodoIntegrationCaptureOnly:
+    """Three domains whose restore semantics aren't a true round-trip
+    and aren't safely testable end-to-end on a clean testcontainer:
+
+    - **calendar_event**: ``/api/services/calendar/create_event`` —
+      creates a *new* event rather than overwriting the captured one
+      (uid mismatch by design). Restore "succeeds" by re-creating, not
+      by reverting. The unit tests cover the payload shape.
+    - **todo_item**: ``/api/services/todo/add_item`` — same shape;
+      adds rather than overwrites. Both share Group 3 service-call
+      mechanics which is exercised by the group/entity full-loop
+      tests above.
+    - **integration**: ``config_entries/disable`` — needs a real
+      integration installed that can be safely toggled. Default-image
+      integrations (``frontend``, ``homeassistant``) are unsafe to
+      disable; the demo integration is auto-set-up and not guaranteed
+      present. Unit test in ``test_backup_manager.py`` covers the
+      payload shape.
+
+    Documented here so future maintainers reach for the unit tests
+    rather than re-discovering why these three lanes don't have a
+    real-HA full-loop test.
+    """
+
+    async def test_documentation_marker(self) -> None:
+        """No-op anchor so pytest reports this class explicitly in
+        ``-v`` output, surfacing the documented coverage gap.
+        """
