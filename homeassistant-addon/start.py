@@ -39,7 +39,9 @@ def generate_secret_path() -> str:
 
 
 _SECRET_PATH_RE = re.compile(r"^/(?!.*://)\S{7,}$")
-_SECRET_PATH_HINT = "Path must start with '/', contain no '://', and be at least 8 characters."
+_SECRET_PATH_HINT = (
+    "Path must start with '/', contain no '://', and be at least 8 characters."
+)
 
 
 def _is_valid_secret_path(path: str) -> bool:
@@ -65,7 +67,9 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
         if not path.startswith("/"):
             path = "/" + path
         if not _is_valid_secret_path(path):
-            log_error(f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}")
+            log_error(
+                f"Custom secret path is invalid ({path!r}), ignoring. {_SECRET_PATH_HINT}"
+            )
         else:
             log_info("Using custom secret path from configuration")
             # Update stored path for consistency
@@ -80,7 +84,9 @@ def get_or_create_secret_path(data_dir: Path, custom_path: str = "") -> str:
                 log_info("Using existing auto-generated secret path")
                 return stored_path
             elif stored_path:
-                log_error(f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}")
+                log_error(
+                    f"Stored secret path is invalid ({stored_path!r}), regenerating. {_SECRET_PATH_HINT}"
+                )
             else:
                 log_error("Stored secret path is empty, regenerating")
         except Exception as e:
@@ -218,6 +224,11 @@ def main() -> int:
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
     enable_lite_docstrings = False  # default
+    enable_auto_backup = (
+        True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
+    )
+    auto_backup_throttle_minutes = 0  # default — every write
+    auto_backup_retain_per_entity = 100  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -231,25 +242,59 @@ def main() -> int:
             backup_hint = config.get("backup_hint", "normal")
             custom_secret_path = config.get("secret_path", "")
             raw_tool_search = config.get("enable_tool_search", False)
-            enable_tool_search = raw_tool_search if isinstance(raw_tool_search, bool) else False
+            enable_tool_search = (
+                raw_tool_search if isinstance(raw_tool_search, bool) else False
+            )
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
-            enable_yaml_config_editing = raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            enable_yaml_config_editing = (
+                raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            )
             raw_filesystem_tools = config.get("enable_filesystem_tools", False)
-            enable_filesystem_tools = raw_filesystem_tools if isinstance(raw_filesystem_tools, bool) else False
-            raw_custom_component = config.get("enable_custom_component_integration", False)
-            enable_custom_component_integration = raw_custom_component if isinstance(raw_custom_component, bool) else False
+            enable_filesystem_tools = (
+                raw_filesystem_tools
+                if isinstance(raw_filesystem_tools, bool)
+                else False
+            )
+            raw_custom_component = config.get(
+                "enable_custom_component_integration", False
+            )
+            enable_custom_component_integration = (
+                raw_custom_component
+                if isinstance(raw_custom_component, bool)
+                else False
+            )
             raw_code_mode = config.get("enable_code_mode", False)
-            enable_code_mode = raw_code_mode if isinstance(raw_code_mode, bool) else False
+            enable_code_mode = (
+                raw_code_mode if isinstance(raw_code_mode, bool) else False
+            )
             raw_lite_docstrings = config.get("enable_lite_docstrings", False)
-            enable_lite_docstrings = raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
+            enable_lite_docstrings = (
+                raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
+            )
+            raw_auto_backup = config.get("enable_auto_backup", True)
+            enable_auto_backup = (
+                raw_auto_backup if isinstance(raw_auto_backup, bool) else False
+            )
+            raw_throttle = config.get("auto_backup_throttle_minutes", 0)
+            auto_backup_throttle_minutes = (
+                raw_throttle if isinstance(raw_throttle, int) else 0
+            )
+            raw_retain = config.get("auto_backup_retain_per_entity", 100)
+            auto_backup_retain_per_entity = (
+                raw_retain if isinstance(raw_retain, int) else 100
+            )
             raw_max_results = config.get("tool_search_max_results", 5)
-            tool_search_max_results = raw_max_results if isinstance(raw_max_results, int) else 5
+            tool_search_max_results = (
+                raw_max_results if isinstance(raw_max_results, int) else 5
+            )
             raw_disabled = config.get("disabled_tools", "")
             disabled_tools_raw = raw_disabled if isinstance(raw_disabled, str) else ""
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
             verify_ssl = resolve_bool_option(config, "verify_ssl", True)
-            advanced_debug_logging = resolve_bool_option(config, "advanced_debug_logging", False)
+            advanced_debug_logging = resolve_bool_option(
+                config, "advanced_debug_logging", False
+            )
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
 
@@ -279,9 +324,14 @@ def main() -> int:
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
-    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(enable_custom_component_integration).lower()
+    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
+        enable_custom_component_integration
+    ).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
+    os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
+    os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
     # Persist saved custom tools across addon restarts. /data is the
     # per-addon writable directory mapped by Supervisor and survives
     # add-on updates (but not uninstall/reinstall — users should copy
@@ -290,9 +340,7 @@ def main() -> int:
     # tool isn't registered anyway, so the file is never read or
     # written. Operators can override by setting CODE_MODE_SAVED_TOOLS_PATH
     # in the add-on's environment if they want a different location.
-    os.environ.setdefault(
-        "CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json"
-    )
+    os.environ.setdefault("CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json")
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
     os.environ["PINNED_TOOLS"] = pinned_tools_raw
@@ -319,6 +367,7 @@ def main() -> int:
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging
+
     logging.basicConfig(level=logging.INFO)
 
     # Import and register browser landing before server start
@@ -341,6 +390,7 @@ def main() -> int:
             from ha_mcp.utils.kill_signal_diagnostics import (
                 schedule_install_after_uvicorn,
             )
+
             schedule_install_after_uvicorn()
         except Exception as e:
             log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
@@ -352,7 +402,9 @@ def main() -> int:
     # server's actual FastMCP instance (not the _DeferredMCP wrapper)
     # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
     server_instance = _get_server()
-    register_settings_routes(server_instance.mcp, server_instance, secret_path=secret_path)
+    register_settings_routes(
+        server_instance.mcp, server_instance, secret_path=secret_path
+    )
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
@@ -379,7 +431,9 @@ def main() -> int:
         cause = e.__cause__ or e.__context__
         if cause:
             log_error(f"Caused by: {cause}")
-            traceback.print_exception(type(cause), cause, cause.__traceback__, file=sys.stderr)
+            traceback.print_exception(
+                type(cause), cause, cause.__traceback__, file=sys.stderr
+            )
         if isinstance(e, SystemExit):
             return int(e.code) if isinstance(e.code, int) else 1
         return 1

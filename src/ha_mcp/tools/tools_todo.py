@@ -16,6 +16,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -207,6 +208,12 @@ class TodoTools:
         name="ha_set_todo_item",
         tags={"Todo Lists"},
         annotations={"destructiveHint": True, "title": "Set Todo Item"},
+    )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: (
+            f"{kw.get('entity_id', '')}::{kw.get('item', '') or kw.get('uid', '') or ''}"
+        ),
     )
     @log_tool_usage
     async def ha_set_todo_item(
@@ -429,7 +436,9 @@ class TodoTools:
             service_data = self._build_update_service_data(
                 entity_id, item, rename, status, description, due_date, due_datetime
             )
-            result = await self._client.call_service("todo", "update_item", service_data)
+            result = await self._client.call_service(
+                "todo", "update_item", service_data
+            )
             update_msg = self._build_update_message(
                 rename, status, description, due_date, due_datetime
             )
@@ -518,6 +527,14 @@ class TodoTools:
             "title": "Remove Todo Item",
         },
     )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['item']}"
+            if kw.get("entity_id") and kw.get("item")
+            else ""
+        ),
+    )
     @log_tool_usage
     async def ha_remove_todo_item(
         self,
@@ -586,7 +603,9 @@ class TodoTools:
             }
 
             # Call the service
-            result = await self._client.call_service("todo", "remove_item", service_data)
+            result = await self._client.call_service(
+                "todo", "remove_item", service_data
+            )
 
             return {
                 "success": True,

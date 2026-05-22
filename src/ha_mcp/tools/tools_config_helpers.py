@@ -16,6 +16,7 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -1973,6 +1974,13 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"Helper Entities"},
         annotations={"destructiveHint": True, "title": "Create or Update Helper"},
+    )
+    @with_auto_backup(
+        domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
+        id_fn=lambda kw: str(
+            kw.get("helper_id") or kw.get("entry_id") or kw.get("subentry_id") or ""
+        ),
+        client=client,
     )
     @log_tool_usage
     async def ha_config_set_helper(

@@ -16,6 +16,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -169,6 +170,17 @@ class CategoryTools:
         tags={"Labels & Categories"},
         annotations={"destructiveHint": True, "title": "Create or Update Category"},
     )
+    @with_auto_backup(
+        domain="category",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
+    )
     @log_tool_usage
     async def ha_config_set_category(
         self,
@@ -301,6 +313,17 @@ class CategoryTools:
             "idempotentHint": True,
             "title": "Remove Category",
         },
+    )
+    @with_auto_backup(
+        domain="category",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_remove_category(
