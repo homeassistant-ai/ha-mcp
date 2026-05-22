@@ -271,6 +271,34 @@ def _categorize_update(entity_id: str, attributes: dict[str, Any]) -> str:
     return "other"
 
 
+async def _try_raw_cdn(
+    http_client: httpx.AsyncClient, owner: str, repo: str, tag: str
+) -> dict[str, str] | None:
+    raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}"
+    changelog_paths = [
+        "CHANGELOG.md",
+        "RELEASES.md",
+        "RELEASE_NOTES.md",
+        f"docs/releases/{tag}.md",
+        "docs/CHANGELOG.md",
+    ]
+    for path in changelog_paths:
+        raw_url = f"{raw_base}/{path}"
+        try:
+            response = await http_client.get(
+                raw_url,
+                headers={"User-Agent": "HomeAssistant-MCP-Server"},
+            )
+            if response.status_code == 200:
+                content = response.text
+                if content and len(content) > 50:
+                    logger.debug(f"Successfully fetched release notes from raw CDN: {raw_url}")
+                    return {"notes": content, "source": "github_raw"}
+        except Exception as raw_error:
+            logger.debug(f"Failed to fetch from {raw_url}: {raw_error}")
+    return None
+
+
 async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None:
     """
     Fetch release notes from GitHub releases API with fallback to raw CDN.
@@ -331,35 +359,9 @@ async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None
                 )
 
             # Try 2: GitHub raw content CDN (for markdown files)
-            # Common locations: CHANGELOG.md, RELEASES.md, docs/releases/{tag}.md
-            raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}"
-
-            changelog_paths = [
-                "CHANGELOG.md",
-                "RELEASES.md",
-                "RELEASE_NOTES.md",
-                f"docs/releases/{tag}.md",
-                "docs/CHANGELOG.md",
-            ]
-
-            for path in changelog_paths:
-                raw_url = f"{raw_base}/{path}"
-                try:
-                    response = await http_client.get(
-                        raw_url,
-                        headers={"User-Agent": "HomeAssistant-MCP-Server"},
-                    )
-
-                    if response.status_code == 200:
-                        content = response.text
-                        if content and len(content) > 50:  # Basic content validation
-                            logger.debug(
-                                f"Successfully fetched release notes from raw CDN: {raw_url}"
-                            )
-                            return {"notes": content, "source": "github_raw"}
-                except Exception as raw_error:
-                    logger.debug(f"Failed to fetch from {raw_url}: {raw_error}")
-                    continue
+            cdn_result = await _try_raw_cdn(http_client, owner, repo, tag)
+            if cdn_result:
+                return cdn_result
 
             logger.debug(
                 f"Could not fetch release notes from API or raw CDN for {release_url}"

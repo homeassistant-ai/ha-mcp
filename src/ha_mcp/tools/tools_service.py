@@ -25,6 +25,31 @@ from .helpers import (
 )
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
 
+
+def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    if data is None:
+        return None
+    raw: Any = None
+    try:
+        raw = parse_json_param(data, "data")
+    except ValueError as e:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid data parameter: {e}",
+                parameter="data",
+                invalid_json=True,
+            )
+        )
+    if raw is not None and not isinstance(raw, dict):
+        raise_tool_error(
+            create_validation_error(
+                "Event data must be a JSON object (dict)",
+                parameter="data",
+                details=f"Received type: {type(raw).__name__}",
+            )
+        )
+    return raw if isinstance(raw, dict) else None
+
 logger = logging.getLogger(__name__)
 
 # Services that produce observable state changes on entities
@@ -476,29 +501,7 @@ class ServiceTools:
                 )
             )
 
-        parsed_data: dict[str, Any] | None = None
-        if data is not None:
-            raw: Any = None
-            try:
-                raw = parse_json_param(data, "data")
-            except ValueError as e:
-                raise_tool_error(
-                    create_validation_error(
-                        f"Invalid data parameter: {e}",
-                        parameter="data",
-                        invalid_json=True,
-                    )
-                )
-            if raw is not None:
-                if not isinstance(raw, dict):
-                    raise_tool_error(
-                        create_validation_error(
-                            "Event data must be a JSON object (dict)",
-                            parameter="data",
-                            details=f"Received type: {type(raw).__name__}",
-                        )
-                    )
-                parsed_data = raw
+        parsed_data = _parse_event_data(data)
 
         try:
             response = await self._client.fire_event(event_type, parsed_data)

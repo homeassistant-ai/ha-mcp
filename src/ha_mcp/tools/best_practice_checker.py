@@ -317,6 +317,31 @@ def _check_repeat_actions(
     _check_action_tree(repeat.get("sequence", []), warnings, skill_prefix)
 
 
+def _check_control_flow_actions(
+    action: dict[str, Any], warnings: list[str], skill_prefix: str | None
+) -> None:
+    """Check choose/if/then/else/repeat/parallel sub-trees in a single action."""
+    if "choose" in action:
+        _check_choose_actions(action["choose"], warnings, skill_prefix)
+
+    if "if" in action:
+        _check_condition_templates(action["if"], warnings, skill_prefix)
+
+    for key in ("then", "else", "default"):
+        nested = action.get(key)
+        if isinstance(nested, list):
+            _check_action_tree(nested, warnings, skill_prefix)
+
+    if "repeat" in action and isinstance(action["repeat"], dict):
+        _check_repeat_actions(action["repeat"], warnings, skill_prefix)
+
+    # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
+    # different semantics. Recurse so templates inside parallel branches
+    # are inspected the same as templates inside choose/repeat sequences.
+    if "parallel" in action and isinstance(action["parallel"], list):
+        _check_action_tree(action["parallel"], warnings, skill_prefix)
+
+
 def _check_action_tree(
     actions: Any, warnings: list[str], skill_prefix: str | None
 ) -> None:
@@ -359,26 +384,7 @@ def _check_action_tree(
         if isinstance(target, dict):
             _check_target_dict(target, warnings, skill_prefix)
 
-        # Nested conditions in choose/if/repeat
-        if "choose" in action:
-            _check_choose_actions(action["choose"], warnings, skill_prefix)
-
-        if "if" in action:
-            _check_condition_templates(action["if"], warnings, skill_prefix)
-
-        for key in ("then", "else", "default"):
-            nested = action.get(key)
-            if isinstance(nested, list):
-                _check_action_tree(nested, warnings, skill_prefix)
-
-        if "repeat" in action and isinstance(action["repeat"], dict):
-            _check_repeat_actions(action["repeat"], warnings, skill_prefix)
-
-        # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
-        # different semantics. Recurse so templates inside parallel branches
-        # are inspected the same as templates inside choose/repeat sequences.
-        if "parallel" in action and isinstance(action["parallel"], list):
-            _check_action_tree(action["parallel"], warnings, skill_prefix)
+        _check_control_flow_actions(action, warnings, skill_prefix)
 
 
 def _check_service_template(

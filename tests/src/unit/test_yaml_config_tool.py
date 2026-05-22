@@ -30,11 +30,8 @@ async def _make_tool():
     captured: dict = {}
 
     class FakeMCP:
-        def tool(self, **_kwargs):
-            def decorator(fn):
-                captured.setdefault("fns", []).append(fn)
-                return fn
-            return decorator
+        def add_tool(self, method):
+            captured.setdefault("fns", []).append(method)
 
     client = MagicMock()
     client.get_services = AsyncMock(return_value=[{"domain": "ha_mcp_tools"}])

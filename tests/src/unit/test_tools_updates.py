@@ -1,6 +1,10 @@
 """Unit tests for tools_updates module."""
 
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from ha_mcp.tools.tools_updates import (
     _categorize_update,
     _extract_blog_content,
@@ -10,6 +14,7 @@ from ha_mcp.tools.tools_updates import (
     _parse_version,
     _strip_html,
     _supports_release_notes,
+    _try_raw_cdn,
 )
 
 
@@ -273,5 +278,59 @@ class TestParsePatchBreakingChanges:
         body = "- Fix ([hue docs]) (Breaking-Change)\n"
         result = _parse_patch_breaking_changes(body, "2025.11.1")
         assert result is not None and result["count"] == 1
+
+
+class TestTryRawCdn:
+    """Unit tests for _try_raw_cdn loop behavior."""
+
+    def _make_http_client(self, responses: list) -> MagicMock:
+        """Build a fake httpx client whose .get() returns responses in order."""
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=responses)
+        return client
+
+    def _ok(self, text: str) -> MagicMock:
+        r = MagicMock()
+        r.status_code = 200
+        r.text = text
+        return r
+
+    def _not_found(self) -> MagicMock:
+        r = MagicMock()
+        r.status_code = 404
+        r.text = ""
+        return r
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_all_paths_404(self):
+        client = self._make_http_client([self._not_found()] * 5)
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is None
+        assert client.get.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_skips_short_content_and_returns_none(self):
+        short = self._ok("too short")
+        client = self._make_http_client([short] * 5)
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_exception_on_one_path_continues_to_next(self):
+        good = self._ok("x" * 100)
+        client = self._make_http_client([ConnectionError("boom"), good])
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is not None
+        assert result["source"] == "github_raw"
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_first_path_with_sufficient_content(self):
+        good = self._ok("y" * 100)
+        client = self._make_http_client([self._not_found(), good])
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is not None
+        assert result["notes"] == "y" * 100
+        assert client.get.await_count == 2
 
 

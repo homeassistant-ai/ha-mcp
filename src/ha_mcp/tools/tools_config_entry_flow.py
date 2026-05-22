@@ -248,6 +248,40 @@ def _parse_flow_api_error(
     }
 
 
+async def _process_menu_flow_result(
+    flow_result: dict[str, Any],
+    client: Any,
+    intro_flow_id: str,
+    menu_choice: str | None,
+) -> dict[str, Any]:
+    """Return schema or menu_options dict for a MENU-type flow result."""
+    info: dict[str, Any] = {}
+    if menu_choice:
+        if not intro_flow_id:
+            return info
+        try:
+            step = await asyncio.wait_for(
+                client.submit_config_flow_step(
+                    intro_flow_id, {"next_step_id": menu_choice}
+                ),
+                timeout=10.0,
+            )
+        except Exception:
+            return info
+        if step.get("type") == _FlowType.FORM:
+            schema = step.get("data_schema")
+            if isinstance(schema, list):
+                info["schema"] = schema
+        return info
+
+    options = flow_result.get("menu_options")
+    if isinstance(options, list):
+        filtered = [opt for opt in options if isinstance(opt, str)]
+        if filtered:
+            info["menu_options"] = filtered
+    return info
+
+
 async def fetch_helper_flow_info(
     client: Any,
     helper_type: str | None,
@@ -287,30 +321,10 @@ async def fetch_helper_flow_info(
                 info["schema"] = schema
             return info
 
-        if flow_type == _FlowType.MENU:
-            if menu_choice and intro_flow_id:
-                try:
-                    step = await asyncio.wait_for(
-                        client.submit_config_flow_step(
-                            intro_flow_id, {"next_step_id": menu_choice}
-                        ),
-                        timeout=10.0,
-                    )
-                except Exception:
-                    return info
-                if step.get("type") == _FlowType.FORM:
-                    schema = step.get("data_schema")
-                    if isinstance(schema, list):
-                        info["schema"] = schema
-                return info
-
-            # MENU without a choice — surface the legal sub-types instead.
-            options = flow_result.get("menu_options")
-            if isinstance(options, list):
-                filtered = [opt for opt in options if isinstance(opt, str)]
-                if filtered:
-                    info["menu_options"] = filtered
-            return info
+        if flow_type == _FlowType.MENU and intro_flow_id:
+            return await _process_menu_flow_result(
+                flow_result, client, intro_flow_id, menu_choice
+            )
 
         return info
     except Exception:
@@ -325,6 +339,29 @@ async def fetch_helper_flow_info(
                 logger.debug(
                     f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
                 )
+
+
+def _build_flow_error_context(
+    flow_id: str,
+    status_code: int,
+    helper_type: str | None,
+    menu_choice: str | None,
+    current_step: dict[str, Any] | None,
+    submitted: dict[str, Any] | None,
+    parsed_raw: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {"flow_id": flow_id, "status_code": status_code}
+    if helper_type:
+        context["helper_type"] = helper_type
+    if menu_choice:
+        context["menu_choice"] = menu_choice
+    if current_step is not None:
+        context["step_id"] = current_step.get("step_id")
+    if submitted is not None:
+        context["submitted_keys"] = sorted(submitted.keys())
+    if parsed_raw is not None:
+        context["response_body"] = parsed_raw
+    return context
 
 
 async def _raise_flow_api_error(
@@ -350,20 +387,10 @@ async def _raise_flow_api_error(
     field_errors = parsed["field_errors"]
     status_code = api_error.status_code or 0
 
-    context: dict[str, Any] = {
-        "flow_id": flow_id,
-        "status_code": status_code,
-    }
-    if helper_type:
-        context["helper_type"] = helper_type
-    if menu_choice:
-        context["menu_choice"] = menu_choice
-    if current_step is not None:
-        context["step_id"] = current_step.get("step_id")
-    if submitted is not None:
-        context["submitted_keys"] = sorted(submitted.keys())
-    if parsed["raw"] is not None:
-        context["response_body"] = parsed["raw"]
+    context = _build_flow_error_context(
+        flow_id, status_code, helper_type, menu_choice, current_step, submitted,
+        parsed["raw"],
+    )
 
     suggestions: list[str] = []
     message: str
@@ -412,6 +439,32 @@ async def _raise_flow_api_error(
         suggestions=suggestions,
         context=context,
     ))
+
+
+async def _submit_step(
+    submit_fn: Any,
+    flow_id: str,
+    payload: dict[str, Any],
+    *,
+    client: Any,
+    helper_type: str | None,
+    last_menu_choice: str | None,
+    current_step: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return await asyncio.wait_for(submit_fn(flow_id, payload), timeout=20.0)
+    except HomeAssistantAPIError as api_err:
+        if api_err.status_code in (400, 422):
+            await _raise_flow_api_error(
+                api_err,
+                client=client,
+                flow_id=flow_id,
+                helper_type=helper_type,
+                menu_choice=last_menu_choice,
+                current_step=current_step,
+                submitted=payload,
+            )
+        raise
 
 
 async def _handle_flow_steps(
@@ -475,24 +528,11 @@ async def _handle_flow_steps(
                 f"Flow step {step_num}: menu '{menu_choice}' "
                 f"(step_id={current_step.get('step_id')})"
             )
-            menu_payload = {"next_step_id": menu_choice}
-            try:
-                current_step = await asyncio.wait_for(
-                    submit_fn(flow_id, menu_payload),
-                    timeout=20.0,
-                )
-            except HomeAssistantAPIError as api_err:
-                if api_err.status_code in (400, 422):
-                    await _raise_flow_api_error(
-                        api_err,
-                        client=client,
-                        flow_id=flow_id,
-                        helper_type=helper_type,
-                        menu_choice=last_menu_choice,
-                        current_step=current_step,
-                        submitted=menu_payload,
-                    )
-                raise
+            current_step = await _submit_step(
+                submit_fn, flow_id, {"next_step_id": menu_choice},
+                client=client, helper_type=helper_type,
+                last_menu_choice=last_menu_choice, current_step=current_step,
+            )
 
         elif result_type == _FlowType.FORM:
             # _handle_form_step pops only the keys declared in the current
@@ -504,23 +544,11 @@ async def _handle_flow_steps(
                 f"Flow step {step_num}: form submit "
                 f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
             )
-            try:
-                current_step = await asyncio.wait_for(
-                    submit_fn(flow_id, form_data),
-                    timeout=20.0,
-                )
-            except HomeAssistantAPIError as api_err:
-                if api_err.status_code in (400, 422):
-                    await _raise_flow_api_error(
-                        api_err,
-                        client=client,
-                        flow_id=flow_id,
-                        helper_type=helper_type,
-                        menu_choice=last_menu_choice,
-                        current_step=current_step,
-                        submitted=form_data,
-                    )
-                raise
+            current_step = await _submit_step(
+                submit_fn, flow_id, form_data,
+                client=client, helper_type=helper_type,
+                last_menu_choice=last_menu_choice, current_step=current_step,
+            )
 
         else:
             raise_tool_error(create_error_response(
@@ -583,24 +611,12 @@ async def _handle_config_subentry_flow_steps(
                 menu_choice,
                 current_step.get("step_id"),
             )
-            menu_payload = {"next_step_id": menu_choice}
-            try:
-                current_step = await asyncio.wait_for(
-                    client.submit_config_subentry_flow_step(flow_id, menu_payload),
-                    timeout=20.0,
-                )
-            except HomeAssistantAPIError as api_err:
-                if api_err.status_code in (400, 422):
-                    await _raise_flow_api_error(
-                        api_err,
-                        client=client,
-                        flow_id=flow_id,
-                        helper_type=None,
-                        menu_choice=last_menu_choice,
-                        current_step=current_step,
-                        submitted=menu_payload,
-                    )
-                raise
+            current_step = await _submit_step(
+                client.submit_config_subentry_flow_step, flow_id,
+                {"next_step_id": menu_choice},
+                client=client, helper_type=None,
+                last_menu_choice=last_menu_choice, current_step=current_step,
+            )
             continue
 
         if result_type == _FlowType.FORM:
@@ -612,23 +628,11 @@ async def _handle_config_subentry_flow_steps(
                 current_step.get("step_id"),
                 sorted(form_data.keys()),
             )
-            try:
-                current_step = await asyncio.wait_for(
-                    client.submit_config_subentry_flow_step(flow_id, form_data),
-                    timeout=20.0,
-                )
-            except HomeAssistantAPIError as api_err:
-                if api_err.status_code in (400, 422):
-                    await _raise_flow_api_error(
-                        api_err,
-                        client=client,
-                        flow_id=flow_id,
-                        helper_type=None,
-                        menu_choice=last_menu_choice,
-                        current_step=current_step,
-                        submitted=form_data,
-                    )
-                raise
+            current_step = await _submit_step(
+                client.submit_config_subentry_flow_step, flow_id, form_data,
+                client=client, helper_type=None,
+                last_menu_choice=last_menu_choice, current_step=current_step,
+            )
             continue
 
         if result_type in {"progress", "progress_done"}:
