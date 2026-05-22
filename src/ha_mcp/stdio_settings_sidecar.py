@@ -536,6 +536,16 @@ def _build_app(
             handlers["settings_info"],
             methods=["GET"],
         ),
+        Route(
+            f"{secret_prefix}/api/settings/features",
+            handlers["get_feature_flags"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/features",
+            handlers["save_feature_flags"],
+            methods=["POST"],
+        ),
     ]
 
     # /shutdown — POST endpoint that drops the disable sentinel and

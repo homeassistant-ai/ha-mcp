@@ -8,6 +8,7 @@ because the subprocess + Starlette stack doesn't unit-test cleanly.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 from pathlib import Path
@@ -15,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.applications import Starlette
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from ha_mcp import stdio_settings_sidecar as sidecar
@@ -77,6 +79,8 @@ class TestBuildSettingsHandlers:
             "save_tools",
             "restart_addon",
             "settings_info",
+            "get_feature_flags",
+            "save_feature_flags",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(
@@ -633,3 +637,187 @@ class TestDiscoverabilityFlow:
             headers={"host": f"127.0.0.1:{parsed.port}"},
         )
         assert resp.status_code == 200
+
+
+class TestFeatureFlagsEndpoint:
+    """``/api/settings/features`` GET + POST surface (issue #863).
+
+    Pins the env-locked / file-editable / default-editable matrix end
+    to end through the sidecar handlers so a future refactor of the
+    config layer cannot silently drop the lock semantics that the UI
+    relies on to disable env-controlled rows.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings(self) -> Generator[None]:
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        yield
+        _reset_global_settings()
+
+    def test_get_returns_all_flags_with_defaults(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Clean environment → every flag reports origin=default, editable=True."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        # Strip any pre-existing env vars so the "default" branch is reachable.
+        for _, env_name, _ in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["get_feature_flags"],
+                    methods=["GET"],
+                ),
+            ]
+        )
+        resp = TestClient(app).get("/api/settings/features")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "flags" in data
+        for field_name, env_name, _ftype in FEATURE_FLAG_FIELDS:
+            entry = data["flags"][field_name]
+            assert entry["origin"] == "default", (
+                f"{field_name} unexpectedly origin={entry['origin']!r}"
+            )
+            assert entry["editable"] is True
+            assert entry["env_var"] == env_name
+
+    def test_get_marks_env_var_locked_fields(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit env var → origin=env, editable=False, value from env."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
+        _reset_global_settings()
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["get_feature_flags"],
+                    methods=["GET"],
+                ),
+            ]
+        )
+        resp = TestClient(app).get("/api/settings/features")
+        body = resp.json()
+        assert body["flags"]["enable_tool_search"] == {
+            "value": True,
+            "origin": "env",
+            "editable": False,
+            "type": "bool",
+            "env_var": "ENABLE_TOOL_SEARCH",
+        }
+
+    def test_post_writes_file_and_resets_singleton(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POST a value → file persisted + Settings singleton invalidated."""
+        from ha_mcp.config import (
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+            get_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        for _, env_name, _ in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["save_feature_flags"],
+                    methods=["POST"],
+                ),
+            ]
+        )
+        client = TestClient(app)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"enable_tool_search": True, "tool_search_max_results": 7}},
+        )
+        assert resp.status_code == 200
+        override = json.loads(
+            (tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME).read_text()
+        )
+        assert override == {"enable_tool_search": True, "tool_search_max_results": 7}
+        settings = get_global_settings()
+        assert settings.enable_tool_search is True
+        assert settings.tool_search_max_results == 7
+
+    def test_post_refuses_env_locked_fields(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Env-locked field → 400 with the env var name in the message."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")
+        _reset_global_settings()
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["save_feature_flags"],
+                    methods=["POST"],
+                ),
+            ]
+        )
+        resp = TestClient(app).post(
+            "/api/settings/features",
+            json={"flags": {"enable_tool_search": True}},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "ENABLE_TOOL_SEARCH" in body["error"]["message"]
+
+    def test_post_rejects_out_of_range_int(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Numeric field outside the pydantic bound → 400, not silent clamp."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        for _, env_name, _ in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["save_feature_flags"],
+                    methods=["POST"],
+                ),
+            ]
+        )
+        resp = TestClient(app).post(
+            "/api/settings/features",
+            json={"flags": {"tool_search_max_results": 999}},
+        )
+        assert resp.status_code == 400

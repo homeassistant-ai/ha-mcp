@@ -506,6 +506,36 @@ _SETTINGS_HTML = (
     font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
   .danger-btn:hover { background: #2a0e0e; }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Feature-flags panel (#863). One row per FEATURE_FLAG_FIELDS
+     entry. Locked rows (env / addon origin) get the dim treatment +
+     a small inline note pointing at the env var to adjust. */
+  .features-panel { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .features-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; cursor: pointer; user-select: none; gap: 12px; }
+  .features-header h2 { font-size: 1rem; font-weight: 600; margin: 0; }
+  .features-header-sub { font-size: 0.75rem; color: var(--text-secondary); }
+  .features-chevron { transition: transform 0.2s; flex-shrink: 0; color: var(--text-secondary); }
+  .features-chevron.open { transform: rotate(90deg); }
+  .features-body { display: none; padding: 4px 16px 12px 16px; }
+  .features-body.open { display: block; }
+  .feature-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .feature-row:first-child { border-top: none; }
+  .feature-info { flex: 1; min-width: 0; }
+  .feature-name { font-size: 0.9rem; font-weight: 500; }
+  .feature-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .feature-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .feature-control { flex-shrink: 0; display: flex; align-items: center; }
+  .feature-control input[type="number"] { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; }
+  .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
+  .feature-row.locked .feature-name { color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -533,6 +563,16 @@ _SETTINGS_HTML = (
   <button class="danger-btn" id="stopSidecarBtn"
           title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
   >Permanently disable settings server</button>
+</div>
+<div class="features-panel" id="featuresPanel">
+  <div class="features-header" id="featuresHeader">
+    <div>
+      <h2>Server Settings</h2>
+      <div class="features-header-sub">Tool Search, beta-flagged features. Requires restart to apply.</div>
+    </div>
+    <span class="features-chevron" id="featuresChevron">▶</span>
+  </div>
+  <div class="features-body" id="featuresBody"></div>
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -949,6 +989,171 @@ document.getElementById('search').addEventListener('input', (e) => {
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
+
+// Feature-flag metadata (display labels + help text). Keyed by the
+// Settings field name. The server returns origin + value + bounds;
+// these strings localize/document each row without bloating the API.
+const FEATURE_META = {
+  enable_tool_search: {
+    label: 'Tool Search (BM25 catalog)',
+    help: 'Replaces the full tool catalog with a single search tool + call proxies. Dramatically reduces idle context usage.',
+  },
+  tool_search_max_results: {
+    label: 'Tool Search · max results',
+    help: 'Max tools returned per ha_search_tools call. Range 2-10.',
+  },
+  enable_yaml_config_editing: {
+    label: 'YAML config editing',
+    help: 'Allows ha_config_set_yaml to mutate configuration.yaml and package files. Beta.',
+  },
+  enable_lite_docstrings: {
+    label: 'Lite tool docstrings',
+    help: 'Trims heavy tool descriptions, deferring detail to ha_get_skill_guide. Reduces idle tokens; relies on the LLM consulting the skill.',
+  },
+  enable_filesystem_tools: {
+    label: 'Filesystem tools',
+    help: 'Registers ha_list_files / ha_read_file / ha_write_file / ha_delete_file under the HA config dir.',
+  },
+  enable_custom_component_integration: {
+    label: 'Custom component installer',
+    help: 'Registers ha_install_mcp_tools (installs the ha_mcp_tools HACS component).',
+  },
+};
+
+const ORIGIN_LOCKED_NOTE = {
+  env: 'Locked by environment variable',
+  addon: 'Locked by add-on configuration',
+};
+
+async function loadFeatureFlags() {
+  let resp;
+  try {
+    resp = await fetch('./api/settings/features');
+  } catch (_e) {
+    // Surface as a row inside the panel rather than the page status —
+    // the panel is collapsible and the user can ignore this if they
+    // do not care about feature flags right now.
+    document.getElementById('featuresBody').innerHTML =
+      '<div class="feature-row"><div class="feature-help">' +
+      'Feature flags unavailable (network error reaching ' +
+      '/api/settings/features).</div></div>';
+    return;
+  }
+  if (!resp.ok) {
+    document.getElementById('featuresBody').innerHTML =
+      `<div class="feature-row"><div class="feature-help">` +
+      `Feature flags unavailable (HTTP ${resp.status}).</div></div>`;
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (_e) {
+    document.getElementById('featuresBody').innerHTML =
+      '<div class="feature-row"><div class="feature-help">' +
+      'Feature flags response was not valid JSON.</div></div>';
+    return;
+  }
+  renderFeatureFlags(data.flags || {});
+}
+
+function renderFeatureFlags(flags) {
+  const body = document.getElementById('featuresBody');
+  body.innerHTML = '';
+  // Render in the order FEATURE_META declares — gives consistent
+  // grouping (Tool Search rows together, beta toggles together)
+  // regardless of dict iteration order returned by the server.
+  Object.keys(FEATURE_META).forEach(fieldName => {
+    const f = flags[fieldName];
+    if (!f) return;
+    const meta = FEATURE_META[fieldName];
+    const row = document.createElement('div');
+    row.className = 'feature-row' + (f.editable ? '' : ' locked');
+
+    const info = document.createElement('div');
+    info.className = 'feature-info';
+    const lockedNote = !f.editable
+      ? `<div class="feature-locked-note">` +
+        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')} — ` +
+        `unset <code>${escapeHtml(f.env_var)}</code> ` +
+        `(or change the add-on configuration) to edit here.</div>`
+      : '';
+    info.innerHTML =
+      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      lockedNote;
+
+    const control = document.createElement('div');
+    control.className = 'feature-control';
+    if (f.type === 'bool') {
+      const label = document.createElement('label');
+      label.className = 'switch';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!f.value;
+      input.disabled = !f.editable;
+      input.addEventListener('change', () =>
+        saveFeatureFlag(fieldName, input.checked)
+      );
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      label.appendChild(input);
+      label.appendChild(slider);
+      control.appendChild(label);
+    } else if (f.type === 'int') {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = f.value;
+      if (typeof f.min === 'number') input.min = f.min;
+      if (typeof f.max === 'number') input.max = f.max;
+      input.disabled = !f.editable;
+      input.addEventListener('change', () => {
+        const parsed = parseInt(input.value, 10);
+        if (Number.isFinite(parsed)) saveFeatureFlag(fieldName, parsed);
+      });
+      control.appendChild(input);
+    }
+
+    row.appendChild(info);
+    row.appendChild(control);
+    body.appendChild(row);
+  });
+}
+
+async function saveFeatureFlag(fieldName, value) {
+  updateStatus('Saving server setting...');
+  let resp;
+  try {
+    resp = await fetch('./api/settings/features', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({flags: {[fieldName]: value}}),
+    });
+  } catch (e) {
+    updateStatus('Save failed: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    let msg = `Save failed (HTTP ${resp.status})`;
+    try {
+      const err = await resp.json();
+      if (err.error && err.error.message) msg = 'Save failed: ' + err.error.message;
+    } catch (_e) {}
+    updateStatus(msg);
+    return;
+  }
+  updateStatus('Saved — restart required', true);
+  document.getElementById('restartNotice').classList.add('show');
+}
+
+document.getElementById('featuresHeader').addEventListener('click', () => {
+  const body = document.getElementById('featuresBody');
+  const chev = document.getElementById('featuresChevron');
+  body.classList.toggle('open');
+  chev.classList.toggle('open');
+});
+
+loadFeatureFlags();
 loadTools();
 </script>
 </body>
@@ -1195,6 +1400,197 @@ def build_settings_handlers(
         addon = False if is_sidecar else is_running_in_addon()
         return JSONResponse({"is_addon": addon, "is_sidecar": is_sidecar})
 
+    async def _get_feature_flags(_: Request) -> JSONResponse:
+        """Return live feature-flag values + per-field origin + editable flag.
+
+        Per-field origin/editable matrix (see
+        :func:`config.get_feature_flag_origin`):
+
+            origin = get_feature_flag_origin(env_name)
+            editable = origin in ("file", "default")
+
+        ``"addon"`` and ``"env"`` are non-editable from the web UI;
+        the user is told which env var (or addon option) to change
+        instead. Mirrors PR #1403's auto-backup config endpoint
+        shape so the front-end can render both surfaces with the
+        same renderer.
+        """
+        from .config import (
+            _FEATURE_FLAG_INT_BOUNDS,
+            FEATURE_FLAG_FIELDS,
+            get_feature_flag_origin,
+            get_global_settings,
+        )
+
+        settings = get_global_settings()
+        flags: dict[str, Any] = {}
+        for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
+            origin = get_feature_flag_origin(env_name)
+            value = getattr(settings, field_name)
+            entry: dict[str, Any] = {
+                "value": value,
+                "origin": origin,
+                "editable": origin in ("file", "default"),
+                "type": ftype.__name__,
+                "env_var": env_name,
+            }
+            if ftype is int:
+                bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
+                if bounds is not None:
+                    entry["min"], entry["max"] = bounds
+            flags[field_name] = entry
+        return JSONResponse({"flags": flags})
+
+    async def _save_feature_flags(request: Request) -> JSONResponse:
+        """Persist UI-edited feature-flag values.
+
+        Only ``editable`` fields (origin = ``file`` or ``default``)
+        accept writes; an attempt to write an env-locked or addon-
+        locked field returns ``VALIDATION_INVALID_PARAMETER`` so the
+        client surfaces the locking source instead of silently
+        discarding the change.
+        """
+        from .config import (
+            _FEATURE_FLAG_INT_BOUNDS,
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+            get_feature_flag_origin,
+        )
+        from .utils.data_paths import get_data_dir
+
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "Invalid JSON body",
+                ),
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Request body must be a JSON object",
+                ),
+                status_code=400,
+            )
+        raw_flags = body.get("flags", {})
+        if not isinstance(raw_flags, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'flags' must be an object mapping field names to values",
+                ),
+                status_code=400,
+            )
+
+        # Build the validated override dict. Reject unknown fields and
+        # env/addon-locked fields up front so the user gets a precise
+        # error instead of a silent no-op.
+        known: dict[str, tuple[str, type]] = {
+            fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS
+        }
+        new_overrides: dict[str, Any] = {}
+        for field_name, raw in raw_flags.items():
+            if field_name not in known:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown feature flag: {field_name!r}",
+                    ),
+                    status_code=400,
+                )
+            env_name, ftype = known[field_name]
+            origin = get_feature_flag_origin(env_name)
+            if origin not in ("file", "default"):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (
+                            f"{field_name!r} is locked by {origin} — "
+                            f"adjust the {env_name} env var "
+                            "(or addon configuration) instead."
+                        ),
+                    ),
+                    status_code=400,
+                )
+            if ftype is bool:
+                if not isinstance(raw, bool):
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{field_name!r} must be a boolean",
+                        ),
+                        status_code=400,
+                    )
+                new_overrides[field_name] = bool(raw)
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int):
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{field_name!r} must be an integer",
+                        ),
+                        status_code=400,
+                    )
+                bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
+                if bounds is not None and not bounds[0] <= raw <= bounds[1]:
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            (
+                                f"{field_name!r} must be between "
+                                f"{bounds[0]} and {bounds[1]}"
+                            ),
+                        ),
+                        status_code=400,
+                    )
+                new_overrides[field_name] = int(raw)
+            else:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (f"{field_name!r} has an unsupported type for UI editing"),
+                    ),
+                    status_code=400,
+                )
+
+        # Merge with the existing override file so a partial POST
+        # only updates the keys it actually included — the front-end
+        # POSTs individual changes, not the entire matrix.
+        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+        existing: dict[str, Any] = {}
+        try:
+            existing_raw = path.read_text()
+            existing_parsed = json.loads(existing_raw)
+            if isinstance(existing_parsed, dict):
+                existing = existing_parsed
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            existing = {}
+        existing.update(new_overrides)
+        try:
+            path.write_text(json.dumps(existing, indent=2))
+        except OSError as exc:
+            logger.warning("Could not write %s", path, exc_info=True)
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Could not persist feature flags: {exc}",
+                ),
+                status_code=500,
+            )
+
+        # Publish the change so the same process picks it up on the
+        # next ``get_global_settings()`` call (server-restart still
+        # required for many flags — the UI surfaces that — but the
+        # cached singleton must not return the stale pre-write
+        # values to subsequent /api/settings/features GETs).
+        _reset_global_settings()
+        return JSONResponse({"success": True})
+
     return {
         "root_page": _root_page,
         "settings_page": _settings_page,
@@ -1202,6 +1598,8 @@ def build_settings_handlers(
         "save_tools": _save_tools,
         "restart_addon": _restart_addon,
         "settings_info": _settings_info,
+        "get_feature_flags": _get_feature_flags,
+        "save_feature_flags": _save_feature_flags,
     }
 
 
@@ -1260,6 +1658,12 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/info", methods=["GET"])(
             handlers["settings_info"]
         )
+        mcp.custom_route("/api/settings/features", methods=["GET"])(
+            handlers["get_feature_flags"]
+        )
+        mcp.custom_route("/api/settings/features", methods=["POST"])(
+            handlers["save_feature_flags"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -1280,4 +1684,10 @@ def register_settings_routes(
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
             handlers["settings_info"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["GET"])(
+            handlers["get_feature_flags"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
+            handlers["save_feature_flags"]
         )
