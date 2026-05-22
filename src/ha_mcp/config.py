@@ -275,11 +275,154 @@ def validate_settings() -> tuple[bool, str | None]:
 _settings: Settings | None = None
 
 
+# Auto-backup runtime-editable fields (#1288 web UI editor). Each entry
+# is (field_name, env_var_name, python_type). The web UI's
+# /api/settings/backups/config GET/POST endpoints iterate this tuple to
+# advertise per-field origin (env / addon / file / default) and to
+# validate incoming writes. Keep aligned with the matching ``Settings``
+# fields above — adding a fourth runtime-editable setting means a new
+# tuple entry plus matching addon ``config.yaml`` schema mirror.
+BACKUP_OVERRIDE_FIELDS: tuple[tuple[str, str, type], ...] = (
+    ("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
+    ("auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int),
+    ("auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int),
+)
+
+# Override-file location is the same data dir that holds tool_config.json
+# (resolved via ``utils.data_paths.get_data_dir`` — addon ``/data``,
+# ``HA_MCP_CONFIG_DIR``, ``XDG_DATA_HOME``, or a tmpdir fallback).
+# Imported lazily inside helpers to avoid a circular import at module
+# load (``utils.data_paths`` imports from ``_version`` which imports
+# from ``config`` transitively in some test layouts).
+_BACKUP_OVERRIDE_FILENAME = "backup_settings.json"
+
+
+def get_backup_setting_origin(env_name: str) -> str:
+    """Return where the live value for ``env_name`` is sourced from.
+
+    Used by the web UI to label each auto-backup field with its source
+    and decide whether the field is editable from the web UI:
+
+    - ``"addon"``: running inside the HA add-on. ``start.py`` always
+      writes these env vars from ``config.yaml`` on every addon start;
+      the override file is ignored. Web UI edits are routed through
+      Supervisor ``/addons/self/options`` so ``config.yaml`` stays
+      authoritative.
+    - ``"env"``: env var explicitly set in the process environment
+      (includes values loaded from ``.env`` via ``load_dotenv`` at
+      module import — those land in ``os.environ`` and are
+      indistinguishable from ``docker -e`` / shell-set values, which is
+      intentional per the deployment design). Web UI shows the field
+      read-only; user must unset / remove the env var to edit.
+    - ``"file"``: standalone deployment with a value persisted in
+      ``<data_dir>/backup_settings.json``. Web UI edits update the
+      file in place.
+    - ``"default"``: no env var and no override file entry; the
+      pydantic field default applies. Web UI edits create the file.
+    """
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return "addon"
+    if os.environ.get(env_name) is not None:
+        return "env"
+    field_name = next(
+        (fname for fname, ename, _ in BACKUP_OVERRIDE_FIELDS if ename == env_name),
+        None,
+    )
+    if field_name is None:
+        return "default"
+    overrides = _read_backup_override_file()
+    if field_name in overrides:
+        return "file"
+    return "default"
+
+
+def _read_backup_override_file() -> dict[str, object]:
+    """Return the contents of the auto-backup override file, or ``{}``.
+
+    Malformed JSON / missing file / unreadable file all return ``{}``
+    silently; the override file is best-effort and a corrupt file
+    should not break Settings loading. Reads are not cached — callers
+    (Settings construction, the GET endpoint) hit disk each time, which
+    is fine for a small JSON file behind a singleton-cached Settings.
+    """
+    from pathlib import Path
+
+    from .utils.data_paths import get_data_dir
+
+    path: Path = get_data_dir() / _BACKUP_OVERRIDE_FILENAME
+    try:
+        raw = path.read_text()
+    except (FileNotFoundError, OSError):
+        return {}
+    try:
+        import json
+
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _apply_backup_overrides(settings: "Settings") -> None:
+    """Patch ``settings`` with values from the override file, in place.
+
+    Honors the "env var wins" contract: a field whose env var is set in
+    the process environment is never overwritten. Addon mode short-
+    circuits — ``start.py`` already wrote these env vars from
+    ``config.yaml`` and the override file is ignored in that mode.
+    Range / type clamping mirrors the pydantic Field bounds so a
+    corrupt override file can't push values out of range; out-of-range
+    or untypable entries are silently skipped.
+    """
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return
+    overrides = _read_backup_override_file()
+    if not overrides:
+        return
+    for field_name, env_name, ftype in BACKUP_OVERRIDE_FIELDS:
+        if os.environ.get(env_name) is not None:
+            continue
+        if field_name not in overrides:
+            continue
+        raw = overrides[field_name]
+        if ftype is bool:
+            if not isinstance(raw, bool | int):
+                continue
+            coerced: bool | int = bool(raw)
+        elif ftype is int:
+            if not isinstance(raw, bool | int):
+                continue
+            try:
+                coerced = int(raw)
+            except (ValueError, TypeError):
+                continue
+            if field_name == "auto_backup_throttle_minutes" and not 0 <= coerced <= 1440:
+                continue
+            if (
+                field_name == "auto_backup_retain_per_entity"
+                and not 1 <= coerced <= 10_000
+            ):
+                continue
+        else:
+            continue
+        try:
+            setattr(settings, field_name, coerced)
+        except (ValueError, TypeError):
+            continue
+
+
 def get_global_settings() -> Settings:
-    """Get global settings instance (singleton pattern)."""
+    """Get global settings instance (singleton pattern).
+
+    Applies the auto-backup override file at first read so web-UI edits
+    (persisted to ``<data_dir>/backup_settings.json``) take effect on
+    the next ``get_global_settings()`` call after
+    ``_reset_global_settings()`` is called by the POST handler.
+    """
     global _settings
     if _settings is None:
         _settings = get_settings()
+        _apply_backup_overrides(_settings)
     return _settings
 
 
@@ -287,7 +430,10 @@ def _reset_global_settings() -> None:
     """Drop the cached settings singleton.
 
     Test-only seam so suites that mutate ``HA_*`` env vars can force a
-    re-read without reaching into module-private state.
+    re-read without reaching into module-private state. Also used by
+    the auto-backup settings POST handler to publish a freshly edited
+    override file value to runtime consumers (the ``@with_auto_backup``
+    decorator reads ``get_global_settings()`` per tool call).
     """
     global _settings
     _settings = None

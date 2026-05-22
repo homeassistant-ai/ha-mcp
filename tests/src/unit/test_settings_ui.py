@@ -707,3 +707,362 @@ class TestRestartAddon:
             await restart(request)
 
         mock_client.post.assert_awaited_once_with("/addons/self/restart")
+
+
+class TestBackupSettingsOverridePersistence:
+    """Round-trip tests for the auto-backup override file (#1288 web UI editor)."""
+
+    def test_save_and_load_roundtrip(self, monkeypatch, tmp_path):
+        from ha_mcp.settings_ui import (
+            _load_backup_settings_override,
+            _save_backup_settings_override,
+        )
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        payload = {
+            "enable_auto_backup": True,
+            "auto_backup_throttle_minutes": 5,
+            "auto_backup_retain_per_entity": 50,
+        }
+        assert _save_backup_settings_override(payload) is True
+        assert _load_backup_settings_override() == payload
+
+    def test_load_missing_returns_empty(self, monkeypatch, tmp_path):
+        from ha_mcp.settings_ui import _load_backup_settings_override
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "absent.json",
+        )
+        assert _load_backup_settings_override() == {}
+
+    def test_load_corrupt_returns_empty(self, monkeypatch, tmp_path):
+        from ha_mcp.settings_ui import _load_backup_settings_override
+
+        path = tmp_path / "backup_settings.json"
+        path.write_text("not valid json {{{")
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: path,
+        )
+        assert _load_backup_settings_override() == {}
+
+    def test_load_non_dict_returns_empty(self, monkeypatch, tmp_path):
+        from ha_mcp.settings_ui import _load_backup_settings_override
+
+        path = tmp_path / "backup_settings.json"
+        path.write_text("[1, 2, 3]")
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: path,
+        )
+        assert _load_backup_settings_override() == {}
+
+
+class TestGetBackupSettingOrigin:
+    """Origin detection for the per-field editable matrix.
+
+    The Web UI relies on this to label each field and disable inputs
+    when the value comes from an env var the user explicitly set.
+    """
+
+    def test_addon_token_wins(self, monkeypatch):
+        from ha_mcp.config import get_backup_setting_origin
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "abc")
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+        # Even with env var set, addon-mode reports "addon" because the
+        # value source-of-truth is config.yaml via start.py.
+        assert get_backup_setting_origin("ENABLE_AUTO_BACKUP") == "addon"
+
+    def test_env_var_set_returns_env(self, monkeypatch):
+        from ha_mcp.config import get_backup_setting_origin
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("AUTO_BACKUP_THROTTLE_MINUTES", "15")
+        assert get_backup_setting_origin("AUTO_BACKUP_THROTTLE_MINUTES") == "env"
+
+    def test_file_present_returns_file(self, monkeypatch, tmp_path):
+        import ha_mcp.config as cfg_mod
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("ENABLE_AUTO_BACKUP", raising=False)
+        override = {"enable_auto_backup": True}
+        (tmp_path / "backup_settings.json").write_text(json.dumps(override))
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        assert cfg_mod.get_backup_setting_origin("ENABLE_AUTO_BACKUP") == "file"
+
+    def test_no_env_no_file_returns_default(self, monkeypatch, tmp_path):
+        from ha_mcp.config import get_backup_setting_origin
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("AUTO_BACKUP_RETAIN_PER_ENTITY", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        assert (
+            get_backup_setting_origin("AUTO_BACKUP_RETAIN_PER_ENTITY") == "default"
+        )
+
+    def test_unknown_env_var_returns_default(self, monkeypatch, tmp_path):
+        from ha_mcp.config import get_backup_setting_origin
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        # Env var not in BACKUP_OVERRIDE_FIELDS — origin lookup still safe.
+        assert get_backup_setting_origin("NOT_A_REAL_ENV_VAR") == "default"
+
+
+class TestApplyBackupOverrides:
+    """``get_global_settings`` applies the override file unless env wins."""
+
+    def test_file_value_applied_when_no_env(self, monkeypatch, tmp_path):
+        import ha_mcp.config as cfg_mod
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        for env in (
+            "ENABLE_AUTO_BACKUP",
+            "AUTO_BACKUP_THROTTLE_MINUTES",
+            "AUTO_BACKUP_RETAIN_PER_ENTITY",
+        ):
+            monkeypatch.delenv(env, raising=False)
+        override = {
+            "enable_auto_backup": True,
+            "auto_backup_throttle_minutes": 7,
+            "auto_backup_retain_per_entity": 33,
+        }
+        (tmp_path / "backup_settings.json").write_text(json.dumps(override))
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        cfg_mod._reset_global_settings()
+        s = cfg_mod.get_global_settings()
+        assert s.enable_auto_backup is True
+        assert s.auto_backup_throttle_minutes == 7
+        assert s.auto_backup_retain_per_entity == 33
+        cfg_mod._reset_global_settings()
+
+    def test_env_var_wins_over_file(self, monkeypatch, tmp_path):
+        import ha_mcp.config as cfg_mod
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
+        monkeypatch.delenv("AUTO_BACKUP_THROTTLE_MINUTES", raising=False)
+        override = {
+            "enable_auto_backup": True,  # env var below sets to false
+            "auto_backup_throttle_minutes": 42,  # no env var → file wins
+        }
+        (tmp_path / "backup_settings.json").write_text(json.dumps(override))
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        cfg_mod._reset_global_settings()
+        s = cfg_mod.get_global_settings()
+        assert s.enable_auto_backup is False  # env wins
+        assert s.auto_backup_throttle_minutes == 42  # file applied
+        cfg_mod._reset_global_settings()
+
+    def test_addon_mode_ignores_override_file(self, monkeypatch, tmp_path):
+        import ha_mcp.config as cfg_mod
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "abc")
+        # start.py would set this in real addon; simulate.
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
+        # Override file says True — must be ignored in addon mode.
+        (tmp_path / "backup_settings.json").write_text(
+            json.dumps({"enable_auto_backup": True})
+        )
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        cfg_mod._reset_global_settings()
+        s = cfg_mod.get_global_settings()
+        assert s.enable_auto_backup is False
+        cfg_mod._reset_global_settings()
+
+    def test_out_of_range_skipped(self, monkeypatch, tmp_path):
+        import ha_mcp.config as cfg_mod
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        for env in (
+            "AUTO_BACKUP_THROTTLE_MINUTES",
+            "AUTO_BACKUP_RETAIN_PER_ENTITY",
+        ):
+            monkeypatch.delenv(env, raising=False)
+        # Both above their bounds — must be silently skipped, defaults survive.
+        (tmp_path / "backup_settings.json").write_text(
+            json.dumps(
+                {
+                    "auto_backup_throttle_minutes": 9999,
+                    "auto_backup_retain_per_entity": 999_999,
+                }
+            )
+        )
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        cfg_mod._reset_global_settings()
+        s = cfg_mod.get_global_settings()
+        assert s.auto_backup_throttle_minutes == 0  # default
+        assert s.auto_backup_retain_per_entity == 20  # default
+        cfg_mod._reset_global_settings()
+
+
+class TestSaveBackupConfigEndpoint:
+    """POST /api/settings/backup-config validation + env-pin rejection."""
+
+    def _make_request(self, body):
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    def _capture_handlers(
+        self, monkeypatch, *, addon: bool = False
+    ) -> dict[str, SaveHandler]:
+        if addon:
+            monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        else:
+            monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/backup-config"):
+                    if "GET" in methods:
+                        captured["get"] = fn
+                    if "POST" in methods:
+                        captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_body(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        handlers = self._capture_handlers(monkeypatch)
+        resp = await handlers["post"](self._make_request([1, 2, 3]))
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_out_of_range_throttle(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        handlers = self._capture_handlers(monkeypatch)
+        resp = await handlers["post"](
+            self._make_request({"auto_backup_throttle_minutes": 9999})
+        )
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert "0..1440" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_rejects_out_of_range_retain(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        handlers = self._capture_handlers(monkeypatch)
+        resp = await handlers["post"](
+            self._make_request({"auto_backup_retain_per_entity": 0})
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_only_body(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        handlers = self._capture_handlers(monkeypatch)
+        resp = await handlers["post"](self._make_request({"unrelated_key": True}))
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_env_pinned_field_returns_409(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: tmp_path / "backup_settings.json",
+        )
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+        handlers = self._capture_handlers(monkeypatch)
+        resp = await handlers["post"](
+            self._make_request({"enable_auto_backup": False})
+        )
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert any(
+            r["env_var"] == "ENABLE_AUTO_BACKUP"
+            for r in body["error"]["rejected"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_standalone_writes_file_and_invalidates_cache(
+        self, monkeypatch, tmp_path
+    ):
+        import ha_mcp.config as cfg_mod
+        import ha_mcp.settings_ui as sui_mod
+
+        override_path = tmp_path / "backup_settings.json"
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._get_backup_settings_override_path",
+            lambda: override_path,
+        )
+        # Critical: the get_data_dir patch is what the *config* module reads
+        # via _read_backup_override_file when get_global_settings re-reads
+        # after the cache reset. Without it the override file wouldn't be
+        # found on the post-reset read, so cache invalidation appears to
+        # have no effect even though the POST succeeded.
+        monkeypatch.setattr(
+            "ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path
+        )
+        for env in (
+            "ENABLE_AUTO_BACKUP",
+            "AUTO_BACKUP_THROTTLE_MINUTES",
+            "AUTO_BACKUP_RETAIN_PER_ENTITY",
+        ):
+            monkeypatch.delenv(env, raising=False)
+        handlers = self._capture_handlers(monkeypatch)
+        cfg_mod._reset_global_settings()
+        _ = cfg_mod.get_global_settings()  # warm the cache
+        resp = await handlers["post"](
+            self._make_request(
+                {
+                    "enable_auto_backup": True,
+                    "auto_backup_throttle_minutes": 9,
+                }
+            )
+        )
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["mode"] == "file"
+        assert body["restarting"] is False
+        on_disk = json.loads(override_path.read_text())
+        assert on_disk["enable_auto_backup"] is True
+        assert on_disk["auto_backup_throttle_minutes"] == 9
+        # Cache invalidation publishes the new values to the next read.
+        fresh = cfg_mod.get_global_settings()
+        assert fresh.enable_auto_backup is True
+        assert fresh.auto_backup_throttle_minutes == 9
+        cfg_mod._reset_global_settings()
+        # Guarantee no symbol-import lint trip.
+        assert sui_mod is not None

@@ -23,7 +23,12 @@ from starlette.responses import HTMLResponse, JSONResponse
 from ._version import is_running_in_addon
 from .backup_manager import get_backup_manager
 from .client.supervisor_client import make_supervisor_httpx_client
-from .config import get_global_settings
+from .config import (
+    BACKUP_OVERRIDE_FIELDS,
+    _reset_global_settings,
+    get_backup_setting_origin,
+    get_global_settings,
+)
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -215,6 +220,52 @@ def save_tool_config(config: dict[str, Any]) -> bool:
         logger.exception("Failed to save tool config to %s", path)
         return False
     logger.info("Saved tool config to %s", path)
+    return True
+
+
+def _get_backup_settings_override_path() -> Path:
+    """Return path to the auto-backup settings override file.
+
+    Sits next to ``tool_config.json`` in the same data dir. Web UI edits
+    in standalone (non-addon) mode persist here; ``get_global_settings``
+    reads the file on the next call after ``_reset_global_settings``.
+    """
+    return get_data_dir() / "backup_settings.json"
+
+
+def _load_backup_settings_override() -> dict[str, Any]:
+    """Read the auto-backup override file, returning {} when absent/corrupt.
+
+    Best-effort by design: a corrupt file logs a warning and is treated
+    as empty so the Settings code path never breaks because of a
+    malformed UI write.
+    """
+    path = _get_backup_settings_override_path()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logger.warning("Cannot read backup settings override at %s", path, exc_info=True)
+        return {}
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Backup settings override at %s is not valid JSON; ignoring.", path
+        )
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_backup_settings_override(data: dict[str, Any]) -> bool:
+    """Persist the auto-backup override file. Returns True on success."""
+    path = _get_backup_settings_override_path()
+    try:
+        path.write_text(json.dumps(data, indent=2))
+    except OSError:
+        logger.exception("Failed to save backup settings override to %s", path)
+        return False
     return True
 
 
@@ -474,6 +525,23 @@ _SETTINGS_HTML = (
   .backup-row-actions button.secondary { background: var(--surface-hover); color: var(--text); }
   .backup-empty { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 0.9rem;
     background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; }
+  .backup-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px; }
+  .backup-config-form { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .backup-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .backup-field-label { min-width: 200px; font-size: 0.9rem; font-weight: 500; }
+  .backup-field-control input[type="number"] { width: 120px; padding: 6px 10px;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .backup-field-control input[type="number"]:disabled { opacity: 0.55; cursor: not-allowed; }
+  .backup-field-locked { background: #2a2520; color: #f4b860; font-size: 0.78rem;
+    padding: 2px 8px; border-radius: 999px; }
+  .backup-field-help { font-size: 0.75rem; color: var(--text-secondary); flex-basis: 100%; margin-left: 200px; }
+  .backup-config-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid var(--border); }
+  .backup-config-actions button { padding: 8px 16px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
+  .backup-config-actions button:hover { background: var(--accent-hover); }
+  .backup-config-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7);
     display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
@@ -525,6 +593,13 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel" id="panel-backups">
   <div class="backup-state" id="backupState">Loading backup state…</div>
+  <div class="backup-config" id="backupConfig">
+    <div class="backup-config-form" id="backupConfigForm"></div>
+    <div class="backup-config-actions" id="backupConfigActions" style="display:none">
+      <button id="backupConfigSave">Save settings</button>
+      <span id="backupConfigStatus" class="status"></span>
+    </div>
+  </div>
   <div class="backup-filters">
     <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)">
     <input type="text" id="backupEntity" placeholder="Entity ID">
@@ -835,12 +910,140 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
     const target = tab.dataset.panel;
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
-    if (target === 'backups') loadBackups();
+    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
   });
 });
 
 // ===== Backups tab =====
 let backupEntries = [];
+let backupConfigFields = [];
+
+const BACKUP_FIELD_LABELS = {
+  enable_auto_backup: {
+    label: 'Auto-backup edits',
+    help: 'Capture a snapshot before every wrapped write/destructive tool call.',
+  },
+  auto_backup_throttle_minutes: {
+    label: 'Throttle (minutes)',
+    help: 'Per-entity throttle. 0 = backup every write; N>0 = at most one per N minutes per entity. Range 0–1440.',
+  },
+  auto_backup_retain_per_entity: {
+    label: 'Retain per entity',
+    help: 'Maximum snapshots kept per entity (1–10000). Older ones rotate out.',
+  },
+};
+
+const BACKUP_ORIGIN_LABELS = {
+  addon: 'Synced to Supervisor — save will restart the add-on.',
+  env: null,  // banner generated dynamically with the env var name
+  file: 'Persisted locally; takes effect immediately.',
+  default: 'Using default; first save creates a local override file.',
+};
+
+async function loadBackupConfig() {
+  const formEl = document.getElementById('backupConfigForm');
+  const actionsEl = document.getElementById('backupConfigActions');
+  try {
+    const resp = await fetch('./api/settings/backup-config');
+    if (!resp.ok) {
+      formEl.innerHTML = '<div class="backup-empty">Could not load backup settings.</div>';
+      actionsEl.style.display = 'none';
+      return;
+    }
+    const data = await resp.json();
+    backupConfigFields = data.fields || [];
+  } catch (_e) {
+    formEl.innerHTML = '<div class="backup-empty">Backup settings unavailable.</div>';
+    actionsEl.style.display = 'none';
+    return;
+  }
+  renderBackupConfig();
+  actionsEl.style.display = backupConfigFields.some(f => f.editable) ? '' : 'none';
+}
+
+function renderBackupConfig() {
+  const formEl = document.getElementById('backupConfigForm');
+  formEl.innerHTML = '';
+  backupConfigFields.forEach(f => {
+    const meta = BACKUP_FIELD_LABELS[f.field] || { label: f.field, help: '' };
+    const row = document.createElement('div');
+    row.className = 'backup-field';
+    let controlHtml;
+    if (typeof f.value === 'boolean') {
+      controlHtml = `<input type="checkbox" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else {
+      const min = f.field === 'auto_backup_throttle_minutes' ? 0 : 1;
+      const max = f.field === 'auto_backup_throttle_minutes' ? 1440 : 10000;
+      controlHtml = `<input type="number" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+    }
+    let originMsg;
+    if (f.origin === 'env') {
+      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+    } else {
+      originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
+    }
+    const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">env-locked</span>`;
+    row.innerHTML =
+      `<span class="backup-field-label">${escapeHtml(meta.label)}</span>` +
+      `<span class="backup-field-control">${controlHtml}</span>` +
+      lockedBadge +
+      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? ' — ' + originMsg : ''}</span>`;
+    formEl.appendChild(row);
+  });
+}
+
+async function saveBackupConfig() {
+  const btn = document.getElementById('backupConfigSave');
+  const statusEl = document.getElementById('backupConfigStatus');
+  const payload = {};
+  backupConfigFields.forEach(f => {
+    if (!f.editable) return;
+    const input = document.querySelector(`#backupConfigForm input[data-field="${f.field}"]`);
+    if (!input) return;
+    if (input.type === 'checkbox') {
+      payload[f.field] = input.checked;
+    } else {
+      const n = parseInt(input.value, 10);
+      if (!isNaN(n)) payload[f.field] = n;
+    }
+  });
+  if (Object.keys(payload).length === 0) {
+    statusEl.textContent = 'Nothing editable.';
+    return;
+  }
+  btn.disabled = true;
+  statusEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch('./api/settings/backup-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      btn.disabled = false;
+      let msg = 'Save failed';
+      if (data && data.error) {
+        if (typeof data.error === 'string') msg = data.error;
+        else if (data.error.message) msg = data.error.message;
+      }
+      statusEl.textContent = msg;
+      return;
+    }
+    if (data.restarting) {
+      statusEl.textContent = 'Saved — addon is restarting. Reload in ~30s.';
+    } else {
+      statusEl.textContent = 'Saved.';
+      btn.disabled = false;
+      // Refresh display so origins update (default → file, etc.).
+      loadBackupConfig();
+      loadBackups();
+    }
+  } catch (err) {
+    btn.disabled = false;
+    statusEl.textContent = 'Network error: ' + String(err);
+  }
+}
 
 async function loadBackups() {
   const params = new URLSearchParams();
@@ -971,6 +1174,7 @@ function yamlStringify(obj) { return JSON.stringify(obj, null, 2); }
 
 document.getElementById('backupRefresh').addEventListener('click', loadBackups);
 document.getElementById('backupBulkDelete').addEventListener('click', bulkDeleteBackups);
+document.getElementById('backupConfigSave').addEventListener('click', saveBackupConfig);
 document.getElementById('modalClose').addEventListener('click', closeModal);
 document.getElementById('modalBackdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modalBackdrop') closeModal();
@@ -1378,6 +1582,231 @@ def register_settings_routes(
             }
         )
 
+    async def _get_backup_config(_: Request) -> JSONResponse:
+        """Return live auto-backup config + per-field origin + editable flag.
+
+        Per-field origin/editable matrix (see ``config.get_backup_setting_origin``):
+        - ``addon``: editable — POST routes through Supervisor.
+        - ``env``: read-only — env var wins; user must unset to edit.
+        - ``file``/``default``: editable — POST writes the override file.
+        """
+        settings = get_global_settings()
+        addon_mode = is_running_in_addon()
+        fields = []
+        for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
+            origin = get_backup_setting_origin(env_name)
+            editable = origin in ("addon", "file", "default")
+            fields.append(
+                {
+                    "field": field_name,
+                    "env_var": env_name,
+                    "value": getattr(settings, field_name),
+                    "origin": origin,
+                    "editable": editable,
+                }
+            )
+        return JSONResponse(
+            {
+                "success": True,
+                "is_addon": addon_mode,
+                "fields": fields,
+            }
+        )
+
+    def _validate_backup_payload(payload: Any) -> tuple[dict[str, Any], str | None]:
+        """Coerce and bounds-check the POST body. Returns (clean, error_msg)."""
+        if not isinstance(payload, dict):
+            return {}, "Body must be a JSON object"
+        clean: dict[str, Any] = {}
+        for field_name, _env_name, ftype in BACKUP_OVERRIDE_FIELDS:
+            if field_name not in payload:
+                continue
+            raw = payload[field_name]
+            if ftype is bool:
+                if isinstance(raw, bool):
+                    value: Any = raw
+                elif isinstance(raw, int):
+                    value = bool(raw)
+                elif isinstance(raw, str):
+                    s = raw.strip().lower()
+                    if s in ("true", "1", "yes", "on"):
+                        value = True
+                    elif s in ("false", "0", "no", "off"):
+                        value = False
+                    else:
+                        return {}, f"Invalid boolean for {field_name}: {raw!r}"
+                else:
+                    return {}, f"Invalid value for {field_name}: {raw!r}"
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int | str):
+                    return {}, f"Invalid integer for {field_name}: {raw!r}"
+                try:
+                    value = int(raw)
+                except (ValueError, TypeError):
+                    return {}, f"Invalid integer for {field_name}: {raw!r}"
+                if field_name == "auto_backup_throttle_minutes" and not (
+                    0 <= value <= 1440
+                ):
+                    return {}, "auto_backup_throttle_minutes must be 0..1440"
+                if field_name == "auto_backup_retain_per_entity" and not (
+                    1 <= value <= 10_000
+                ):
+                    return {}, "auto_backup_retain_per_entity must be 1..10000"
+            else:
+                continue
+            clean[field_name] = value
+        if not clean:
+            return {}, "No editable auto-backup fields in body"
+        return clean, None
+
+    async def _save_backup_config(request: Request) -> JSONResponse:
+        """Persist auto-backup config edits and publish to the live process.
+
+        Routing:
+        - Addon mode: POST ``/addons/self/options`` to update ``config.yaml``,
+          then ``/addons/self/restart`` to make the new values take effect via
+          ``start.py``'s env-var write at next boot. The HTTP response races
+          the restart-induced socket drop; the JS treats both 200 and
+          connection-drop as success and reloads the page after ~30s.
+        - Standalone (file) mode: refuse any field that's pinned by an env
+          var (process or ``.env``) — return 409 with the offending names so
+          the UI can refresh and show the read-only banner. Editable fields
+          merge into ``<data_dir>/backup_settings.json`` and a Settings
+          cache reset publishes them immediately (no restart).
+        """
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            return _bad_request("Invalid JSON body")
+        clean, err = _validate_backup_payload(payload)
+        if err is not None:
+            return _bad_request(err)
+
+        if is_running_in_addon():
+            if not os.environ.get("SUPERVISOR_TOKEN"):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONFIG_VALIDATION_FAILED,
+                        "Supervisor token missing — cannot update add-on options",
+                    ),
+                    status_code=400,
+                )
+            options_body = {"options": clean}
+            try:
+                async with make_supervisor_httpx_client(
+                    timeout=10.0, verify=server.settings.verify_ssl
+                ) as sclient:
+                    opt_resp = await sclient.post(
+                        "/addons/self/options", json=options_body
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Failed to PUT /addons/self/options: %s", exc, exc_info=True
+                )
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        f"Supervisor options update failed: {exc}",
+                    ),
+                    status_code=502,
+                )
+            if opt_resp.status_code >= 400:
+                body = opt_resp.text[:400]
+                logger.warning(
+                    "Supervisor rejected options update (%s): %s",
+                    opt_resp.status_code,
+                    body,
+                )
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONFIG_VALIDATION_FAILED,
+                        f"Supervisor rejected options update: {body}",
+                    ),
+                    status_code=opt_resp.status_code,
+                )
+            # Trigger restart so start.py rewrites env vars from config.yaml.
+            # Socket may drop mid-response (self-restart) — treat that as
+            # success, same as the existing _restart_addon handler.
+            try:
+                async with make_supervisor_httpx_client(
+                    timeout=5.0, verify=server.settings.verify_ssl
+                ) as sclient:
+                    await sclient.post("/addons/self/restart")
+            except (httpx.ReadError, httpx.RemoteProtocolError):
+                pass
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Options updated but restart request failed: %s", exc, exc_info=True
+                )
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "applied": clean,
+                        "mode": "addon",
+                        "warning": (
+                            "Options saved to config.yaml but restart request "
+                            "failed; restart the add-on manually to apply."
+                        ),
+                    },
+                    status_code=200,
+                )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": clean,
+                    "mode": "addon",
+                    "restarting": True,
+                }
+            )
+
+        # Standalone (file) mode — refuse to override env-pinned fields.
+        rejected: list[dict[str, str]] = []
+        for field_name in list(clean.keys()):
+            env_name = next(
+                en for fn, en, _ in BACKUP_OVERRIDE_FIELDS if fn == field_name
+            )
+            if os.environ.get(env_name) is not None:
+                rejected.append({"field": field_name, "env_var": env_name})
+                del clean[field_name]
+        if rejected:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "env_var_pinned",
+                        "message": (
+                            "Some fields are set via environment variable and "
+                            "cannot be changed from the web UI. Unset the "
+                            "env var(s) and reload."
+                        ),
+                        "rejected": rejected,
+                    },
+                },
+                status_code=409,
+            )
+        if not clean:
+            return _bad_request("No editable auto-backup fields after env-var filter")
+        current = _load_backup_settings_override()
+        current.update(clean)
+        if not _save_backup_settings_override(current):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Failed to persist override file",
+                ),
+                status_code=500,
+            )
+        # Drop the cached Settings so the next read sees the merged value.
+        _reset_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": clean,
+                "mode": "file",
+                "restarting": False,
+            }
+        )
+
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
@@ -1415,6 +1844,12 @@ def register_settings_routes(
         )
         mcp.custom_route("/api/settings/backups/{name}", methods=["DELETE"])(
             _delete_backup
+        )
+        mcp.custom_route("/api/settings/backup-config", methods=["GET"])(
+            _get_backup_config
+        )
+        mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
+            _save_backup_config
         )
 
     if secret_prefix:
@@ -1454,3 +1889,9 @@ def register_settings_routes(
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backups/{{name}}", methods=["DELETE"]
         )(_delete_backup)
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backup-config", methods=["GET"]
+        )(_get_backup_config)
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
+        )(_save_backup_config)
