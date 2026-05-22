@@ -7,21 +7,7 @@ configuration:
       `ha_manage_backup(scope='snapshot')` tool description for when to
       suggest a full Home Assistant tarball backup before risky operations
       (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-      sentence — **not** the per-edit auto-backup feature, and **not**
-      anything the add-on does on its own.
-
-      - **strong** — LLM should suggest a snapshot before the FIRST
-        destructive op of the day/session. Most cautious; use if you don't
-        already run a daily HA backup.
-      - **normal** *(default)* — LLM should suggest a snapshot only before
-        truly irreversible operations (deleting devices, mass entity
-        removal). Skips the suggestion when the change is undoable from
-        captured state.
-      - **weak** — LLM treats snapshots as usually unnecessary; only
-        suggests one when the user explicitly asks or the op is
-        system-wide.
-      - **auto** — Currently identical to **normal**; reserved for a
-        future heuristic that looks at the operation type.
+      sentence.
 
       For per-edit automatic snapshots of automations / scripts / helpers /
       etc., use the separate **Enable auto-backup of edits** toggle below.
