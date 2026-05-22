@@ -25,23 +25,17 @@ import statistics
 
 import pytest
 
+from ha_mcp.tools.tools_config_automations import NOT_VERIFIED_WARNING_PREFIX
+
 from ...conftest import record_poll_cadence_measurement
 from ...utilities.assertions import safe_call_tool
+from ...utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 logger = logging.getLogger(__name__)
 
 # Captures the DEBUG line emitted by rest_client._poll_for_automation_entity
 # on every successful registration. Format owned by that function.
 _ELAPSED_RE = re.compile(r"entity-registration-elapsed:\s*([\d.]+)ms")
-
-# Distinctive substring of the soft-failure warning ``ha_config_set_automation``
-# emits when ``_poll_for_automation_entity`` exhausts ``_POLL_CADENCE`` without
-# matching the new automation. The tool pops ``entity_not_verified`` from the
-# response, so this warning is the only reliable signal that a registration
-# missed. Mirrors the literal in ``tools_config_automations.py``.
-_NOT_VERIFIED_WARNING_PREFIX = (
-    "Automation was submitted to Home Assistant but the entity was not found"
-)
 
 
 @pytest.mark.automation
@@ -100,7 +94,7 @@ class TestPollCadenceMeasurement1389:
                     warnings = create_data.get("warnings") or []
                     if any(
                         isinstance(w, str)
-                        and w.startswith(_NOT_VERIFIED_WARNING_PREFIX)
+                        and w.startswith(NOT_VERIFIED_WARNING_PREFIX)
                         for w in warnings
                     ):
                         not_verified_count += 1
@@ -194,11 +188,13 @@ class TestPollCadenceMeasurement1389:
             logger.info("VERDICT: %s", verdict)
             logger.info(sep)
         finally:
-            # The session-scoped ``cleanup_tracker`` fixture only logs what
+            # The logging-only ``cleanup_tracker`` fixture only logs what
             # it tracked; without an explicit delete here this test would
             # leak 10 automations into the next worker run on a loadscope
-            # split. Best-effort: per-entity remove, swallow individual
-            # failures so cleanup doesn't mask the real assertion outcome.
+            # split. Best-effort: per-entity remove, swallow only transient
+            # transport/HA errors so programmer bugs (TypeError, KeyError,
+            # AttributeError, AssertionError) propagate with their stack
+            # trace instead of being downgraded to a warning line.
             for ent_id in created_entity_ids:
                 try:
                     await safe_call_tool(
@@ -206,7 +202,7 @@ class TestPollCadenceMeasurement1389:
                         "ha_config_remove_automation",
                         {"identifier": ent_id},
                     )
-                except Exception as cleanup_err:
+                except _POLLING_TRANSIENT_ERRORS as cleanup_err:
                     logger.warning(
                         "cleanup: failed to remove %s: %s", ent_id, cleanup_err
                     )

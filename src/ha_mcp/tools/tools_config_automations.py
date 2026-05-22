@@ -53,6 +53,17 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Distinctive prefix of the soft-failure warning emitted by
+# ``ha_config_set_automation`` when ``_poll_for_automation_entity``
+# exhausts ``_POLL_CADENCE`` without matching the new automation.
+# Exported so tests (e.g. ``test_poll_cadence_measurement.py``) can
+# detect a missed registration without hard-coding the literal —
+# rewording the warning becomes a compile-time coupling rather than
+# a silent test drift.
+NOT_VERIFIED_WARNING_PREFIX = (
+    "Automation was submitted to Home Assistant but the entity was not found"
+)
+
 
 def _normalize_automation_config(
     config: Any,
@@ -767,7 +778,7 @@ class AutomationConfigTools:
             # If the client could not verify the entity was registered, warn but don't hard-fail.
             if result.get("entity_not_verified"):
                 result.setdefault("warnings", []).append(
-                    "Automation was submitted to Home Assistant but the entity was not found "
+                    f"{NOT_VERIFIED_WARNING_PREFIX} "
                     "after polling. The automation may still have been created -- check Home "
                     "Assistant logs and try reloading automations. Common causes: "
                     "automations.yaml vs automation.yaml filename mismatch, invalid config "
