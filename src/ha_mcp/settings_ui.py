@@ -991,32 +991,36 @@ document.getElementById('restartBtn').addEventListener('click', restartAddon);
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
 
 // Feature-flag metadata (display labels + help text). Keyed by the
-// Settings field name. The server returns origin + value + bounds;
-// these strings localize/document each row without bloating the API.
+// Settings field name. The strings are intentionally copied verbatim
+// from ``homeassistant-addon-dev/translations/en.yaml`` so the web
+// UI and the add-on Configuration tab read identically — a user who
+// flips between the two surfaces never wonders if the option name
+// or warning text shifted meaning. Keep them in sync when one side
+// changes; the addon-dev translations file is the source of truth.
 const FEATURE_META = {
   enable_tool_search: {
-    label: 'Tool Search (BM25 catalog)',
-    help: 'Replaces the full tool catalog with a single search tool + call proxies. Dramatically reduces idle context usage.',
+    label: "Enable tool search",
+    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes — those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
   },
   tool_search_max_results: {
-    label: 'Tool Search · max results',
-    help: 'Max tools returned per ha_search_tools call. Range 2-10.',
+    label: "Tool search max results",
+    help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
   enable_yaml_config_editing: {
-    label: 'YAML config editing',
-    help: 'Allows ha_config_set_yaml to mutate configuration.yaml and package files. Beta.',
+    label: "Enable YAML config editing (beta)",
+    help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
   },
   enable_lite_docstrings: {
-    label: 'Lite tool docstrings',
-    help: 'Trims heavy tool descriptions, deferring detail to ha_get_skill_guide. Reduces idle tokens; relies on the LLM consulting the skill.',
+    label: "Enable lite tool docstrings (beta)",
+    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
   enable_filesystem_tools: {
-    label: 'Filesystem tools',
-    help: 'Registers ha_list_files / ha_read_file / ha_write_file / ha_delete_file under the HA config dir.',
+    label: "Enable filesystem tools (beta)",
+    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
   },
   enable_custom_component_integration: {
-    label: 'Custom component installer',
-    help: 'Registers ha_install_mcp_tools (installs the ha_mcp_tools HACS component).',
+    label: "Enable custom component integration (beta)",
+    help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
   },
 };
 
