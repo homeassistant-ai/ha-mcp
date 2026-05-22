@@ -1230,11 +1230,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Available keys: success, system_summary, domain_stats, "
                     "area_analysis, ai_insights, pagination, partial, warnings, "
                     "device_types, service_availability, system_info, "
-                    "notification_count, notifications, repair_count, repairs, "
-                    "repairs_error, tool_discovery. The ``settings_url`` "
-                    "field (stdio mode only, see tool description) is not "
-                    "subject to this projection — it is always included "
-                    "when the settings-UI sidecar is running."
+                    "notification_count, notifications, repair_count, "
+                    "dismissed_repair_count, repairs, repairs_error, "
+                    "tool_discovery, settings_url. Note: ``settings_url`` "
+                    "(stdio mode only, see tool description) is emitted "
+                    "regardless of ``fields=`` projection — it is always "
+                    "included when the settings-UI sidecar is running."
                 ),
             ),
         ] = None,
