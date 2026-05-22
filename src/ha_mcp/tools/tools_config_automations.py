@@ -56,11 +56,10 @@ logger = logging.getLogger(__name__)
 
 # Distinctive prefix of the soft-failure warning emitted by
 # ``ha_config_set_automation`` when ``_poll_for_automation_entity``
-# exhausts ``_POLL_CADENCE`` without matching the new automation.
-# Exported so tests (e.g. ``test_poll_cadence_measurement.py``) can
-# detect a missed registration without hard-coding the literal —
-# rewording the warning becomes a compile-time coupling rather than
-# a silent test drift.
+# exhausts its budget (``_POLL_BUDGET_S``) without resolving the new
+# automation's entity_id. Exported so future tests can detect a missed
+# registration without hard-coding the literal — rewording the warning
+# becomes a compile-time coupling rather than a silent test drift.
 NOT_VERIFIED_WARNING_PREFIX = (
     "Automation was submitted to Home Assistant but the entity was not found"
 )
