@@ -377,6 +377,14 @@ class BackupManager:
     ) -> list[dict[str, Any]]:
         if not self._dir.exists():
             return []
+        # ``entity_id`` comparison: filenames hold the sanitized form (see
+        # ``_safe_entity_id`` — any char outside ``[A-Za-z0-9._-]`` becomes
+        # ``_``), so composite IDs like ``area:foo`` / ``automation:UUID``
+        # would otherwise never match a filter passed in original form.
+        # Sanitize the filter once up front so the per-file comparison is
+        # symmetric: filter and ``meta["entity_id"]`` both come from the
+        # same sanitization function.
+        safe_filter = _safe_entity_id(entity_id) if entity_id else None
         out: list[dict[str, Any]] = []
         # Reverse-sorted glob — newest filenames sort last lexicographically,
         # so reverse=True yields newest-first.
@@ -386,7 +394,7 @@ class BackupManager:
                 continue
             if domain and meta["domain"] != domain:
                 continue
-            if entity_id and meta["entity_id"] != entity_id:
+            if safe_filter and meta["entity_id"] != safe_filter:
                 continue
             try:
                 stat = path.stat()
@@ -743,13 +751,33 @@ async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) -> Any:
-    payload = dict(config)
+    payload = _strip_readonly(config, "id")
     payload["resource_id"] = entity_id
     payload["type"] = "lovelace/resources/update"
     return await _ws_send(client, payload)
 
 
 # Labels — config/label_registry/{list,update}
+#
+# Registry list endpoints return read-only metadata fields
+# (``created_at``, ``modified_at``) that the matching ``/update`` endpoint
+# rejects with ``extra keys not allowed``. The capture has to keep them
+# (they're part of the snapshot's informational payload), so the restore
+# strips them at the last moment. Same pattern applies to category /
+# zone / area / floor / integration / helper registries.
+_REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
+
+
+def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
+    """Return ``config`` with read-only registry fields removed.
+
+    Always strips ``created_at`` / ``modified_at`` (universal across HA's
+    registries). Caller passes additional per-registry id keys (e.g.
+    ``label_id`` / ``category_id``) that the update endpoint re-injects
+    separately and rejects when sent inside the payload body.
+    """
+    drop = _REGISTRY_READONLY_KEYS | set(extra)
+    return {k: v for k, v in config.items() if k not in drop}
 
 
 async def _fetch_label(client: Any, entity_id: str) -> Any:
@@ -763,7 +791,7 @@ async def _fetch_label(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_label(client: Any, entity_id: str, config: Any) -> Any:
-    payload = {k: v for k, v in config.items() if k != "label_id"}
+    payload = _strip_readonly(config, "label_id")
     payload["type"] = "config/label_registry/update"
     payload["label_id"] = entity_id
     return await _ws_send(client, payload)
@@ -789,7 +817,7 @@ async def _fetch_category(client: Any, entity_id: str) -> Any:
 
 async def _restore_category(client: Any, entity_id: str, config: Any) -> Any:
     scope, _, cat_id = entity_id.partition(":")
-    payload = {k: v for k, v in config.items() if k not in ("category_id", "scope")}
+    payload = _strip_readonly(config, "category_id", "scope")
     payload["type"] = "config/category_registry/update"
     payload["scope"] = scope or config.get("scope")
     payload["category_id"] = cat_id
@@ -899,7 +927,7 @@ async def _fetch_zone(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_zone(client: Any, entity_id: str, config: Any) -> Any:
-    payload = {k: v for k, v in config.items() if k != "id"}
+    payload = _strip_readonly(config, "id")
     payload["type"] = "zone/update"
     payload["zone_id"] = config.get("id", entity_id)
     return await _ws_send(client, payload)
@@ -931,9 +959,7 @@ async def _fetch_area_or_floor(client: Any, entity_id: str) -> Any:
 
 async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any:
     kind, _, real_id = entity_id.partition(":")
-    payload = {
-        k: v for k, v in config.items() if k not in ("kind", "area_id", "floor_id")
-    }
+    payload = _strip_readonly(config, "kind", "area_id", "floor_id")
     if kind == "area":
         payload["type"] = "config/area_registry/update"
         payload["area_id"] = real_id
@@ -1093,7 +1119,7 @@ async def _restore_helper(
             "be restored via the auto-backup snapshot path. Use the helper's "
             "native edit tool (``ha_config_set_helper``) instead."
         )
-    payload = {k: v for k, v in config.items() if k != "id"}
+    payload = _strip_readonly(config, "id")
     payload["type"] = f"{helper_type}/update"
     payload[f"{helper_type}_id"] = config.get("id", entity_id)
     return await _ws_send(client, payload)

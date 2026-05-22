@@ -399,19 +399,17 @@ class TestComplexHelperCaptureRestore:
         )
 
         # View — assert the nested arrays survived YAML round-trip into
-        # the snapshot file. Schedule shape:
-        # ``data.config.monday = [{"from": "...", "to": "..."}, ...]``.
+        # the snapshot file. The tool returns ``{"success": True, "data":
+        # <YAML payload>}`` and the payload's ``config`` key holds the
+        # original entity config (schedule shape:
+        # ``config.monday = [{"from": "...", "to": "..."}, ...]``).
         view = await safe_call_tool(
             mcp_client,
             "ha_manage_backup",
             {"scope": "edits", "action": "view", "backup_name": backup_name},
         )
         assert view.get("success") is True
-        captured = (
-            view.get("data", {})
-            .get("data", {})
-            .get("config", view.get("data", {}).get("data", {}))
-        )
+        captured = view.get("data", {}).get("config", {})
         # Nested structure must be intact. Three days × multiple ranges.
         assert isinstance(captured.get("monday"), list)
         assert len(captured["monday"]) == 2
@@ -1027,8 +1025,22 @@ class TestGroupCaptureRestore:
         )
         if create.get("success") is False:
             pytest.skip(f"group create unsupported: {create}")
-        # Settle so the decorator's pre-edit fetch finds the group state.
-        await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+        # Group entity is created via the ``group.set`` service call —
+        # state machine registration is async and a fixed sleep is racy.
+        # Poll ``ha_get_state`` until ``group.<object_id>`` is queryable
+        # so the decorator's pre-edit ``/api/states`` GET finds it.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_state",
+            arguments={"entity_id": f"group.{object_id}"},
+            predicate=lambda d: (
+                d.get("success") is True
+                or d.get("state") is not None
+                or d.get("entity_id") == f"group.{object_id}"
+            ),
+            description=f"group.{object_id} state visible",
+            timeout=15,
+        )
 
         edit = await safe_call_tool(
             mcp_client,
@@ -1157,7 +1169,7 @@ class TestDashboardResourceCaptureRestore:
             "ha_config_set_dashboard_resource",
             {
                 "url": f"/local/e2e-bk-{suffix}.js",
-                "res_type": "module",
+                "resource_type": "module",
             },
         )
         if create.get("success") is False:
