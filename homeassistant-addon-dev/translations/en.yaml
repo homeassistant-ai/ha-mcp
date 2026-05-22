@@ -1,8 +1,19 @@
 ---
 configuration:
   backup_hint:
-    name: Backup hint
-    description: Controls when backup reminders are shown before risky operations.
+    name: Full-HA snapshot suggestion level (LLM-facing)
+    description: >-
+      Tunes the wording of the hint the LLM sees in the
+      ``ha_manage_backup(scope='snapshot')`` tool description about when
+      to suggest a full Home Assistant tarball backup before risky
+      operations (e.g. mass device deletes). Affects ONLY this one
+      LLM-facing prompt sentence — not auto-backup, not anything the
+      add-on does on its own. ``strong`` nudges the LLM to suggest a
+      backup before the first daily destructive op; ``normal`` (default)
+      only before truly irreversible ops; ``weak`` says backups are
+      usually unnecessary; ``auto`` matches ``normal``. For per-edit
+      automatic snapshots of automations / scripts / helpers / etc., use
+      the separate ``Enable auto-backup of edits`` toggle below.
   secret_path:
     name: Secret path override
     description: |
