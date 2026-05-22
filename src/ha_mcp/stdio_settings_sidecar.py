@@ -145,7 +145,27 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _existing_sidecar_alive() -> bool:
-    """Check whether a previously spawned sidecar is still running."""
+    """Check whether a previously spawned sidecar is still running.
+
+    "Alive" here means BOTH the recorded PID is live AND the URL file
+    is present on disk. Checking the PID alone has two failure modes:
+
+    * **PID reuse**: after a crash that doesn't clean up ``ui.pid``,
+      the OS can reassign that PID to an unrelated process (any
+      ``python.exe``, a system daemon, even ``chrome.exe``).
+      ``_pid_alive`` returns True for any of those, so
+      ``maybe_spawn()`` permanently skips spawning the real sidecar
+      until the user manually deletes ``ui.pid``.
+
+    * **Crashed-mid-startup**: child exits before writing
+      ``ui.url`` but after writing ``ui.pid`` (e.g. uvicorn port-bind
+      race, see ``_pick_free_port`` docstring). Same lockout.
+
+    The URL file is the consumer contract — if it isn't present,
+    no one can reach the sidecar, so by definition no sidecar is
+    "serving". Self-heal by reporting False, which lets the caller
+    spawn a fresh one and overwrite both stale files.
+    """
     try:
         raw = _pid_file().read_text().strip()
     except FileNotFoundError:
@@ -156,7 +176,21 @@ def _existing_sidecar_alive() -> bool:
         pid = int(raw)
     except ValueError:
         return False
-    return _pid_alive(pid)
+    if not _pid_alive(pid):
+        return False
+    if not _url_file().exists():
+        # PID is live but no URL on disk → the process is either a
+        # reused-PID unrelated stranger, or a crashed-mid-startup
+        # sidecar that never finished writing. Either way the
+        # consumer can't reach it; treat as dead.
+        logger.warning(
+            "Sidecar pid %s is alive but %s is missing — "
+            "treating as stale and respawning.",
+            pid,
+            _url_file(),
+        )
+        return False
+    return True
 
 
 def _spawn_lock_path() -> Path:
@@ -394,16 +428,38 @@ def _do_spawn() -> None:
 def _atomic_write_0600(path: Path, content: str) -> None:
     """Create ``path`` with 0o600 perms atomically and write ``content``.
 
-    ``Path.write_text()`` opens the file with default perms (0o644 under
-    a typical 022 umask) and only restricts them on a separate
-    ``os.chmod`` call — a TOCTOU window where the URL (a credential, it
-    embeds the secret path) is briefly world-readable on shared hosts.
-    ``os.open`` with an explicit mode arg sets the permissions on the
-    creating syscall itself, closing the window.
+    Two atomicity guarantees, both needed:
+
+    1. **Perms**: ``Path.write_text()`` opens with default perms (0o644
+       under a typical 022 umask) and only restricts them via a
+       follow-up ``os.chmod`` — a TOCTOU window where the URL (a
+       credential — it embeds the secret path) is briefly
+       world-readable on shared hosts. ``os.open`` with an explicit
+       ``mode`` arg sets perms on the creating syscall itself, closing
+       the window.
+
+    2. **Content**: write to a sibling ``<path>.tmp`` and ``os.replace``
+       into place. ``O_TRUNC`` directly on ``path`` would leave an
+       empty/truncated file if the writer dies mid-write (signal, OOM,
+       disk full) — and a half-written URL file next to a still-live
+       PID file produces the worst-possible state (consumers read
+       ``None`` and assume "no sidecar" even though one is running).
+       ``os.replace`` is atomic on POSIX and on Windows (since Vista),
+       so readers always see either the old content or the full new
+       content.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fp:
-        fp.write(content)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fp:
+            fp.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        # On any failure (including KeyboardInterrupt) clean up the
+        # tmp file so a retry doesn't trip over a stale leftover.
+        with contextlib.suppress(FileNotFoundError, OSError):
+            tmp.unlink()
+        raise
 
 
 def _write_pid_url(url: str) -> None:
@@ -586,7 +642,35 @@ def _build_app(
         with shutdown_lock:
             stop = shutdown_state.get("stop")
         if stop is not None:
-            stop()
+            try:
+                stop()
+            except Exception as stop_exc:
+                # Sentinel write already succeeded; if we now report
+                # "shutting down" but the process keeps running, the
+                # user has the worst possible state: UI loads on this
+                # session, but next restart skips spawning. Roll back
+                # the sentinel so subsequent ha-mcp launches still
+                # spawn the sidecar, and surface the failure.
+                logger.exception("uvicorn stop() raised — rolling back sentinel")
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    _disabled_sentinel().unlink()
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": (
+                                f"Sentinel written but server stop failed "
+                                f"({type(stop_exc).__name__}: {stop_exc}); "
+                                "sentinel was rolled back so future "
+                                "launches will still spawn. Set "
+                                "HA_MCP_DISABLE_SETTINGS_UI=1 and "
+                                "restart your MCP client to disable."
+                            ),
+                        },
+                    },
+                    status_code=500,
+                )
         return JSONResponse(
             {
                 "success": True,

@@ -9,6 +9,7 @@ Works across all installation methods (add-on, Docker, standalone).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -506,11 +507,10 @@ _SETTINGS_HTML = (
     font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
   .danger-btn:hover { background: #2a0e0e; }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  /* Tabs — kept identical to the structure PR #1403 introduces for
-     its Backups tab so the two PRs stack as parallel tabs after
-     merge (Tools / Server Settings / Backups) without HTML/CSS
-     conflicts. When both land, the .tabs nav div picks up both
-     new tab buttons and the panel-* sections concatenate. */
+  /* Tabs — generic structure other tabs can stack onto without
+     touching existing markup. New tabs add a button to .tabs and
+     a sibling .panel below; the JS switcher dispatches via the
+     data-panel attribute. */
   .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
   .tab { padding: 10px 16px; border: none; background: transparent; color: var(--text-secondary);
     font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
@@ -1169,9 +1169,9 @@ async function saveFeatureFlag(fieldName, value) {
 }
 
 // ===== Tab switching =====
-// Mirrors the exact pattern PR #1403 uses for the Backups tab so the
-// two PRs stack as parallel tabs (Tools / Server Settings / Backups)
-// without divergent switching logic to reconcile at merge time.
+// Generic dispatcher — every .tab button names its target panel via
+// data-panel, every .panel has matching id="panel-<name>". Adding a
+// new tab is one button + one panel div; no JS change needed.
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t =>
@@ -1442,9 +1442,10 @@ def build_settings_handlers(
 
         ``"addon"`` and ``"env"`` are non-editable from the web UI;
         the user is told which env var (or addon option) to change
-        instead. Mirrors PR #1403's auto-backup config endpoint
-        shape so the front-end can render both surfaces with the
-        same renderer.
+        instead. The envelope shape (``flags`` dict of
+        ``{value, origin, editable, type, env_var, min?, max?}``
+        entries) is intentionally generic so other settings
+        surfaces can render rows with the same JS code.
         """
         from .config import (
             _FEATURE_FLAG_INT_BOUNDS,
@@ -1592,20 +1593,76 @@ def build_settings_handlers(
         # Merge with the existing override file so a partial POST
         # only updates the keys it actually included — the front-end
         # POSTs individual changes, not the entire matrix.
+        #
+        # Three failure modes for the read:
+        #
+        # * file missing → fresh dict, normal first-write path.
+        # * file unreadable (PermissionError, etc.) → 500. We can't
+        #   silently fall back to {} and overwrite, because that
+        #   would silently drop every flag the user had previously
+        #   persisted (the same data we can't read is still on
+        #   disk).
+        # * file present but corrupt JSON → 409. Same data-loss
+        #   hazard: a partial write from a prior crash, blindly
+        #   overwriting, erases anything past the corruption point.
+        #   Return a clear error so the user can inspect / delete
+        #   the file manually.
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
         existing: dict[str, Any] = {}
         try:
             existing_raw = path.read_text()
-            existing_parsed = json.loads(existing_raw)
-            if isinstance(existing_parsed, dict):
-                existing = existing_parsed
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            existing = {}
+        except FileNotFoundError:
+            existing_raw = None
+        except OSError as exc:
+            logger.warning("Cannot read %s", path, exc_info=True)
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    (
+                        f"Could not read existing feature flags "
+                        f"({type(exc).__name__}: {exc}); refusing to "
+                        "overwrite to avoid losing prior toggles. "
+                        "Check filesystem permissions and retry."
+                    ),
+                ),
+                status_code=500,
+            )
+        if existing_raw is not None:
+            try:
+                parsed = json.loads(existing_raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (
+                            f"Existing override file at {path} is not "
+                            f"valid JSON ({exc}); refusing to overwrite "
+                            "to avoid losing prior toggles. Inspect or "
+                            "delete the file manually and retry."
+                        ),
+                    ),
+                    status_code=409,
+                )
+            if isinstance(parsed, dict):
+                existing = parsed
+            # else: non-dict JSON (list, scalar) — treat as empty;
+            # we're about to write a dict either way and there's no
+            # prior toggle state to preserve from a non-object root.
         existing.update(new_overrides)
+
+        # Atomic write: tmp + rename. ``path.write_text`` is O_TRUNC +
+        # write — a crash mid-write leaves an empty/truncated file
+        # that the next ``_read_feature_flag_override_file`` call
+        # would refuse, losing every prior toggle.
+        tmp = path.with_suffix(path.suffix + ".tmp")
         try:
-            path.write_text(json.dumps(existing, indent=2))
+            tmp.write_text(json.dumps(existing, indent=2))
+            os.replace(tmp, path)
         except OSError as exc:
             logger.warning("Could not write %s", path, exc_info=True)
+            with contextlib.suppress(FileNotFoundError, OSError):
+                tmp.unlink()
             return JSONResponse(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,

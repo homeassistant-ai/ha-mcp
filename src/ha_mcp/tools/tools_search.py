@@ -1253,13 +1253,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
 
-        When the ha-mcp settings-UI sidecar is running (stdio mode, e.g.
-        Claude Desktop / Claude Code), the response always includes a
-        ``settings_url`` field — the local URL to the tool-configuration
-        page. Hand this URL to the user when they ask how to enable or
-        disable tools or change server settings. ``settings_url`` is
-        emitted regardless of ``fields=`` projection so it stays
-        discoverable even when callers minimize the response.
+        When (and only when) the ha-mcp settings-UI sidecar is running
+        (stdio mode, e.g. Claude Desktop / Claude Code), the response
+        includes a ``settings_url`` field — the local URL to the
+        tool-configuration page. Hand this URL to the user when they
+        ask how to enable or disable tools or change server settings.
+        ``settings_url`` is emitted regardless of ``fields=``
+        projection (so it stays discoverable even when callers
+        minimize the response) but only when the sidecar URL file
+        actually exists.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so

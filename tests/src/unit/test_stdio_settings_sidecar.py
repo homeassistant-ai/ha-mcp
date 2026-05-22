@@ -209,11 +209,48 @@ class TestMaybeSpawnGates:
     def test_maybe_spawn_skips_when_sidecar_alive(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # "Alive" now means BOTH the recorded PID is live AND the URL
+        # file is on disk — see ``_existing_sidecar_alive`` docstring
+        # for the stale-PID / crashed-mid-startup self-heal rationale.
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
         with patch("subprocess.Popen") as popen:
             sidecar.maybe_spawn()
         popen.assert_not_called()
+
+    def test_maybe_spawn_respawns_when_pid_alive_but_url_missing(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        """Stale PID without a URL file → respawn + warning log.
+
+        Failure modes this guards: (a) PID reuse after a crash that
+        didn't clean up ``ui.pid`` and the OS reassigned the PID to
+        an unrelated process; (b) sidecar that wrote pid then crashed
+        before writing url (port-bind race, see ``_pick_free_port``).
+        Without this self-heal, ``_pid_alive(pid)`` returns True and
+        every future ``maybe_spawn()`` silently skips spawning a real
+        sidecar — user permanently has no UI until they manually
+        ``rm ui.pid``.
+        """
+        import logging
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        # ui.url deliberately not written.
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("subprocess.Popen", return_value=fake_proc) as popen,
+        ):
+            sidecar.maybe_spawn()
+        popen.assert_called_once()
+        assert any(
+            "treating as stale and respawning" in rec.message for rec in caplog.records
+        ), f"expected stale-sidecar warning, got: {[r.message for r in caplog.records]}"
 
     def test_maybe_spawn_invokes_popen_when_no_existing(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -312,6 +349,38 @@ class TestSecurityMiddleware:
         assert resp.status_code == 200
         # Sentinel must have been written so the next maybe_spawn skips.
         assert (tmp_data_dir / "settings_ui_disabled").exists()
+
+    def test_shutdown_rolls_back_sentinel_when_stop_raises(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If ``stop()`` raises *after* the sentinel was written, the
+        sentinel must be rolled back. Otherwise the user sees the worst
+        possible state: current session keeps running (stop failed),
+        next launch refuses to spawn (sentinel on disk), and they have
+        no clue why.
+        """
+
+        def boom() -> None:
+            raise RuntimeError("uvicorn server.should_exit assignment failed")
+
+        app = sidecar._build_app(
+            host="127.0.0.1", port=12345, secret_path="/private_xx"
+        )
+        app.state.shutdown_state["stop"] = boom
+        client = TestClient(app)
+        resp = client.post(
+            "/private_xx/api/settings/shutdown",
+            headers={
+                "host": "127.0.0.1:12345",
+                "origin": "http://127.0.0.1:12345",
+            },
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["success"] is False
+        assert "rolled back" in body["error"]["message"].lower()
+        # Sentinel MUST be gone so the next maybe_spawn still spawns.
+        assert not (tmp_data_dir / "settings_ui_disabled").exists()
 
 
 class TestSidecarSettingsInfo:
@@ -821,3 +890,285 @@ class TestFeatureFlagsEndpoint:
             json={"flags": {"tool_search_max_results": 999}},
         )
         assert resp.status_code == 400
+
+    def _build_post_app(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        """Return a TestClient hitting only the POST features endpoint
+        with all FEATURE_FLAG_FIELDS env vars cleared so origin defaults
+        to ``file``/``default`` and writes are accepted.
+        """
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        for _, env_name, _ in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(env_name, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/features",
+                    handlers["save_feature_flags"],
+                    methods=["POST"],
+                ),
+            ]
+        )
+        return TestClient(app)
+
+    def test_post_rejects_non_json_body(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            content=b"not json {{{",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "Invalid JSON" in resp.json()["error"]["message"]
+
+    def test_post_rejects_body_not_object(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """JSON-valid but non-dict body must 400, not 500.
+
+        Mirrors the ``_save_tools`` validation discipline so an LLM
+        that wraps the payload as a list (``[{"enable_tool_search":
+        true}]``) gets a clear error instead of a stack trace.
+        """
+        client = self._build_post_app(monkeypatch)
+        for payload in ([1, 2, 3], "hello", 42, None):
+            resp = client.post("/api/settings/features", json=payload)
+            assert resp.status_code == 400, (
+                f"payload {payload!r} should 400, got {resp.status_code}"
+            )
+
+    def test_post_rejects_flags_not_object(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": ["enable_tool_search"]},
+        )
+        assert resp.status_code == 400
+        assert "object" in resp.json()["error"]["message"].lower()
+
+    def test_post_rejects_unknown_field(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unknown field name → 400 with the field in the message.
+
+        Without this guard a misspelled field would be silently
+        dropped and the UI would say "Saved" while persisting
+        nothing — same failure mode the ``_save_tools`` typo guard
+        addresses.
+        """
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"nonexistent_flag": True}},
+        )
+        assert resp.status_code == 400
+        assert "nonexistent_flag" in resp.json()["error"]["message"]
+
+    def test_post_rejects_string_for_bool(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``"true"`` for a bool field must 400.
+
+        Python's truthiness would silently accept the non-empty
+        string ``"false"`` as True — exactly the foot-gun the
+        explicit ``isinstance(raw, bool)`` check on the handler
+        prevents.
+        """
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"enable_tool_search": "true"}},
+        )
+        assert resp.status_code == 400
+
+    def test_post_rejects_bool_for_int(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``True`` for an int field must 400 — bool subclasses int
+        in Python, so without the explicit ``isinstance(raw, bool)``
+        guard the handler would happily coerce ``True`` to ``1``.
+        """
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"tool_search_max_results": True}},
+        )
+        assert resp.status_code == 400
+
+    def test_post_refuses_to_overwrite_corrupt_existing_file(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Existing override file is corrupt JSON → 409, file untouched.
+
+        Pre-fix behavior dropped to ``existing = {}`` then overwrote,
+        silently erasing every prior toggle the user had set.
+        """
+        from ha_mcp.config import _FEATURE_FLAG_OVERRIDE_FILENAME
+
+        client = self._build_post_app(monkeypatch)
+        corrupt = tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME
+        corrupt.write_text("{not json")
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"enable_tool_search": True}},
+        )
+        assert resp.status_code == 409
+        # File on disk must be unchanged — we refused to overwrite.
+        assert corrupt.read_text() == "{not json"
+
+    def test_post_atomic_write_no_partial_file_left_behind(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Successful POST → no ``feature_flags.json.tmp`` leftover.
+
+        The handler writes to a sibling .tmp then ``os.replace``s
+        into place; the .tmp must not survive a successful write.
+        """
+        from ha_mcp.config import _FEATURE_FLAG_OVERRIDE_FILENAME
+
+        client = self._build_post_app(monkeypatch)
+        resp = client.post(
+            "/api/settings/features",
+            json={"flags": {"enable_tool_search": True}},
+        )
+        assert resp.status_code == 200
+        final = tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME
+        leftover = final.with_suffix(final.suffix + ".tmp")
+        assert final.exists()
+        assert not leftover.exists()
+
+
+class TestFeatureFlagAddonMode:
+    """Addon-mode short-circuit on ``get_feature_flag_origin`` /
+    ``_apply_feature_flag_overrides``. When ``SUPERVISOR_TOKEN`` is set
+    the override file is intentionally ignored — addon ``start.py``
+    is the only path that writes env vars in addon mode, and any
+    override file present is a stale leftover that MUST NOT shadow
+    addon config. Without these tests, a regression dropping the
+    ``SUPERVISOR_TOKEN`` check would silently let
+    ``~/.ha-mcp/feature_flags.json`` override what the addon's
+    Configuration tab says.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings(self) -> Generator[None]:
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        yield
+        _reset_global_settings()
+
+    def test_origin_returns_addon_when_supervisor_token_set(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ha_mcp.config import (
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            get_feature_flag_origin,
+        )
+
+        # File present + env var set — neither path should win over addon.
+        (tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME).write_text(
+            json.dumps({"enable_tool_search": True})
+        )
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
+        assert get_feature_flag_origin("ENABLE_TOOL_SEARCH") == "addon"
+
+    def test_apply_overrides_skipped_when_supervisor_token_set(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Override file present + addon mode → file value IGNORED.
+
+        Asserts that the cached Settings reflects the *env-var* /
+        default value, not the file value, even though the file
+        was on disk.
+        """
+        from ha_mcp.config import (
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            get_global_settings,
+        )
+
+        (tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME).write_text(
+            json.dumps(
+                {
+                    "enable_tool_search": True,
+                    "tool_search_max_results": 9,
+                }
+            )
+        )
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        # No env var → pydantic default should remain, NOT the file value.
+        monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+        monkeypatch.delenv("TOOL_SEARCH_MAX_RESULTS", raising=False)
+
+        settings = get_global_settings()
+        assert settings.enable_tool_search is False  # default, not file's True
+        assert settings.tool_search_max_results == 5  # default, not file's 9
+
+
+class TestFeatureFlagOverrideReadErrors:
+    """``_read_feature_flag_override_file`` must log loudly when the
+    file exists-but-can't-be-read or exists-but-isn't-valid-JSON, so
+    a user whose toggles silently stop taking effect has a log line
+    to grep for. Silent fall-through on a missing file is fine.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_settings(self) -> Generator[None]:
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        yield
+        _reset_global_settings()
+
+    def test_missing_file_does_not_log(self, tmp_data_dir: Path, caplog) -> None:
+        import logging as _l
+
+        from ha_mcp.config import _read_feature_flag_override_file
+
+        with caplog.at_level(_l.WARNING, logger="ha_mcp.config"):
+            result = _read_feature_flag_override_file()
+        assert result == {}
+        assert not caplog.records, (
+            f"missing file should be silent, got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_corrupt_json_logs_warning(self, tmp_data_dir: Path, caplog) -> None:
+        import logging as _l
+
+        from ha_mcp.config import (
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            _read_feature_flag_override_file,
+        )
+
+        (tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME).write_text("{not valid")
+        with caplog.at_level(_l.WARNING, logger="ha_mcp.config"):
+            result = _read_feature_flag_override_file()
+        assert result == {}
+        assert any("not valid JSON" in r.message for r in caplog.records), [
+            r.message for r in caplog.records
+        ]
+
+    def test_non_object_root_logs_warning(self, tmp_data_dir: Path, caplog) -> None:
+        import logging as _l
+
+        from ha_mcp.config import (
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            _read_feature_flag_override_file,
+        )
+
+        (tmp_data_dir / _FEATURE_FLAG_OVERRIDE_FILENAME).write_text("[1,2,3]")
+        with caplog.at_level(_l.WARNING, logger="ha_mcp.config"):
+            result = _read_feature_flag_override_file()
+        assert result == {}
+        assert any("not a JSON object" in r.message for r in caplog.records), [
+            r.message for r in caplog.records
+        ]

@@ -2,6 +2,7 @@
 Configuration management for Home Assistant MCP Server.
 """
 
+import logging
 import os
 
 # Load environment variables from .env file with HAMCP_ENV_FILE support
@@ -13,6 +14,8 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ha_mcp._version import get_version
+
+logger = logging.getLogger(__name__)
 
 _PACKAGE_VERSION = get_version()
 
@@ -278,10 +281,10 @@ def validate_settings() -> tuple[bool, str | None]:
 # (issue #863). Each entry is (field_name, env_var_name, python_type).
 # The web UI's /api/settings/features GET/POST endpoints iterate this
 # tuple to advertise per-field origin (env / addon / file / default)
-# and to validate incoming writes. Mirrors the BACKUP_OVERRIDE_FIELDS
-# pattern (#1403) so the addon-config / env-var / file / default
-# precedence is uniform across every runtime-editable Settings field
-# we expose to end users.
+# and to validate incoming writes. Precedence: explicit env var beats
+# the override file, addon mode (SUPERVISOR_TOKEN set) ignores the
+# file entirely (start.py owns env vars from config.yaml in that
+# mode), and the pydantic field default is the fallback.
 FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
     ("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
     ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
@@ -356,16 +359,26 @@ def get_feature_flag_origin(env_name: str) -> str:
 def _read_feature_flag_override_file() -> dict[str, object]:
     """Return the contents of the feature-flag override file, or ``{}``.
 
-    Malformed JSON / missing file / unreadable file all return ``{}``
-    silently; the override file is best-effort and a corrupt file
-    should not break Settings loading.
+    Best-effort: a corrupt file MUST NOT break Settings loading. But
+    the failure modes split into two categories that need different
+    treatment:
+
+    * **Silent**: file does not exist. The override layer is opt-in;
+      a missing file is the normal "user has never edited" state and
+      should not log.
+    * **Loud (WARNING)**: file exists but is unreadable
+      (``PermissionError``, broken filesystem) or unparseable
+      (``JSONDecodeError``). The user toggled something, the UI said
+      "Saved", and the value is silently being ignored. Without a log
+      line they have no diagnostic; with one, the sidecar/server log
+      tells them exactly what to fix.
 
     Data-dir resolution itself can raise (``RuntimeError`` when
     ``Path.home()`` cannot determine a home directory — typical of
     pytest's ``patch.dict(os.environ, {}, clear=True)``), so the
-    ``get_data_dir()`` call is inside the try/except too. The
-    legacy ``os.getenv``-direct read path never touched the home
-    directory; the override layer must not regress that.
+    ``get_data_dir()`` call is inside the try/except too. That branch
+    is treated as silent: the user could not have created an override
+    file in a directory we cannot resolve.
     """
     import json
     from pathlib import Path
@@ -374,14 +387,41 @@ def _read_feature_flag_override_file() -> dict[str, object]:
         from .utils.data_paths import get_data_dir
 
         path: Path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+    except (RuntimeError, OSError):
+        # Couldn't resolve the data dir at all — user has no override
+        # file by definition. Silent.
+        return {}
+    try:
         raw = path.read_text()
-    except (FileNotFoundError, OSError, RuntimeError):
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logger.warning(
+            "Feature-flag override file at %s exists but is unreadable; "
+            "falling back to defaults. Check filesystem permissions.",
+            path,
+            exc_info=True,
+        )
         return {}
     try:
         data = json.loads(raw)
     except ValueError:
+        logger.warning(
+            "Feature-flag override file at %s is not valid JSON; "
+            "falling back to defaults. Delete or fix the file to "
+            "re-enable persisted toggles.",
+            path,
+        )
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "Feature-flag override file at %s is not a JSON object "
+            "(got %s); falling back to defaults.",
+            path,
+            type(data).__name__,
+        )
+        return {}
+    return data
 
 
 def _apply_feature_flag_overrides(settings: "Settings") -> None:
@@ -392,9 +432,9 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
     short-circuits — ``start.py`` already wrote env vars from
     ``config.yaml`` and the override file is ignored. Range / type
     coercion mirrors the pydantic Field bounds so a corrupt file
-    can't push values out of range; out-of-range or untypable entries
-    are silently skipped (matching the
-    :func:`_apply_backup_overrides`-style defensive read in #1403).
+    can't push values out of range; out-of-range or untypable
+    entries are logged at WARNING and skipped rather than crashing
+    every consumer of ``get_global_settings()``.
     """
     if os.environ.get("SUPERVISOR_TOKEN"):
         return
@@ -410,23 +450,51 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
         coerced: bool | int
         if ftype is bool:
             if not isinstance(raw, bool | int):
+                logger.warning(
+                    "Override for %r is %s; expected bool — ignoring.",
+                    field_name,
+                    type(raw).__name__,
+                )
                 continue
             coerced = bool(raw)
         elif ftype is int:
             if isinstance(raw, bool) or not isinstance(raw, int):
-                # Reject bool-typed ints (since ``bool`` subclasses ``int``,
-                # a stray ``true`` would otherwise coerce to ``1``).
+                # Reject bool-typed ints (since ``bool`` subclasses
+                # ``int``, a stray ``true`` would otherwise coerce to
+                # ``1``).
+                logger.warning(
+                    "Override for %r is %s; expected int — ignoring.",
+                    field_name,
+                    type(raw).__name__,
+                )
                 continue
             coerced = int(raw)
             bounds = _FEATURE_FLAG_INT_BOUNDS.get(field_name)
             if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+                logger.warning(
+                    "Override for %r is %d, outside %d-%d — ignoring.",
+                    field_name,
+                    coerced,
+                    bounds[0],
+                    bounds[1],
+                )
                 continue
         else:
             continue
         try:
             setattr(settings, field_name, coerced)
-        except (ValueError, TypeError):
-            continue
+        except Exception:
+            # Pydantic field validators may raise types other than the
+            # ones we expect (ValidationError is a ValueError subclass
+            # but mode='before' validators can route weird shapes
+            # through arbitrary code). Log at WARNING and skip rather
+            # than letting a malformed override crash every consumer of
+            # ``get_global_settings()``.
+            logger.warning(
+                "Override for %r could not be applied to Settings; ignoring.",
+                field_name,
+                exc_info=True,
+            )
 
 
 # Global settings instance
