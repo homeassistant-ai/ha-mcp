@@ -570,9 +570,9 @@ _SETTINGS_HTML = (
       <h2>Server Settings</h2>
       <div class="features-header-sub">Tool Search, beta-flagged features. Requires restart to apply.</div>
     </div>
-    <span class="features-chevron" id="featuresChevron">▶</span>
+    <span class="features-chevron open" id="featuresChevron">▶</span>
   </div>
-  <div class="features-body" id="featuresBody"></div>
+  <div class="features-body open" id="featuresBody"></div>
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -1021,8 +1021,8 @@ const FEATURE_META = {
 };
 
 const ORIGIN_LOCKED_NOTE = {
-  env: 'Locked by environment variable',
-  addon: 'Locked by add-on configuration',
+  env: 'Set via environment variable — unset it to edit here.',
+  addon: 'Managed by the add-on Configuration tab — open Settings → Add-ons → ha-mcp → Configuration to edit.',
 };
 
 async function loadFeatureFlags() {
@@ -1072,11 +1072,13 @@ function renderFeatureFlags(flags) {
 
     const info = document.createElement('div');
     info.className = 'feature-info';
+    const envVarSuffix = f.origin === 'env'
+      ? ` (<code>${escapeHtml(f.env_var)}</code>)`
+      : '';
     const lockedNote = !f.editable
       ? `<div class="feature-locked-note">` +
-        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')} — ` +
-        `unset <code>${escapeHtml(f.env_var)}</code> ` +
-        `(or change the add-on configuration) to edit here.</div>`
+        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')}${envVarSuffix}` +
+        `</div>`
       : '';
     info.innerHTML =
       `<div class="feature-name">${escapeHtml(meta.label)}</div>` +

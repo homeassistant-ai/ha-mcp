@@ -168,6 +168,24 @@ class Settings(BaseSettings):
     # updates).
     code_mode_saved_tools_path: str = Field("", alias="CODE_MODE_SAVED_TOOLS_PATH")
 
+    # Mirror the legacy ``os.getenv("FLAG", "").lower() in ("true", ...)``
+    # semantics for the two ex-direct-getenv flags: an empty env var
+    # value MUST be treated as False rather than raising
+    # ``ValidationError``. Pydantic v2's bool parser raises on ``""``
+    # which broke ``test_tools_filesystem.py::TestFeatureFlag::
+    # test_disabled_with_empty_string`` after the migration; this
+    # validator restores the contract callers rely on.
+    @field_validator(
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        mode="before",
+    )
+    @classmethod
+    def _empty_string_means_false(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return False
+        return v
+
     @property
     def env_file_name(self) -> str:
         """Get the current environment file name."""
@@ -341,16 +359,23 @@ def _read_feature_flag_override_file() -> dict[str, object]:
     Malformed JSON / missing file / unreadable file all return ``{}``
     silently; the override file is best-effort and a corrupt file
     should not break Settings loading.
+
+    Data-dir resolution itself can raise (``RuntimeError`` when
+    ``Path.home()`` cannot determine a home directory — typical of
+    pytest's ``patch.dict(os.environ, {}, clear=True)``), so the
+    ``get_data_dir()`` call is inside the try/except too. The
+    legacy ``os.getenv``-direct read path never touched the home
+    directory; the override layer must not regress that.
     """
     import json
     from pathlib import Path
 
-    from .utils.data_paths import get_data_dir
-
-    path: Path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
     try:
+        from .utils.data_paths import get_data_dir
+
+        path: Path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
         raw = path.read_text()
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, RuntimeError):
         return {}
     try:
         data = json.loads(raw)
