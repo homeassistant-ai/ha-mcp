@@ -55,11 +55,10 @@ def _backups_for(
 # fetch fires. The decorator is best-effort: if fetch returns None
 # (entity not in the registry list yet), the snapshot is silently
 # skipped — and polling the backup file afterwards can't recover that.
-# 2 s is the empirically-stable mark on HAOS testcontainer runners;
-# automation's REST upsert path settles faster and doesn't need this,
-# but every WS-backed domain (label, category, zone, area, helper,
-# dashboard_resource) does.
-_HA_PROPAGATION_SETTLE_SECONDS = 2.0
+# 5 s is conservative on CI runners under load; automation's REST
+# upsert path settles faster and doesn't need this, but every WS-backed
+# domain (label, category, zone, area, helper, dashboard_resource) does.
+_HA_PROPAGATION_SETTLE_SECONDS = 5.0
 
 
 async def _wait_for_backup(

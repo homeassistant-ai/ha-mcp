@@ -278,6 +278,14 @@ class BackupManager:
             if config is None:
                 # Entity didn't exist at fetch time (create operation, or
                 # already-deleted at remove time before our pre-fetch).
+                # Logged at INFO so e2e diagnostics surface the
+                # "entity-not-yet-indexed" case without polluting prod
+                # WARNING streams; downgrade to DEBUG later once #1288
+                # full-loop e2e coverage is stable.
+                logger.info(
+                    "Auto-backup: fetch returned None for %s — skipping snapshot",
+                    key,
+                )
                 return None
             try:
                 path = await asyncio.to_thread(
