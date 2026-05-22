@@ -925,7 +925,8 @@ class HomeAssistantClient:
                 f"Mismatched automation id: identifier={identifier!r} resolves "
                 f"to unique_id={unique_id!r}, but config['id']={config_id!r}. "
                 "Refusing to write to prevent overwriting the wrong automation. "
-                "Remove 'id' from config or set it to match the identifier.",
+                f"Remove 'id' from config or set it to the resolved unique_id "
+                f"({unique_id!r}).",
                 status_code=400,
             )
 
