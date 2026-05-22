@@ -2325,11 +2325,11 @@
   {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
-    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.\n\nEXAMPLES:\n- Get script: ha_config_get_script(\"morning_routine\")\n- Get script: ha_config_get_script(\"backup_script\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
+    "description": "Retrieve Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).\n\nEXAMPLES:\n- Get script (bare form): ha_config_get_script(\"morning_routine\")\n- Get script (entity_id form): ha_config_get_script(\"script.morning_routine\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "script_id": {
-          "type": "Annotated[str, Field(description=\"Script identifier (e.g., 'morning_routine')\")]"
+          "type": "Annotated[str, Field(description=\"Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup.\")]"
         }
       },
       "required": [
@@ -2352,7 +2352,7 @@
     "inputSchema": {
       "properties": {
         "script_id": {
-          "type": "Annotated[str, Field(description=\"Script identifier to delete (e.g., 'old_script')\")]"
+          "type": "Annotated[str, Field(description=\"Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup.\")]"
         },
         "wait": {
           "type": "Annotated[bool | str, Field(description='Wait for script to be fully removed before returning. Default: True.', default=True)]",
@@ -2379,7 +2379,7 @@
     "inputSchema": {
       "properties": {
         "script_id": {
-          "type": "Annotated[str, Field(description=\"Script identifier (e.g., 'morning_routine')\")]"
+          "type": "Annotated[str, Field(description=\"Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup.\")]"
         },
         "config": {
           "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. Mutually exclusive with python_transform.\", default=None)]",
