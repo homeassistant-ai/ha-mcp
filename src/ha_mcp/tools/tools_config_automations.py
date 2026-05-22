@@ -290,7 +290,9 @@ class AutomationConfigTools:
                 ):
                     return str(state["entity_id"])
         except Exception as e:
-            logger.debug(f"Failed to resolve entity_id for automation {identifier}: {e}")
+            logger.debug(
+                f"Failed to resolve entity_id for automation {identifier}: {e}"
+            )
         return None
 
     @tool(
@@ -345,13 +347,17 @@ class AutomationConfigTools:
                     "Use ha_search_entities(domain_filter='automation') to list automations",
                 ],
             )
-            normalized_config, config_hash = await self._get_automation_config_internal(identifier)
+            normalized_config, config_hash = await self._get_automation_config_internal(
+                identifier
+            )
 
             # Resolve entity_id and fetch category from entity registry
             # (injected after hash so transient registry failures don't affect the hash)
             entity_id = await self._resolve_automation_entity_id(identifier)
             if entity_id:
-                cat_id = await fetch_entity_category(self._client, entity_id, "automation")
+                cat_id = await fetch_entity_category(
+                    self._client, entity_id, "automation"
+                )
                 if cat_id:
                     normalized_config["category"] = cat_id
 
@@ -655,7 +661,10 @@ class AutomationConfigTools:
                                 "Provide the automation entity_id or unique_id",
                                 "Use ha_search_entities(domain_filter='automation') to find automations",
                             ],
-                            context={"action": "python_transform", "identifier": identifier},
+                            context={
+                                "action": "python_transform",
+                                "identifier": identifier,
+                            },
                         )
                     )
                 if config_hash is None:
@@ -667,7 +676,10 @@ class AutomationConfigTools:
                                 "Call ha_config_get_automation() first",
                                 "Use the config_hash from that response",
                             ],
-                            context={"action": "python_transform", "identifier": identifier},
+                            context={
+                                "action": "python_transform",
+                                "identifier": identifier,
+                            },
                         )
                     )
 
@@ -686,7 +698,10 @@ class AutomationConfigTools:
                             ErrorCode.VALIDATION_FAILED,
                             message,
                             suggestions=suggestions,
-                            context={"action": "python_transform", "identifier": identifier},
+                            context={
+                                "action": "python_transform",
+                                "identifier": identifier,
+                            },
                         )
                     )
 
@@ -709,11 +724,20 @@ class AutomationConfigTools:
 
                 # Re-apply category if present
                 entity_id = result.get("entity_id")
-                if not entity_id and identifier and identifier.startswith("automation."):
+                if (
+                    not entity_id
+                    and identifier
+                    and identifier.startswith("automation.")
+                ):
                     entity_id = identifier
                 if transform_category and entity_id:
                     await apply_entity_category(
-                        self._client, entity_id, transform_category, "automation", result, "automation"
+                        self._client,
+                        entity_id,
+                        transform_category,
+                        "automation",
+                        result,
+                        "automation",
                     )
 
                 response: dict[str, Any] = {
@@ -773,7 +797,9 @@ class AutomationConfigTools:
                 self._client, config_dict
             )
 
-            result = await self._client.upsert_automation_config(config_dict, identifier)
+            result = await self._client.upsert_automation_config(
+                config_dict, identifier
+            )
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
             if result.get("entity_not_verified"):
@@ -795,7 +821,9 @@ class AutomationConfigTools:
             if wait_bool and entity_id:
                 action_word = "created" if identifier is None else "updated"
                 try:
-                    registered = await wait_for_entity_registered(self._client, entity_id)
+                    registered = await wait_for_entity_registered(
+                        self._client, entity_id
+                    )
                     if not registered:
                         result.setdefault("warnings", []).append(
                             f"Automation {action_word} but {entity_id} not yet queryable. "
@@ -809,7 +837,12 @@ class AutomationConfigTools:
             # Apply category to entity registry if provided
             if effective_category and entity_id:
                 await apply_entity_category(
-                    self._client, entity_id, effective_category, "automation", result, "automation"
+                    self._client,
+                    entity_id,
+                    effective_category,
+                    "automation",
+                    result,
+                    "automation",
                 )
 
             if bp_warnings:
@@ -870,7 +903,9 @@ class AutomationConfigTools:
         Returns the current normalized config dict.
         Raises ToolError if the hash does not match (conflict).
         """
-        current_config, current_hash = await self._get_automation_config_internal(identifier)
+        current_config, current_hash = await self._get_automation_config_internal(
+            identifier
+        )
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -891,22 +926,26 @@ class AutomationConfigTools:
         try:
             parsed_config = parse_json_param(config, "config")
         except ValueError as e:
-            raise_tool_error(create_error_response(
-                code=ErrorCode.VALIDATION_INVALID_JSON,
-                message=f"Invalid config parameter: {e}",
-                suggestions=[
-                    "Pass 'config' as a dict, not a JSON string, to avoid escaping issues.",
-                    "Check for JSON syntax errors: unquoted keys, trailing commas, or invalid escape sequences.",
-                ],
-                context={"parameter": "config"},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_JSON,
+                    message=f"Invalid config parameter: {e}",
+                    suggestions=[
+                        "Pass 'config' as a dict, not a JSON string, to avoid escaping issues.",
+                        "Check for JSON syntax errors: unquoted keys, trailing commas, or invalid escape sequences.",
+                    ],
+                    context={"parameter": "config"},
+                )
+            )
 
         if parsed_config is None or not isinstance(parsed_config, dict):
-            raise_tool_error(create_validation_error(
-                "Config parameter must be a JSON object",
-                parameter="config",
-                details=f"Received type: {type(parsed_config).__name__}",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    "Config parameter must be a JSON object",
+                    parameter="config",
+                    details=f"Received type: {type(parsed_config).__name__}",
+                )
+            )
 
         return cast(dict[str, Any], parsed_config)
 
@@ -935,24 +974,28 @@ class AutomationConfigTools:
                 context: dict[str, Any] = {"missing_fields": missing_fields}
                 if identifier:
                     context["identifier"] = identifier
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                    message=f"Missing required fields: {', '.join(missing_fields)}",
-                    details=(
-                        "Config contains 'sequence', which belongs to scripts. "
-                        "Automations use 'trigger' and 'action'; scripts use 'sequence'."
-                    ),
-                    suggestions=[
-                        "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
-                        "For an automation, replace 'sequence' with 'action' and add a 'trigger'.",
-                    ],
-                    context=context,
-                ))
-            raise_tool_error(create_config_error(
-                f"Missing required fields: {', '.join(missing_fields)}",
-                identifier=identifier,
-                missing_fields=missing_fields,
-            ))
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                        message=f"Missing required fields: {', '.join(missing_fields)}",
+                        details=(
+                            "Config contains 'sequence', which belongs to scripts. "
+                            "Automations use 'trigger' and 'action'; scripts use 'sequence'."
+                        ),
+                        suggestions=[
+                            "Did you mean ha_config_set_script? Scripts use 'sequence' directly.",
+                            "For an automation, replace 'sequence' with 'action' and add a 'trigger'.",
+                        ],
+                        context=context,
+                    )
+                )
+            raise_tool_error(
+                create_config_error(
+                    f"Missing required fields: {', '.join(missing_fields)}",
+                    identifier=identifier,
+                    missing_fields=missing_fields,
+                )
+            )
 
         # Issue #1169: reject configs that wrap ``scene.create`` in an
         # automation with no functional trigger. Models occasionally produce
@@ -977,31 +1020,33 @@ class AutomationConfigTools:
                 if _action_contains_scene_create(a)
             ]
             if scene_create_indices:
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=(
-                        "Empty trigger paired with a scene.create action — "
-                        "this automation can never fire. For a state snapshot "
-                        "of one or more entities, use ha_config_set_scene "
-                        "directly instead of wrapping scene.create in an "
-                        "automation."
-                    ),
-                    suggestions=[
-                        "ha_config_set_scene(scene_id='...', config={'name': "
-                        "'...', 'entities': {'<entity_id>': {...}}}) creates "
-                        "a scene without a trigger.",
-                        "If the snapshot really should be the result of an "
-                        "event, add the trigger that should fire it and keep "
-                        "the automation.",
-                        "For a state-derived value that recomputes when its "
-                        "inputs change, use "
-                        "ha_config_set_helper(helper_type='template') instead.",
-                    ],
-                    context={
-                        "scene_create_action_indices": scene_create_indices,
-                        "identifier": identifier,
-                    },
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message=(
+                            "Empty trigger paired with a scene.create action — "
+                            "this automation can never fire. For a state snapshot "
+                            "of one or more entities, use ha_config_set_scene "
+                            "directly instead of wrapping scene.create in an "
+                            "automation."
+                        ),
+                        suggestions=[
+                            "ha_config_set_scene(scene_id='...', config={'name': "
+                            "'...', 'entities': {'<entity_id>': {...}}}) creates "
+                            "a scene without a trigger.",
+                            "If the snapshot really should be the result of an "
+                            "event, add the trigger that should fire it and keep "
+                            "the automation.",
+                            "For a state-derived value that recomputes when its "
+                            "inputs change, use "
+                            "ha_config_set_helper(helper_type='template') instead.",
+                        ],
+                        context={
+                            "scene_create_action_indices": scene_create_indices,
+                            "identifier": identifier,
+                        },
+                    )
+                )
 
         # HA accepts conditions with 'platform' (trigger syntax) but then crashes
         # with an unhelpful 500 rather than a 400 validation error.
@@ -1009,30 +1054,34 @@ class AutomationConfigTools:
             if not isinstance(cond, dict):
                 continue
             if "platform" in cond and "condition" not in cond:
-                raise_tool_error(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=(
-                        f"Condition at index {idx} uses 'platform' (trigger syntax). "
-                        "Conditions use 'condition', not 'platform'."
-                    ),
-                    suggestions=[
-                        f"Replace 'platform' with 'condition': "
-                        f"{{'condition': '{cond['platform']}', ...}}",
-                        "Triggers use 'platform'; conditions use 'condition'.",
-                    ],
-                    context={"condition_index": idx, "found_key": "platform"},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message=(
+                            f"Condition at index {idx} uses 'platform' (trigger syntax). "
+                            "Conditions use 'condition', not 'platform'."
+                        ),
+                        suggestions=[
+                            f"Replace 'platform' with 'condition': "
+                            f"{{'condition': '{cond['platform']}', ...}}",
+                            "Triggers use 'platform'; conditions use 'condition'.",
+                        ],
+                        context={"condition_index": idx, "found_key": "platform"},
+                    )
+                )
 
         # Prevent duplicate creation when config contains an existing automation id
         if identifier is None and "id" in config_dict:
             existing_id = config_dict["id"]
-            raise_tool_error(create_validation_error(
-                f"Config contains 'id' field ('{existing_id}') but no identifier was provided. "
-                "This would create a duplicate automation instead of updating the existing one.",
-                parameter="identifier",
-                details=f"To update, pass identifier='{existing_id}' (or the automation's entity_id). "
-                "To create a genuinely new automation, remove the 'id' field from the config.",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Config contains 'id' field ('{existing_id}') but no identifier was provided. "
+                    "This would create a duplicate automation instead of updating the existing one.",
+                    parameter="identifier",
+                    details=f"To update, pass identifier='{existing_id}' (or the automation's entity_id). "
+                    "To create a genuinely new automation, remove the 'id' field from the config.",
+                )
+            )
 
     @tool(
         name="ha_config_remove_automation",
@@ -1097,7 +1146,9 @@ class AutomationConfigTools:
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             if wait_bool and entity_id_for_wait:
                 try:
-                    removed = await wait_for_entity_removed(self._client, entity_id_for_wait)
+                    removed = await wait_for_entity_removed(
+                        self._client, entity_id_for_wait
+                    )
                     if not removed:
                         result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."

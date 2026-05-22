@@ -93,8 +93,7 @@ class TestPollCadenceMeasurement1389:
                     # silently print VERDICT=VALIDATED.
                     warnings = create_data.get("warnings") or []
                     if any(
-                        isinstance(w, str)
-                        and w.startswith(NOT_VERIFIED_WARNING_PREFIX)
+                        isinstance(w, str) and w.startswith(NOT_VERIFIED_WARNING_PREFIX)
                         for w in warnings
                     ):
                         not_verified_count += 1
