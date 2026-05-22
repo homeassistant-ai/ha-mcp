@@ -2253,6 +2253,20 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       instructions.push(uiSteps);
     }
 
+    // Stdio installs (uvx / docker stdio) spawn a localhost settings UI
+    // sidecar that lets users enable / disable / pin MCP tools. The URL
+    // surfaces via ``ha_get_overview`` so the AI client can hand it to
+    // the user on request, but a "what's next" hint here is cheaper
+    // than waiting for the user to ask. HTTP modes mount the same page
+    // directly on their existing server and don't need this nudge.
+    if (isStdio) {
+      instructions.push(`<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: changing which tools are enabled</h4>
+        <p class="text-slate-300 mb-2">ha-mcp ships a small localhost settings page where you can enable, disable, and pin individual MCP tools. To find the URL, ask the AI something like <em>"how do I change which MCP tools are enabled?"</em> — it's included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response.</p>
+        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for how to disable the sidecar entirely.</p>
+      </div>`);
+    }
+
     // Render all instructions (including UI client steps added during config generation)
     instructionsEl.innerHTML = instructions.join('');
     if (window.initCopyButtons) window.initCopyButtons();

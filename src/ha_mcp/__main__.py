@@ -83,7 +83,9 @@ class OAuthProxyClient:
             logger.error(
                 f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}"
             )
-            raise HomeAssistantAuthError("No Home Assistant credentials in OAuth token claims")
+            raise HomeAssistantAuthError(
+                "No Home Assistant credentials in OAuth token claims"
+            )
 
         ha_token = claims["ha_token"]
 
@@ -627,7 +629,90 @@ def main() -> None:
     _setup_logging(settings.log_level)
     _log_startup_version()
 
+    # Spawn the persistent settings UI sidecar (issue #863). The sidecar
+    # is a detached subprocess so the settings page stays reachable even
+    # when this stdio process is SIGTERM'd or idle-killed by the client.
+    # Best-effort: failure logs a warning but doesn't block MCP startup.
+    _maybe_spawn_settings_sidecar()
+
     _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+
+
+def _maybe_spawn_settings_sidecar() -> None:
+    """Dump tool metadata cache + spawn the stdio settings UI sidecar.
+
+    Split out of ``main()`` to keep the entrypoint readable. The cache
+    dump uses a one-off ``asyncio.run`` because ``_get_tool_metadata``
+    is async; this happens before the main stdio loop so there's no
+    nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
+
+    Performance: the dump constructs the full FastMCP server, which is
+    heavy. Skip it (and the server build) when there's nothing to spawn
+    for — sidecar disabled or already alive. Warm restarts that already
+    have a sidecar pay zero cold-start tax from this path.
+    """
+    from ha_mcp.settings_ui import (
+        _get_tool_metadata,
+        dump_tool_metadata_cache,
+    )
+    from ha_mcp.stdio_settings_sidecar import (
+        _existing_sidecar_alive,
+        _is_disabled,
+        maybe_spawn,
+    )
+
+    # Cheap gates first; skip the heavy metadata dump when the sidecar
+    # would be a no-op anyway. Any condition that makes maybe_spawn()
+    # short-circuit also makes the dump pointless (the running sidecar
+    # already has a cache from a prior parent startup; a disabled
+    # sidecar never reads one).
+    if _is_disabled() or _existing_sidecar_alive():
+        try:
+            maybe_spawn()
+        except Exception as e:
+            logger.warning(
+                "Failed to invoke maybe_spawn no-op path (%s)",
+                type(e).__name__,
+                exc_info=True,
+            )
+        return
+
+    try:
+        metadata = asyncio.run(_get_tool_metadata(_get_server()))
+        dumped = dump_tool_metadata_cache(metadata)
+        # Log a deliberate one-liner so users debugging an empty
+        # settings page can see whether the parent's dump succeeded
+        # by grepping the stdio process output (which Claude Desktop
+        # surfaces in its MCP server log panel).
+        logger.info(
+            "Tool metadata cache: %d tools dumped, write %s",
+            len(metadata),
+            "succeeded" if dumped else "FAILED",
+        )
+    except Exception as e:
+        # Cache dump is best-effort — the sidecar falls back to an empty
+        # tools list rather than blocking stdio startup. Include the
+        # exception class in the warning so ops can distinguish
+        # server-init failures (Pydantic ValidationError) from cache I/O
+        # (OSError) from event-loop issues (RuntimeError).
+        logger.warning(
+            "Failed to dump tool metadata cache (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
+
+    try:
+        maybe_spawn()
+    except Exception as e:
+        # Spawn failures already log inside maybe_spawn(); the bare
+        # except here is a defense-in-depth guard for any unexpected
+        # path (e.g. import error in the sidecar module). Settings UI
+        # is advisory — never let it block MCP startup.
+        logger.warning(
+            "Failed to spawn settings UI sidecar (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
 
 
 def main_dev() -> None:
@@ -875,6 +960,7 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     register_browser_landing(mcp, path)
 
     from ha_mcp.settings_ui import register_settings_routes
+
     register_settings_routes(mcp, _server, secret_path=path)
 
     tools = await mcp.list_tools()

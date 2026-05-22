@@ -129,7 +129,10 @@ ADDONS: tuple[Addon, ...] = (
     Addon(repo="https://github.com/hassio-addons/repository", name="Node-RED"),
     # Official ESPHome repo addon is named "ESPHome Device Builder"; match by
     # the unique part of the name so dev/beta variants don't shadow stable.
-    Addon(repo="https://github.com/esphome/home-assistant-addon", name="ESPHome Device Builder"),
+    Addon(
+        repo="https://github.com/esphome/home-assistant-addon",
+        name="ESPHome Device Builder",
+    ),
     # Matter Server is in the official ``core`` repo (no repo URL needed) and
     # is one of the very few addons that ship with ``ingress_panel=false``,
     # which is the canonical "hidden sidebar" shape that ``ha_get_addon``
@@ -143,8 +146,9 @@ ADDONS: tuple[Addon, ...] = (
     # MQTT IO replaces Zigbee2MQTT for start-fail coverage. Its schema
     # requires a configured MQTT broker; with no broker the addon refuses
     # to start, exercising the same Supervisor reject path Z2M used to.
-    Addon(repo="https://github.com/hassio-addons/repository",
-          name="MQTT IO", start=False),
+    Addon(
+        repo="https://github.com/hassio-addons/repository", name="MQTT IO", start=False
+    ),
 )
 
 # Get HACS addon — bootstraps HACS into /config/custom_components/.
@@ -273,7 +277,9 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
             last_err = e
         time.sleep(3.0)
-    raise TimeoutError(f"{url} did not become ready within {timeout}s (last: {last_err})")
+    raise TimeoutError(
+        f"{url} did not become ready within {timeout}s (last: {last_err})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -304,18 +310,27 @@ def start_qemu(qcow2: Path, work_dir: Path) -> subprocess.Popen[bytes]:
     serial_log = work_dir / "haos-serial.log"
     cmd = [
         "qemu-system-x86_64",
-        "-machine", "q35,accel=kvm",
-        "-cpu", "host",
-        "-smp", "2",
-        "-m", "4096",
-        "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE_PATH}",
-        "-drive", f"if=virtio,file={qcow2},format=qcow2",
+        "-machine",
+        "q35,accel=kvm",
+        "-cpu",
+        "host",
+        "-smp",
+        "2",
+        "-m",
+        "4096",
+        "-drive",
+        f"if=pflash,format=raw,readonly=on,file={OVMF_CODE_PATH}",
+        "-drive",
+        f"if=virtio,file={qcow2},format=qcow2",
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
         f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22",
-        "-device", "virtio-net-pci,netdev=net0",
-        "-display", "none",
-        "-serial", f"file:{serial_log}",
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-display",
+        "none",
+        "-serial",
+        f"file:{serial_log}",
     ]
     LOG.info("Booting HAOS (serial log: %s)", serial_log)
     return subprocess.Popen(cmd)
@@ -402,7 +417,10 @@ class HAWebSocket:
     """
 
     def __init__(self, base_url: str, token: str) -> None:
-        self._ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+        self._ws_url = (
+            base_url.replace("http://", "ws://").replace("https://", "wss://")
+            + "/api/websocket"
+        )
         self._token = token
         self._ws = None  # type: ignore[var-annotated]
         self._next_id = 0
@@ -422,7 +440,11 @@ class HAWebSocket:
         auth_resp = json.loads(self._ws.recv())
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
-        LOG.info("WS connected to %s (ha_version=%s)", self._ws_url, auth_resp.get("ha_version"))
+        LOG.info(
+            "WS connected to %s (ha_version=%s)",
+            self._ws_url,
+            auth_resp.get("ha_version"),
+        )
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -438,6 +460,19 @@ class HAWebSocket:
         Used after /core/restart: HA Core kicks every WS connection on
         restart, so any subsequent supervisor_api call needs a fresh
         connection (the access_token survives the restart).
+
+        ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
+        is up before we get here, but Core's WS layer can be accepting
+        connections while the ``hassio`` integration is still loading —
+        and the ``supervisor/api`` WS command is registered by that
+        integration's ``async_load_websocket_api`` (homeassistant/
+        components/hassio/websocket_api.py). Any supervisor_api call
+        that lands in that window comes back as
+        ``{"code": "unknown_command", "message": "Unknown command."}``
+        from Core's WS dispatcher, which the build then mis-blames on
+        the Supervisor itself. Block here until the handler is actually
+        registered, so callers can fire-and-trust their next
+        supervisor_api call.
         """
         if self._ws is not None:
             try:
@@ -447,6 +482,53 @@ class HAWebSocket:
             self._ws = None
         self._next_id = 0
         self.__enter__()
+        self._wait_supervisor_api_ready()
+
+    def _wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
+        """Poll ``supervisor/api`` until Core's dispatcher accepts it.
+
+        Probe with the cheapest read-only Supervisor endpoint
+        (``/supervisor/info``). The expected transient is the WS-layer
+        ``unknown_command`` response described in ``reconnect`` above;
+        anything else propagates immediately so a real failure isn't
+        masked as "still booting". Backoff caps at 5s; outer timeout
+        keeps a wedged restart from hanging the whole build.
+        """
+        start = time.monotonic()
+        delay = 1.0
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                self.supervisor_api("/supervisor/info", method="get", timeout=10.0)
+                if attempts > 1:
+                    LOG.info(
+                        "supervisor/api ready after %d attempts (%.1fs)",
+                        attempts,
+                        time.monotonic() - start,
+                    )
+                return
+            except WSCommandError as e:
+                if e.code != "unknown_command":
+                    # Different structured error (real Supervisor failure,
+                    # renamed endpoint, etc.) — propagate so a regression
+                    # isn't masked as "still booting".
+                    raise
+                elapsed = time.monotonic() - start
+                if elapsed >= timeout:
+                    raise RuntimeError(
+                        f"hassio supervisor/api WS handler did not register "
+                        f"within {timeout:.0f}s after Core restart "
+                        f"(attempts={attempts})"
+                    ) from e
+                LOG.debug(
+                    "Waiting for hassio supervisor/api handler "
+                    "(attempt %d, elapsed %.1fs)",
+                    attempts,
+                    elapsed,
+                )
+                time.sleep(delay)
+                delay = min(delay * 1.5, 5.0)
 
     def supervisor_api(
         self,
@@ -480,8 +562,26 @@ class HAWebSocket:
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success", True):
-                raise RuntimeError(f"supervisor/api {method} {endpoint} failed: {resp.get('error')}")
+                err = resp.get("error") or {}
+                code = err.get("code") if isinstance(err, dict) else None
+                raise WSCommandError(
+                    f"supervisor/api {method} {endpoint} failed: {err}",
+                    code=code,
+                )
             return resp.get("result", {}) or {}
+
+
+class WSCommandError(RuntimeError):
+    """Supervisor/Core WS-level failure with the structured error code.
+
+    Carries the ``error.code`` field from the WS response so callers can
+    branch on it (e.g. retry on ``"unknown_command"`` after a Core
+    restart) without parsing the str() representation of the exception.
+    """
+
+    def __init__(self, message: str, *, code: str | None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
@@ -493,7 +593,12 @@ def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
     """
     LOG.info("Adding addon repository %s", repo_url)
     try:
-        ws.supervisor_api("/store/repositories", method="post", data={"repository": repo_url}, timeout=120.0)
+        ws.supervisor_api(
+            "/store/repositories",
+            method="post",
+            data={"repository": repo_url},
+            timeout=120.0,
+        )
     except RuntimeError as e:
         if "already in the store" in str(e):
             LOG.info("Repository %s already registered, continuing", repo_url)
@@ -520,13 +625,19 @@ def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     candidates = [e for e in store_addons if e.get("name") == addon.name]
     if not candidates:
         # Log a sample so we can see what names the store is actually returning.
-        sample = [{"name": e.get("name"), "slug": e.get("slug"), "repo": e.get("repository")}
-                  for e in store_addons[:25]]
+        sample = [
+            {"name": e.get("name"), "slug": e.get("slug"), "repo": e.get("repository")}
+            for e in store_addons[:25]
+        ]
         LOG.error(
             "No store entry matched %r. First 25 entries (of %d total): %s",
-            addon.name, len(store_addons), sample,
+            addon.name,
+            len(store_addons),
+            sample,
         )
-        raise RuntimeError(f"Addon {addon.name!r} not found in store after repo refresh")
+        raise RuntimeError(
+            f"Addon {addon.name!r} not found in store after repo refresh"
+        )
     if len(candidates) == 1:
         return candidates[0]["slug"]
     # Disambiguate by repository: addon.repo=None → core, otherwise non-core.
@@ -638,9 +749,7 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
         # the addon's current options, merge our override on top, and
         # send the merged whole. When overrides only touch top-level
         # fields, skip the GET and POST just those fields.
-        merged: dict[str, Any] = {
-            k: v for k, v in overrides.items() if k != "options"
-        }
+        merged: dict[str, Any] = {k: v for k, v in overrides.items() if k != "options"}
         if "options" in overrides:
             current = ws.supervisor_api(
                 f"/addons/{slug}/info", method="get", timeout=30.0
@@ -679,7 +788,11 @@ def _check_core_auth(base_url: str, token: str) -> None:
     """
     try:
         cfg = _http("GET", f"{base_url}/api/config", token=token, timeout=10.0)
-        LOG.info("AUTH OK: /api/config version=%s state=%s", cfg.get("version"), cfg.get("state"))
+        LOG.info(
+            "AUTH OK: /api/config version=%s state=%s",
+            cfg.get("version"),
+            cfg.get("state"),
+        )
     except urllib.error.HTTPError as e:
         raise RuntimeError(
             f"HA Core rejected the access token at /api/config ({e.code}). "
@@ -687,7 +800,10 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
     try:
         states = _http("GET", f"{base_url}/api/states", token=token, timeout=10.0)
-        LOG.info("AUTH OK: /api/states returned %d entities", len(states) if isinstance(states, list) else 0)
+        LOG.info(
+            "AUTH OK: /api/states returned %d entities",
+            len(states) if isinstance(states, list) else 0,
+        )
     except urllib.error.HTTPError as e:
         raise RuntimeError(
             f"HA Core rejected the access token at /api/states ({e.code})."
@@ -718,7 +834,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
             f"checkout is incomplete; the image cannot be built."
         )
 
-    LOG.info("Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/")
+    LOG.info(
+        "Staging ha-mcp dev addon source into qcow2 /supervisor/addons/local/ha_mcp_dev/"
+    )
     workdir = Path(tempfile.mkdtemp(prefix="haos-dev-addon-"))
     try:
         staging = workdir / "ha_mcp_dev"
@@ -726,7 +844,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
 
         # Files outside the addon dir that the Dockerfile COPYs from.
         # Mirrors the addon-repo-branch manual steps.
-        shutil.copy(repo_root / "homeassistant-addon" / "start.py", staging / "start.py")
+        shutil.copy(
+            repo_root / "homeassistant-addon" / "start.py", staging / "start.py"
+        )
         shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
         shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
         # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
@@ -771,7 +891,8 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         # Dockerfile it sees in /supervisor/addons/local/ha_mcp_dev/.
         config_yaml = staging / "config.yaml"
         config_lines = [
-            ln for ln in config_yaml.read_text().splitlines(keepends=True)
+            ln
+            for ln in config_yaml.read_text().splitlines(keepends=True)
             if not ln.startswith("image:")
         ]
         config_yaml.write_text("".join(config_lines))
@@ -790,22 +911,39 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         # tar root-owned, root-mode files into /supervisor/addons/local/ on the qcow2's
         # hassos-data partition. Same approach as bake_test_state's seed-tar.
         seed_tar = workdir / "ha_mcp_dev.tar"
-        _run([
-            "tar", "--numeric-owner", "--owner=0", "--group=0",
-            "-C", str(workdir), "-cf", str(seed_tar), "ha_mcp_dev",
-        ])
-        _run([
-            "guestfish",
-            "--rw",
-            "-a", str(qcow2),
-            "run",
-            ":",
-            "mount", "/dev/sda8", "/",
-            ":",
-            "mkdir-p", "/supervisor/addons/local",
-            ":",
-            "tar-in", str(seed_tar), "/supervisor/addons/local",
-        ])
+        _run(
+            [
+                "tar",
+                "--numeric-owner",
+                "--owner=0",
+                "--group=0",
+                "-C",
+                str(workdir),
+                "-cf",
+                str(seed_tar),
+                "ha_mcp_dev",
+            ]
+        )
+        _run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(qcow2),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "mkdir-p",
+                "/supervisor/addons/local",
+                ":",
+                "tar-in",
+                str(seed_tar),
+                "/supervisor/addons/local",
+            ]
+        )
         LOG.info("Dev addon source staged at /supervisor/addons/local/ha_mcp_dev/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -882,8 +1020,7 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
     )
     ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     LOG.info(
-        "Advanced SSH installed + started on port 22222 "
-        "(user=root, protected=false)"
+        "Advanced SSH installed + started on port 22222 (user=root, protected=false)"
     )
     return slug
 
@@ -954,7 +1091,9 @@ def _wait_supervisor_ready(ws: HAWebSocket) -> None:
     and supervisor/api commands route correctly.
     """
     info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
-    LOG.info("Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch"))
+    LOG.info(
+        "Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch")
+    )
 
 
 def bake_test_state(qcow2: Path) -> None:
@@ -1027,9 +1166,11 @@ def bake_test_state(qcow2: Path) -> None:
             # If the storage schema ever bumps and breaks this expectation,
             # fail loudly so we update the bake instead of shipping a
             # broken image.
-            if not isinstance(ce_data, dict) or not isinstance(
-                ce_data.get("data"), dict
-            ) or not isinstance(ce_data["data"].get("entries"), list):
+            if (
+                not isinstance(ce_data, dict)
+                or not isinstance(ce_data.get("data"), dict)
+                or not isinstance(ce_data["data"].get("entries"), list)
+            ):
                 raise RuntimeError(
                     f"core.config_entries at {ce_path} has unexpected shape "
                     f"— expected dict with data.entries list; HA storage "
@@ -1038,34 +1179,40 @@ def bake_test_state(qcow2: Path) -> None:
                 )
             entries = ce_data["data"]["entries"]
             if not any(e.get("domain") == domain for e in entries):
-                entries.append({
-                    "created_at": "2025-09-07T23:56:28.040744+00:00",
-                    "data": {},
-                    "disabled_by": None,
-                    "discovery_keys": {},
-                    "domain": domain,
-                    "entry_id": f"e2e_test_{domain}_entry",
-                    "minor_version": 1,
-                    "modified_at": "2025-09-07T23:56:28.040747+00:00",
-                    "options": {},
-                    "pref_disable_new_entities": False,
-                    "pref_disable_polling": False,
-                    "source": "import",
-                    "subentries": [],
-                    "title": title,
-                    "unique_id": domain,
-                    "version": 1,
-                })
+                entries.append(
+                    {
+                        "created_at": "2025-09-07T23:56:28.040744+00:00",
+                        "data": {},
+                        "disabled_by": None,
+                        "discovery_keys": {},
+                        "domain": domain,
+                        "entry_id": f"e2e_test_{domain}_entry",
+                        "minor_version": 1,
+                        "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                        "options": {},
+                        "pref_disable_new_entities": False,
+                        "pref_disable_polling": False,
+                        "source": "import",
+                        "subentries": [],
+                        "title": title,
+                        "unique_id": domain,
+                        "version": 1,
+                    }
+                )
                 ce_path.write_text(json.dumps(ce_data, indent=2))
                 LOG.info("Injected config entry for %s", domain)
 
         # mcp_proxy reads target_url + webhook_id from this file on setup —
         # the testcontainer dispatch writes the same JSON before container
         # start. Tests assert the webhook_id matches.
-        (staging / ".mcp_proxy_config.json").write_text(json.dumps({
-            "target_url": "http://localhost:8123/api/",
-            "webhook_id": "mcp_e2e_test_webhook_proxy",
-        }))
+        (staging / ".mcp_proxy_config.json").write_text(
+            json.dumps(
+                {
+                    "target_url": "http://localhost:8123/api/",
+                    "webhook_id": "mcp_e2e_test_webhook_proxy",
+                }
+            )
+        )
 
         # Recorder DB normalisation. initial_test_state ships
         # home-assistant_v2.db in WAL journal mode but WITHOUT the
@@ -1086,7 +1233,9 @@ def bake_test_state(qcow2: Path) -> None:
             finally:
                 con.close()
             shutil.move(str(vacuumed), str(db_src))
-            LOG.info("Vacuumed recorder DB → %s (size %d B)", db_src, db_src.stat().st_size)
+            LOG.info(
+                "Vacuumed recorder DB → %s (size %d B)", db_src, db_src.stat().st_size
+            )
 
         seed_tar = workdir / "seed.tar"
         # --owner=0 --group=0 + --numeric-owner forces the archived files
@@ -1094,10 +1243,19 @@ def bake_test_state(qcow2: Path) -> None:
         # (would otherwise be `runner:docker` on GitHub-hosted boxes).
         # HAOS's HA Core container expects /config files to be root-owned
         # so its homeassistant user can read them via the volume mount.
-        _run([
-            "tar", "--numeric-owner", "--owner=0", "--group=0",
-            "-C", str(staging), "-cf", str(seed_tar), ".",
-        ])
+        _run(
+            [
+                "tar",
+                "--numeric-owner",
+                "--owner=0",
+                "--group=0",
+                "-C",
+                str(staging),
+                "-cf",
+                str(seed_tar),
+                ".",
+            ]
+        )
 
         # HAOS qcow2 has multiple partitions. The hassos-data partition
         # (usually /dev/sda8) holds /supervisor/homeassistant which HA Core
@@ -1107,7 +1265,9 @@ def bake_test_state(qcow2: Path) -> None:
         # First probe: list filesystems + labels so we can debug if needed.
         probe = subprocess.run(
             ["guestfish", "--ro", "-a", str(qcow2), "run", ":", "list-filesystems"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         LOG.info("guestfish filesystems on qcow2:\n%s", probe.stdout)
         if probe.returncode != 0:
@@ -1124,16 +1284,23 @@ def bake_test_state(qcow2: Path) -> None:
         # checked out from git), so no separate chmod step is needed —
         # which is good because guestfish has no recursive chmod builtin
         # (`chmod-r` is not a valid command; only single-target `chmod`).
-        _run([
-            "guestfish",
-            "--rw",
-            "-a", str(qcow2),
-            "run",
-            ":",
-            "mount", "/dev/sda8", "/",
-            ":",
-            "tar-in", str(seed_tar), "/supervisor/homeassistant",
-        ])
+        _run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(qcow2),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "tar-in",
+                str(seed_tar),
+                "/supervisor/homeassistant",
+            ]
+        )
         LOG.info("Bake complete")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

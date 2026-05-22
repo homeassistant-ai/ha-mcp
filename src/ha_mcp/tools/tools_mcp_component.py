@@ -9,7 +9,6 @@ Feature Flag: Set HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true to enable this 
 """
 
 import logging
-import os
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -32,9 +31,15 @@ FEATURE_FLAG = "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"
 
 
 def is_custom_component_integration_enabled() -> bool:
-    """Check if the custom component integration feature is enabled."""
-    value = os.getenv(FEATURE_FLAG, "").lower()
-    return value in ("true", "1", "yes", "on")
+    """Check if the custom component integration feature is enabled.
+
+    Reads through :func:`config.get_global_settings` so the same
+    env-var / override-file / default precedence path applies as
+    every other runtime-editable Settings field (issue #863 web UI).
+    """
+    from ..config import get_global_settings
+
+    return bool(get_global_settings().enable_custom_component_integration)
 
 
 # Constants for ha_mcp_tools custom component
@@ -65,13 +70,17 @@ class McpComponentTools:
         poll_interval = 1.0  # seconds
 
         for attempt in range(max_attempts):
-            logger.debug(f"Polling for repository ID (attempt {attempt + 1}/{max_attempts})")
+            logger.debug(
+                f"Polling for repository ID (attempt {attempt + 1}/{max_attempts})"
+            )
             list_response = await ws_client.send_command("hacs/repositories/list")
             repos = list_response.get("result", [])
             for repo in repos:
                 if repo.get("full_name", "").lower() == MCP_TOOLS_REPO.lower():
                     repo_id = str(repo.get("id"))
-                    logger.info(f"Found repository ID: {repo_id} after {attempt + 1} attempts")
+                    logger.info(
+                        f"Found repository ID: {repo_id} after {attempt + 1} attempts"
+                    )
                     return repo_id
 
             if attempt < max_attempts - 1:
@@ -80,7 +89,9 @@ class McpComponentTools:
         return None
 
     @staticmethod
-    async def _resolve_repo_id(ws_client: Any, existing_repo: dict[str, Any] | None) -> str:
+    async def _resolve_repo_id(
+        ws_client: Any, existing_repo: dict[str, Any] | None
+    ) -> str:
         """Resolve the HACS repository ID, polling if necessary."""
         repo_id = str(existing_repo.get("id")) if existing_repo else None
 
@@ -88,15 +99,17 @@ class McpComponentTools:
             repo_id = await McpComponentTools._poll_for_repo_id(ws_client)
 
         if not repo_id:
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Could not find repository ID after adding (timed out after 10 attempts)",
-                suggestions=[
-                    "HACS may be processing the request - try again in a few seconds",
-                    "Check HACS logs for errors",
-                    f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Could not find repository ID after adding (timed out after 10 attempts)",
+                    suggestions=[
+                        "HACS may be processing the request - try again in a few seconds",
+                        "Check HACS logs for errors",
+                        f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
+                    ],
+                )
+            )
 
         return repo_id
 
@@ -108,16 +121,18 @@ class McpComponentTools:
             hacs_info = info_response.get("result", {})
             disabled_reason = hacs_info.get("disabled_reason")
             if disabled_reason:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"HACS is disabled: {disabled_reason}",
-                    context={"disabled_reason": disabled_reason},
-                    suggestions=[
-                        "HACS requires a valid GitHub token to manage repositories",
-                        "Configure a GitHub Personal Access Token in HACS settings",
-                        "Ensure HACS has completed initial setup",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"HACS is disabled: {disabled_reason}",
+                        context={"disabled_reason": disabled_reason},
+                        suggestions=[
+                            "HACS requires a valid GitHub token to manage repositories",
+                            "Configure a GitHub Personal Access Token in HACS settings",
+                            "Ensure HACS has completed initial setup",
+                        ],
+                    )
+                )
 
     @staticmethod
     async def _add_repo_to_hacs(ws_client: Any) -> dict[str, Any]:
@@ -133,14 +148,16 @@ class McpComponentTools:
         )
 
         if not add_response.get("success"):
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to add repository to HACS: {add_response}",
-                suggestions=[
-                    f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
-                    "Check HACS logs for errors",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to add repository to HACS: {add_response}",
+                    suggestions=[
+                        f"Verify the repository exists: https://github.com/{MCP_TOOLS_REPO}",
+                        "Check HACS logs for errors",
+                    ],
+                )
+            )
 
         result: dict[str, Any] = add_response.get("result", {})
         return result
@@ -154,9 +171,7 @@ class McpComponentTools:
         ):
             result["restarted"] = True
             result["message"] += ". Home Assistant is restarting."
-            result["note"] = (
-                "Wait 1-5 minutes for Home Assistant to restart."
-            )
+            result["note"] = "Wait 1-5 minutes for Home Assistant to restart."
         else:
             result["restart_error"] = str(restart_error)
             result["message"] += ". Restart failed - please restart manually."
@@ -164,10 +179,7 @@ class McpComponentTools:
     @tool(
         name="ha_install_mcp_tools",
         tags={"Utilities", "beta"},
-        annotations={
-            "destructiveHint": True,
-            "title": "Install MCP Tools Component"
-        }
+        annotations={"destructiveHint": True, "title": "Install MCP Tools Component"},
     )
     @log_tool_usage
     async def ha_install_mcp_tools(
@@ -217,10 +229,12 @@ class McpComponentTools:
             await self._ensure_hacs_ready(ws_client)
             list_response = await ws_client.send_command("hacs/repositories/list")
             if not list_response.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to get HACS repository list",
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Failed to get HACS repository list",
+                    )
+                )
 
             repos = list_response.get("result", [])
             existing_repo = self._find_existing_repo(repos)
@@ -254,14 +268,16 @@ class McpComponentTools:
             )
 
             if not download_response.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to download repository: {download_response}",
-                    suggestions=[
-                        "Check HACS logs for errors",
-                        "Verify GitHub is accessible",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to download repository: {download_response}",
+                        suggestions=[
+                            "Check HACS logs for errors",
+                            "Verify GitHub is accessible",
+                        ],
+                    )
+                )
 
             result: dict[str, Any] = {
                 "success": True,
