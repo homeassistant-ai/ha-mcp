@@ -1043,15 +1043,9 @@ class AutomationConfigTools:
                         "automation."
                     ),
                     suggestions=[
-                        "ha_config_set_scene(scene_id='...', config={'name': "
-                        "'...', 'entities': {'<entity_id>': {...}}}) creates "
-                        "a scene without a trigger.",
-                        "If the snapshot really should be the result of an "
-                        "event, add the trigger that should fire it and keep "
-                        "the automation.",
-                        "For a state-derived value that recomputes when its "
-                        "inputs change, use "
-                        "ha_config_set_helper(helper_type='template') instead.",
+                        "ha_config_set_scene(scene_id='...', config={'name': '...', 'entities': {'<entity_id>': {...}}}) creates a scene without a trigger.",
+                        "If the snapshot really should be the result of an event, add the trigger that should fire it and keep the automation.",
+                        "For a state-derived value that recomputes when its inputs change, use ha_config_set_helper(helper_type='template') instead.",
                     ],
                     context={
                         "scene_create_action_indices": scene_create_indices,

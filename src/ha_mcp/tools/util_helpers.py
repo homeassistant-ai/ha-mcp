@@ -787,7 +787,7 @@ async def _ws_run_wait_loop(
             await asyncio.wait_for(nudge.wait(), timeout=wait_budget)
             nudge.clear()
         except TimeoutError:
-            pass
+            pass  # polling backstop expired — loop continues to check connection and sample
 
         if not ws_client.is_connected:
             logger.debug(
