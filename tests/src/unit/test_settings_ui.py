@@ -235,12 +235,19 @@ class TestSaveToolConfig:
         cfg_path = tmp_path / "tool_config.json"
         monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: cfg_path)
 
-        def fake_write_text(self: Path, *args, **kwargs):
-            if self == cfg_path:
-                raise OSError(30, "Read-only file system")
-            return Path.write_text(self, *args, **kwargs)
+        # ``save_tool_config`` now writes via ``_atomic_write_json``
+        # (tmp + ``os.replace``) so a read-only filesystem can surface
+        # at either step — patch the helper itself so the simulation
+        # doesn't need to know which underlying call raises. The old
+        # patch-Path.write_text approach also recursed once we wrote
+        # to ``<target>.tmp`` (the fallback ``Path.write_text(self,...)``
+        # call points back at the now-monkeypatched function).
+        def fake_atomic_write(path: Path, payload: dict) -> None:
+            raise OSError(30, "Read-only file system")
 
-        monkeypatch.setattr(Path, "write_text", fake_write_text)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._atomic_write_json", fake_atomic_write
+        )
         assert save_tool_config({"tools": {"x": "disabled"}}) is False
 
 
