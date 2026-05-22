@@ -497,6 +497,15 @@ _SETTINGS_HTML = (
     font-size: 0.85rem; flex-shrink: 0; }
   .restart-btn:hover { background: var(--accent-hover); }
   .restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Destructive variant — visually distinct from the primary accent
+     so a glance at the page makes "Disable settings server"
+     obviously not a routine click. Matches the restart-notice red
+     family so the danger semantic reads even without label text. */
+  .danger-btn { padding: 7px 14px; border-radius: 8px;
+    border: 1px solid #7a1a1a; background: transparent; color: #ff9090;
+    font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
+  .danger-btn:hover { background: #2a0e0e; }
+  .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -514,16 +523,16 @@ _SETTINGS_HTML = (
   and pinning has no extra effect.
 </div>
 <div class="restart-notice" id="restartNotice">
-  <span class="restart-notice-text">
-    ⚠ Changes saved. Restart the add-on for them to take effect — disabled
+  <span class="restart-notice-text" id="restartNoticeText">
+    ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
     tools will be fully removed from the MCP tool list on next startup.
   </span>
   <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
 </div>
 <div id="sidecarStopRow" style="display:none; margin: 12px 0; text-align: right;">
-  <button class="restart-btn" id="stopSidecarBtn"
-          title="Stops this settings UI sidecar process and writes a disable sentinel so it won't respawn on next ha-mcp start. Delete ~/.ha-mcp/settings_ui_disabled to re-enable."
-  >Stop settings server</button>
+  <button class="danger-btn" id="stopSidecarBtn"
+          title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
+  >Permanently disable settings server</button>
 </div>
 <div class="summary" id="summary"></div>
 <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -595,25 +604,65 @@ async function loadTools() {
   // button only when this page is served by the stdio sidecar
   // (HTTP modes serve the same HTML but is_sidecar=false there, so
   // clicking Stop wouldn't make sense — it would kill the MCP server).
+  // Also tailor the restart-notice copy to the install mode so the
+  // user is told exactly what action they need to take ("close and
+  // reopen Claude Desktop" vs "click Restart Add-on" vs "restart
+  // your Docker container") instead of a generic "restart the add-on"
+  // that only matches one of three real deployment surfaces.
   try {
     const infoResp = await fetch('./api/settings/info');
     const info = await infoResp.json();
+    const noticeEl = document.getElementById('restartNoticeText');
     if (info.is_addon) {
       document.getElementById('restartBtn').style.display = '';
-    }
-    if (info.is_sidecar) {
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Click "Restart Add-on" for them to take ' +
+          'effect — disabled tools will be fully removed from the MCP ' +
+          'tool list on next startup.';
+      }
+    } else if (info.is_sidecar) {
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Fully quit and reopen your MCP client ' +
+          '(Claude Desktop: right-click the tray icon → Quit, then ' +
+          'relaunch; Claude Code: close the terminal session) for them ' +
+          'to take effect. Disabled tools will be fully removed from the ' +
+          'MCP tool list on next startup.';
+      }
       document.getElementById('sidecarStopRow').style.display = '';
+    } else if (noticeEl) {
+      // HTTP / Docker / standalone — no button we can wire to a restart,
+      // so describe the action in process terms.
+      noticeEl.textContent =
+        '⚠ Changes saved. Restart your ha-mcp process (Docker ' +
+        'container, systemd service, or however you launch it) for them ' +
+        'to take effect. Disabled tools will be fully removed from the ' +
+        'MCP tool list on next startup.';
     }
   } catch (_e) {}
 }
 
 async function stopSidecar() {
   const btn = document.getElementById('stopSidecarBtn');
+  // Two-part confirm wording: lead with the *permanence* (this is not a
+  // routine "stop now, autostart later" — the server will refuse to
+  // restart on every future ha-mcp launch until the user manually
+  // intervenes), then spell out the exact re-enable steps. The button
+  // is right-aligned near the top of a list of toggle controls, so
+  // accidental clicks are easy; the dialog needs to read like a
+  // commitment, not a soft prompt.
   if (!confirm(
-    'Stop the settings server?\\n\\n' +
-    'A "disabled" sentinel file will be written so the server does not ' +
-    'respawn the next time ha-mcp starts. To re-enable, delete the file ' +
-    'at ~/.ha-mcp/settings_ui_disabled (or unset HA_MCP_DISABLE_SETTINGS_UI).'
+    '⚠ PERMANENTLY disable the settings server?\\n\\n' +
+    'This stops the running server AND writes a disable marker so it ' +
+    'will NOT respawn on future ha-mcp launches — every restart of ' +
+    'Claude Desktop / Docker / your MCP host will continue to skip it ' +
+    'until you manually re-enable.\\n\\n' +
+    'To restore access later you must:\\n' +
+    '  1. Delete  ~/.ha-mcp/settings_ui_disabled  (the marker file), AND\\n' +
+    '  2. Unset  HA_MCP_DISABLE_SETTINGS_UI  if that env var was set.\\n\\n' +
+    'You will lose the in-browser tool-configuration UI until both ' +
+    'conditions are met. Continue?'
   )) return;
   btn.disabled = true;
   btn.textContent = 'Stopping...';
