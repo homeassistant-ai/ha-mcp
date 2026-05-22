@@ -316,15 +316,17 @@ class TestPollForAutomationEntity:
             return client
 
     def test_poll_cadence_shape(self):
-        """Pin the cadence tuple plus the sub-200ms first-poll bound — length
+        """Pin the cadence tuple plus the sub-100ms first-poll bound — length
         and sum are derivable from the tuple and would fail redundantly on a
-        mutation."""
-        assert HomeAssistantClient._POLL_CADENCE == (0.1, 1.0, 4.9)
-        assert HomeAssistantClient._POLL_CADENCE[0] <= 0.2
+        mutation. First-poll was tightened from 0.1s to 0.025s after the
+        #1389 measurement showed HA-Core's entity-registration latency is
+        ~4ms (well below the prior 100ms sleep floor)."""
+        assert HomeAssistantClient._POLL_CADENCE == (0.025, 1.0, 4.975)
+        assert HomeAssistantClient._POLL_CADENCE[0] <= 0.1
 
     @pytest.mark.asyncio
     async def test_poll_returns_entity_id_on_first_attempt(self, mock_client):
-        """When HA publishes the entity within the first 0.1s window, the
+        """When HA publishes the entity within the first 0.025s window, the
         poll returns on iteration 1 and only sleeps once."""
         mock_client.get_states = AsyncMock(
             return_value=[
@@ -343,7 +345,7 @@ class TestPollForAutomationEntity:
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result == "automation.test_target"
-        assert sleep_calls == [0.1]
+        assert sleep_calls == [0.025]
         assert mock_client.get_states.call_count == 1
 
     @pytest.mark.asyncio
@@ -360,7 +362,7 @@ class TestPollForAutomationEntity:
             result = await mock_client._poll_for_automation_entity("unique_42")
 
         assert result is None
-        assert sleep_calls == [0.1, 1.0, 4.9]
+        assert sleep_calls == [0.025, 1.0, 4.975]
         assert mock_client.get_states.call_count == 3
 
     @pytest.mark.asyncio
@@ -388,7 +390,7 @@ class TestPollForAutomationEntity:
             result = await mock_client._poll_for_automation_entity("unique_99")
 
         assert result == "automation.slow_target"
-        assert sleep_calls == [0.1, 1.0]
+        assert sleep_calls == [0.025, 1.0]
         assert mock_client.get_states.call_count == 2
 
     @pytest.mark.asyncio
