@@ -679,7 +679,7 @@ async def _handle_config_subentry_flow_steps(
                     suggestions=[
                         "Complete the provider setup in Home Assistant so the "
                         "external resource is available.",
-                        "Retry the same ha_config_set_helper call after the "
+                        "Retry the same ha_config_set_helper call after the ",
                         "resource is ready.",
                     ],
                     context={"flow_id": flow_id, "details": current_step},
