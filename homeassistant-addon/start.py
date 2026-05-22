@@ -226,7 +226,7 @@ def main() -> int:
     enable_lite_docstrings = False  # default
     enable_auto_backup = False  # default (#1288)
     auto_backup_throttle_minutes = 0  # default — every write
-    auto_backup_retain_per_entity = 20  # default
+    auto_backup_retain_per_entity = 100  # default
     tool_search_max_results = 5  # default
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
@@ -277,9 +277,9 @@ def main() -> int:
             auto_backup_throttle_minutes = (
                 raw_throttle if isinstance(raw_throttle, int) else 0
             )
-            raw_retain = config.get("auto_backup_retain_per_entity", 20)
+            raw_retain = config.get("auto_backup_retain_per_entity", 100)
             auto_backup_retain_per_entity = (
-                raw_retain if isinstance(raw_retain, int) else 20
+                raw_retain if isinstance(raw_retain, int) else 100
             )
             raw_max_results = config.get("tool_search_max_results", 5)
             tool_search_max_results = (

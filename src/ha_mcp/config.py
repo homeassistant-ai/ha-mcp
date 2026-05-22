@@ -168,7 +168,7 @@ class Settings(BaseSettings):
     # Max snapshots kept per entity. Older snapshots beyond this cap
     # are rotated out on each successful capture.
     auto_backup_retain_per_entity: int = Field(
-        20, ge=1, le=10_000, alias="AUTO_BACKUP_RETAIN_PER_ENTITY"
+        100, ge=1, le=10_000, alias="AUTO_BACKUP_RETAIN_PER_ENTITY"
     )
 
     # Backup directory override. Empty ("") resolves at runtime to a

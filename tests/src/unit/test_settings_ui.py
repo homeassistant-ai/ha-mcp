@@ -893,7 +893,7 @@ class TestApplyBackupOverrides:
         cfg_mod._reset_global_settings()
         s = cfg_mod.get_global_settings()
         assert s.auto_backup_throttle_minutes == 0  # default
-        assert s.auto_backup_retain_per_entity == 20  # default
+        assert s.auto_backup_retain_per_entity == 100  # default
         cfg_mod._reset_global_settings()
 
 

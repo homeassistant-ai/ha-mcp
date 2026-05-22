@@ -211,7 +211,9 @@ class BackupManager:
 
     @property
     def retain_per_entity(self) -> int:
-        return max(1, int(getattr(self._settings, "auto_backup_retain_per_entity", 20)))
+        return max(
+            1, int(getattr(self._settings, "auto_backup_retain_per_entity", 100))
+        )
 
     # ----- handler registration ------------------------------------------
 

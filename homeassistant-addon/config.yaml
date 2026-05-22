@@ -34,7 +34,7 @@ options:
   enable_tool_search: false
   enable_auto_backup: false
   auto_backup_throttle_minutes: 0
-  auto_backup_retain_per_entity: 20
+  auto_backup_retain_per_entity: 100
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)

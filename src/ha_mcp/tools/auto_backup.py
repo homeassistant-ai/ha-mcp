@@ -75,7 +75,17 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
         config_id = config.get("id")
         if config_id:
             return str(config_id)
-    return _resolve_str(kw.get("identifier"))
+    identifier = _resolve_str(kw.get("identifier"))
+    # Strip the leading ``automation.`` prefix when the caller passed an
+    # entity_id form (typical for ``python_transform`` calls that don't
+    # carry a config body). Without this, snapshot files duplicate the
+    # domain segment as ``automation.automation.<slug>.<ts>.yaml`` — the
+    # body's entity_id keeps the prefix, only the filename / list key
+    # tighten up. HA's automation upsert accepts either form for the
+    # ``identifier`` param, so restore is unaffected.
+    if identifier.startswith("automation."):
+        identifier = identifier[len("automation.") :]
+    return identifier
 
 
 def with_auto_backup(

@@ -131,14 +131,21 @@ class TestManageBackupGating:
         suggestions = error.get("suggestions", []) if isinstance(error, dict) else []
         assert any("Valid combinations" in s for s in suggestions)
 
-    async def test_edits_create_rejected(self, mcp_client) -> None:
-        # (edits, create) is not valid — captures happen automatically via the decorator.
+    async def test_edits_create_requires_domain_and_entity_id(self, mcp_client) -> None:
+        # (edits, create) is the on-demand-snapshot combo — needs both
+        # ``domain`` and ``entity_id`` to know what to capture. The
+        # bare call must fail with a structured validation error rather
+        # than silently routing through the decorator's auto-on-write
+        # path (which only fires on actual writes).
         result = await safe_call_tool(
             mcp_client,
             "ha_manage_backup",
             {"scope": "edits", "action": "create"},
         )
         assert result.get("success") is False
+        error = result.get("error", {})
+        msg = error.get("message", "") if isinstance(error, dict) else ""
+        assert "domain" in msg or "entity_id" in msg
 
     async def test_snapshot_restore_requires_backup_id(self, mcp_client) -> None:
         # Validation should mention that backup_id is missing — not silently dispatch.
@@ -177,6 +184,115 @@ class TestListEditsBackups:
         assert "enabled" in data
         assert "throttle_minutes" in data
         assert "retain_per_entity" in data
+
+
+# ---------------------------------------------------------------- on-demand snapshot
+
+
+@pytest.mark.automation
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestEditsCreateOnDemandSnapshot:
+    """``ha_manage_backup(scope='edits', action='create', ...)`` — captures
+    a snapshot of the named entity on demand. Use case: "I'm about to
+    edit this in the HA UI; snapshot it first." Distinct from the
+    auto-on-write path the ``@with_auto_backup`` decorator drives.
+
+    Exercises against an automation entity to share the existing
+    automation create+edit fixture; the underlying maybe_snapshot path
+    is domain-agnostic, so coverage of one domain is sufficient to
+    pin the routing.
+    """
+
+    async def test_on_demand_snapshot_round_trip(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_ondemand_{suffix}"
+        # Create an automation to snapshot. We do NOT edit it — the
+        # on-demand snapshot path must work without a write triggering
+        # the decorator.
+        original = {
+            "alias": f"E2E On-Demand Original {suffix}",
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        create = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        assert create.get("success") is not False
+
+        # On-demand snapshot.
+        snap = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "create",
+                "domain": "automation",
+                "entity_id": identifier,
+            },
+        )
+        assert snap.get("success") is True, f"on-demand snapshot failed: {snap}"
+        data = snap.get("data", {})
+        backup_name = data.get("backup_name")
+        assert backup_name, f"backup_name missing from response: {snap}"
+        assert data.get("domain") == "automation"
+        assert data.get("entity_id") == identifier
+        assert data.get("size", 0) > 0
+
+        # The snapshot must also show up in the list query.
+        listing = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "automation",
+                "entity_id": identifier,
+            },
+        )
+        assert listing.get("success") is True
+        entries = listing.get("data", {}).get("backups", [])
+        assert any(b["name"] == backup_name for b in entries), (
+            f"on-demand snapshot {backup_name!r} not in list: "
+            f"{[b['name'] for b in entries]}"
+        )
+
+        # Cleanup: delete the snapshot + remove the automation.
+        await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": backup_name},
+        )
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
+
+    async def test_on_demand_snapshot_unknown_domain_rejected(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "create",
+                "domain": "not_a_real_domain",
+                "entity_id": "anything",
+            },
+        )
+        assert result.get("success") is False
+        error = result.get("error", {})
+        msg = error.get("message", "") if isinstance(error, dict) else ""
+        assert "handler" in msg.lower() or "domain" in msg.lower()
 
 
 # ---------------------------------------------------------------- automation lane

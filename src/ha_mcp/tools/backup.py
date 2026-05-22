@@ -544,6 +544,7 @@ async def restore_backup(
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
     ("snapshot", "restore"),
+    ("edits", "create"),
     ("edits", "list"),
     ("edits", "view"),
     ("edits", "restore"),
@@ -607,6 +608,7 @@ def register_backup_tools(
 |---|---|---|
 | `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Heavy, seconds-long. |
 | `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
+| `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `restore` | Re-apply one auto-backup. Creates a fresh safety snapshot first. **No HA restart.** |
@@ -624,6 +626,7 @@ def register_backup_tools(
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
 - Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
+- On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="kitchen_lights_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
 - View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
 - Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
@@ -728,6 +731,79 @@ def register_backup_tools(
         # scope == "edits"
         settings = get_global_settings()
         mgr = get_backup_manager(client, settings)
+
+        if action == "create":
+            # On-demand snapshot for "I'm about to edit this in the HA UI,
+            # save the current state first." Mirrors the path the
+            # ``@with_auto_backup`` decorator takes on writes — same
+            # handler registry, same throttle/rotation rules — but
+            # triggered explicitly by the caller for entities they're
+            # about to mutate outside the MCP-tool surface. Bypasses
+            # ``enable_auto_backup`` because the request is explicit.
+            dom = _require("domain", domain, scope, action)
+            eid = _require("entity_id", entity_id, scope, action)
+            if mgr._handlers.get(dom) is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"No backup handler registered for domain={dom!r}",
+                        context={"domain": dom, "entity_id": eid},
+                        suggestions=[
+                            "Supported domains: "
+                            + ", ".join(sorted(mgr._handlers.keys())),
+                        ],
+                    )
+                )
+            # ``maybe_snapshot`` returns None when ``enable_auto_backup``
+            # is off OR throttle blocks. For an explicit on-demand call,
+            # the off-state and the throttle-block are both wrong reasons
+            # to skip — temporarily flip the toggle + clear the throttle
+            # tracker entry so the capture always fires.
+            was_enabled = mgr.enabled
+            prev_ts = mgr._last_snapshot.pop(f"{dom}:{eid}", None)
+            path = None
+            try:
+                # Force-enable for this call: read the live attr, override,
+                # restore after. Settings object is shared with other
+                # callers, so the override must be tight to this scope.
+                if not was_enabled:
+                    object.__setattr__(settings, "enable_auto_backup", True)
+                path = await mgr.maybe_snapshot(
+                    dom, eid, tool_name="ha_manage_backup.edits.create"
+                )
+            finally:
+                if not was_enabled:
+                    object.__setattr__(settings, "enable_auto_backup", False)
+                if path is None and prev_ts is not None:
+                    # Restore the throttle tracker only when the capture
+                    # didn't write (e.g. entity didn't exist at fetch
+                    # time). A successful capture sets a new timestamp
+                    # already.
+                    mgr._last_snapshot[f"{dom}:{eid}"] = prev_ts
+            if path is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Could not snapshot {dom}:{eid} — entity not found "
+                        "or fetch returned no config",
+                        context={"domain": dom, "entity_id": eid},
+                        suggestions=[
+                            "Verify the entity exists via the matching "
+                            "ha_config_get_* tool first",
+                            "For helpers, pass domain='helper_<helper_type>' "
+                            "(e.g. 'helper_input_boolean')",
+                        ],
+                    )
+                )
+            return {
+                "success": True,
+                "data": {
+                    "backup_name": path.name,
+                    "domain": dom,
+                    "entity_id": eid,
+                    "size": path.stat().st_size,
+                },
+            }
 
         if action == "list":
             # list_snapshots does sync directory globbing + per-file stat;

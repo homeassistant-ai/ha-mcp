@@ -42,7 +42,7 @@ configuration:
     name: Auto-backup retention (per entity)
     description: >-
       Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 20,
+      this cap are rotated out on each successful capture. Default 100,
       range 1–10000.
   verify_ssl:
     name: Verify TLS certificate
