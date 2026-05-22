@@ -279,10 +279,7 @@ def _check_template_string(
     # reframes #695 from "enumerate bad shapes" to "surface every template
     # in a logic position". Specific detectors above keep their tailored
     # messages.
-    if (
-        len(warnings) == initial_count
-        and _RE_ANY_TEMPLATE.search(template)
-    ):
+    if len(warnings) == initial_count and _RE_ANY_TEMPLATE.search(template):
         warnings.append(
             f"Template detected in {position} — if this maps to a native option "
             "(`numeric_state`, `state`, `time`, `sun`, `zone`, `device`), use that "
@@ -304,9 +301,7 @@ def _check_choose_actions(
             _check_condition_templates(
                 option.get("conditions", []), warnings, skill_prefix
             )
-            _check_action_tree(
-                option.get("sequence", []), warnings, skill_prefix
-            )
+            _check_action_tree(option.get("sequence", []), warnings, skill_prefix)
 
 
 def _check_repeat_actions(
@@ -315,6 +310,31 @@ def _check_repeat_actions(
     _check_condition_templates(repeat.get("while", []), warnings, skill_prefix)
     _check_condition_templates(repeat.get("until", []), warnings, skill_prefix)
     _check_action_tree(repeat.get("sequence", []), warnings, skill_prefix)
+
+
+def _check_control_flow_actions(
+    action: dict[str, Any], warnings: list[str], skill_prefix: str | None
+) -> None:
+    """Check choose/if/then/else/repeat/parallel sub-trees in a single action."""
+    if "choose" in action:
+        _check_choose_actions(action["choose"], warnings, skill_prefix)
+
+    if "if" in action:
+        _check_condition_templates(action["if"], warnings, skill_prefix)
+
+    for key in ("then", "else", "default"):
+        nested = action.get(key)
+        if isinstance(nested, list):
+            _check_action_tree(nested, warnings, skill_prefix)
+
+    if "repeat" in action and isinstance(action["repeat"], dict):
+        _check_repeat_actions(action["repeat"], warnings, skill_prefix)
+
+    # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
+    # different semantics. Recurse so templates inside parallel branches
+    # are inspected the same as templates inside choose/repeat sequences.
+    if "parallel" in action and isinstance(action["parallel"], list):
+        _check_action_tree(action["parallel"], warnings, skill_prefix)
 
 
 def _check_action_tree(
@@ -359,26 +379,7 @@ def _check_action_tree(
         if isinstance(target, dict):
             _check_target_dict(target, warnings, skill_prefix)
 
-        # Nested conditions in choose/if/repeat
-        if "choose" in action:
-            _check_choose_actions(action["choose"], warnings, skill_prefix)
-
-        if "if" in action:
-            _check_condition_templates(action["if"], warnings, skill_prefix)
-
-        for key in ("then", "else", "default"):
-            nested = action.get(key)
-            if isinstance(nested, list):
-                _check_action_tree(nested, warnings, skill_prefix)
-
-        if "repeat" in action and isinstance(action["repeat"], dict):
-            _check_repeat_actions(action["repeat"], warnings, skill_prefix)
-
-        # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
-        # different semantics. Recurse so templates inside parallel branches
-        # are inspected the same as templates inside choose/repeat sequences.
-        if "parallel" in action and isinstance(action["parallel"], list):
-            _check_action_tree(action["parallel"], warnings, skill_prefix)
+        _check_control_flow_actions(action, warnings, skill_prefix)
 
 
 def _check_service_template(
@@ -439,7 +440,9 @@ def _check_target_dict(
                     f"hardcode the literal value instead. The self-reference is always "
                     f"resolvable at write time, so the template adds runtime cost without "
                     f"any flexibility."
-                    + _ref(skill_prefix, "template-guidelines.md#when-to-avoid-templates")
+                    + _ref(
+                        skill_prefix, "template-guidelines.md#when-to-avoid-templates"
+                    )
                 )
             else:
                 warnings.append(
@@ -447,7 +450,9 @@ def _check_target_dict(
                     f"or use a `choose` action with native conditions to dispatch to different "
                     f"hardcoded targets. Templates in target fields fail silently if they "
                     f"resolve to a non-existent entity."
-                    + _ref(skill_prefix, "template-guidelines.md#when-to-avoid-templates")
+                    + _ref(
+                        skill_prefix, "template-guidelines.md#when-to-avoid-templates"
+                    )
                 )
 
 

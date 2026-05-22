@@ -237,6 +237,19 @@ def parse_json_param(
     )
 
 
+def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:
+    """Parse a JSON string as a list of strings, raising ValueError on failure."""
+    try:
+        parsed = json.loads(s)
+        if not isinstance(parsed, list):
+            raise ValueError(f"{param_name} must be a JSON array")
+        if not all(isinstance(item, str) for item in parsed):
+            raise ValueError(f"{param_name} must be a JSON array of strings")
+        return parsed
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+
+
 def parse_string_list_param(
     param: str | list[str] | None,
     param_name: str = "parameter",
@@ -260,30 +273,11 @@ def parse_string_list_param(
         raise ValueError(f"{param_name} must be a list of strings")
 
     if isinstance(param, str):
-        # Try JSON array first
         if param.strip().startswith("["):
-            try:
-                parsed = json.loads(param)
-                if not isinstance(parsed, list):
-                    raise ValueError(f"{param_name} must be a JSON array")
-                if not all(isinstance(item, str) for item in parsed):
-                    raise ValueError(f"{param_name} must be a JSON array of strings")
-                return parsed
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
-        # Comma-separated fallback (opt-in)
+            return _parse_json_to_str_list(param, param_name)
         if allow_csv:
             return [item.strip() for item in param.split(",") if item.strip()]
-        # Original behavior: attempt JSON parse (will fail for plain strings)
-        try:
-            parsed = json.loads(param)
-            if not isinstance(parsed, list):
-                raise ValueError(f"{param_name} must be a JSON array")
-            if not all(isinstance(item, str) for item in parsed):
-                raise ValueError(f"{param_name} must be a JSON array of strings")
-            return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
+        return _parse_json_to_str_list(param, param_name)
 
     raise ValueError(f"{param_name} must be string, list, or None")
 
@@ -691,6 +685,171 @@ async def _get_waiter_ws_client(client: Any) -> Any:
     return ws_client
 
 
+async def _ws_subscribe_all(
+    ws_client: Any,
+    event_types: tuple[str, ...],
+    handler: Any,
+    attached_handlers: list[str],
+    sub_ids: list[int],
+    description: str,
+    identifier: str,
+) -> bool:
+    """Attach event handler and subscribe to all event_types.
+
+    Populates attached_handlers and sub_ids in-place.
+    Returns True on success, False if a non-auth error triggers REST fallback.
+    """
+    for et in event_types:
+        ws_client.add_event_handler(et, handler)
+        attached_handlers.append(et)
+    for et in event_types:
+        try:
+            sub_ids.append(await ws_client.subscribe_events(et))
+        except HomeAssistantAuthError:
+            raise
+        except (
+            HomeAssistantConnectionError,
+            HomeAssistantCommandError,
+            OSError,
+            TimeoutError,
+        ) as e:
+            logger.debug(
+                "subscribe_events(%s) failed during %s for %s: %s — falling back to REST polling",
+                et,
+                description,
+                identifier,
+                e,
+            )
+            return False
+    return True
+
+
+async def _ws_post_subscribe_check(
+    ws_client: Any,
+    sample: Callable[[], Awaitable[Any]],
+    start: float,
+    timeout: float,
+    poll_interval: float,
+    description: str,
+    identifier: str,
+) -> tuple[Any, bool]:
+    """Run post-subscribe sample and connection check.
+
+    Returns (result, is_done). When is_done=True the caller should return result
+    immediately (either an early success or a REST-poll fallback).
+    """
+    try:
+        result = await sample()
+        if result is not None:
+            logger.debug(
+                f"WS waiter: {description} for {identifier} resolved by "
+                f"post-subscribe sample after {time.monotonic() - start:.2f}s"
+            )
+            return result, True
+    except (HomeAssistantConnectionError, HomeAssistantAuthError):
+        raise
+
+    if not ws_client.is_connected:
+        logger.debug(
+            "WS connection dropped before wait loop for %s on %s — completing via REST polling",
+            description,
+            identifier,
+        )
+        remaining = timeout - (time.monotonic() - start)
+        if remaining <= 0:
+            return None, True
+        return await _legacy_poll_until(
+            identifier,
+            sample,
+            timeout=remaining,
+            poll_interval=poll_interval,
+            description=description,
+        ), True
+
+    return None, False
+
+
+async def _ws_run_wait_loop(
+    ws_client: Any,
+    sample: Callable[[], Awaitable[Any]],
+    nudge: asyncio.Event,
+    start: float,
+    timeout: float,
+    poll_interval: float,
+    description: str,
+    identifier: str,
+) -> Any:
+    """Event-driven wait loop: nudge on event, backstop polling, REST fallback on disconnect."""
+    while time.monotonic() - start < timeout:
+        remaining = timeout - (time.monotonic() - start)
+        wait_budget = min(remaining, _POLLING_BACKSTOP_INTERVAL)
+        try:
+            await asyncio.wait_for(nudge.wait(), timeout=wait_budget)
+            nudge.clear()
+        except TimeoutError:
+            pass  # polling backstop expired — loop continues to check connection and sample
+
+        if not ws_client.is_connected:
+            logger.debug(
+                "WS connection dropped during %s for %s — completing wait via REST polling",
+                description,
+                identifier,
+            )
+            remaining = timeout - (time.monotonic() - start)
+            if remaining <= 0:
+                return None
+            return await _legacy_poll_until(
+                identifier,
+                sample,
+                timeout=remaining,
+                poll_interval=poll_interval,
+                description=description,
+            )
+
+        try:
+            result = await sample()
+            if result is not None:
+                logger.debug(
+                    f"WS waiter: {description} for {identifier} resolved "
+                    f"after {time.monotonic() - start:.2f}s"
+                )
+                return result
+        except (HomeAssistantConnectionError, HomeAssistantAuthError):
+            raise
+
+    logger.warning(
+        f"WS waiter: {description} for {identifier} timed out after {timeout}s"
+    )
+    return None
+
+
+async def _ws_cleanup(
+    ws_client: Any,
+    attached_handlers: list[str],
+    sub_ids: list[int],
+    handler: Callable[[dict[str, Any]], Awaitable[None]],
+) -> None:
+    for et in attached_handlers:
+        ws_client.remove_event_handler(et, handler)
+    for sub_id in sub_ids:
+        try:
+            await ws_client.unsubscribe_events(sub_id)
+        except (HomeAssistantConnectionError, OSError, TimeoutError) as e:
+            logger.warning(
+                "unsubscribe_events(%s) cleanup failed (subscription "
+                "may leak until WS pool reconnects): %s",
+                sub_id,
+                e,
+            )
+        except HomeAssistantCommandTimeout:
+            logger.warning(
+                "unsubscribe_events(%s) cleanup timed out on WS "
+                "round-trip; subscription may leak until WS pool "
+                "reconnects",
+                sub_id,
+            )
+
+
 async def _ws_wait_for_condition(
     client: Any,
     identifier: str,
@@ -762,157 +921,44 @@ async def _ws_wait_for_condition(
     attached_handlers: list[str] = []
     sub_ids: list[int] = []
     try:
-        for et in event_types:
-            ws_client.add_event_handler(et, handler)
-            attached_handlers.append(et)
-        for et in event_types:
-            try:
-                sub_id = await ws_client.subscribe_events(et)
-            except HomeAssistantAuthError:
-                # Auth errors must surface — see _get_waiter_ws_client.
-                raise
-            except (
-                HomeAssistantConnectionError,
-                HomeAssistantCommandError,
-                OSError,
-                TimeoutError,
-            ) as e:
-                logger.debug(
-                    "subscribe_events(%s) failed during %s for %s: %s — "
-                    "falling back to REST polling",
-                    et,
-                    description,
-                    identifier,
-                    e,
-                )
-                return await _legacy_poll_until(
-                    identifier,
-                    sample,
-                    timeout=timeout,
-                    poll_interval=poll_interval,
-                    description=description,
-                )
-            sub_ids.append(sub_id)
-
-        start = time.monotonic()
-        # Sample-after-subscribe: covers the "event fired before subscribe
-        # landed" race. This is where most happy-path waits resolve.
-        try:
-            result = await sample()
-            if result is not None:
-                logger.debug(
-                    f"WS waiter: {description} for {identifier} resolved by "
-                    f"post-subscribe sample after {time.monotonic() - start:.2f}s"
-                )
-                return result
-        except (HomeAssistantConnectionError, HomeAssistantAuthError):
-            raise
-
-        # If the WS dropped between subscribe and the post-subscribe sample,
-        # skip the wait loop entirely — we'd burn up to one backstop interval
-        # waiting for events that will never arrive. Connection-drop coverage
-        # symmetric with the in-loop check below.
-        if not ws_client.is_connected:
-            logger.debug(
-                "WS connection dropped before wait loop for %s on %s — "
-                "completing via REST polling",
-                description,
-                identifier,
-            )
-            remaining = timeout - (time.monotonic() - start)
-            if remaining <= 0:
-                return None
+        if not await _ws_subscribe_all(
+            ws_client,
+            event_types,
+            handler,
+            attached_handlers,
+            sub_ids,
+            description,
+            identifier,
+        ):
             return await _legacy_poll_until(
                 identifier,
                 sample,
-                timeout=remaining,
+                timeout=timeout,
                 poll_interval=poll_interval,
                 description=description,
             )
 
-        while time.monotonic() - start < timeout:
-            # Wait for either an event nudge or the polling backstop. The
-            # backstop guards against silently-broken subscriptions and
-            # late-binding state hydration the event stream doesn't
-            # advertise.
-            remaining = timeout - (time.monotonic() - start)
-            wait_budget = min(remaining, _POLLING_BACKSTOP_INTERVAL)
-            try:
-                await asyncio.wait_for(nudge.wait(), timeout=wait_budget)
-                nudge.clear()
-            except TimeoutError:
-                pass
-
-            # Connection-drop awareness: if the WS dropped while we were
-            # waiting, the OperationManager / pool will reconnect lazily
-            # but our subscription is gone. Fall back to REST polling for
-            # the remaining budget rather than wait silently for events
-            # that will never arrive.
-            if not ws_client.is_connected:
-                logger.debug(
-                    "WS connection dropped during %s for %s — completing "
-                    "wait via REST polling",
-                    description,
-                    identifier,
-                )
-                remaining = timeout - (time.monotonic() - start)
-                if remaining <= 0:
-                    return None
-                return await _legacy_poll_until(
-                    identifier,
-                    sample,
-                    timeout=remaining,
-                    poll_interval=poll_interval,
-                    description=description,
-                )
-
-            try:
-                result = await sample()
-                if result is not None:
-                    logger.debug(
-                        f"WS waiter: {description} for {identifier} resolved "
-                        f"after {time.monotonic() - start:.2f}s"
-                    )
-                    return result
-            except (HomeAssistantConnectionError, HomeAssistantAuthError):
-                raise
-
-        logger.warning(
-            f"WS waiter: {description} for {identifier} timed out after {timeout}s"
+        start = time.monotonic()
+        # Sample-after-subscribe: covers the "event fired before subscribe
+        # landed" race. This is where most happy-path waits resolve.
+        early_result, is_done = await _ws_post_subscribe_check(
+            ws_client, sample, start, timeout, poll_interval, description, identifier
         )
-        return None
+        if is_done:
+            return early_result
+
+        return await _ws_run_wait_loop(
+            ws_client,
+            sample,
+            nudge,
+            start,
+            timeout,
+            poll_interval,
+            description,
+            identifier,
+        )
     finally:
-        for et in attached_handlers:
-            ws_client.remove_event_handler(et, handler)
-        for sub_id in sub_ids:
-            # ``unsubscribe_events`` narrows internally: OSError → debug,
-            # HomeAssistantCommandError → warning, everything else propagates.
-            # The outer catch here guards against the round-trip's WS-level
-            # failure modes (connection reset by another caller, send_command
-            # timeout) so a cleanup hiccup never masks the wait's real result.
-            # Narrow set — programming bugs (TypeError, AttributeError) must
-            # propagate.
-            try:
-                await ws_client.unsubscribe_events(sub_id)
-            except (HomeAssistantConnectionError, OSError, TimeoutError) as e:
-                logger.warning(
-                    "unsubscribe_events(%s) cleanup failed (subscription "
-                    "may leak until WS pool reconnects): %s",
-                    sub_id,
-                    e,
-                )
-            except HomeAssistantCommandTimeout:
-                # ``send_command`` raises this when the WS round-trip exceeds
-                # its own 30s deadline (Patch76 review #1382 — typed
-                # replacement for the previous ``str(e) == "Command timeout"``
-                # string match). Treated as cleanup noise; the subscription
-                # may leak until the WS pool reconnects.
-                logger.warning(
-                    "unsubscribe_events(%s) cleanup timed out on WS "
-                    "round-trip; subscription may leak until WS pool "
-                    "reconnects",
-                    sub_id,
-                )
+        await _ws_cleanup(ws_client, attached_handlers, sub_ids, handler)
 
 
 async def wait_for_entity_registered(
@@ -1018,6 +1064,34 @@ async def wait_for_entity_removed(
     return False
 
 
+async def _sample_state_change(
+    client: Any,
+    entity_id: str,
+    expected_state: str | None,
+    baseline: dict[str, str | None],
+) -> dict[str, Any] | None:
+    """Sample entity state for wait_for_state_change; returns state dict on match."""
+    try:
+        raw = await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError as e:
+        logger.debug(f"API error sampling {entity_id} state: {e}")
+        return None
+    if not isinstance(raw, dict):
+        return None
+    current = raw.get("state")
+    if expected_state is not None and current == expected_state:
+        return raw
+    if (
+        expected_state is None
+        and baseline["state"] is not None
+        and current != baseline["state"]
+    ):
+        return raw
+    if expected_state is None and baseline["state"] is None and current is not None:
+        baseline["state"] = current
+    return None
+
+
 async def wait_for_state_change(
     client: Any,
     entity_id: str,
@@ -1068,25 +1142,7 @@ async def wait_for_state_change(
     baseline: dict[str, str | None] = {"state": initial_state}
 
     async def sample() -> dict[str, Any] | None:
-        try:
-            raw = await client.get_entity_state(entity_id)
-        except HomeAssistantAPIError as e:
-            logger.debug(f"API error sampling {entity_id} state: {e}")
-            return None
-        if not isinstance(raw, dict):
-            return None
-        current = raw.get("state")
-        if expected_state is not None and current == expected_state:
-            return raw
-        if (
-            expected_state is None
-            and baseline["state"] is not None
-            and current != baseline["state"]
-        ):
-            return raw
-        if expected_state is None and baseline["state"] is None and current is not None:
-            baseline["state"] = current
-        return None
+        return await _sample_state_change(client, entity_id, expected_state, baseline)
 
     result = await _ws_wait_for_condition(
         client,
@@ -1101,6 +1157,62 @@ async def wait_for_state_change(
         return result
     logger.warning(f"Entity {entity_id} state did not change within {timeout}s")
     return None
+
+
+async def _discover_automation_sample(
+    client: Any,
+    unique_id: str,
+    captured: dict[str, str | None],
+) -> str | None:
+    """Sample get_states() looking for an automation whose attributes.id matches unique_id."""
+    if captured["entity_id"] is not None:
+        return captured["entity_id"]
+    try:
+        states = await client.get_states()
+    except HomeAssistantAPIError as e:
+        logger.debug(f"API error sampling get_states() for unique_id {unique_id}: {e}")
+        captured["last_api_error"] = str(e)
+        return None
+    for state in states:
+        entity_id = state.get("entity_id")
+        if not isinstance(entity_id, str) or not entity_id.startswith("automation."):
+            continue
+        if state.get("attributes", {}).get("id") == unique_id:
+            return entity_id
+    return None
+
+
+def _automation_event_filter(
+    event: dict[str, Any],
+    unique_id: str,
+    captured: dict[str, str | None],
+) -> bool:
+    """Filter state_changed events to those matching an automation by unique_id.
+
+    Defensive isinstance guards mirror the sample() callback — the WS dispatcher
+    swallows handler exceptions broadly, so a malformed payload reaching
+    .startswith would silently fail to nudge and the wait would time out.
+    """
+    data = event.get("data") or {}
+    evt_entity = data.get("entity_id")
+    if not isinstance(evt_entity, str) or not evt_entity.startswith("automation."):
+        return False
+    new_state = data.get("new_state") or {}
+    attrs = new_state.get("attributes") if isinstance(new_state, dict) else None
+    if not isinstance(attrs, dict) or attrs.get("id") != unique_id:
+        return False
+    # Guard against last-writer-wins collision (HA forbids duplicate unique_id,
+    # but don't coin-flip silently if it ever happens).
+    if captured["entity_id"] is None:
+        captured["entity_id"] = evt_entity
+    elif captured["entity_id"] != evt_entity:
+        logger.warning(
+            "Duplicate automation match for unique_id %s: %s already captured, ignoring %s",
+            unique_id,
+            captured["entity_id"],
+            evt_entity,
+        )
+    return True
 
 
 async def wait_for_automation_entity_by_unique_id(
@@ -1131,76 +1243,16 @@ async def wait_for_automation_entity_by_unique_id(
         The discovered entity_id (e.g. ``"automation.morning_routine"``)
         or ``None`` on timeout.
     """
-    # Mutable closure cells: ``entity_id`` stashes the discovered
-    # entity_id when the filter sees a matching event (sample() then
-    # short-circuits the full get_states() scan). ``last_api_error``
-    # tracks the most recent transient API failure during sampling so
-    # the final timeout warning can distinguish "automation truly not
-    # found" from "REST channel wedged the whole budget."
+    # Mutable cells shared between sample and event_filter.
+    # ``entity_id``: stashes the discovered entity_id when filter sees a match.
+    # ``last_api_error``: tracks REST failures for the timeout warning.
     captured: dict[str, str | None] = {"entity_id": None, "last_api_error": None}
 
     async def sample() -> str | None:
-        if captured["entity_id"] is not None:
-            return captured["entity_id"]
-        try:
-            states = await client.get_states()
-        except HomeAssistantAPIError as e:
-            # Debug-level here is intentional — the waiter retries on
-            # transient errors. The wedged-channel signal goes in the
-            # final timeout warning via ``captured["last_api_error"]``.
-            logger.debug(
-                f"API error sampling get_states() for unique_id {unique_id}: {e}"
-            )
-            captured["last_api_error"] = str(e)
-            return None
-        for state in states:
-            entity_id = state.get("entity_id")
-            if not isinstance(entity_id, str) or not entity_id.startswith(
-                "automation."
-            ):
-                continue
-            if state.get("attributes", {}).get("id") == unique_id:
-                return entity_id
-        return None
+        return await _discover_automation_sample(client, unique_id, captured)
 
     def event_filter(event: dict[str, Any]) -> bool:
-        # state_changed payload shape:
-        #   event["data"] = {"entity_id": ..., "new_state": {"attributes": {...}}}
-        # capability_attributes on BaseAutomationEntity guarantees attributes.id
-        # carries the unique_id on the first state emission (the caller has
-        # always just POSTed /config/automation/config/{unique_id}, so
-        # unique_id is non-None by construction).
-        #
-        # Defensive ``isinstance`` guards mirror the ``sample()`` callback
-        # above — the WS dispatcher swallows handler exceptions broadly
-        # (``websocket_client.py``'s ``except Exception`` in the dispatch
-        # loop), so a malformed payload reaching ``.startswith`` here would
-        # silently fail to nudge and the wait would time out reporting
-        # "not found" when the real cause was schema drift. Same shape-
-        # hardening pattern as ``sample()``.
-        data = event.get("data") or {}
-        evt_entity = data.get("entity_id")
-        if not isinstance(evt_entity, str) or not evt_entity.startswith("automation."):
-            return False
-        new_state = data.get("new_state") or {}
-        attrs = new_state.get("attributes") if isinstance(new_state, dict) else None
-        if not isinstance(attrs, dict) or attrs.get("id") != unique_id:
-            return False
-        # Guard against last-writer-wins: if two events for matching
-        # automations arrived (HA storage forbids duplicate unique_id, but
-        # don't coin-flip silently if it ever happens), keep the first
-        # observed entity_id and log the collision.
-        if captured["entity_id"] is None:
-            captured["entity_id"] = evt_entity
-        elif captured["entity_id"] != evt_entity:
-            logger.warning(
-                "Duplicate automation match for unique_id %s: %s already "
-                "captured, ignoring %s",
-                unique_id,
-                captured["entity_id"],
-                evt_entity,
-            )
-        return True
+        return _automation_event_filter(event, unique_id, captured)
 
     result = await _ws_wait_for_condition(
         client,
@@ -1391,6 +1443,62 @@ def parse_diagnostics_fields(value: list[str] | str | None) -> list[str] | None:
     )
 
 
+async def _fetch_raw_diagnostics(
+    client: Any,
+    endpoint: str,
+    timeout_seconds: float,
+    device_id: str | None,
+    result: dict[str, Any],
+) -> None:
+    """Fetch diagnostics from HA, populating result['data'] or result['error']."""
+    try:
+        result["data"] = await client._request("GET", endpoint, timeout=timeout_seconds)
+    except HomeAssistantAuthError as e:
+        logger.warning("Diagnostics fetch auth error: %s", e)
+        result["error"] = (
+            "Authentication failed for diagnostics endpoint (HTTP 401): the "
+            "configured access token is invalid or expired. Generate a new "
+            "long-lived access token from the HA user profile page."
+        )
+    except HomeAssistantAPIError as e:
+        status = getattr(e, "status_code", None)
+        if status == 404:
+            scope = "device" if device_id else "config entry"
+            result["error"] = (
+                f"Diagnostics not available for this {scope}: integration may "
+                "not implement the diagnostics platform, or the id is invalid. "
+                "Verify via ha_get_integration()."
+            )
+            logger.debug("Diagnostics not available (404): %s", e)
+        elif status == 403:
+            result["error"] = (
+                "Diagnostics endpoint refused the request: admin scope required "
+                "(HA's @http.require_admin gate)."
+            )
+            logger.warning("Diagnostics fetch refused (403): %s", e)
+        else:
+            result["error"] = (
+                f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
+            )
+            logger.warning("Diagnostics fetch API error: %s", e)
+    except HomeAssistantConnectionError as e:
+        msg = str(e)
+        if "timeout" in msg.lower():
+            result["error"] = (
+                f"Diagnostics fetch timed out after {timeout_seconds:.1f}s "
+                "(ZHA dumps on large networks can exceed this; the integration "
+                "may be too slow to return diagnostics on this network)"
+            )
+        else:
+            result["error"] = f"Diagnostics fetch connection failed: {e}"
+        logger.warning("Diagnostics fetch connection error: %s", e)
+    except Exception as e:  # pragma: no cover - defensive last-resort guard
+        logger.warning(
+            "Diagnostics fetch unexpected error: %s: %s", type(e).__name__, e
+        )
+        result["error"] = f"Diagnostics fetch failed: {e}"
+
+
 async def fetch_integration_diagnostics(
     client: Any,
     config_entry_id: str | None,
@@ -1472,52 +1580,7 @@ async def fetch_integration_diagnostics(
     if device_id:
         endpoint += f"/device/{device_id}"
 
-    try:
-        result["data"] = await client._request("GET", endpoint, timeout=timeout_seconds)
-    except HomeAssistantAuthError as e:
-        logger.warning("Diagnostics fetch auth error: %s", e)
-        result["error"] = (
-            "Authentication failed for diagnostics endpoint (HTTP 401): the "
-            "configured access token is invalid or expired. Generate a new "
-            "long-lived access token from the HA user profile page."
-        )
-    except HomeAssistantAPIError as e:
-        status = getattr(e, "status_code", None)
-        if status == 404:
-            scope = "device" if device_id else "config entry"
-            result["error"] = (
-                f"Diagnostics not available for this {scope}: integration may "
-                "not implement the diagnostics platform, or the id is invalid. "
-                "Verify via ha_get_integration()."
-            )
-            logger.debug("Diagnostics not available (404): %s", e)
-        elif status == 403:
-            result["error"] = (
-                "Diagnostics endpoint refused the request: admin scope required "
-                "(HA's @http.require_admin gate)."
-            )
-            logger.warning("Diagnostics fetch refused (403): %s", e)
-        else:
-            result["error"] = (
-                f"Diagnostics fetch failed (HTTP {status or '<status>'}): {e}"
-            )
-            logger.warning("Diagnostics fetch API error: %s", e)
-    except HomeAssistantConnectionError as e:
-        msg = str(e)
-        if "timeout" in msg.lower():
-            result["error"] = (
-                f"Diagnostics fetch timed out after {timeout_seconds:.1f}s "
-                "(ZHA dumps on large networks can exceed this; the integration "
-                "may be too slow to return diagnostics on this network)"
-            )
-        else:
-            result["error"] = f"Diagnostics fetch connection failed: {e}"
-        logger.warning("Diagnostics fetch connection error: %s", e)
-    except Exception as e:  # pragma: no cover - defensive last-resort guard
-        logger.warning(
-            "Diagnostics fetch unexpected error: %s: %s", type(e).__name__, e
-        )
-        result["error"] = f"Diagnostics fetch failed: {e}"
+    await _fetch_raw_diagnostics(client, endpoint, timeout_seconds, device_id, result)
 
     if "data" in result and result["data"] is None and "error" not in result:
         # Empty response body — distinct from an explicit error or a
@@ -1532,6 +1595,84 @@ async def fetch_integration_diagnostics(
         )
 
     return result
+
+
+def _apply_data_path_resolution(
+    result: dict[str, Any],
+    data: Any,
+    data_path: str,
+    data_limit: int | None,
+    data_offset: int,
+) -> tuple[Any, bool]:
+    """Walk data_path, apply pagination, and update result. Returns (data, paginated).
+
+    Called only when data_path is set; when absent the caller handles the
+    orphan data_offset warning directly.
+    """
+    resolved, path_error = _resolve_data_path(data, data_path)
+    if path_error is not None:
+        result["data"] = None
+        result["data_path_error"] = path_error
+        return None, False
+
+    result["data_path"] = data_path
+    if isinstance(resolved, list) and data_limit is not None:
+        total = len(resolved)
+        start = max(0, data_offset)
+        end = start + data_limit
+        items = resolved[start:end]
+        page: dict[str, Any] = {
+            "path": data_path,
+            "items": items,
+            "offset": start,
+            "limit": data_limit,
+            "total": total,
+            "has_more": end < total,
+        }
+        result["data"] = page
+        return items, True
+
+    # Pagination intent has nowhere to apply: either data_limit is set but the
+    # resolved value isn't a list, or data_offset is set without data_limit.
+    if data_limit is not None:
+        type_name = "null" if resolved is None else type(resolved).__name__
+        result["data_pagination_warning"] = (
+            f"data_limit ignored: resolved value at '{data_path}' is {type_name}, not a list"
+        )
+    elif data_offset > 0:
+        result["data_pagination_warning"] = (
+            "data_offset ignored: data_limit not set (no pagination window to slice)"
+        )
+    result["data"] = resolved
+    return resolved, False
+
+
+def _apply_truncation_cap(
+    result: dict[str, Any],
+    data: Any,
+    truncate_at_bytes: int | None,
+    paginated: bool,
+) -> None:
+    if truncate_at_bytes is None or data is None:
+        return
+    try:
+        serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return
+    bytes_total = len(serialized.encode("utf-8"))
+    if bytes_total > truncate_at_bytes:
+        result["truncated"] = True
+        result["bytes_total"] = bytes_total
+        result["byte_cap"] = truncate_at_bytes
+        if paginated:
+            envelope = result["data"]
+            preserved = {k: v for k, v in envelope.items() if k != "items"}
+            preserved["truncated"] = True
+            result["data"] = preserved
+        else:
+            if isinstance(data, dict):
+                result["available_fields"] = sorted(data.keys())
+            del result["data"]
 
 
 def _project_cap_and_paginate_diagnostics(
@@ -1575,47 +1716,9 @@ def _project_cap_and_paginate_diagnostics(
 
     paginated = False
     if data_path:
-        resolved, path_error = _resolve_data_path(data, data_path)
-        if path_error is not None:
-            result["data"] = None
-            result["data_path_error"] = path_error
-            data = None
-        else:
-            result["data_path"] = data_path
-            if isinstance(resolved, list) and data_limit is not None:
-                total = len(resolved)
-                start = max(0, data_offset)
-                end = start + data_limit
-                items = resolved[start:end]
-                page: dict[str, Any] = {
-                    "path": data_path,
-                    "items": items,
-                    "offset": start,
-                    "limit": data_limit,
-                    "total": total,
-                    "has_more": end < total,
-                }
-                result["data"] = page
-                data = items
-                paginated = True
-            else:
-                # Pagination intent has nowhere to apply: either ``data_limit``
-                # is set but the resolved value isn't a list, or ``data_offset``
-                # is set without ``data_limit`` (no window to slice). Surface
-                # a structured warning rather than silently dropping the kwarg.
-                if data_limit is not None:
-                    type_name = "null" if resolved is None else type(resolved).__name__
-                    result["data_pagination_warning"] = (
-                        f"data_limit ignored: resolved value at '{data_path}' "
-                        f"is {type_name}, not a list"
-                    )
-                elif data_offset > 0:
-                    result["data_pagination_warning"] = (
-                        "data_offset ignored: data_limit not set "
-                        "(no pagination window to slice)"
-                    )
-                result["data"] = resolved
-                data = resolved
+        data, paginated = _apply_data_path_resolution(
+            result, data, data_path, data_limit, data_offset
+        )
     elif data_offset > 0 and "data_pagination_warning" not in result:
         # ``data_offset`` set without ``data_path`` — the resolver branch is
         # skipped entirely, so the offset has no effect on the response.
@@ -1627,31 +1730,7 @@ def _project_cap_and_paginate_diagnostics(
             "data_offset ignored: data_path not set (no resolved sub-tree to paginate)"
         )
 
-    if truncate_at_bytes is not None and data is not None:
-        try:
-            serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
-        except (TypeError, ValueError):
-            # Non-serialisable payload (shouldn't happen for HA diagnostics, but
-            # don't suppress the data on a serializer hiccup).
-            return
-        bytes_total = len(serialized.encode("utf-8"))
-        if bytes_total > truncate_at_bytes:
-            result["truncated"] = True
-            result["bytes_total"] = bytes_total
-            result["byte_cap"] = truncate_at_bytes
-            if paginated:
-                # ``paginated=True`` is only set on the branch that writes a
-                # dict envelope to ``result["data"]`` — preserve the metadata
-                # (path / offset / limit / total / has_more) so the caller can
-                # shrink the window in the next call. Only ``items`` is dropped.
-                envelope = result["data"]
-                preserved = {k: v for k, v in envelope.items() if k != "items"}
-                preserved["truncated"] = True
-                result["data"] = preserved
-            else:
-                if isinstance(data, dict):
-                    result["available_fields"] = sorted(data.keys())
-                del result["data"]
+    _apply_truncation_cap(result, data, truncate_at_bytes, paginated)
 
 
 def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:

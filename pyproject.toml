@@ -147,7 +147,6 @@ ignore = [
 "src/ha_mcp/tools/tools_search.py" = ["C901"]
 "src/ha_mcp/tools/tools_utility.py" = ["C901"]
 "src/ha_mcp/tools/smart_search.py" = ["C901"]
-"src/ha_mcp/tools/util_helpers.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

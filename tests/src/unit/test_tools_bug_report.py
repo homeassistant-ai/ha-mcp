@@ -21,25 +21,30 @@ from ha_mcp.tools.tools_bug_report import (
 )
 
 
+@pytest.fixture
+def mock_mcp():
+    """Create a mock MCP server for bug report tool tests."""
+    mcp = MagicMock()
+    mcp._tools = {}
+
+    def add_tool(method):
+        name = (
+            getattr(getattr(method, "__fastmcp__", None), "name", None)
+            or method.__name__
+        )
+
+        async def _wrapper(*args, **kwargs):
+            return await method(*args, **kwargs)
+
+        _wrapper.__name__ = name
+        mcp._tools[name] = _wrapper
+
+    mcp.add_tool = add_tool
+    return mcp
+
+
 class TestBugReportTool:
     """Test suite for the ha_report_issue tool."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        # Store registered tools so we can call them in tests
-        mcp._tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                mcp._tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -1113,21 +1118,6 @@ class TestFormatClientInfoForTemplate:
 class TestBugReportNewIdentityFields:
     """End-to-end checks that the new self-reported placeholders + auto fields
     land in both templates and the response payload."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        mcp._tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                mcp._tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):

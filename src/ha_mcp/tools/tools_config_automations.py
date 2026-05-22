@@ -183,6 +183,19 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
     return normalized_triggers
 
 
+def _scene_create_in_choose(action: dict[str, Any]) -> bool:
+    """True if any ``choose`` option's sequence contains scene.create."""
+    opts = action.get("choose")
+    if not isinstance(opts, list):
+        return False
+    for opt in opts:
+        if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
+            for sub in opt["sequence"]:
+                if _action_contains_scene_create(sub):
+                    return True
+    return False
+
+
 def _action_contains_scene_create(action: Any) -> bool:
     """True if the action — or any nested action under HA's wrapper keys —
     invokes ``scene.create``.
@@ -205,14 +218,7 @@ def _action_contains_scene_create(action: Any) -> bool:
             for sub in nested:
                 if _action_contains_scene_create(sub):
                     return True
-    # ``choose``: list of ``{conditions, sequence}`` options.
-    if isinstance(action.get("choose"), list):
-        for opt in action["choose"]:
-            if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
-                for sub in opt["sequence"]:
-                    if _action_contains_scene_create(sub):
-                        return True
-    return False
+    return _scene_create_in_choose(action)
 
 
 def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
@@ -650,111 +656,10 @@ class AutomationConfigTools:
                     )
                 )
 
-            # Handle python_transform mode
             if python_transform is not None:
-                if not identifier:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "identifier is required for python_transform",
-                            suggestions=[
-                                "Provide the automation entity_id or unique_id",
-                                "Use ha_search_entities(domain_filter='automation') to find automations",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "identifier": identifier,
-                            },
-                        )
-                    )
-                if config_hash is None:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "config_hash is required for python_transform",
-                            suggestions=[
-                                "Call ha_config_get_automation() first",
-                                "Use the config_hash from that response",
-                            ],
-                            context={
-                                "action": "python_transform",
-                                "identifier": identifier,
-                            },
-                        )
-                    )
-
-                # Fetch current config and verify hash
-                current_config = await self._fetch_and_verify_hash(
-                    identifier, config_hash, "python_transform"
+                response, bp_warnings = await self._run_python_transform(
+                    identifier, config_hash, python_transform, category
                 )
-
-                # Apply Python transformation
-                try:
-                    transformed_config = safe_execute(python_transform, current_config)
-                except PythonSandboxError as e:
-                    message, suggestions = format_sandbox_error(e, python_transform)
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_FAILED,
-                            message,
-                            suggestions=suggestions,
-                            context={
-                                "action": "python_transform",
-                                "identifier": identifier,
-                            },
-                        )
-                    )
-
-                # Pop category before sending to HA REST API (rejects unknown keys)
-                transform_category = transformed_config.pop("category", None)
-
-                # Normalize and validate the transformed config
-                transformed_config = _normalize_automation_config(transformed_config)
-                self._validate_required_fields(transformed_config, identifier)
-                bp_warnings = _check_best_practices(transformed_config)
-
-                # Save transformed config
-                result = await self._client.upsert_automation_config(
-                    transformed_config, identifier
-                )
-
-                # Re-fetch to get authoritative hash (HA may normalize after save)
-                refetched = await self._get_automation_config_internal(identifier)
-                new_config_hash = refetched[1]  # (config, hash) tuple
-
-                # Re-apply category if present
-                entity_id = result.get("entity_id")
-                if (
-                    not entity_id
-                    and identifier
-                    and identifier.startswith("automation.")
-                ):
-                    entity_id = identifier
-                if transform_category and entity_id:
-                    await apply_entity_category(
-                        self._client,
-                        entity_id,
-                        transform_category,
-                        "automation",
-                        result,
-                        "automation",
-                    )
-
-                response: dict[str, Any] = {
-                    "success": True,
-                    "action": "python_transform",
-                    "automation_id": (
-                        entity_id or identifier or result.get("unique_id")
-                    ),
-                    "config_hash": new_config_hash,
-                    "python_expression": python_transform,
-                    "message": f"Automation {identifier} updated via Python transform",
-                    **_strip_redundant_identifier_echo(
-                        result, extra_excludes=("success",)
-                    ),
-                }
-                if bp_warnings:
-                    response["best_practice_warnings"] = bp_warnings
                 return response
 
             if config is None:
@@ -784,82 +689,20 @@ class AutomationConfigTools:
             if identifier and config_hash:
                 await self._fetch_and_verify_hash(identifier, config_hash, "set")
 
-            # Validate required fields based on automation type
             self._validate_required_fields(config_dict, identifier)
-
-            # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
-
-            # Cross-check literal service and entity references against
-            # the live registries. Soft warnings only — the write still
-            # happens, even when references don't resolve (#940).
             validation_meta = await validate_config_references(
                 self._client, config_dict
             )
 
-            result = await self._client.upsert_automation_config(
-                config_dict, identifier
+            return await self._run_config_update(
+                config_dict,
+                identifier,
+                effective_category,
+                wait,
+                bp_warnings,
+                validation_meta,
             )
-
-            # If the client could not verify the entity was registered, warn but don't hard-fail.
-            if result.get("entity_not_verified"):
-                result.setdefault("warnings", []).append(
-                    f"{NOT_VERIFIED_WARNING_PREFIX} "
-                    "after polling. The automation may still have been created -- check Home "
-                    "Assistant logs and try reloading automations. Common causes: "
-                    "automations.yaml vs automation.yaml filename mismatch, invalid config "
-                    "that HA accepted but failed to load, or slow hardware."
-                )
-                result.pop("entity_not_verified", None)
-
-            # Wait for automation to be queryable
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
-            entity_id = result.get("entity_id")
-            # On updates, entity_id may not be in the result -- derive from identifier
-            if not entity_id and identifier and identifier.startswith("automation."):
-                entity_id = identifier
-            if wait_bool and entity_id:
-                action_word = "created" if identifier is None else "updated"
-                try:
-                    registered = await wait_for_entity_registered(
-                        self._client, entity_id
-                    )
-                    if not registered:
-                        result.setdefault("warnings", []).append(
-                            f"Automation {action_word} but {entity_id} not yet queryable. "
-                            "It may take a moment to become available."
-                        )
-                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                    result.setdefault("warnings", []).append(
-                        f"Automation {action_word} but verification failed: {e}"
-                    )
-
-            # Apply category to entity registry if provided
-            if effective_category and entity_id:
-                await apply_entity_category(
-                    self._client,
-                    entity_id,
-                    effective_category,
-                    "automation",
-                    result,
-                    "automation",
-                )
-
-            if bp_warnings:
-                result["best_practice_warnings"] = bp_warnings
-
-            merge_validation_meta(result, validation_meta)
-
-            automation_id = entity_id or identifier or result.get("unique_id")
-            return {
-                "success": True,
-                # automation_id omitted when all three fallbacks are falsy —
-                # the create path is unguarded by validate_identifier_not_empty,
-                # and surfacing automation_id=None would lie about resolvability.
-                # HA's upsert contract makes this branch unreachable in practice.
-                **({"automation_id": automation_id} if automation_id else {}),
-                **_strip_redundant_identifier_echo(result),
-            }
 
         except ToolError:
             raise
@@ -888,6 +731,162 @@ class AutomationConfigTools:
                 context={"identifier": identifier},
                 suggestions=suggestions,
             )
+
+    async def _run_python_transform(
+        self,
+        identifier: str | None,
+        config_hash: str | None,
+        python_transform: str,
+        category: str | None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Execute python_transform mode and return (response, bp_warnings)."""
+        if not identifier:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "identifier is required for python_transform",
+                    suggestions=[
+                        "Provide the automation entity_id or unique_id",
+                        "Use ha_search_entities(domain_filter='automation') to find automations",
+                    ],
+                    context={"action": "python_transform", "identifier": identifier},
+                )
+            )
+        if config_hash is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config_hash is required for python_transform",
+                    suggestions=[
+                        "Call ha_config_get_automation() first",
+                        "Use the config_hash from that response",
+                    ],
+                    context={"action": "python_transform", "identifier": identifier},
+                )
+            )
+
+        current_config = await self._fetch_and_verify_hash(
+            identifier, config_hash, "python_transform"
+        )
+
+        try:
+            transformed_config = safe_execute(python_transform, current_config)
+        except PythonSandboxError as e:
+            message, suggestions = format_sandbox_error(e, python_transform)
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    message,
+                    suggestions=suggestions,
+                    context={"action": "python_transform", "identifier": identifier},
+                )
+            )
+
+        # Pop category before sending to HA REST API (rejects unknown keys)
+        transform_category = transformed_config.pop("category", None)
+        effective_category = category if category is not None else transform_category
+
+        transformed_config = _normalize_automation_config(transformed_config)
+        self._validate_required_fields(transformed_config, identifier)
+        bp_warnings = _check_best_practices(transformed_config)
+
+        result = await self._client.upsert_automation_config(
+            transformed_config, identifier
+        )
+        refetched = await self._get_automation_config_internal(identifier)
+        new_config_hash = refetched[1]
+
+        entity_id = result.get("entity_id")
+        if not entity_id and identifier and identifier.startswith("automation."):
+            entity_id = identifier
+        if effective_category and entity_id:
+            await apply_entity_category(
+                self._client,
+                entity_id,
+                effective_category,
+                "automation",
+                result,
+                "automation",
+            )
+
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "python_transform",
+            "automation_id": entity_id or identifier or result.get("unique_id"),
+            "config_hash": new_config_hash,
+            "python_expression": python_transform,
+            "message": f"Automation {identifier} updated via Python transform",
+            **_strip_redundant_identifier_echo(result, extra_excludes=("success",)),
+        }
+        if bp_warnings:
+            response["best_practice_warnings"] = bp_warnings
+        return response, bp_warnings
+
+    async def _run_config_update(
+        self,
+        config_dict: dict[str, Any],
+        identifier: str | None,
+        effective_category: str | None,
+        wait: bool | str,
+        bp_warnings: list[str],
+        validation_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute config-replacement mode and return the tool response."""
+        result = await self._client.upsert_automation_config(config_dict, identifier)
+
+        if result.get("entity_not_verified"):
+            result.setdefault("warnings", []).append(
+                f"{NOT_VERIFIED_WARNING_PREFIX} "
+                "after polling. The automation may still have been created -- check Home "
+                "Assistant logs and try reloading automations. Common causes: "
+                "automations.yaml vs automation.yaml filename mismatch, invalid config "
+                "that HA accepted but failed to load, or slow hardware."
+            )
+            result.pop("entity_not_verified", None)
+
+        wait_bool = coerce_bool_param(wait, "wait", default=True)
+        entity_id = result.get("entity_id")
+        if not entity_id and identifier and identifier.startswith("automation."):
+            entity_id = identifier
+        if wait_bool and entity_id:
+            action_word = "created" if identifier is None else "updated"
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Automation {action_word} but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Automation {action_word} but verification failed: {e}"
+                )
+
+        if effective_category and entity_id:
+            await apply_entity_category(
+                self._client,
+                entity_id,
+                effective_category,
+                "automation",
+                result,
+                "automation",
+            )
+
+        if bp_warnings:
+            result["best_practice_warnings"] = bp_warnings
+
+        merge_validation_meta(result, validation_meta)
+
+        automation_id = entity_id or identifier or result.get("unique_id")
+        return {
+            "success": True,
+            # automation_id omitted when all three fallbacks are falsy —
+            # the create path is unguarded by validate_identifier_not_empty,
+            # and surfacing automation_id=None would lie about resolvability.
+            # HA's upsert contract makes this branch unreachable in practice.
+            **({"automation_id": automation_id} if automation_id else {}),
+            **_strip_redundant_identifier_echo(result),
+        }
 
     async def _list_automation_entity_ids(self) -> list[str]:
         """Best-effort list of automation entity_ids (up to 10) from the entity registry.
@@ -1018,6 +1017,67 @@ class AutomationConfigTools:
         return cast(dict[str, Any], parsed_config)
 
     @staticmethod
+    def _check_scene_create_misroute(
+        config_dict: dict[str, Any], identifier: str | None
+    ) -> None:
+        """Raise if an empty-trigger config wraps scene.create (common model misroute)."""
+        trigger_value = config_dict.get("trigger")
+        trigger_empty = trigger_value is None or (
+            isinstance(trigger_value, list) and not trigger_value
+        )
+        if not trigger_empty:
+            return
+        actions_list = coerce_to_list(config_dict.get("action"))
+        scene_create_indices = [
+            i for i, a in enumerate(actions_list) if _action_contains_scene_create(a)
+        ]
+        if scene_create_indices:
+            raise_tool_error(
+                create_error_response(
+                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    message=(
+                        "Empty trigger paired with a scene.create action — "
+                        "this automation can never fire. For a state snapshot "
+                        "of one or more entities, use ha_config_set_scene "
+                        "directly instead of wrapping scene.create in an "
+                        "automation."
+                    ),
+                    suggestions=[
+                        "ha_config_set_scene(scene_id='...', config={'name': '...', 'entities': {'<entity_id>': {...}}}) creates a scene without a trigger.",
+                        "If the snapshot really should be the result of an event, add the trigger that should fire it and keep the automation.",
+                        "For a state-derived value that recomputes when its inputs change, use ha_config_set_helper(helper_type='template') instead.",
+                    ],
+                    context={
+                        "scene_create_action_indices": scene_create_indices,
+                        "identifier": identifier,
+                    },
+                )
+            )
+
+    @staticmethod
+    def _validate_condition_platform(config_dict: dict[str, Any]) -> None:
+        """Raise if any condition uses 'platform' (trigger syntax) instead of 'condition'."""
+        for idx, cond in enumerate(coerce_to_list(config_dict.get("condition"))):
+            if not isinstance(cond, dict):
+                continue
+            if "platform" in cond and "condition" not in cond:
+                raise_tool_error(
+                    create_error_response(
+                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        message=(
+                            f"Condition at index {idx} uses 'platform' (trigger syntax). "
+                            "Conditions use 'condition', not 'platform'."
+                        ),
+                        suggestions=[
+                            f"Replace 'platform' with 'condition': "
+                            f"{{'condition': '{cond['platform']}', ...}}",
+                            "Triggers use 'platform'; conditions use 'condition'.",
+                        ],
+                        context={"condition_index": idx, "found_key": "platform"},
+                    )
+                )
+
+    @staticmethod
     def _validate_required_fields(
         config_dict: dict[str, Any], identifier: str | None
     ) -> None:
@@ -1065,78 +1125,12 @@ class AutomationConfigTools:
                 )
             )
 
-        # Issue #1169: reject configs that wrap ``scene.create`` in an
-        # automation with no functional trigger. Models occasionally produce
-        # these when they want a state snapshot but pattern-match to
-        # ``ha_config_set_automation`` instead of ``ha_config_set_scene``.
-        # HA's REST endpoint accepts ``trigger: []`` (or ``null``/missing)
-        # and stores a never-firing automation — corruption marker, not a
-        # draft. Only the narrow misroute pattern is rejected so legitimate
-        # empty-trigger drafts paired with other actions still pass.
-        trigger_value = config_dict.get("trigger")
-        trigger_empty = trigger_value is None or (
-            isinstance(trigger_value, list) and not trigger_value
-        )
-        if trigger_empty:
-            actions_list = coerce_to_list(config_dict.get("action"))
-            # Walks the standard HA wrappers (``sequence`` / ``parallel`` /
-            # ``choose`` / ``if``-``then``/``else``) so a nested
-            # ``scene.create`` is caught alongside the top-level case.
-            scene_create_indices = [
-                i
-                for i, a in enumerate(actions_list)
-                if _action_contains_scene_create(a)
-            ]
-            if scene_create_indices:
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message=(
-                            "Empty trigger paired with a scene.create action — "
-                            "this automation can never fire. For a state snapshot "
-                            "of one or more entities, use ha_config_set_scene "
-                            "directly instead of wrapping scene.create in an "
-                            "automation."
-                        ),
-                        suggestions=[
-                            "ha_config_set_scene(scene_id='...', config={'name': "
-                            "'...', 'entities': {'<entity_id>': {...}}}) creates "
-                            "a scene without a trigger.",
-                            "If the snapshot really should be the result of an "
-                            "event, add the trigger that should fire it and keep "
-                            "the automation.",
-                            "For a state-derived value that recomputes when its "
-                            "inputs change, use "
-                            "ha_config_set_helper(helper_type='template') instead.",
-                        ],
-                        context={
-                            "scene_create_action_indices": scene_create_indices,
-                            "identifier": identifier,
-                        },
-                    )
-                )
+        # Issue #1169: see _check_scene_create_misroute
+        AutomationConfigTools._check_scene_create_misroute(config_dict, identifier)
 
         # HA accepts conditions with 'platform' (trigger syntax) but then crashes
         # with an unhelpful 500 rather than a 400 validation error.
-        for idx, cond in enumerate(coerce_to_list(config_dict.get("condition"))):
-            if not isinstance(cond, dict):
-                continue
-            if "platform" in cond and "condition" not in cond:
-                raise_tool_error(
-                    create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message=(
-                            f"Condition at index {idx} uses 'platform' (trigger syntax). "
-                            "Conditions use 'condition', not 'platform'."
-                        ),
-                        suggestions=[
-                            f"Replace 'platform' with 'condition': "
-                            f"{{'condition': '{cond['platform']}', ...}}",
-                            "Triggers use 'platform'; conditions use 'condition'.",
-                        ],
-                        context={"condition_index": idx, "found_key": "platform"},
-                    )
-                )
+        AutomationConfigTools._validate_condition_platform(config_dict)
 
         # Prevent duplicate creation when config contains an existing automation id
         if identifier is None and "id" in config_dict:

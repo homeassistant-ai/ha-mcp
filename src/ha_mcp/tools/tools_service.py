@@ -25,6 +25,42 @@ from .helpers import (
 )
 from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
 
+
+def _parse_json_dict_param(
+    data: str | dict[str, Any] | None,
+    *,
+    type_error_message: str,
+) -> dict[str, Any] | None:
+    if data is None:
+        return None
+    raw: Any = None
+    try:
+        raw = parse_json_param(data, "data")
+    except ValueError as e:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid data parameter: {e}",
+                parameter="data",
+                invalid_json=True,
+            )
+        )
+    if raw is not None and not isinstance(raw, dict):
+        raise_tool_error(
+            create_validation_error(
+                type_error_message,
+                parameter="data",
+                details=f"Received type: {type(raw).__name__}",
+            )
+        )
+    return raw if isinstance(raw, dict) else None
+
+
+def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    return _parse_json_dict_param(
+        data, type_error_message="Event data must be a JSON object (dict)"
+    )
+
+
 logger = logging.getLogger(__name__)
 
 # Services that produce observable state changes on entities
@@ -96,41 +132,26 @@ class ServiceTools:
 
     @staticmethod
     def _parse_service_data(
-        data: str | dict[str, Any] | None, entity_id: str | None,
+        data: str | dict[str, Any] | None,
+        entity_id: str | None,
     ) -> dict[str, Any]:
         """Parse and validate the data parameter into a service_data dict."""
-        try:
-            parsed_data = parse_json_param(data, "data")
-        except ValueError as e:
-            raise_tool_error(
-                create_validation_error(
-                    f"Invalid data parameter: {e}",
-                    parameter="data",
-                    invalid_json=True,
-                )
+        service_data: dict[str, Any] = (
+            _parse_json_dict_param(
+                data, type_error_message="Data parameter must be a JSON object"
             )
-
-        service_data: dict[str, Any] = {}
-        if parsed_data is not None:
-            if isinstance(parsed_data, dict):
-                service_data = parsed_data
-            else:
-                raise_tool_error(
-                    create_validation_error(
-                        "Data parameter must be a JSON object",
-                        parameter="data",
-                        details=f"Received type: {type(parsed_data).__name__}",
-                    )
-                )
-
+            or {}
+        )
         if entity_id:
             service_data["entity_id"] = entity_id
-
         return service_data
 
     @staticmethod
     def _build_timeout_response(
-        domain: str, service: str, entity_id: str | None, data: str | dict[str, Any] | None,
+        domain: str,
+        service: str,
+        entity_id: str | None,
+        data: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build a partial-success response for service call timeouts."""
         return {
@@ -194,7 +215,11 @@ class ServiceTools:
                 f"Service executed but state verification failed: {e}"
             )
 
-    @tool(name="ha_call_service", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
+    @tool(
+        name="ha_call_service",
+        tags={"Service & Device Control"},
+        annotations={"destructiveHint": True, "title": "Call Service"},
+    )
     @log_tool_usage
     async def ha_call_service(
         self,
@@ -288,7 +313,10 @@ class ServiceTools:
             # Wait for entity state to change
             if should_wait and entity_id is not None:
                 await self._verify_state_change(
-                    entity_id, service, initial_state, response,
+                    entity_id,
+                    service,
+                    initial_state,
+                    response,
                 )
 
             return response
@@ -330,7 +358,11 @@ class ServiceTools:
                 suggestions=suggestions,
             )
 
-    @tool(name="ha_get_operation_status", tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @tool(
+        name="ha_get_operation_status",
+        tags={"Service & Device Control"},
+        annotations={"readOnlyHint": True, "title": "Get Operation Status"},
+    )
     @log_tool_usage
     async def ha_get_operation_status(
         self,
@@ -390,7 +422,11 @@ class ServiceTools:
                 ],
             )
 
-    @tool(name="ha_bulk_control", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
+    @tool(
+        name="ha_bulk_control",
+        tags={"Service & Device Control"},
+        annotations={"destructiveHint": True, "title": "Bulk Control"},
+    )
     @log_tool_usage
     async def ha_bulk_control(
         self,
@@ -476,29 +512,7 @@ class ServiceTools:
                 )
             )
 
-        parsed_data: dict[str, Any] | None = None
-        if data is not None:
-            raw: Any = None
-            try:
-                raw = parse_json_param(data, "data")
-            except ValueError as e:
-                raise_tool_error(
-                    create_validation_error(
-                        f"Invalid data parameter: {e}",
-                        parameter="data",
-                        invalid_json=True,
-                    )
-                )
-            if raw is not None:
-                if not isinstance(raw, dict):
-                    raise_tool_error(
-                        create_validation_error(
-                            "Event data must be a JSON object (dict)",
-                            parameter="data",
-                            details=f"Received type: {type(raw).__name__}",
-                        )
-                    )
-                parsed_data = raw
+        parsed_data = _parse_event_data(data)
 
         try:
             response = await self._client.fire_event(event_type, parsed_data)

@@ -15,11 +15,17 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
@@ -32,9 +38,7 @@ logger = logging.getLogger(__name__)
 _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 
 
-async def _check_storage_mode_dashboard_collision(
-    client: Any, yaml_path: str
-) -> None:
+async def _check_storage_mode_dashboard_collision(client: Any, yaml_path: str) -> None:
     """Raise a ToolError if a storage-mode dashboard already owns the requested
     url_path; otherwise return without doing anything.
 
@@ -44,7 +48,7 @@ async def _check_storage_mode_dashboard_collision(
     """
     if not yaml_path.startswith(_LOVELACE_DASHBOARD_PREFIX):
         return
-    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
+    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX) :]
     try:
         dashboards = await fetch_dashboards_list(client)
     except Exception as exc:
@@ -78,21 +82,12 @@ async def _check_storage_mode_dashboard_collision(
             )
 
 
-def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register YAML config editing tools with the MCP server.
+class YamlConfigTools:
+    def __init__(self, client: Any) -> None:
+        self._client = client
 
-    Requires ENABLE_YAML_CONFIG_EDITING=true.
-    """
-    settings = get_global_settings()
-    if not settings.enable_yaml_config_editing:
-        logger.debug(
-            "YAML config tools disabled (set ENABLE_YAML_CONFIG_EDITING=true to enable)"
-        )
-        return
-
-    logger.info("YAML config editing tools enabled")
-
-    @mcp.tool(
+    @tool(
+        name="ha_config_set_yaml",
         tags={"System", "beta"},
         annotations={
             "destructiveHint": True,
@@ -102,6 +97,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_config_set_yaml(
+        self,
         yaml_path: Annotated[
             str,
             Field(
@@ -220,10 +216,10 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Skip on `remove` so users can clean up YAML entries that conflict
             # with a storage-mode dashboard (e.g., during a migration).
             if action in ("add", "replace"):
-                await _check_storage_mode_dashboard_collision(client, yaml_path)
+                await _check_storage_mode_dashboard_collision(self._client, yaml_path)
 
             # Check if custom component is available
-            await _assert_mcp_tools_available(client)
+            await _assert_mcp_tools_available(self._client)
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -236,7 +232,7 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 service_data["content"] = content
 
             # Call the custom component service
-            result = await client.call_service(
+            result = await self._client.call_service(
                 MCP_TOOLS_DOMAIN,
                 "edit_yaml_config",
                 service_data,
@@ -269,3 +265,18 @@ def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "yaml_path": yaml_path,
                 },
             )
+
+
+def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register YAML config editing tools with the MCP server.
+
+    Requires ENABLE_YAML_CONFIG_EDITING=true.
+    """
+    settings = get_global_settings()
+    if not settings.enable_yaml_config_editing:
+        logger.debug(
+            "YAML config tools disabled (set ENABLE_YAML_CONFIG_EDITING=true to enable)"
+        )
+        return
+    logger.info("YAML config editing tools enabled")
+    register_tool_methods(mcp, YamlConfigTools(client))

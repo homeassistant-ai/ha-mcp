@@ -14,10 +14,14 @@ broke ``statistics`` (multi-step user → pick-characteristic) and
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_config_entry_flow import (
     _extract_schema_field_names,
     _handle_flow_steps,
     _handle_form_step,
+    _submit_step,
 )
 
 
@@ -201,3 +205,26 @@ class TestMultiStepFlow:
         }
 
 
+class TestSubmitStep:
+    """Unit tests for _submit_step error propagation."""
+
+    @pytest.mark.asyncio
+    async def test_non_400_422_api_error_propagates_unwrapped(self):
+        """A 500 HomeAssistantAPIError must re-raise unchanged, not be swallowed."""
+        err = HomeAssistantAPIError("server error", status_code=500)
+        submit_fn = AsyncMock(side_effect=err)
+        dummy_step: dict[str, Any] = {"step_id": "user", "type": "form"}
+
+        with pytest.raises(HomeAssistantAPIError) as exc_info:
+            await _submit_step(
+                submit_fn,
+                "flow-1",
+                {"name": "x"},
+                client=None,
+                helper_type=None,
+                last_menu_choice=None,
+                current_step=dummy_step,
+            )
+
+        assert exc_info.value is err
+        assert exc_info.value.status_code == 500
