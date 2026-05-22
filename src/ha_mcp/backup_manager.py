@@ -829,7 +829,7 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         days = int(
             getattr(get_global_settings(), "auto_backup_calendar_lookahead_days", 7)
         )
-    except Exception:
+    except (AttributeError, ImportError, ValueError, TypeError):
         days = 7
     days = max(1, min(365, days))
     start = datetime.now(UTC).isoformat()
