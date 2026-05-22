@@ -28,6 +28,13 @@ Three layers of guard, each catching a different silent-failure mode:
    collection-time regressions where a test file fails to import and
    pytest silently drops tens of tests.
 
+4. ``test_session_skipped_count_below_ceiling`` — per-lane skip-count
+   ceiling. Catches the inverse of #3: collection size unchanged but
+   tests transition pass→skip silently because a marker was applied
+   too broadly. The conftest documents a prior incident of this kind
+   (PR #1375 audit, 14 ``supervisor_mock`` tests silently skipping on
+   every testcontainer run — see ``tests/src/e2e/conftest.py:158-166``).
+
 This file is placed under ``basic/`` (NOT ``haos_only/``) on purpose: the
 auto-applied ``haos_only`` marker would skip these whenever
 ``is_haos_backend_selected()`` returns False, which is exactly the
@@ -42,11 +49,24 @@ from typing import Any
 
 from ..utilities.assertions import safe_call_tool
 
-# Floor for total collected tests across all lanes. As of 2026-05-22 each
-# lane collects ~913 tests (just differing skip mix per mode). Set well
-# below current value to allow normal test-add/remove churn while still
-# catching the case where ~50+ tests vanish from collection.
+# Floor for total collected tests across all lanes. As of 2026-05-22
+# container lanes collect 912 and HAOS lanes collect 915 (small per-mode
+# variance from parametrize/fixture-driven cases). Floor sits well below
+# all three to allow normal test-add/remove churn while still catching
+# the case where ~50+ tests vanish from collection.
 _COLLECTION_FLOOR = 850
+
+# Per-lane ceilings for the count of skip-marked tests. Set 5-9 above
+# current per-lane skip counts (as of 2026-05-22: container=46,
+# haos=14, haos_inaddon=22). A buffer of 5-9 absorbs PRs that
+# legitimately add a few new marker-gated tests, but catches a
+# mass-skip incident like PR #1375 (14 tests started skipping silently
+# because a marker was applied too broadly).
+_SKIP_CEILING_PER_LANE = {
+    "container": 55,
+    "haos": 20,
+    "haos_inaddon": 30,
+}
 
 
 def test_backend_dispatch_matches_workflow_env(
@@ -54,9 +74,14 @@ def test_backend_dispatch_matches_workflow_env(
 ) -> None:
     """Conftest dispatch must pick the backend the workflow env implies.
 
-    Runs unconditionally on every lane — branches off env vars to mirror
-    conftest's own dispatch logic. Mismatch means the dispatch silently
-    picked a different backend than CI asked for.
+    Runs unconditionally on every lane — branches off env vars to
+    approximate conftest's dispatch logic. (Conftest's
+    ``is_haos_backend_selected`` additionally requires the qcow2 file
+    to exist on disk; this test only checks env-var truthiness. The
+    test deliberately re-derives the expected backend independently
+    rather than calling the same helper, so a helper-side regression
+    can't make the test silently agree with the bug.) Mismatch means
+    the dispatch silently picked a different backend than CI asked for.
     """
     image_path = os.environ.get("HAOS_TEST_IMAGE_PATH")
     mode = os.environ.get("HAOS_TEST_MODE", "")
@@ -108,8 +133,12 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
 
     - HAOS external + inaddon: ``ha_get_addon`` returns a populated
       addons list (the bake installs several addons).
-    - testcontainer: ``ha_get_addon`` returns ``success=False`` because
-      the Supervisor proxy endpoint is unreachable.
+    - testcontainer: ``ha_get_addon`` raises ToolError
+      (RESOURCE_NOT_FOUND from the ``supervisor/api`` WebSocket proxy
+      because no Supervisor is running); ``safe_call_tool`` catches
+      and decodes the structured error to ``{"success": False, ...}``.
+      The dict conversion is load-bearing — a future maintainer should
+      NOT switch to ``assert_mcp_failure`` or similar.
 
     The asymmetry of this check makes it impossible for one backend to
     impersonate the other while keeping this test green.
@@ -145,12 +174,59 @@ def test_session_collected_test_count_above_floor(request: Any) -> None:
 
     Catches collection-time regressions: a test file fails to import,
     pytest collects tens of fewer tests, the suite stays green with
-    reduced coverage. Collection count is mode-independent (all lanes
-    collect the same items, mode only changes pass/skip mix).
+    reduced coverage. Collection count varies by a handful across
+    modes (parametrize/fixture-driven — currently 912 container vs
+    915 HAOS lanes); the floor sits well below all three lanes' actuals.
     """
     total = len(request.session.items)
     assert total >= _COLLECTION_FLOOR, (
         f"Only {total} tests collected, expected >= {_COLLECTION_FLOOR}. "
         f"A test file likely failed to import, dropping coverage. Check "
         f"for collection errors in the pytest output."
+    )
+
+
+def test_session_skipped_count_below_ceiling(
+    request: Any,
+    ha_container_with_fresh_config: dict[str, Any],
+) -> None:
+    """Per-lane skip-count must stay below ``_SKIP_CEILING_PER_LANE[backend]``.
+
+    Catches the inverse of the collection-floor check: the suite still
+    collects the expected total, but tests transition pass→skip silently
+    because a marker was applied too broadly in conftest's
+    ``pytest_collection_modifyitems`` hook.
+
+    The conftest itself documents a real prior incident of this kind
+    (``tests/src/e2e/conftest.py:158-166`` — PR #1375 audit, 14
+    ``supervisor_mock`` tests silently skipping on every testcontainer
+    run because an ``external_only`` skip was scoped wrong). A
+    skip-count ceiling per lane catches that whole class of bug.
+
+    Ceilings sit 5-9 above current per-lane skip counts; updates are
+    only required when a PR legitimately introduces enough new
+    marker-gated tests to cross the threshold (uncommon).
+    """
+    backend = ha_container_with_fresh_config["backend"]
+    ceiling = _SKIP_CEILING_PER_LANE.get(backend)
+    assert ceiling is not None, (
+        f"Unknown backend {backend!r} — add to _SKIP_CEILING_PER_LANE "
+        f"at the top of this file"
+    )
+    # Items in request.session.items already have skip markers applied
+    # by pytest_collection_modifyitems (which ran before any test).
+    # Under pytest-xdist with --dist loadscope, each worker collects
+    # the full session, so this count is consistent per worker.
+    skipped = sum(
+        1
+        for item in request.session.items
+        if any(m.name == "skip" for m in item.iter_markers())
+    )
+    assert skipped <= ceiling, (
+        f"{skipped} tests have skip markers on the {backend} lane, "
+        f"which exceeds the ceiling of {ceiling}. A marker may be "
+        f"applied too broadly in pytest_collection_modifyitems — "
+        f"check tests/src/e2e/conftest.py:115-168 for recent changes. "
+        f"If the increase is intentional (legitimate new marker-gated "
+        f"tests), bump _SKIP_CEILING_PER_LANE[{backend!r}] in this file."
     )
