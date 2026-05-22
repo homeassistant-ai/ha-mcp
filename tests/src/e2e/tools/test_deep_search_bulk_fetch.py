@@ -78,9 +78,14 @@ def _script_config(index: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def bulk_automations(mcp_client):
-    """Create a batch of test automations and tear them down after the test."""
+    """Create a batch of test automations once per module and tear them down after the module.
+
+    Module-scoped because every test in this file is read-only against the
+    created automations (search/list only; no modify/remove), so a single
+    setup amortises ~20s of fixture overhead per consuming test (refs #366).
+    """
     created_ids = []
 
     for i in range(_AUTOMATION_COUNT):
@@ -98,20 +103,31 @@ async def bulk_automations(mcp_client):
         created_ids.append(entity_id)
         logger.info(f"Created automation {i}/{_AUTOMATION_COUNT}: {entity_id}")
 
-    # Poll until all entities are registered (more robust than fixed sleep)
-    from ..utilities.wait_helpers import wait_for_condition
+    # Wait via HA WebSocket for ``state_changed`` on each created
+    # automation. This avoids the ~10s ``ha_list_states`` polling burn
+    # observed on HAOS (the bulk fixture's old wait_for_condition fired
+    # the warning path on every run). After WS confirms, one
+    # ``ha_list_states`` call below acts as the final correctness check.
+    from ..utilities.wait_helpers import wait_for_entities_registered_via_ws
 
-    async def all_entities_registered():
-        states = await mcp_client.call_tool("ha_list_states", {})
-        state_data = assert_mcp_success(states, "Get states for polling")
-        registered_ids = {s.get("entity_id") for s in state_data.get("states", [])}
-        return all(eid in registered_ids for eid in created_ids)
+    seen = await wait_for_entities_registered_via_ws(created_ids, timeout=30.0)
+    if seen != set(created_ids):
+        # Fall back to the old poll-via-mcp pattern for the stragglers
+        # rather than failing setup — keeps the fixture robust if WS
+        # misses an event (e.g. coalesced state during heavy CI load).
+        from ..utilities.wait_helpers import wait_for_condition
 
-    await wait_for_condition(
-        all_entities_registered,
-        condition_name=f"All {len(created_ids)} bulk automations registered",
-        timeout=10.0,
-    )
+        async def all_entities_registered():
+            states = await mcp_client.call_tool("ha_list_states", {})
+            state_data = assert_mcp_success(states, "Get states (fallback polling)")
+            registered_ids = {s.get("entity_id") for s in state_data.get("states", [])}
+            return all(eid in registered_ids for eid in created_ids)
+
+        await wait_for_condition(
+            all_entities_registered,
+            condition_name=f"All {len(created_ids)} bulk automations registered (fallback)",
+            timeout=10.0,
+        )
 
     yield created_ids
 
@@ -127,9 +143,13 @@ async def bulk_automations(mcp_client):
     logger.info(f"Cleaned up {len(created_ids)} bulk test automations")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 async def bulk_scripts(mcp_client):
-    """Create a batch of test scripts and tear them down after the test."""
+    """Create a batch of test scripts once per module and tear them down after the module.
+
+    Module-scoped for the same reason as ``bulk_automations`` above: every
+    consuming test in this file is read-only against the created scripts.
+    """
     created_ids = []
 
     for i in range(_SCRIPT_COUNT):
@@ -142,22 +162,29 @@ async def bulk_scripts(mcp_client):
         created_ids.append(script_id)
         logger.info(f"Created script {i}/{_SCRIPT_COUNT}: {script_id}")
 
-    # Poll until all script entities are registered (more robust than fixed sleep)
-    from ..utilities.wait_helpers import wait_for_condition
+    # WS-based wait — mirrors the bulk_automations fixture above to
+    # avoid the chronic ~10s ``ha_list_states`` poll on HAOS. Script
+    # entity_ids carry the ``script.`` domain prefix in the state
+    # machine; created_ids hold the script_id without the prefix.
+    from ..utilities.wait_helpers import wait_for_entities_registered_via_ws
 
-    async def all_scripts_registered():
-        states = await mcp_client.call_tool("ha_list_states", {})
-        state_data = assert_mcp_success(states, "Get states for script polling")
-        registered_ids = {
-            s.get("entity_id") for s in state_data.get("states", [])
-            if s.get("entity_id", "").startswith("script.")
-        }
-        expected_entity_ids = {f"script.{sid}" for sid in created_ids}
-        return expected_entity_ids.issubset(registered_ids)
+    expected_entity_ids = {f"script.{sid}" for sid in created_ids}
+    seen = await wait_for_entities_registered_via_ws(expected_entity_ids, timeout=30.0)
+    if seen != expected_entity_ids:
+        from ..utilities.wait_helpers import wait_for_condition
 
-    await wait_for_condition(
-        all_scripts_registered,
-        condition_name=f"All {len(created_ids)} bulk scripts registered",
+        async def all_scripts_registered():
+            states = await mcp_client.call_tool("ha_list_states", {})
+            state_data = assert_mcp_success(states, "Get states (fallback polling)")
+            registered_ids = {
+                s.get("entity_id") for s in state_data.get("states", [])
+                if s.get("entity_id", "").startswith("script.")
+            }
+            return expected_entity_ids.issubset(registered_ids)
+
+        await wait_for_condition(
+            all_scripts_registered,
+            condition_name=f"All {len(created_ids)} bulk scripts registered (fallback)",
         timeout=10.0,
     )
 

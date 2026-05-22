@@ -232,3 +232,201 @@ class TestSendCommandErrorContract:
             await client.send_command_with_event("system_health/info")
         assert "Command failed:" in str(exc_info.value)
         assert "system_health failure" in str(exc_info.value)
+
+
+class TestSubscribeEventsContract:
+    """Tests that pin the subscribe_events HA-wire-contract semantics.
+
+    HA's ``handle_subscribe_events`` (websocket_api/commands.py) ends with
+    ``connection.send_result(msg["id"])``; ``send_result(msg_id, result=None)``
+    emits ``{"id": N, "type": "result", "success": true, "result": null}``.
+    The subscription identifier is the request ``id`` — NOT a field inside
+    the ``result`` payload. Previously the code looked for
+    ``result["subscription"]``, which never exists, so every call raised
+    ``"Failed to get subscription ID"``. The ``WebSocketListenerService``
+    then left ``_listener_started = False``, every device-control call
+    re-retried (and re-failed), and ``OperationManager.process_state_change``
+    was never invoked — leaving every async operation in PENDING until
+    the per-operation timeout flipped it to TIMEOUT. Surfaced during
+    PR #1375 HAOS log audit.
+    """
+
+    @staticmethod
+    def _prepare_client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_returns_message_id_with_null_result(self):
+        """HA's canonical ``result: null`` reply must NOT raise.
+
+        Pins the wire contract: ``subscribe_events`` returns the message
+        ``id`` from the original command, regardless of what HA puts in
+        ``result`` (HA always sends ``null`` for this command).
+        """
+        client = self._prepare_client()
+        captured_id: dict[str, int] = {}
+
+        async def _resolve(message: dict) -> None:
+            message_id = message["id"]
+            captured_id["id"] = message_id
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        subscription_id = await client.subscribe_events("state_changed")
+
+        assert subscription_id == captured_id["id"], (
+            f"Expected subscription_id to equal the message_id used in the "
+            f"subscribe command, got subscription_id={subscription_id!r} "
+            f"vs message_id={captured_id['id']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_includes_event_type_in_message(self):
+        """The outgoing message must carry ``event_type`` when provided."""
+        client = self._prepare_client()
+        captured_message: dict[str, dict] = {}
+
+        async def _resolve(message: dict) -> None:
+            captured_message["msg"] = message
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        await client.subscribe_events("state_changed")
+
+        assert captured_message["msg"]["type"] == "subscribe_events"
+        assert captured_message["msg"]["event_type"] == "state_changed"
+
+    @pytest.mark.asyncio
+    async def test_omits_event_type_when_none(self):
+        """No ``event_type`` field when called with None (subscribe to all)."""
+        client = self._prepare_client()
+        captured_message: dict[str, dict] = {}
+
+        async def _resolve(message: dict) -> None:
+            captured_message["msg"] = message
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        await client.subscribe_events()
+
+        assert captured_message["msg"]["type"] == "subscribe_events"
+        assert "event_type" not in captured_message["msg"]
+
+    @pytest.mark.asyncio
+    async def test_raises_on_failure_result(self):
+        """HA's ``{"success": false, "error": {...}}`` must surface as an error."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": False,
+                    "error": {
+                        "code": "unauthorized",
+                        "message": "Refused to subscribe",
+                    },
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        with pytest.raises(HomeAssistantCommandError) as exc_info:
+            await client.subscribe_events("state_changed")
+        assert "subscribe_events failed" in str(exc_info.value)
+        assert "Refused to subscribe" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_not_authenticated(self):
+        """Subscribing before auth completes surfaces a connection error."""
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        # Fresh client, NOT marked authenticated
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+
+        with pytest.raises(HomeAssistantConnectionError):
+            await client.subscribe_events("state_changed")
+
+    @pytest.mark.asyncio
+    async def test_timeout_cancels_pending_future_and_raises(self, monkeypatch):
+        """If HA never sends the subscribe-result, the 30s ``wait_for``
+        deadline fires, the pending future is cancelled (preventing a
+        leaked state entry), and ``TimeoutError`` propagates.
+
+        Pins the third raise site in subscribe_events. Without this, a
+        regression that swallows the timeout or forgets the cleanup
+        would only surface as a stuck WS subscription dict on the
+        production server.
+        """
+        client = self._prepare_client()
+
+        # Drop the message on the floor — never resolve the future.
+        async def _drop(message: dict) -> None:
+            return None
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+
+        # Shorten the deadline so the test doesn't actually wait 30s.
+        # Patches asyncio.wait_for to immediately raise TimeoutError.
+        async def _instant_timeout(_coro, timeout):
+            raise TimeoutError("test-injected timeout")
+
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.asyncio.wait_for", _instant_timeout
+        )
+
+        with pytest.raises(TimeoutError):
+            await client.subscribe_events("state_changed")
+
+        # Pending future for the subscribe message must have been cleaned up.
+        assert not client._state._pending_requests, (
+            f"Expected pending_requests to be cleaned up after timeout, "
+            f"still have: {list(client._state._pending_requests)}"
+        )

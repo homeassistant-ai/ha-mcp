@@ -145,7 +145,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Entity domain must match the original domain",
     ],
     ErrorCode.SERVICE_NOT_FOUND: [
-        "Use ha_get_skill_home_assistant_best_practices for documentation",
+        "Use ha_get_skill_guide for documentation",
         "Check the service name spelling",
         "Verify the domain supports this service",
     ],
@@ -156,7 +156,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ErrorCode.SERVICE_INVALID_ACTION: [
         "Check available actions for this domain",
         "Common actions: turn_on, turn_off, toggle",
-        "Use ha_get_skill_home_assistant_best_practices for documentation",
+        "Use ha_get_skill_guide for documentation",
     ],
     ErrorCode.SERVICE_CALL_FAILED: [
         "Check the service parameters are correct",
@@ -169,7 +169,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ],
     ErrorCode.CONFIG_INVALID: [
         "Review the configuration format",
-        "Use ha_get_skill_home_assistant_best_practices for configuration help",
+        "Use ha_get_skill_guide for configuration help",
     ],
     ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS: [
         "Check documentation for required fields",
@@ -380,20 +380,6 @@ def create_timeout_error(
         f"Operation '{operation}' timed out after {timeout_seconds}s",
         details=details,
         context=final_context,
-    )
-
-
-def create_resource_not_found_error(
-    resource_type: str,
-    identifier: str,
-    details: str | None = None,
-) -> dict[str, Any]:
-    """Create a resource not found error response."""
-    return create_error_response(
-        ErrorCode.RESOURCE_NOT_FOUND,
-        f"{resource_type} '{identifier}' not found",
-        details=details,
-        context={"resource_type": resource_type, "identifier": identifier},
     )
 
 

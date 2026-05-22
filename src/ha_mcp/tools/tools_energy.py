@@ -41,6 +41,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -672,7 +673,7 @@ class EnergyTools:
             }
             if validate_warning is not None:
                 response["partial"] = True
-                response["warning"] = validate_warning
+                response.setdefault("warnings", []).append(validate_warning)
             return response
 
         except ToolError:
@@ -952,14 +953,14 @@ class EnergyTools:
             }
             if post_save_errors:
                 response["post_save_validation_errors"] = post_save_errors
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but the persisted config has "
                     f"{len(post_save_errors)} validation error(s). Review "
                     "and re-write if any relate to this change."
                 )
             elif post_save_validate_error is not None:
                 response["partial"] = True
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but post-save energy/validate "
                     f"failed: {post_save_validate_error}. The persisted "
                     "config has not been re-validated."
@@ -1011,6 +1012,18 @@ class EnergyTools:
                     ],
                 )
             )
+        # Empty/whitespace stat_consumption would write a ``{"stat_consumption": ""}``
+        # entry to energy prefs storage — a phantom row keyed on an empty
+        # sensor reference. Same multi-modal-destructive class as
+        # ``ha_manage_addon`` slug guard.
+        validate_identifier_not_empty(
+            stat_consumption,
+            "stat_consumption",
+            suggestions=[
+                "Pass stat_consumption='sensor.<your_device_energy>'",
+            ],
+            context={"mode": "add_device"},
+        )
 
         target_key = "device_consumption_water" if water else "device_consumption"
 
@@ -1049,6 +1062,17 @@ class EnergyTools:
                     ],
                 )
             )
+        # Empty/whitespace stat_consumption would search the prefs storage for
+        # an empty match (always missing) and surface as a misleading
+        # "Device with stat_consumption='' not found".
+        validate_identifier_not_empty(
+            stat_consumption,
+            "stat_consumption",
+            suggestions=[
+                "Pass stat_consumption='sensor.<existing_device_energy>'",
+            ],
+            context={"mode": "remove_device"},
+        )
 
         target_key = "device_consumption_water" if water else "device_consumption"
 

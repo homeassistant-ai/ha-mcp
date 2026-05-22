@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
 
+from .._version import is_running_in_addon
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -42,11 +43,12 @@ COMPACT_LOGBOOK_FIELDS = {
 }
 
 
-# Supervisor-managed system services exposed via /<slug>/logs. Stable set
-# in HA Core; if Supervisor adds e.g. /cli/logs in a future release, extend
-# here. See #1116.
+# Supervisor-managed system services exposed via /<slug>/logs. Set mirrors
+# HA Core's hassio HTTP proxy ``PATHS_ADMIN`` whitelist in
+# ``homeassistant/components/hassio/http.py``. See #1116 (original 7-service
+# scope) and #1260 (cli added — proxy supported it the whole time).
 SYSTEM_SERVICE_SLUGS = frozenset(
-    {"supervisor", "host", "core", "dns", "audio", "multicast", "observer"}
+    {"supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"}
 )
 
 
@@ -145,7 +147,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "error_log": Raw home-assistant.log text
         - "supervisor": Add-on container logs (requires slug = add-on slug)
         - "system_service": HA-Supervisor-managed system service logs (requires
-          slug ∈ {supervisor, host, core, dns, audio, multicast, observer})
+          slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
@@ -762,15 +764,29 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except HomeAssistantAuthError as e:
             # Listed before HomeAssistantAPIError because AuthError is a sibling,
             # not a subclass — without this explicit clause the 401 from
-            # _supervisor_logs_get propagates raw to FastMCP and surfaces
-            # without a structured `code` field.
+            # _supervisor_logs_get / _raw_request propagates raw to FastMCP and
+            # surfaces without a structured `code` field.
+            #
+            # Suggestions branch on is_running_in_addon(): addon installs go
+            # direct to Supervisor (the failure mode is a missing/rotated
+            # SUPERVISOR_TOKEN), non-addon installs hit HA Core's hassio
+            # proxy with the user's LLA (the failure mode is a non-admin or
+            # expired LLA — SUPERVISOR_TOKEN doesn't even apply).
+            if is_running_in_addon():
+                suggestions = [
+                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
+                    "Reinstall the add-on if the token may have rotated",
+                ]
+            else:
+                suggestions = [
+                    "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived "
+                    "Access Token (Settings → Profile → Long-Lived Access Tokens)",
+                    "Re-create the LLAT if it has expired or been revoked",
+                ]
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
-                suggestions=[
-                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
-                    "Reinstall the add-on if the token may have rotated",
-                ],
+                suggestions=suggestions,
             )
         except HomeAssistantAPIError as e:
             status = getattr(e, "status_code", None)
@@ -832,13 +848,15 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 
-        ``service`` ∈ {supervisor, host, core, dns, audio, multicast, observer}.
+        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the eight Supervisor-managed
+        services: supervisor, host, core, dns, audio, cli, multicast, observer).
         Caller (``ha_get_logs(source='system_service')``) validates against
-        ``SYSTEM_SERVICE_SLUGS`` before dispatch. Hits
-        ``http://supervisor/<service>/logs`` directly via
-        ``HomeAssistantClient._get_system_service_logs`` — same direct-Supervisor
-        path #1116's add-on fix uses, just with a different URL prefix.
-        Requires ``hassio_role: manager`` in the addon manifest.
+        ``SYSTEM_SERVICE_SLUGS`` before dispatch. Routed through
+        ``HomeAssistantClient._get_system_service_logs`` which gates on
+        ``is_running_in_addon()``: addon installs hit Supervisor directly at
+        ``http://supervisor/<service>/logs`` (requires ``hassio_role: manager``
+        in the addon manifest), non-addon installs fall back to the HA Core
+        proxy at ``/api/hassio/<service>/logs`` (requires an admin LLA).
         """
         effective_limit = _coerce_limit(
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
@@ -877,29 +895,53 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except HomeAssistantAuthError as e:
             # Listed before HomeAssistantAPIError because AuthError is a sibling,
             # not a subclass — without this explicit clause the 401 from
-            # _supervisor_logs_get propagates raw to FastMCP and surfaces
-            # without a structured `code` field.
+            # _supervisor_logs_get / _raw_request propagates raw to FastMCP and
+            # surfaces without a structured `code` field.
+            #
+            # Suggestions branch on is_running_in_addon() (see _get_supervisor_log
+            # for the rationale): SUPERVISOR_TOKEN suggestions only make sense
+            # inside the addon container; non-addon installs need admin-LLA hints.
+            if is_running_in_addon():
+                suggestions = [
+                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
+                    "Reinstall the add-on if the token may have rotated",
+                ]
+            else:
+                suggestions = [
+                    "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived "
+                    "Access Token (Settings → Profile → Long-Lived Access Tokens)",
+                    "Re-create the LLAT if it has expired or been revoked",
+                ]
             exception_to_structured_error(
                 e,
                 context={"source": "system_service", "slug": service},
-                suggestions=[
-                    "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
-                    "Reinstall the add-on if the token may have rotated",
-                ],
+                suggestions=suggestions,
             )
         except HomeAssistantAPIError as e:
             status = getattr(e, "status_code", None)
             if status == 403:
-                # Same role-too-low cause as the addon-logs branch.
-                exception_to_structured_error(
-                    e,
-                    context={"source": "system_service", "slug": service},
-                    suggestions=[
+                # In-addon: Supervisor returns 403 when the addon's hassio_role
+                # is below 'manager'. Non-addon: HA Core's hassio proxy returns
+                # 403 when the LLA's user lacks admin — completely different
+                # remediation. Branch on the gate accordingly.
+                if is_running_in_addon():
+                    suggestions = [
                         "Addon's hassio_role must be 'manager' or higher to "
                         "read /<service>/logs",
                         "Verify the addon was reinstalled after the role bump "
                         "took effect",
-                    ],
+                    ]
+                else:
+                    suggestions = [
+                        "The Long-Lived Access Token must belong to a user "
+                        "with admin privileges",
+                        "Generate a new LLAT under an admin account and set "
+                        "HOMEASSISTANT_TOKEN to it",
+                    ]
+                exception_to_structured_error(
+                    e,
+                    context={"source": "system_service", "slug": service},
+                    suggestions=suggestions,
                 )
             if status == 404:
                 exception_to_structured_error(
@@ -984,13 +1026,13 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ now().weekday() }}                          # Day of week (0=Monday)
         ```
 
-        **Conditional Logic:**
+        **Conditional Logic (for display strings — not for `condition:` positions):**
         ```jinja2
         {{ 'Day' if now().hour < 18 else 'Night' }}    # Ternary operator
-        {% if is_state('sun.sun', 'above_horizon') %}
-          It's daytime
+        {% if is_state('alarm_control_panel.home', 'armed_away') %}
+          Alarm is armed
         {% else %}
-          It's nighttime
+          Alarm is disarmed
         {% endif %}
         ```
 
@@ -1017,16 +1059,21 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ device_id('light.bedroom') }}               # Get device ID for entity
         ```
 
-        **Common Use Cases:**
+        **When NOT to use this for automation/script logic:**
+        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
+        debugging existing templates), but `condition:` / `trigger:` positions and
+        action service names are better expressed as native HA constructs — they
+        validate at config load, fail loudly, and avoid silent runtime failures.
+        Prefer:
+        - `condition: numeric_state` over `{{ states('x') | float > N }}`
+        - `condition: state` over `{{ is_state(...) }}`
+        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
+        - Native `for:` field on state/numeric_state triggers and conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math
+        - `choose` action over templated `service:` / `action:` strings
+        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
 
-        **Automation Conditions:**
-        ```jinja2
-        # Check if it's a workday and after 7 AM
-        {{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 }}
-
-        # Temperature-based condition
-        {{ states('sensor.outdoor_temp') | float < 0 }}
-        ```
+        **Common Use Cases (legitimate template positions):**
 
         **Dynamic Service Data:**
         ```jinja2
@@ -1044,7 +1091,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ha_eval_template("{{ states('light.living_room') }}")
         ```
 
-        **Test conditional logic:**
+        **Test a string expression (e.g. for a notification body):**
         ```python
         ha_eval_template("{{ 'Day' if now().hour < 18 else 'Night' }}")
         ```
@@ -1052,11 +1099,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Test mathematical operations:**
         ```python
         ha_eval_template("{{ (states('sensor.temperature') | float + 5) | round(1) }}")
-        ```
-
-        **Test complex automation condition:**
-        ```python
-        ha_eval_template("{{ is_state('binary_sensor.workday', 'on') and now().hour >= 7 and states('sensor.temperature') | float > 20 }}")
         ```
 
         **Test entity counting:**

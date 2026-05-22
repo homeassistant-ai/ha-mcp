@@ -18,6 +18,7 @@ from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
@@ -375,16 +376,27 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         _extract_ws_error(get_result),
                     )
                     device_rename_result = {
-                        "warning": "Entity registry lookup failed — could not determine device. Retry may succeed.",
+                        "warnings": [
+                            "Entity registry lookup failed — could not determine device. Retry may succeed."
+                        ],
+                        "lookup_failed": True,
                     }
 
             device_id = (
                 entity_entry.get("device_id") if not device_rename_result else None
             )
             if not device_id:
-                device_rename_result = {
-                    "warning": "Entity has no associated device — device rename skipped",
-                }
+                # Only fire the "no device" warning when the registry lookup
+                # succeeded — otherwise the L378 "lookup failed" warning
+                # already carries the more accurate signal, and a second
+                # "no associated device" claim would be unverified (we don't
+                # actually know what the registry says when the lookup failed).
+                if device_rename_result is None:
+                    device_rename_result = {
+                        "warnings": [
+                            "Entity has no associated device — device rename skipped"
+                        ],
+                    }
             else:
                 device_msg: dict[str, Any] = {
                     "type": "config/device_registry/update",
@@ -396,7 +408,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     device_rename_result = {"success": True, "device_id": device_id}
                 else:
                     device_rename_result = {
-                        "warning": f"Entity updated but device rename failed: {_extract_ws_error(device_result)}",
+                        "warnings": [
+                            f"Entity updated but device rename failed: {_extract_ws_error(device_result)}"
+                        ],
                         "device_id": device_id,
                     }
 
@@ -510,7 +524,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Include old_entity_id and rename warning when a rename was performed
         if new_entity_id is not None:
             response_data["old_entity_id"] = original_entity_id
-            response_data["warning"] = (
+            response_data.setdefault("warnings", []).append(
                 "Remember to update any automations, scripts, or dashboards "
                 "that reference the old entity_id"
             )
@@ -520,10 +534,14 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
-            # Only mark partial when device rename was attempted and failed
-            # (not when entity simply has no device)
-            if "warning" in device_rename_result and device_rename_result.get(
-                "device_id"
+            # Mark partial when a device rename was requested but didn't complete
+            # for an operational reason: WS-call failure (device_id present + warnings)
+            # or upstream registry lookup failure (lookup_failed marker). Not partial
+            # when the entity simply has no device — that's a no-op, not an incomplete
+            # operation.
+            if device_rename_result.get("warnings") and (
+                device_rename_result.get("device_id")
+                or device_rename_result.get("lookup_failed")
             ):
                 response_data["partial"] = True
 
@@ -793,6 +811,13 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
                     )
                 )
+
+            # Per-element empty/whitespace check — the list-empty check above
+            # rejects ``[]`` but not ``[""]``; without this guard, an empty
+            # entity_id would propagate to the entity-registry update WS call
+            # and surface as a misleading HA "entity not found".
+            for eid in entity_ids:
+                validate_identifier_not_empty(eid, "entity_id")
 
             # Validate: bulk operations only support categories, labels, and expose_to
             single_entity_params = {
@@ -1334,6 +1359,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_get_entity: Check entity details before removal
         """
         try:
+            # Empty/whitespace entity_id would reach the registry-remove WS
+            # command and surface as a misleading HA "entity not found".
+            validate_identifier_not_empty(
+                entity_id,
+                "entity_id",
+                suggestions=[
+                    "Use ha_search_entities() to find valid entity IDs",
+                ],
+            )
             result = await client.send_websocket_message(
                 {"type": "config/entity_registry/remove", "entity_id": entity_id}
             )

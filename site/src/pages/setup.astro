@@ -657,7 +657,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
         <!-- Environment Variables -->
         <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-6">
-          <h3 class="font-medium text-amber-300 mb-2">Replace these values:</h3>
+          <h3 class="font-medium text-amber-300 mb-2">Replace these placeholders (delete the surrounding <code class="bg-amber-900/30 px-1 rounded">{{ }}</code> braces too):</h3>
           <ul class="text-sm text-amber-200/80 space-y-1" id="replace-hints">
             <!-- Filled by JS -->
           </ul>
@@ -2271,20 +2271,20 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     if (isStdio || derivedDeployment === 'uvx' || derivedDeployment === 'docker') {
       // Docker-specific URL hint
       if (isDocker) {
-        hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Use <code>http://host.docker.internal:8123</code> if Home Assistant runs on your host machine</li>`);
+        hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with <code>http://host.docker.internal:8123</code> if Home Assistant runs on your host machine</li>`);
       } else {
-        hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> → Your Home Assistant URL (e.g., http://homeassistant.local:8123)</li>`);
+        hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with your Home Assistant URL (e.g., <code>http://homeassistant.local:8123</code>)</li>`);
       }
-      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> → Your long-lived access token</li>`);
+      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> (braces and all) with your long-lived access token</li>`);
     }
     if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker') && state.proxy !== 'webhook-proxy') {
-      hints.push(`<li><code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> → A random secret string (e.g., <code>abc123xyz</code>) - <strong class="text-red-400">keep this private!</strong></li>`);
+      hints.push(`<li>Replace <code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> (braces and all) with a random secret string (e.g., <code>abc123xyz</code>) — <strong class="text-red-400">keep this private!</strong></li>`);
     }
     if (!isStdio) {
       const urlHint = state.proxy === 'webhook-proxy'
-        ? 'Your webhook proxy URL (from the webhook proxy add-on logs)'
-        : 'Your MCP server URL (from deployment step above)';
-      hints.push(`<li><code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> → ${urlHint}</li>`);
+        ? 'your webhook proxy URL (from the webhook proxy add-on logs)'
+        : 'your MCP server URL (from deployment step above)';
+      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> (braces and all) with ${urlHint}</li>`);
     }
     hintsEl.innerHTML = hints.join('');
 

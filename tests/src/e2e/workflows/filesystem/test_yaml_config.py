@@ -21,7 +21,11 @@ import os
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,7 +37,12 @@ READ_TOOL = "ha_read_file"
 
 @pytest.fixture(scope="module")
 def yaml_config_tools_enabled(ha_container_with_fresh_config):
-    """Enable YAML config editing feature flag for the test module."""
+    """Enable YAML config editing feature flag for the test module.
+
+    In inaddon mode the env-flip applies only to the test process; the
+    addon container has its own env and is started with the flag set at
+    install time (see ``build_image.install_ha_mcp_dev_addon``).
+    """
     os.environ[FEATURE_FLAG] = "true"
     logger.info("YAML config editing feature flag enabled")
     yield
@@ -41,8 +50,35 @@ def yaml_config_tools_enabled(ha_container_with_fresh_config):
 
 
 @pytest.fixture
-async def mcp_client_with_yaml_config(yaml_config_tools_enabled, mcp_server):
-    """Create MCP client with YAML config editing enabled."""
+async def mcp_client_with_yaml_config(
+    yaml_config_tools_enabled,
+    mcp_server,
+    mcp_client,
+    ha_container_with_fresh_config,
+):
+    """Yield an MCP client with YAML-config editing enabled.
+
+    In inaddon mode ``mcp_server`` is None (the addon is the server) and
+    the session ``mcp_client`` already speaks HTTP to the addon —
+    started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options
+    at install time. Yield that client directly.
+    """
+    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
+        # Fail fast at fixture setup if the addon's install-time options
+        # drifted and the YAML config tool isn't registered.
+        tools = await mcp_client.list_tools()
+        tool_names = {t.name for t in tools}
+        assert TOOL_NAME in tool_names, (
+            f"Inaddon addon is missing {TOOL_NAME}; the addon's install-time "
+            f"options (build_image.install_ha_mcp_dev_addon) must include "
+            f"enable_yaml_config_editing=true."
+        )
+        logger.debug("FastMCP client (inaddon, HTTP) reused for YAML tests")
+        # Session-scope mcp_client owns __aexit__; the per-test fixture
+        # deliberately doesn't wrap in `async with`.
+        yield mcp_client
+        return
+
     from fastmcp import Client
 
     client = Client(mcp_server.mcp)
@@ -123,7 +159,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Disallowed file should fail: {data}"
-        assert "not allowed" in inner.get("error", "").lower()
+        assert "not allowed" in extract_error_message(inner).lower()
         logger.info("Correctly rejected disallowed file")
 
     async def test_blocked_key_rejected(self, mcp_client_with_yaml_config):
@@ -142,7 +178,7 @@ class TestYamlConfigSecurity:
         )
         inner = data
         assert inner.get("success") is False, f"Blocked key should fail: {data}"
-        assert "not in the allowed list" in inner.get("error", "").lower()
+        assert "not in the allowed list" in extract_error_message(inner).lower()
         logger.info("Correctly rejected blocked key")
 
     async def test_helper_keys_not_allowed(self, mcp_client_with_yaml_config):
@@ -271,6 +307,37 @@ class TestYamlConfigOperations:
             assert inner.get("success") is True, f"Add should succeed: {data}"
             assert inner.get("action") == "add"
             logger.info("Successfully added template to new package file")
+
+    async def test_add_knx_to_package_file(self, mcp_client_with_yaml_config):
+        """knx is in ALLOWED_YAML_KEYS and can be edited in package files (issue #1367)."""
+
+        # Minimal valid knx YAML — a sensor reading from a group address.
+        content = (
+            "sensor:\n"
+            "  - name: E2E KNX Test Sensor\n"
+            "    state_address: '1/2/3'\n"
+            "    type: temperature\n"
+        )
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "knx",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_test_knx.yaml",
+                    "backup": False,
+                },
+            )
+            inner = data
+            assert inner.get("success") is True, f"knx add should succeed: {data}"
+            assert inner.get("action") == "add"
+            # knx is not in YAML_KEY_POST_ACTIONS, so it defaults to restart_required.
+            assert inner.get("post_action") == "restart_required", (
+                f"knx should default to post_action=restart_required: {data}"
+            )
+            logger.info("Successfully added knx to package file")
 
     async def test_replace_key(self, mcp_client_with_yaml_config):
         """Replace overwrites the key content."""
@@ -401,7 +468,7 @@ class TestYamlConfigOperations:
         )
         inner = data
         assert inner.get("success") is False, f"Type mismatch should error: {data}"
-        assert "type mismatch" in inner.get("error", "").lower()
+        assert "type mismatch" in extract_error_message(inner).lower()
         logger.info("Correctly errored on type mismatch")
 
 

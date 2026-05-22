@@ -5,5 +5,11 @@ from .categorized_search import (
     CategorizedSearchTransform,
     SearchKeywordsTransform,
 )
+from .lite_docstrings import LiteDocstringsTransform
 
-__all__ = ["CategorizedSearchTransform", "DEFAULT_PINNED_TOOLS", "SearchKeywordsTransform"]
+__all__ = [
+    "CategorizedSearchTransform",
+    "DEFAULT_PINNED_TOOLS",
+    "LiteDocstringsTransform",
+    "SearchKeywordsTransform",
+]

@@ -73,46 +73,55 @@ class TestDeviceList:
             )
 
     async def test_list_devices_filter_by_area(self, mcp_client):
-        """
-        Test: Filter devices by area_id
+        """Filter devices by area_id (positive, multi-match, and negative cases).
 
-        Note: This test may not find devices if no devices are assigned to areas
-        in the test environment.
+        Seed (tests/initial_test_state/.storage/core.device_registry) assigns
+        ``living_room`` to 2+ demo devices so this test reliably exercises the
+        area-filter code path without relying on environmental luck.
         """
         logger.info("Testing device list - filter by area")
 
-        # First, get all devices to find an area
         all_result = await mcp_client.call_tool("ha_get_device", {})
         all_data = parse_mcp_result(all_result)
         assert all_data.get("success"), f"Failed to list all devices: {all_data}"
 
-        # Find a device with an area
-        devices_with_area = [d for d in all_data.get("devices", []) if d.get("area_id")]
-
-        if not devices_with_area:
-            logger.info("No devices with areas found, skipping area filter test")
-            pytest.skip("No devices with areas in test environment")
-
-        area_id = devices_with_area[0]["area_id"]
-        logger.info(f"Testing filter with area_id: {area_id}")
-
-        # Filter by area
         filter_result = await mcp_client.call_tool(
             "ha_get_device",
-            {"area_id": area_id},
+            {"area_id": "living_room"},
         )
         filter_data = parse_mcp_result(filter_result)
 
         assert filter_data.get("success"), f"Failed to filter devices: {filter_data}"
         assert filter_data.get("filters"), "Response should indicate filters applied"
-
-        # Verify all returned devices have the specified area
-        for device in filter_data.get("devices", []):
-            assert device.get("area_id") == area_id, (
-                f"Device {device.get('name')} has area {device.get('area_id')}, expected {area_id}"
+        assert filter_data["count"] >= 2, (
+            f"Seed assigns living_room to 2+ devices but filter returned {filter_data['count']} — "
+            "check tests/initial_test_state/.storage/core.device_registry"
+        )
+        assert filter_data["count"] < all_data["count"], (
+            f"Filter returned {filter_data['count']} of {all_data['count']} devices — "
+            "area filter appears to be ignored"
+        )
+        for device in filter_data["devices"]:
+            assert device.get("area_id") == "living_room", (
+                f"Device {device.get('name')} has area {device.get('area_id')}, expected living_room"
             )
 
-        logger.info(f"Area filter returned {filter_data['count']} devices")
+        empty_result = await mcp_client.call_tool(
+            "ha_get_device",
+            {"area_id": "no_such_area_xyz123"},
+        )
+        empty_data = parse_mcp_result(empty_result)
+        assert empty_data.get("success"), (
+            f"Filter by nonexistent area should succeed, not raise: {empty_data}"
+        )
+        assert empty_data["count"] == 0, (
+            f"Filter by nonexistent area returned {empty_data['count']} devices, expected 0"
+        )
+
+        logger.info(
+            f"Area filter: {filter_data['count']} living_room devices, "
+            f"negative case returned 0"
+        )
 
     async def test_list_devices_filter_by_manufacturer(self, mcp_client):
         """

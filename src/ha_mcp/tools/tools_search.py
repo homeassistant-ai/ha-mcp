@@ -22,8 +22,13 @@ from .util_helpers import (
     build_pagination_metadata,
     coerce_bool_param,
     coerce_int_param,
+    filter_active_repairs,
     parse_string_list_param,
+    project_fields,
+    project_records,
+    project_repair_fields,
     public_fields,
+    result_fields_warning,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +49,13 @@ def _build_pagination_metadata(
     return meta
 
 
+# Module-level aliases so existing call sites keep their names unchanged.
+# The implementations live in util_helpers so tools_areas / tools_services
+# can share them without a cross-module import.
+_project_records = project_records
+_result_fields_warning = result_fields_warning
+
+
 async def _exact_match_search(
     client: Any,
     query: str,
@@ -51,6 +63,7 @@ async def _exact_match_search(
     limit: int,
     offset: int = 0,
     include_hidden: bool = True,
+    state_filter: str | None = None,
 ) -> dict[str, Any]:
     """
     Search entities by substring on entity_id + friendly_name.
@@ -136,6 +149,9 @@ async def _exact_match_search(
                 }
             )
 
+    if state_filter:
+        results = [r for r in results if r.get("state") == state_filter]
+
     # Sort by score descending, tie-break on entity_id for stable
     # pagination when many results share a score (visible substring
     # hits at 100, hidden ones at 80 etc).
@@ -148,6 +164,85 @@ async def _exact_match_search(
         "results": paginated,
         "search_type": "exact_match",
     }
+
+
+def _project_entity(
+    record: dict[str, Any],
+    fields: list[str] | None,
+    attribute_keys: list[str] | None,
+) -> tuple[dict[str, Any], str | None]:
+    """Apply optional field projection to a HA entity record.
+
+    ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
+    ``attribute_keys`` further filters the ``attributes`` sub-dict.
+    Both default None = full payload (no-op).
+
+    Returns ``(projected_record, warning_string | None)``.  *warning_string* is
+    non-None when ``attribute_keys`` was specified, the original ``attributes``
+    dict was non-empty, and the filter produced an empty result — i.e. the caller
+    supplied only unknown attribute keys (typo guard).  Callers should append the
+    warning to the response ``warnings`` list so the user receives a diagnostic
+    rather than a silently empty ``attributes: {}``.
+
+    Both parameters are already parsed into ``list[str] | None`` — string/CSV inputs
+    must be normalised at the call site via ``parse_string_list_param`` (see
+    ``ha_get_state`` which parses once before the bulk loop to avoid re-parsing per
+    entity record).
+
+    Unlike ``project_fields``, this helper does not auto-retain ``success`` — entity
+    records have no ``success`` field, so the asymmetry is intentional.
+
+    Non-dict ``attributes`` handling: when ``attribute_keys`` is set but the
+    record's ``attributes`` value is not a dict (``None``, a string, a list —
+    rare from HA's state API but possible from malformed records, partial
+    error payloads, or mocked fixtures), the key-set filter cannot be
+    applied and the ``attributes`` value is returned unchanged. A
+    ``warning``-level log line records the short-circuit so it is visible
+    at default log levels. The bulk path shares this helper, so
+    both single- and bulk-entity calls behave identically here. This is
+    deliberately silent (no caller-facing warning) because malformed
+    ``attributes`` is rare and the call still produces a usable record.
+    """
+    if not isinstance(record, dict):
+        return (
+            record,
+            None,
+        )  # non-dict (e.g. error path returning None) — skip projection
+    if fields is not None:
+        keep = set(fields)
+        record = {k: v for k, v in record.items() if k in keep}
+    attr_warn: str | None = None
+    if attribute_keys is not None:
+        attrs = record.get("attributes")
+        if isinstance(attrs, dict):
+            attr_keep = set(attribute_keys)
+            filtered_attrs = {k: v for k, v in attrs.items() if k in attr_keep}
+            # Typo guard: if the original had keys AND the caller specified at least
+            # one key AND the filter yielded nothing, the caller likely mistyped an
+            # attribute name.  Return a diagnostic so the agent gets
+            # "attributes came out empty — available: [...]" instead of silently
+            # receiving ``attributes: {}``.
+            # Exclude the attribute_keys=[] case — an empty list is an explicit
+            # "keep nothing" request, not a typo.
+            if attrs and attribute_keys and not filtered_attrs:
+                available = sorted(attrs.keys())
+                attr_warn = (
+                    f"attribute_keys {sorted(attribute_keys)!r} matched no attribute "
+                    f"keys — attributes came out empty. "
+                    f"Available keys: {available!r}"
+                )
+            record = {**record, "attributes": filtered_attrs}
+        elif "attributes" in record:
+            # ``attributes`` is present but not a dict — filter cannot apply.
+            # Log at warning so the no-op is visible at default log levels
+            # (this branch is exercised rarely; see docstring for rationale).
+            logger.warning(
+                "_project_entity: attribute_keys filter skipped — "
+                "'attributes' is %s (expected dict) for record keys=%r",
+                type(attrs).__name__,
+                list(record.keys()),
+            )
+    return record, attr_warn
 
 
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -230,6 +325,64 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        per_domain_limit: Annotated[
+            int | str | None,
+            Field(
+                default=None,
+                description=(
+                    "When group_by_domain=True, cap results per domain to this number. "
+                    "Applied after the global limit — use a high limit (e.g. limit=200) "
+                    "with per_domain_limit=5 to get up to 5 entities from each domain. "
+                    "Ignored when group_by_domain=False. "
+                    "None = no per-domain cap (default)."
+                ),
+            ),
+        ] = None,
+        state_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter results to entities in a specific state "
+                    '(e.g. "on", "off", "unavailable"). Case-insensitive — '
+                    "input is lowercased before matching. Applied server-side after "
+                    "search results are collected. For exact-match and domain-listing "
+                    "searches, total_matches reflects the filtered count. For fuzzy "
+                    "searches, state_filter is page-only and total_matches remains "
+                    "unfiltered (see state_filter_note in the response). "
+                    "None = no state filter (default)."
+                ),
+            ),
+        ] = None,
+        result_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each entity record in results[] to only the specified keys. "
+                    'E.g. ["entity_id", "state"] returns slim entity records. '
+                    "None = full records (default). Unknown keys yield empty records; "
+                    "omit result_fields to see all available keys. "
+                    "Available keys: entity_id, friendly_name, domain, state, score, match_type."
+                ),
+            ),
+        ] = None,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["results"]). '
+                    "None = full response (default). "
+                    "Available keys: success, query, results, total_matches, count, "
+                    "offset, limit, has_more, next_offset, search_type, "
+                    "domain_filter, area_filter, area_name, area_names, "
+                    "by_domain, warnings, partial, message, note, state_filter, "
+                    "state_filter_note."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -241,6 +394,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
+        # Validate fields= early so a malformed value returns VALIDATION_FAILED
+        # with parameter="fields" instead of bubbling to the outer except and
+        # getting reclassified as a generic search failure.
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+        parsed_result_fields: list[str] | None = None
+        if result_fields is not None:
+            try:
+                parsed_result_fields = parse_string_list_param(
+                    result_fields, "result_fields", allow_csv=True
+                )
+                if parsed_result_fields is not None and len(parsed_result_fields) == 0:
+                    raise ValueError("result_fields must contain at least one key")
+            except ValueError as exc:
+                raise_tool_error(
+                    create_validation_error(str(exc), parameter="result_fields")
+                )
         # Normalize omitted/None query to empty string so downstream logic is unchanged
         query = query or ""
         # HA domains are canonically lowercase, no whitespace; agents
@@ -283,11 +459,27 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # with default=True the result is a real bool, but the type
             # system still admits None — coalesce defensively for static
             # typing.
-            include_hidden_bool = (
-                coerced_hidden if coerced_hidden is not None else True
-            )
+            include_hidden_bool = coerced_hidden if coerced_hidden is not None else True
             offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
             limit = coerce_int_param(limit, "limit", default=10, min_value=1)
+            per_domain_limit_int = (
+                coerce_int_param(
+                    per_domain_limit, "per_domain_limit", default=None, min_value=1
+                )
+                if per_domain_limit is not None
+                else None
+            )
+
+            # Normalize state_filter — strip surrounding whitespace so
+            # "on " and " on" match HA's canonical lowercase state values.
+            # HA states are typically lowercase; we don't lowercase here
+            # HA states are always lowercase ("on", "off", "unavailable").
+            # Normalise to avoid silent zero-result surprises from "ON" / " on ".
+            if state_filter is not None:
+                state_filter = state_filter.strip().lower()
+                # Collapse whitespace-only strings to None (no filter)
+                if not state_filter:
+                    state_filter = None
 
             # If area_filter is provided, use area-based search
             if area_filter:
@@ -327,13 +519,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     aliases_map: dict[str, list[str]] = {}
                     if area_entity_ids:
                         try:
-                            entries_resp = await client.send_websocket_message({
-                                "type": "config/entity_registry/get_entries",
-                                "entity_ids": area_entity_ids,
-                            })
-                            if (
-                                isinstance(entries_resp, dict)
-                                and entries_resp.get("success")
+                            entries_resp = await client.send_websocket_message(
+                                {
+                                    "type": "config/entity_registry/get_entries",
+                                    "entity_ids": area_entity_ids,
+                                }
+                            )
+                            if isinstance(entries_resp, dict) and entries_resp.get(
+                                "success"
                             ):
                                 for eid, entry in (
                                     entries_resp.get("result", {}) or {}
@@ -397,6 +590,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         for match in matches
                     ]
 
+                    if state_filter:
+                        results = [r for r in results if r.get("state") == state_filter]
+
                     pagination = _build_pagination_metadata(
                         total_matches, offset, limit, results
                     )
@@ -411,6 +607,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                     if domain_filter:
                         search_data["domain_filter"] = domain_filter
+                    if state_filter is not None:
+                        search_data["state_filter"] = state_filter
+                        # Area+query uses fuzzy pagination internally; state_filter
+                        # is applied to the returned page, not the full dataset.
+                        search_data["state_filter_note"] = (
+                            "state_filter applied to this page only; "
+                            "total_matches and has_more reflect the unfiltered "
+                            "fuzzy-search dataset and may yield empty pages"
+                        )
 
                     if group_by_domain_bool:
                         by_domain: dict[str, list[dict[str, Any]]] = {}
@@ -419,9 +624,36 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             if domain not in by_domain:
                                 by_domain[domain] = []
                             by_domain[domain].append(item)
+                        if per_domain_limit_int is not None:
+                            by_domain = {
+                                d: entities[:per_domain_limit_int]
+                                for d, entities in by_domain.items()
+                            }
+                        if parsed_result_fields is not None:
+                            by_domain = {
+                                d: _project_records(entities, parsed_result_fields)
+                                for d, entities in by_domain.items()
+                            }
                         search_data["by_domain"] = by_domain
 
-                    return await add_timezone_metadata(client, search_data)
+                    if parsed_result_fields is not None and "results" in search_data:
+                        _orig = search_data["results"]
+                        search_data["results"] = _project_records(
+                            _orig, parsed_result_fields
+                        )
+                        _warn = _result_fields_warning(
+                            _orig, search_data["results"], parsed_result_fields
+                        )
+                        if _warn:
+                            search_data.setdefault("warnings", []).append(_warn)
+
+                    _r = await add_timezone_metadata(client, search_data)
+                    if parsed_fields is not None:
+                        _sfn = _r["data"].get("state_filter_note")
+                        _r["data"] = project_fields(_r["data"], parsed_fields)
+                        if _sfn is not None:
+                            _r["data"]["state_filter_note"] = _sfn
+                    return _r
                 else:
                     # Just area filter, return area results with enhanced format
                     if area_result.get("areas"):
@@ -478,9 +710,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         # 100, every hidden one at 80 — without the
                         # secondary key the page split would shift
                         # between calls).
-                        all_results.sort(
-                            key=lambda x: (-x["score"], x["entity_id"])
-                        )
+                        all_results.sort(key=lambda x: (-x["score"], x["entity_id"]))
+                        if state_filter:
+                            all_results = [
+                                r for r in all_results if r.get("state") == state_filter
+                            ]
                         paginated = all_results[offset : offset + limit]
 
                         area_search_data: dict[str, Any] = {
@@ -504,6 +738,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             area_search_data["domain_filter"] = domain_filter
+                        if state_filter is not None:
+                            area_search_data["state_filter"] = state_filter
                         # Mirror the empty-area branch's message when
                         # the area resolved but a domain_filter wiped
                         # out every entity in it — otherwise the caller
@@ -522,8 +758,39 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                 paginated_by_domain.setdefault(
                                     entity["domain"], []
                                 ).append(entity)
+                            if per_domain_limit_int is not None:
+                                paginated_by_domain = {
+                                    d: entities[:per_domain_limit_int]
+                                    for d, entities in paginated_by_domain.items()
+                                }
+                            if parsed_result_fields is not None:
+                                paginated_by_domain = {
+                                    d: _project_records(entities, parsed_result_fields)
+                                    for d, entities in paginated_by_domain.items()
+                                }
                             area_search_data["by_domain"] = paginated_by_domain
-                        return await add_timezone_metadata(client, area_search_data)
+                        if (
+                            parsed_result_fields is not None
+                            and "results" in area_search_data
+                        ):
+                            _orig = area_search_data["results"]
+                            area_search_data["results"] = _project_records(
+                                _orig, parsed_result_fields
+                            )
+                            _warn = _result_fields_warning(
+                                _orig, area_search_data["results"], parsed_result_fields
+                            )
+                            if _warn:
+                                area_search_data.setdefault("warnings", []).append(
+                                    _warn
+                                )
+                        _r = await add_timezone_metadata(client, area_search_data)
+                        if parsed_fields is not None:
+                            _sfn = _r["data"].get("state_filter_note")
+                            _r["data"] = project_fields(_r["data"], parsed_fields)
+                            if _sfn is not None:
+                                _r["data"]["state_filter_note"] = _sfn
+                        return _r
                     else:
                         # Empty match: still emit `area_names: []` so
                         # callers don't KeyError when they read the
@@ -540,9 +807,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         }
                         if domain_filter:
                             empty_area_data["domain_filter"] = domain_filter
+                        if state_filter is not None:
+                            empty_area_data["state_filter"] = state_filter
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
-                        return await add_timezone_metadata(client, empty_area_data)
+                        _r = await add_timezone_metadata(client, empty_area_data)
+                        if parsed_fields is not None:
+                            _r["data"] = project_fields(_r["data"], parsed_fields)
+                        return _r
 
             # Regular entity search (no area filter)
             # Handle empty query with domain_filter - list all entities of that domain
@@ -590,10 +862,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     e
                     for e in all_entities
                     if e.get("entity_id", "").startswith(f"{domain_filter}.")
-                    and (
-                        include_hidden_bool
-                        or e.get("entity_id") not in hidden_ids
-                    )
+                    and (include_hidden_bool or e.get("entity_id") not in hidden_ids)
                 ]
 
                 # Score: 100 baseline for domain membership (exact, not
@@ -606,21 +875,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     score = apply_hidden_penalty(
                         100, "_hidden" if entity_id in hidden_ids else None
                     )
-                    scored_entities.append({
-                        "entity_id": entity_id,
-                        "friendly_name": attributes.get("friendly_name", entity_id),
-                        "domain": domain_filter,
-                        "state": entity.get("state", "unknown"),
-                        "score": score,
-                        "match_type": "domain_listing",
-                    })
+                    scored_entities.append(
+                        {
+                            "entity_id": entity_id,
+                            "friendly_name": attributes.get("friendly_name", entity_id),
+                            "domain": domain_filter,
+                            "state": entity.get("state", "unknown"),
+                            "score": score,
+                            "match_type": "domain_listing",
+                        }
+                    )
                 # Tie-break on entity_id for stable pagination — every
                 # visible domain entry scores 100 and every hidden one
                 # scores 80, so sorting by score alone leaves the
                 # within-tier ordering up to dict iteration.
-                scored_entities.sort(
-                    key=lambda x: (-x["score"], x["entity_id"])
-                )
+                scored_entities.sort(key=lambda x: (-x["score"], x["entity_id"]))
+                if state_filter:
+                    scored_entities = [
+                        e for e in scored_entities if e.get("state") == state_filter
+                    ]
                 results = scored_entities[offset : offset + limit]
 
                 domain_list_data: dict[str, Any] = {
@@ -634,9 +907,33 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "search_type": "domain_listing",
                     "note": f"Listing all {domain_filter} entities (empty query with domain_filter)",
                 }
+                if state_filter is not None:
+                    domain_list_data["state_filter"] = state_filter
+                if parsed_result_fields is not None:
+                    _orig = results
+                    domain_list_data["results"] = _project_records(
+                        _orig, parsed_result_fields
+                    )
+                    _warn = _result_fields_warning(
+                        _orig, domain_list_data["results"], parsed_result_fields
+                    )
+                    if _warn:
+                        domain_list_data.setdefault("warnings", []).append(_warn)
                 if group_by_domain_bool:
-                    domain_list_data["by_domain"] = {domain_filter: results}
-                return await add_timezone_metadata(client, domain_list_data)
+                    domain_list_results = (
+                        results[:per_domain_limit_int]
+                        if per_domain_limit_int is not None
+                        else results
+                    )
+                    if parsed_result_fields is not None:
+                        domain_list_results = _project_records(
+                            domain_list_results, parsed_result_fields
+                        )
+                    domain_list_data["by_domain"] = {domain_filter: domain_list_results}
+                _r = await add_timezone_metadata(client, domain_list_data)
+                if parsed_fields is not None:
+                    _r["data"] = project_fields(_r["data"], parsed_fields)
+                return _r
 
             # Search strategy depends on exact_match setting:
             # - exact_match=True: substring match
@@ -663,6 +960,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     limit,
                     offset,
                     include_hidden=include_hidden_bool,
+                    state_filter=state_filter,
                 )
                 search_type = "exact_match"
             else:
@@ -694,6 +992,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         limit,
                         offset,
                         include_hidden=include_hidden_bool,
+                        state_filter=state_filter,
                     )
                     warning = "Fuzzy search unavailable, using substring match"
                     search_type = "exact_match"
@@ -720,7 +1019,29 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     result["offset"] + limit if result["has_more"] else None
                 )
 
-            # Group by domain if requested
+            # Apply state_filter to fuzzy results BEFORE grouping so by_domain stays
+            # consistent with results[].
+            # Note: for fuzzy_search, state_filter is page-only — smart_entity_search
+            # already paginated internally, so we cannot know the pre-filter total.
+            # total_matches and has_more reflect the unfiltered fuzzy-search dataset;
+            # only count is updated to match the filtered page.
+            if state_filter and "results" in result and search_type == "fuzzy_search":
+                filtered = [
+                    r for r in result["results"] if r.get("state") == state_filter
+                ]
+                result["results"] = filtered
+                result["count"] = len(filtered)
+                # Signal that state_filter is page-only for fuzzy mode.
+                # total_matches and has_more/next_offset reflect the unfiltered
+                # fuzzy dataset — subsequent pages may also come back empty if
+                # no entities on that page match the state filter.
+                result["state_filter_note"] = (
+                    "state_filter applied to this page only; "
+                    "total_matches and has_more reflect the unfiltered "
+                    "fuzzy-search dataset and may yield empty pages"
+                )
+
+            # Group by domain if requested (built from already-filtered results)
             if group_by_domain_bool and "results" in result:
                 by_domain = {}
                 for entity in result["results"]:
@@ -728,16 +1049,52 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     if domain not in by_domain:
                         by_domain[domain] = []
                     by_domain[domain].append(entity)
+                if per_domain_limit_int is not None:
+                    by_domain = {
+                        d: entities[:per_domain_limit_int]
+                        for d, entities in by_domain.items()
+                    }
                 result["by_domain"] = by_domain
 
             result["search_type"] = search_type
 
+            # Echo state_filter in response so callers can see what filter was applied.
+            # Gate on ``is not None`` (not truthy) so an empty-string or
+            # falsy-but-intentional value is still reflected in the response.
+            # (state_filter=None means no filter was requested — omit in that case.)
+            if state_filter is not None:
+                result["state_filter"] = state_filter
+
             # Add warning and partial flag if fallback was used
             if warning:
-                result["warning"] = warning
+                result.setdefault("warnings", []).append(warning)
                 result["partial"] = True
 
-            return await add_timezone_metadata(client, result)
+            # Apply per-record projection to results and by_domain
+            if parsed_result_fields is not None and "results" in result:
+                _orig = result["results"]
+                result["results"] = _project_records(_orig, parsed_result_fields)
+                _warn = _result_fields_warning(
+                    _orig, result["results"], parsed_result_fields
+                )
+                if _warn:
+                    result.setdefault("warnings", []).append(_warn)
+            if parsed_result_fields is not None and "by_domain" in result:
+                result["by_domain"] = {
+                    d: _project_records(entities, parsed_result_fields)
+                    for d, entities in result["by_domain"].items()
+                }
+
+            _r = await add_timezone_metadata(client, result)
+            if parsed_fields is not None:
+                # Force-retain state_filter_note alongside success — it
+                # explains has_more/total_matches semantics for fuzzy+state_filter
+                # and should survive a fields= projection so the caller isn't misled.
+                _sfn = _r["data"].get("state_filter_note")
+                _r["data"] = project_fields(_r["data"], parsed_fields)
+                if _sfn is not None:
+                    _r["data"]["state_filter_note"] = _sfn
+            return _r
 
         except ToolError:
             raise
@@ -852,6 +1209,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Include active persistent notifications (default: True). Set False to skip.",
             ),
         ] = True,
+        include_dismissed_repairs: Annotated[
+            bool | str | None,
+            Field(
+                default=False,
+                description=(
+                    "Include user-dismissed/ignored repairs (default: False). "
+                    "Matches the HA Repairs UI which hides dismissed items by default."
+                ),
+            ),
+        ] = False,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level response keys to reduce "
+                    'response size (e.g. ["system_info", "domains"]). '
+                    "None = full response (default). "
+                    "Available keys: success, system_summary, domain_stats, "
+                    "area_analysis, ai_insights, pagination, partial, warnings, "
+                    "device_types, service_availability, system_info, "
+                    "notification_count, notifications, repair_count, repairs, "
+                    "repairs_error, tool_discovery."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get AI-friendly system overview with intelligent categorization.
 
@@ -862,7 +1245,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         are always complete regardless of entity pagination.
         Standard/full modes paginate entities (default 200 per page) — use offset
         to fetch more. Use 'domains' filter to narrow scope.
+
+        Use fields= to project the response to only the keys you need — a
+        significantly smaller payload when fetching a single sub-section (e.g.
+        fields=["system_info"] returns just that section instead of the full overview).
         """
+        # Validate fields= early so a malformed value returns VALIDATION_FAILED
+        # with parameter="fields" (ha_get_overview has no outer try/except, so
+        # a raw ValueError would escape uncaught).
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
         # Coerce boolean parameters that may come as strings from XML-style calls
         include_state_bool = coerce_bool_param(
             include_state, "include_state", default=None
@@ -872,6 +1271,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         )
         include_notifications_bool = coerce_bool_param(
             include_notifications, "include_notifications", default=True
+        )
+        include_dismissed_repairs_bool = bool(
+            coerce_bool_param(
+                include_dismissed_repairs,
+                "include_dismissed_repairs",
+                default=False,
+            )
         )
 
         # Parse domains filter
@@ -925,8 +1331,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     }
                 )
             result["system_info"] = system_info
+            # Enrich system_summary with HA version (config already fetched above).
+            # Use `or "unknown"` so a None version (HA omitting the key) still
+            # surfaces a sentinel value rather than null.
+            if "system_summary" in result:
+                result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
-            logger.warning(f"Failed to fetch system info for overview: {e}")
+            logger.warning(
+                "Failed to fetch system info for overview: %s", e, exc_info=True
+            )
+            # Config fetch failed — populate version sentinel so system_summary
+            # always has a "version" key regardless of connection state.
+            if "system_summary" in result:
+                result["system_summary"].setdefault("version", "unknown")
 
         # Include active persistent notifications
         if include_notifications_bool:
@@ -949,29 +1366,43 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             for n in notifications
                         ]
             except Exception as e:
-                logger.warning(f"Failed to fetch notifications for overview: {e}")
+                logger.warning(
+                    "Failed to fetch notifications for overview: %s", e, exc_info=True
+                )
 
-        # Include active repair issues
+        # Active repairs only by default — matches the HA Repairs UI so agents
+        # don't chase problems the user already dismissed.
         result["repair_count"] = 0
         try:
             repairs_result = await client.send_websocket_message(
                 {"type": "repairs/list_issues"}
             )
             if repairs_result.get("success"):
-                issues = repairs_result.get("result", {}).get("issues", [])
-                result["repair_count"] = len(issues)
-                if issues:
+                all_issues = repairs_result.get("result", {}).get("issues", [])
+                visible_issues = filter_active_repairs(
+                    all_issues,
+                    include_dismissed=include_dismissed_repairs_bool,
+                )
+                result["repair_count"] = len(visible_issues)
+                if not include_dismissed_repairs_bool:
+                    dismissed_count = len(all_issues) - len(visible_issues)
+                    if dismissed_count:
+                        result["dismissed_repair_count"] = dismissed_count
+                if visible_issues:
                     result["repairs"] = [
-                        {
-                            "issue_id": r.get("issue_id"),
-                            "domain": r.get("domain"),
-                            "severity": r.get("severity"),
-                            "translation_key": r.get("translation_key"),
-                        }
-                        for r in issues
+                        project_repair_fields(r) for r in visible_issues
                     ]
+            else:
+                err = repairs_result.get("error") or {}
+                err_msg = (
+                    err.get("message") if isinstance(err, dict) else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "repairs/list_issues returned success=false: %s", err_msg
+                )
+                result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
-            logger.warning("Failed to fetch repairs for overview: %s", e)
+            logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
 
         # Include tool discovery hint when search transform is active
@@ -1000,7 +1431,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             }
 
-        return result
+        return project_fields(result, parsed_fields)
 
     @mcp.tool(
         tags={"Search & Discovery"},
@@ -1144,6 +1575,32 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "(e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])"
             ),
         ],
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified top-level entity record keys to reduce "
+                    'response size (e.g. ["state", "attributes"]). '
+                    "None = full entity record (default). "
+                    "Available keys: entity_id, state, attributes, last_changed, "
+                    "last_reported, last_updated, context."
+                ),
+            ),
+        ] = None,
+        attribute_keys: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return only the specified keys from each entity's attributes dict "
+                    '(e.g. ["brightness", "color_temp"] for lights). '
+                    "None = full attributes (default). "
+                    "Unknown keys are silently dropped. "
+                    'Requires "attributes" to be present in fields= (or fields=None).'
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
@@ -1156,15 +1613,90 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Returns success=True if at least one entity state was retrieved.
         Check 'error_count' for any failed lookups in partial-success scenarios.
 
+        FIELDS PROJECTION:
+        `fields=` projects the per-entity record keys (see the fields= parameter
+        description for the full key list), NOT the outer bulk response wrapper.
+        In single-entity mode it filters keys of the returned record directly. In bulk
+        mode it filters keys of each record inside `states[entity_id]`; outer keys
+        (`success`, `count`, `states`, `errors`, ...) are always preserved.
+        `attribute_keys=` further narrows the `attributes` sub-dict and is only applied
+        when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
+
+        When `attribute_keys=` is set but has no effect (because `attributes` was
+        excluded by `fields=`), a `warnings` list is emitted outside the projected
+        entity record(s): in bulk mode at the response wrapper level (sibling of
+        `success`/`count`/`states`); in single-entity mode at the top-level result
+        (sibling of `data`/`metadata`, since the projected record IS `data`).
+        The warnings list is never a record key, so `fields=["state"]` returns a
+        record with only `state` regardless of whether the no-effect warning fires.
+
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
+        - State only: ha_get_state("light.kitchen", fields=["state"])
+        - Slim bulk: ha_get_state(["light.kitchen", "sensor.temperature"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
+        # Parse projection params once up front so the bulk loop doesn't re-parse
+        # the same string/CSV input per entity (100 entities → 200 parses pre-fix).
+        # parse_string_list_param raises ValueError on bad input; surface as
+        # VALIDATION_FAILED with parameter="fields"/"attribute_keys" via the
+        # normal ToolError flow.
+        try:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+        except ValueError as e:
+            raise_tool_error(create_validation_error(str(e), parameter="fields"))
+        try:
+            parsed_attribute_keys = parse_string_list_param(
+                attribute_keys, "attribute_keys", allow_csv=True
+            )
+        except ValueError as e:
+            raise_tool_error(
+                create_validation_error(str(e), parameter="attribute_keys")
+            )
+
+        # `attribute_keys` only takes effect when `attributes` is in the projected
+        # field set (or `fields=None`). Surface a warning rather than silently
+        # ignoring it — caller likely intended to slim attributes and would
+        # otherwise see an unfiltered or absent `attributes` key with no signal.
+        attribute_keys_no_effect = (
+            parsed_attribute_keys is not None
+            and parsed_fields is not None
+            and "attributes" not in parsed_fields
+        )
+
         # Single entity path
         if isinstance(entity_id, str):
             try:
                 result = await client.get_entity_state(entity_id)
-                return await add_timezone_metadata(client, result)
+                entity_record, attr_warn = _project_entity(
+                    result, parsed_fields, parsed_attribute_keys
+                )
+                # Always wrap (include_metadata=True); callers and tests rely on
+                # the ``result["data"]`` envelope even when fields= is active.
+                wrapped = await add_timezone_metadata(client, entity_record)
+                # ``attribute_keys`` was specified but ``attributes`` is not
+                # in the projected ``fields=`` set. Attach the warning at
+                # the outer wrapper level (sibling of ``data``/``metadata``)
+                # rather than spreading it into ``data`` — the FIELDS
+                # PROJECTION contract: ``fields=`` filters the keys of the
+                # returned record; ``warnings`` is not a record key.
+                # Bulk path keeps ``warnings`` outside the per-entity records
+                # (at ``data`` level, sibling of ``states``); in single-entity
+                # mode the projected record IS ``data``, so the analogous
+                # "outside" location is the top-level wrapper (sibling of
+                # ``data``/``metadata``).
+                # ``add_timezone_metadata`` always returns a dict, so
+                # ``wrapped.setdefault("warnings", [])`` is type-safe regardless
+                # of ``entity_record``'s type — no isinstance guard needed.
+                if attribute_keys_no_effect:
+                    wrapped.setdefault("warnings", []).append(
+                        "attribute_keys was ignored because 'attributes' is not in "
+                        "fields=. Add 'attributes' to fields= (or omit fields=) to "
+                        "apply attribute_keys."
+                    )
+                if attr_warn:
+                    wrapped.setdefault("warnings", []).append(attr_warn)
+                return wrapped
             except ToolError:
                 raise
             except Exception as e:
@@ -1232,10 +1764,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             states: dict[str, Any] = {}
             errors: list[dict[str, Any]] = []
+            _bulk_attr_warns: list[str] = []
 
             for eid, result in zip(unique_ids, results, strict=True):
                 if result.get("success") is True and "state" in result:
-                    states[eid] = result["state"]
+                    state_record, attr_warn = _project_entity(
+                        result["state"], parsed_fields, parsed_attribute_keys
+                    )
+                    states[eid] = state_record
+                    # Collect unique attribute-typo warnings across entities
+                    # (different entities may report different available keys).
+                    if attr_warn and attr_warn not in _bulk_attr_warns:
+                        _bulk_attr_warns.append(attr_warn)
                 else:
                     error_detail = result.get("error")
                     if error_detail is None:
@@ -1255,6 +1795,16 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "count": len(states),
                 "states": states,
             }
+
+            if attribute_keys_no_effect:
+                response.setdefault("warnings", []).append(
+                    "attribute_keys was ignored because 'attributes' is not in "
+                    "fields=. Add 'attributes' to fields= (or omit fields=) to "
+                    "apply attribute_keys."
+                )
+
+            for _w in _bulk_attr_warns:
+                response.setdefault("warnings", []).append(_w)
 
             if errors:
                 response["errors"] = errors

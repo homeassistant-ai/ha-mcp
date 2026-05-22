@@ -415,7 +415,7 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
     def get_entity_id(data: dict) -> str | None:
         entity_id = data.get("entity_id")
         if not entity_id:
-            helper_id = data.get("helper_data", {}).get("id")
+            helper_id = data.get("data", {}).get("id")
             if helper_id:
                 entity_id = f"input_boolean.{helper_id}"
         return entity_id

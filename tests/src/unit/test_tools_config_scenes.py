@@ -13,6 +13,7 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
@@ -2026,3 +2027,261 @@ class TestSmartSearchSceneIdFallbackPaths:
             "tier-3 slug-fallback must emit a WARNING; got "
             f"{[(r.levelname, r.message) for r in caplog.records]}"
         )
+
+
+class TestSceneVerificationFailureWarnings:
+    """Scene-tool-specific verification-failure coverage for the three
+    wait-helper call sites migrated under #1332 (PR #1340):
+
+    1. ``ha_config_set_scene`` python_transform update path
+    2. ``ha_config_set_scene`` main create path
+    3. ``ha_config_remove_scene`` delete path
+
+    Per the narrow exception tuple decision (#1340 thread with
+    kingpanther13): only ``HomeAssistantConnectionError`` and
+    ``HomeAssistantAuthError`` propagate from
+    ``wait_for_entity_registered`` / ``wait_for_entity_removed`` to the
+    call sites. ``TimeoutError`` returns False (handled separately;
+    surfaces a different "not yet queryable" warning), and
+    ``HomeAssistantAPIError`` is fully swallowed by the helpers in
+    ``util_helpers.py``.
+
+    Distinct from the cross-cutting shape regression in
+    ``test_helper_response_shape.py::TestLifecycleWriteWarningsShape`` —
+    these tests stay scoped to the scene tool family and assert on
+    scene-specific behaviour: exact warning verbiage per call site,
+    the underlying write still reports ``success=True``, the storage
+    key is threaded through unchanged, and the upstream exception
+    message is captured in the warning text.
+    """
+
+    async def test_scene_create_wait_connection_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """Create path: a ``HomeAssistantConnectionError`` from the wait
+        helper must surface as a top-level warning, leave ``success=True``
+        (the upsert itself succeeded), and carry the exception message
+        in the warning text."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantConnectionError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _raise)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "Test Scene",
+                "entities": {"light.kitchen": {"state": "on"}},
+            },
+        )
+
+        # Underlying upsert succeeded — only the post-write verification
+        # tripped, so the operation is still reported as successful.
+        assert result["success"] is True
+        mock_client.upsert_scene_config.assert_called_once()
+        # Storage key threading unchanged by the warning path.
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"expected non-empty warnings list, got {warnings!r}"
+        )
+        assert all(isinstance(w, str) for w in warnings), (
+            f"warnings list must be list[str]; got {warnings!r}"
+        )
+        # Neutral verbiage on the full-config branch — upsert_scene_config
+        # returns no create/update signal, so wording follows the scripts
+        # pattern (rest_client.py::upsert_scene_config L1417-1428).
+        assert any("Scene saved but verification failed" in w for w in warnings), (
+            f"expected scene-saved verbiage; got {warnings!r}"
+        )
+        # Exception message captured for caller-side diagnosis.
+        assert any("forced for test" in w for w in warnings), (
+            f"expected exception message in warning; got {warnings!r}"
+        )
+
+    async def test_scene_create_wait_auth_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """Create path: ``HomeAssistantAuthError`` is the second member of
+        the narrow exception tuple and must reach the same warning path."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantAuthError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _raise)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={
+                "name": "Test Scene",
+                "entities": {"light.kitchen": {"state": "on"}},
+            },
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_scene_config.assert_called_once()
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings
+        assert all(isinstance(w, str) for w in warnings)
+        assert any("Scene saved but verification failed" in w for w in warnings), (
+            f"expected scene-saved verbiage; got {warnings!r}"
+        )
+        assert any("forced for test" in w for w in warnings)
+
+    async def test_scene_update_wait_connection_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """python_transform branch: a ``HomeAssistantConnectionError`` from
+        the wait helper surfaces a warning specific to the update verbiage
+        ("Scene updated but verification failed"). Asserts the warning is
+        appended on this branch — historically the python_transform path
+        had drift risk with the main create branch (cf. the G2 regression
+        for ``apply_entity_category``)."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantConnectionError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _raise)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform=(
+                "config['entities']['light.kitchen']['brightness'] = 100"
+            ),
+            config_hash=seed_hash,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        mock_client.upsert_scene_config.assert_called_once()
+        # python_transform branch threads the storage key into the response.
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"expected non-empty warnings list, got {warnings!r}"
+        )
+        assert all(isinstance(w, str) for w in warnings)
+        # Update-branch verbiage differs from create-branch verbiage.
+        assert any("Scene updated but verification failed" in w for w in warnings), (
+            f"expected scene-update verbiage; got {warnings!r}"
+        )
+        assert any("forced for test" in w for w in warnings)
+
+    async def test_scene_update_wait_auth_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """python_transform branch: ``HomeAssistantAuthError`` reaches the
+        same warning path as the connection-error case."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        seed = {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": {"light.kitchen": {"state": "on"}},
+        }
+        mock_client.get_scene_config = AsyncMock(return_value=seed)
+        seed_hash = compute_config_hash(seed)
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantAuthError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", _raise)
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            python_transform=(
+                "config['entities']['light.kitchen']['brightness'] = 100"
+            ),
+            config_hash=seed_hash,
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        mock_client.upsert_scene_config.assert_called_once()
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings
+        assert all(isinstance(w, str) for w in warnings)
+        assert any("Scene updated but verification failed" in w for w in warnings), (
+            f"expected scene-update verbiage; got {warnings!r}"
+        )
+        assert any("forced for test" in w for w in warnings)
+
+    async def test_scene_remove_wait_connection_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """Remove path: a ``HomeAssistantConnectionError`` from the
+        ``wait_for_entity_removed`` helper surfaces a remove-specific
+        warning ("Deletion confirmed but removal verification failed"),
+        while the response still reports ``success=True`` (the delete
+        REST call itself completed) and threads the storage key."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantConnectionError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
+
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert result["success"] is True
+        assert result["action"] == "delete"
+        mock_client.delete_scene_config.assert_called_once()
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"expected non-empty warnings list, got {warnings!r}"
+        )
+        assert all(isinstance(w, str) for w in warnings)
+        # Remove-path verbiage is distinct from create / update.
+        assert any("removal verification failed" in w for w in warnings), (
+            f"expected scene-remove verbiage; got {warnings!r}"
+        )
+        assert any("forced for test" in w for w in warnings)
+
+    async def test_scene_remove_wait_auth_error_appends_warning(
+        self, tools, mock_client, monkeypatch
+    ):
+        """Remove path: ``HomeAssistantAuthError`` reaches the same
+        warning path as the connection-error case."""
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+
+        async def _raise(*_args, **_kwargs):
+            raise HomeAssistantAuthError("forced for test")
+
+        monkeypatch.setattr(scene_mod, "wait_for_entity_removed", _raise)
+
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert result["success"] is True
+        assert result["action"] == "delete"
+        mock_client.delete_scene_config.assert_called_once()
+        assert result["scene_id"] == "test_scene"
+
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings
+        assert all(isinstance(w, str) for w in warnings)
+        assert any("removal verification failed" in w for w in warnings), (
+            f"expected scene-remove verbiage; got {warnings!r}"
+        )
+        assert any("forced for test" in w for w in warnings)

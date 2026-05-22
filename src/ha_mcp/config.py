@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     # supervisor UI rejects out-of-range values before they reach env vars.
     tool_search_max_results: int = Field(5, ge=2, le=10, alias="TOOL_SEARCH_MAX_RESULTS")
 
+    # Lite docstrings — replace selected heavy tool descriptions with
+    # shorter variants that defer detailed guidance to the
+    # ``ha_get_skill_guide`` skill tool/resource.
+    # Reduces idle catalog token usage at the cost of relying on the LLM
+    # to actually consult the skill when it needs detail. Beta feature
+    # (issue #1062); a startup WARNING is emitted when enabled so
+    # env-var users see the trade-off in their logs.
+    enable_lite_docstrings: bool = Field(False, alias="ENABLE_LITE_DOCSTRINGS")
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.

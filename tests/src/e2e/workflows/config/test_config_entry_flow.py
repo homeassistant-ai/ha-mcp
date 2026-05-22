@@ -2,10 +2,10 @@
 E2E tests for Config Entry Flow API.
 
 Covers:
-- Schema retrieval for form-based and menu-based helpers (ha_get_helper_schema)
 - Creating a form-only helper (min_max)
 - Creating a menu-based helper (group — menu then form)
-- Error feedback on missing menu selection
+- Error feedback on missing menu selection (data_schema_unavailable_reason
+  marker + menu_options inline on validation errors)
 - Deletion of config-entry-based helpers
 """
 
@@ -53,107 +53,6 @@ async def _create_config_entry_helper(
 @pytest.mark.slow
 class TestConfigEntryFlow:
     """Test Config Entry Flow helper creation."""
-
-    async def test_get_helper_schema_form_type(self, mcp_client):
-        """Schema for a form-based helper returns data_schema fields."""
-        result = await mcp_client.call_tool(
-            "ha_get_helper_schema", {"helper_type": "min_max"}
-        )
-        data = assert_mcp_success(result, "Get min_max schema")
-
-        assert data.get("helper_type") == "min_max"
-        assert data.get("flow_type") == "form"
-        assert "data_schema" in data
-        assert isinstance(data["data_schema"], list)
-        logger.info(f"min_max schema has {len(data['data_schema'])} fields")
-
-    async def test_get_helper_schema_menu_type(self, mcp_client):
-        """Schema for a menu-based helper (group) returns menu_options."""
-        result = await mcp_client.call_tool(
-            "ha_get_helper_schema", {"helper_type": "group"}
-        )
-        data = assert_mcp_success(result, "Get group schema")
-
-        assert data.get("helper_type") == "group"
-        assert "flow_type" in data
-
-        if data.get("flow_type") == "menu":
-            assert "menu_options" in data
-            assert isinstance(data["menu_options"], list)
-            assert len(data["menu_options"]) > 0, "Group should have at least one menu option"
-            logger.info(f"Group has {len(data['menu_options'])} menu options: {data['menu_options']}")
-        else:
-            # HA may change group to form-based in future versions
-            assert "data_schema" in data
-
-    async def test_get_helper_schema_template_menu_top(self, mcp_client):
-        """Template schema without menu_option returns top-level menu with sensor/binary_sensor."""
-        result = await mcp_client.call_tool(
-            "ha_get_helper_schema", {"helper_type": "template"}
-        )
-        data = assert_mcp_success(result, "Get template schema top-level")
-
-        assert data.get("helper_type") == "template"
-        assert data.get("flow_type") == "menu"
-        assert "menu_options" in data
-        assert "sensor" in data["menu_options"], f"Expected 'sensor' in {data['menu_options']}"
-        assert "binary_sensor" in data["menu_options"], f"Expected 'binary_sensor' in {data['menu_options']}"
-        logger.info(f"Template menu_options: {data['menu_options']}")
-
-    async def test_get_helper_schema_template_sensor(self, mcp_client):
-        """Template schema with menu_option='sensor' returns form fields including 'state'."""
-        result = await mcp_client.call_tool(
-            "ha_get_helper_schema",
-            {"helper_type": "template", "menu_option": "sensor"},
-        )
-        data = assert_mcp_success(result, "Get template sensor schema")
-
-        assert data.get("helper_type") == "template"
-        assert data.get("flow_type") == "form"
-        assert data.get("menu_option") == "sensor"
-        assert "data_schema" in data
-        field_names = [f.get("name") for f in data["data_schema"]]
-        assert "state" in field_names, f"Expected 'state' field, got: {field_names}"
-        logger.info(f"Template sensor fields: {field_names}")
-
-    async def test_get_helper_schema_menu_option_invalid_for_form_helper(self, mcp_client):
-        """Passing menu_option to a form-based helper returns a validation error."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_helper_schema",
-            {"helper_type": "min_max", "menu_option": "sensor"},
-        )
-        assert data.get("success") is not True
-        error_str = str(data).lower()
-        assert any(
-            kw in error_str for kw in ("menu_option", "form", "not 'menu'", "not applicable")
-        ), f"Error should mention menu_option or flow type mismatch: {data}"
-
-    async def test_get_helper_schema_invalid_menu_option(self, mcp_client):
-        """Passing an invalid menu_option value returns a clear validation error."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_helper_schema",
-            {"helper_type": "template", "menu_option": "nonexistent_type"},
-        )
-        assert data.get("success") is not True
-        error_str = str(data).lower()
-        assert any(
-            kw in error_str
-            for kw in ("valid options", "not valid", "menu_option", "400", "api error")
-        ), f"Error should mention valid options or invalid menu_option: {data}"
-
-    async def test_get_helper_schema_multiple_types(self, mcp_client):
-        """Schema retrieval works for all supported helper types."""
-        helper_types = ["utility_meter", "min_max"]
-
-        for helper_type in helper_types:
-            result = await mcp_client.call_tool(
-                "ha_get_helper_schema", {"helper_type": helper_type}
-            )
-            data = assert_mcp_success(result, f"Get {helper_type} schema")
-            assert data.get("helper_type") == helper_type
-            assert "flow_type" in data
 
     async def test_create_min_max_helper(self, mcp_client):
         """Create a min_max helper (single form step, no menu)."""
@@ -268,7 +167,9 @@ class TestConfigEntryFlow:
         logger.info(f"options_schema flow_type={schema['flow_type']} for {entry['domain']}")
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
-        """Creating a group helper without group_type returns a helpful error."""
+        """Creating a group helper without group_type returns a helpful error
+        with the legal sub-types inline as ``menu_options`` (issue #1186).
+        """
         config = {"name": "my_group", "entities": []}  # missing group_type
 
         data = await safe_call_tool(
@@ -283,3 +184,13 @@ class TestConfigEntryFlow:
             kw in error_str.lower()
             for kw in ("menu", "group_type", "next_step_id", "selection", "option")
         ), f"Error should mention menu selection: {error_str}"
+        # The error context must carry the legal sub-types inline so the
+        # caller can pick a branch on the next try without a discovery
+        # round-trip — see _handle_menu_step in tools_config_entry_flow.
+        menu_options = data.get("menu_options")
+        assert isinstance(menu_options, list) and menu_options, (
+            f"Error should carry menu_options list: {data}"
+        )
+        assert "light" in menu_options, (
+            f"Group menu_options should include 'light': {menu_options}"
+        )

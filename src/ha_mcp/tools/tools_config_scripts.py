@@ -12,6 +12,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -28,6 +32,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
@@ -95,13 +100,28 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
+        The returned `script_id` is the canonical storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it.
+
         EXAMPLES:
         - Get script: ha_config_get_script("morning_routine")
         - Get script: ha_config_get_script("backup_script")
 
-        For detailed script configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
+            # Empty/whitespace script_id would propagate to
+            # ``get_script_config`` and surface as a misleading
+            # ``RESOURCE_NOT_FOUND``. Extension of the #1312
+            # validate_identifier_not_empty pattern to the scripts
+            # family per #1313.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Pass a script identifier (e.g. 'morning_routine')",
+                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                ],
+            )
             config_result = await self._client.get_script_config(script_id)
             # Extract actual script config body and compute hash before category injection
             actual_config = config_result.get("config", config_result)
@@ -114,10 +134,26 @@ class ConfigScriptTools:
             if cat_id:
                 config_result["category"] = cat_id
 
+            # Issue #1334: return the canonical storage key from the
+            # rest_client envelope so callers can thread the result into
+            # subsequent ha_config_*_script calls without re-resolving.
+            # Falls back to the input when the rest_client response omits
+            # the key — a contract violation that we surface via warning
+            # rather than mask silently.
+            canonical_id = config_result.get("script_id")
+            if canonical_id is None:
+                logger.warning(
+                    "get_script_config envelope missing 'script_id' for "
+                    "input %r; falling back to caller input. This indicates "
+                    "a rest_client contract violation.",
+                    script_id,
+                )
+                canonical_id = script_id
+
             return {
                 "success": True,
                 "action": "get",
-                "script_id": script_id,
+                "script_id": canonical_id,
                 "config": config_result,
                 "config_hash": config_hash_value,
             }
@@ -130,7 +166,7 @@ class ConfigScriptTools:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -296,7 +332,7 @@ class ConfigScriptTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_home_assistant_best_practices`.
+        For comprehensive guidance, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -411,6 +447,21 @@ class ConfigScriptTools:
         """
         bp_warnings: list[str] = []
         try:
+            # ``script_id`` is required (always non-None). Reject empty/
+            # whitespace up-front so the caller gets a structured parameter
+            # error instead of a misleading ``RESOURCE_NOT_FOUND`` from
+            # the downstream upsert/fetch. Extension of the #1312
+            # validate_identifier_not_empty pattern to the scripts family
+            # per #1313.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Pass a script identifier (e.g. 'morning_routine')",
+                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                ],
+                context={"action": "set"},
+            )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(
@@ -537,9 +588,14 @@ class ConfigScriptTools:
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
-                        result["warning"] = f"Script created but {entity_id} not yet queryable. It may take a moment to become available."
-                except Exception as e:
-                    result["warning"] = f"Script created but verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Script saved but {entity_id} not yet queryable. "
+                            "It may take a moment to become available."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Script saved but verification failed: {e}"
+                    )
 
             # Apply category to entity registry if provided
             if effective_category and entity_id:
@@ -566,7 +622,7 @@ class ConfigScriptTools:
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
                 "Use ha_search_entities(domain_filter='script') to find scripts",
-                "Use ha_get_skill_home_assistant_best_practices for help",
+                "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
                 suggestions.append(
@@ -619,6 +675,15 @@ class ConfigScriptTools:
         **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                script_id,
+                "script_id",
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='script') to find existing script_ids"
+                ],
+                context={"operation": "remove_script"},
+            )
             result = await self._client.delete_script_config(script_id)
 
             # Wait for script to be removed
@@ -628,9 +693,13 @@ class ConfigScriptTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
-                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
-                except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
             return {"success": True, "action": "delete", **result}
         except ToolError:
@@ -642,7 +711,7 @@ class ConfigScriptTools:
                 suggestions=[
                     "Verify script_id exists using ha_search_entities(domain_filter='script')",
                     "Check if script is being used by automations",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 

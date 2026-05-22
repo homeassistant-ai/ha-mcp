@@ -17,6 +17,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -32,6 +33,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
@@ -215,26 +217,26 @@ class ConfigSceneTools:
         - ha_config_set_scene — pass the returned ``config_hash`` for
           ``python_transform`` updates.
 
-        For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` previously
             # surfaced as ``RESOURCE_NOT_FOUND`` with a misleading
             # `entities`-related suggestion. Pre-flight here so the caller
-            # gets the actual problem.
-            if not scene_id or not scene_id.strip():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "scene_id must not be empty",
-                        suggestions=[
-                            "Pass a non-empty scene identifier (e.g. 'movie_night')",
-                            "Use ha_search_entities(domain_filter='scene') "
-                            "to find existing scene_ids",
-                        ],
-                        context={"scene_id": scene_id},
-                    )
-                )
+            # gets the actual problem. Migrated to the shared
+            # ``validate_identifier_not_empty`` helper (#1314) — message
+            # and ``context["scene_id"]`` key preserved for callers.
+            validate_identifier_not_empty(
+                scene_id,
+                "scene_id",
+                message="scene_id must not be empty",
+                suggestions=[
+                    "Pass a non-empty scene identifier (e.g. 'movie_night')",
+                    "Use ha_search_entities(domain_filter='scene') "
+                    "to find existing scene_ids",
+                ],
+                context={"scene_id": scene_id},
+            )
             # Issue #1168 R3 blockers 3 + 6: unwrap the rest-client envelope
             # so the response carries the scene body directly (no nested
             # `success`/`scene_id`/`config` chain), and use the storage key
@@ -278,7 +280,7 @@ class ConfigSceneTools:
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -514,25 +516,25 @@ class ConfigSceneTools:
             "icon": "mdi:movie",
         })
 
-        For detailed scene configuration help, use ha_get_skill_home_assistant_best_practices.
+        For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
             # any config dispatch — keeps the error code/message aligned with
             # the actual problem rather than the misleading
-            # ``RESOURCE_NOT_FOUND`` from a downstream lookup.
-            if not scene_id or not scene_id.strip():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "scene_id must not be empty",
-                        suggestions=[
-                            "Pass a non-empty scene identifier (e.g. 'movie_night')",
-                            "For a fresh create, use a name-derived slug",
-                        ],
-                        context={"scene_id": scene_id},
-                    )
-                )
+            # ``RESOURCE_NOT_FOUND`` from a downstream lookup. Migrated to
+            # the shared ``validate_identifier_not_empty`` helper (#1314) —
+            # message and ``context["scene_id"]`` key preserved for callers.
+            validate_identifier_not_empty(
+                scene_id,
+                "scene_id",
+                message="scene_id must not be empty",
+                suggestions=[
+                    "Pass a non-empty scene identifier (e.g. 'movie_night')",
+                    "For a fresh create, use a name-derived slug",
+                ],
+                context={"scene_id": scene_id},
+            )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(
@@ -727,16 +729,12 @@ class ConfigSceneTools:
                             self._client, entity_id
                         )
                         if not registered:
-                            result["warning"] = (
+                            result.setdefault("warnings", []).append(
                                 f"Scene updated but {entity_id} not yet queryable. "
                                 "It may take a moment to become available."
                             )
-                    except (
-                        TimeoutError,
-                        HomeAssistantAPIError,
-                        HomeAssistantConnectionError,
-                    ) as e:
-                        result["warning"] = (
+                    except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                        result.setdefault("warnings", []).append(
                             f"Scene updated but verification failed: {e}"
                         )
                 if category and entity_id:
@@ -848,16 +846,14 @@ class ConfigSceneTools:
                         self._client, entity_id
                     )
                     if not registered:
-                        result["warning"] = (
-                            f"Scene created but {entity_id} not yet queryable. "
+                        result.setdefault("warnings", []).append(
+                            f"Scene saved but {entity_id} not yet queryable. "
                             "It may take a moment to become available."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
-                    result["warning"] = f"Scene created but verification failed: {e}"
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Scene saved but verification failed: {e}"
+                    )
 
             # Apply category to entity registry if provided.
             if effective_category and entity_id:
@@ -895,7 +891,7 @@ class ConfigSceneTools:
                     "Ensure config includes an 'entities' field (a dict keyed by entity_id)",
                     "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
                     "Use ha_search_entities(domain_filter='scene') to find scenes",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -942,20 +938,20 @@ class ConfigSceneTools:
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
             # the resolver — keeps the error code/message aligned with the
-            # actual problem.
-            if not scene_id or not scene_id.strip():
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "scene_id must not be empty",
-                        suggestions=[
-                            "Pass a non-empty scene identifier (e.g. 'old_scene')",
-                            "Use ha_search_entities(domain_filter='scene') "
-                            "to find existing scene_ids",
-                        ],
-                        context={"scene_id": scene_id},
-                    )
-                )
+            # actual problem. Migrated to the shared
+            # ``validate_identifier_not_empty`` helper (#1314) — message
+            # and ``context["scene_id"]`` key preserved for callers.
+            validate_identifier_not_empty(
+                scene_id,
+                "scene_id",
+                message="scene_id must not be empty",
+                suggestions=[
+                    "Pass a non-empty scene identifier (e.g. 'old_scene')",
+                    "Use ha_search_entities(domain_filter='scene') "
+                    "to find existing scene_ids",
+                ],
+                context={"scene_id": scene_id},
+            )
             # Issue #1168 R3 blocker 6: resolve once up-front so every later
             # callsite (entity_id resolver, delete call, response) uses the
             # storage key consistently — outer ``scene_id`` matches the
@@ -976,15 +972,11 @@ class ConfigSceneTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
-                        result["warning"] = (
+                        result.setdefault("warnings", []).append(
                             f"Deletion confirmed by API but {entity_id} may still appear briefly."
                         )
-                except (
-                    TimeoutError,
-                    HomeAssistantAPIError,
-                    HomeAssistantConnectionError,
-                ) as e:
-                    result["warning"] = (
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
                         f"Deletion confirmed but removal verification failed: {e}"
                     )
 
@@ -1003,7 +995,7 @@ class ConfigSceneTools:
                 suggestions=[
                     "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
                     "Check if scene is being used by automations or scripts",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 

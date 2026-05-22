@@ -72,9 +72,9 @@ async def wait_for_entity_state(
     """
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}

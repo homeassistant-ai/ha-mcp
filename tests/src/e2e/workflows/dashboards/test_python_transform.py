@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions
+from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         },
     )
     # Verify error message mentions import or forbidden
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
 
 
@@ -154,7 +154,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {"url_path": "test-python-hash", "python_transform": "config['views'] = []"},
     )
     # Verify error message mentions config_hash
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "config_hash" in error_msg.lower()
 
 
@@ -173,7 +173,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
         },
     )
     # Verify error message mentions mutual exclusivity
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "cannot use both" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
 
 
@@ -304,7 +304,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         },
     )
     # Verify error message mentions conflict
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
 
@@ -358,3 +358,252 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
     assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
+
+
+@pytest.mark.asyncio
+async def test_python_transform_replace_string_method(mcp_client, ha_client):
+    """``str.replace`` works inside ``python_transform``."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-replace",
+            "config": {
+                "views": [
+                    {
+                        "cards": [
+                            {"type": "markdown", "content": "a\\b\\c"},
+                        ]
+                    }
+                ]
+            },
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-replace"}
+    )
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-replace",
+            "config_hash": get_result["config_hash"],
+            "python_transform": (
+                "card = config['views'][0]['cards'][0]\n"
+                "card['content'] = card['content'].replace('\\\\', '')"
+            ),
+        },
+    )
+
+    verify = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-replace"}
+    )
+    assert verify["config"]["views"][0]["cards"][0]["content"] == "abc"
+
+
+def _hint_suggestions(result: dict) -> list[str]:
+    error = result["error"] if isinstance(result["error"], dict) else {}
+    return list(error.get("suggestions", []))
+
+
+@pytest.mark.asyncio
+async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_client):
+    """IndexError from a bad path surfaces the search-mode hint first."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-index",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-bad-index"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-index",
+            "config_hash": get_result["config_hash"],
+            "python_transform": "config['views'][3]['cards'][0]['type'] = 'tile'",
+        },
+    )
+
+    suggestions = _hint_suggestions(result)
+    assert suggestions, "expected suggestions in error response"
+    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+        f"Expected search-mode hint as first suggestion, got: {suggestions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_key_error_hints_at_search_mode(mcp_client, ha_client):
+    """KeyError from a missing dict key also surfaces the search-mode hint."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-key",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-bad-key"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-bad-key",
+            "config_hash": get_result["config_hash"],
+            # 'sections' doesn't exist on this view — KeyError, not IndexError.
+            "python_transform": "config['views'][0]['sections'][0]['cards'][0]['type'] = 'tile'",
+        },
+    )
+
+    suggestions = _hint_suggestions(result)
+    assert suggestions, "expected suggestions in error response"
+    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+        f"Expected search-mode hint as first suggestion, got: {suggestions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_unrelated_runtime_error_no_search_hint(
+    mcp_client, ha_client
+):
+    """A non-path runtime error (TypeError) must not get the dashboard hint."""
+    mcp = MCPAssertions(mcp_client)
+
+    await mcp.call_tool_success(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-type-error",
+            "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+        },
+    )
+
+    get_result = await mcp.call_tool_success(
+        "ha_config_get_dashboard", {"url_path": "test-python-type-error"}
+    )
+
+    result = await mcp.call_tool_failure(
+        "ha_config_set_dashboard",
+        {
+            "url_path": "test-python-type-error",
+            "config_hash": get_result["config_hash"],
+            # str + int is a TypeError at runtime.
+            "python_transform": "config['views'][0]['title'] = 'x' + 1",
+        },
+    )
+
+    suggestions = _hint_suggestions(result)
+    joined = " ".join(suggestions)
+    assert "card_type" not in joined, (
+        f"Unrelated TypeError should not get the search-mode hint, got: {suggestions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_python_transform_returns_authoritative_post_save_hash(
+    mcp_client, ha_client
+):
+    """Regression for #1291: the hash returned by set(python_transform) must
+    equal the hash a subsequent get returns — i.e. the post-save authoritative
+    state, not the pre-save in-memory transformed dict.
+
+    Before the fix, ``new_config_hash = compute_config_hash(transformed_config)``
+    (tools_config_dashboards.py, around L1157) silently drifted whenever HA
+    normalised on save (key reorder, default injection, empty-container
+    stripping). A subsequent ``set(python_transform=..., config_hash=<returned>)``
+    would then trip ``Dashboard modified since last read`` even with no
+    concurrent writes. The fix re-fetches via ``_get_dashboard_config_internal``
+    to obtain the authoritative hash, matching the sibling pattern in
+    ``tools_config_scripts.py`` / ``tools_config_scenes.py`` /
+    ``tools_config_automations.py``.
+
+    Hash invariance is a pre-condition for chained python_transform calls and
+    for the styleguide's "Dashboard updates use content hashing, not session
+    tracking" contract.
+    """
+    mcp = MCPAssertions(mcp_client)
+    url_path = "test-1291-hash-auth"
+
+    try:
+        # Create dashboard
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config": {
+                    "views": [
+                        {
+                            "cards": [
+                                {"type": "markdown", "content": "v1"}
+                            ]
+                        }
+                    ]
+                },
+            },
+        )
+
+        get_initial = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": url_path}
+        )
+        initial_hash = get_initial["config_hash"]
+
+        # Apply python_transform; capture returned hash.
+        transform_result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config_hash": initial_hash,
+                "python_transform": (
+                    "config['views'][0]['cards'][0]['content'] = 'transformed'"
+                ),
+            },
+        )
+        returned_hash = transform_result["config_hash"]
+
+        # Re-read to obtain HA's authoritative post-save hash.
+        verify_get = await mcp.call_tool_success(
+            "ha_config_get_dashboard", {"url_path": url_path}
+        )
+        post_save_hash = verify_get["config_hash"]
+
+        # Invariant: hash returned by set(python_transform) must equal a
+        # subsequent get's hash. Master computes it from the pre-save dict;
+        # the fix re-fetches and computes it from HA's authoritative response.
+        assert returned_hash == post_save_hash, (
+            "set(python_transform) returned a config_hash that does not match "
+            "the hash from a subsequent get — the optimistic-locking chain is "
+            "broken (next chained python_transform call would fail with "
+            "'Dashboard modified since last read'). "
+            f"returned={returned_hash!r} post_save={post_save_hash!r}"
+        )
+
+        # Chain a second python_transform using the returned hash — this is
+        # the user-visible scenario that breaks when the invariant fails.
+        chain_result = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": url_path,
+                "config_hash": returned_hash,
+                "python_transform": (
+                    "config['views'][0]['cards'][0]['content'] = 'chained'"
+                ),
+            },
+        )
+        assert chain_result["success"] is True
+        assert chain_result["action"] == "python_transform"
+    finally:
+        await mcp.call_tool_success(
+            "ha_config_delete_dashboard", {"url_path": url_path}
+        )

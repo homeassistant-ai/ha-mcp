@@ -16,12 +16,13 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..errors import ErrorCode, create_error_response, create_resource_not_found_error
+from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -592,6 +593,20 @@ class ResourceTools:
         resource_type: str,
     ) -> tuple[dict[str, Any], str]:
         """Create or update a lovelace resource. Returns (result, action)."""
+        # ``None`` stays the documented "create-new" sentinel; explicit
+        # empty/whitespace ``resource_id`` would silently route to the
+        # ``else`` create branch below and lose update intent (destructive
+        # intent-loss class, same as the registry-metadata twins).
+        if resource_id is not None:
+            validate_identifier_not_empty(
+                resource_id,
+                "resource_id",
+                suggestions=[
+                    "Omit resource_id entirely to create a new resource",
+                    "Pass a valid resource_id to update an existing resource",
+                ],
+                context={"action": "set"},
+            )
         if resource_id:
             result = await self._client.send_websocket_message(
                 {
@@ -646,6 +661,15 @@ class ResourceTools:
         before deleting. Ensure no dashboards depend on the resource.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                resource_id,
+                "resource_id",
+                suggestions=[
+                    "Pass a valid resource_id (use ha_config_list_dashboard_resources() to list)",
+                ],
+                context={"action": "delete"},
+            )
             result = await self._client.send_websocket_message(
                 {
                     "type": "lovelace/resources/delete",
@@ -659,13 +683,14 @@ class ResourceTools:
                 error_str = str(error_msg).lower()
                 if "not found" in error_str or "unable to find" in error_str:
                     raise_tool_error(
-                        create_resource_not_found_error(
-                            "Dashboard resource",
-                            resource_id,
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Dashboard resource '{resource_id}' not found",
                             details=(
                                 f"Resource '{resource_id}' not found. "
                                 "Use ha_config_list_dashboard_resources() to see available resources."
                             ),
+                            context={"action": "delete", "resource_id": resource_id},
                         )
                     )
 

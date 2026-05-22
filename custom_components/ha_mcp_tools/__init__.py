@@ -319,7 +319,6 @@ def _build_edit_yaml_config_handler(hass):
 
     async def handle_edit_yaml_config(call: ServiceCall) -> dict[str, Any]:
         """Handle the edit_yaml_config service call."""
-        ry = make_yaml()
         rel_path = call.data["file"]
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
@@ -361,7 +360,9 @@ def _build_edit_yaml_config_handler(hass):
                     "error": f"'content' is required for action '{action}'.",
                 }
             try:
-                parsed_content = ry.load(StringIO(content))
+                parsed_content = await hass.async_add_executor_job(
+                    lambda: make_yaml().load(StringIO(content))
+                )
             except YAMLError as err:
                 return {
                     "success": False,
@@ -382,7 +383,9 @@ def _build_edit_yaml_config_handler(hass):
             if target_exists:
                 raw_content = await hass.async_add_executor_job(target_file.read_text)
                 try:
-                    data = ry.load(StringIO(raw_content)) or {}
+                    data = await hass.async_add_executor_job(
+                        lambda: make_yaml().load(StringIO(raw_content)) or {}
+                    )
                 except YAMLError as err:
                     return {
                         "success": False,
@@ -414,9 +417,7 @@ def _build_edit_yaml_config_handler(hass):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 safe_name = normalized.replace(os.sep, "_")
                 backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
-                await hass.async_add_executor_job(
-                    backup_file.write_text, raw_content
-                )
+                await hass.async_add_executor_job(backup_file.write_text, raw_content)
                 backup_path_str = str(backup_file.relative_to(config_dir))
                 _LOGGER.info("Backup created: %s", backup_path_str)
 
@@ -454,7 +455,9 @@ def _build_edit_yaml_config_handler(hass):
                 if action == "add":
                     if url_path in dashboards:
                         existing = dashboards[url_path]
-                        if isinstance(existing, dict) and isinstance(parsed_content, dict):
+                        if isinstance(existing, dict) and isinstance(
+                            parsed_content, dict
+                        ):
                             existing.update(parsed_content)
                         else:
                             return {
@@ -490,9 +493,13 @@ def _build_edit_yaml_config_handler(hass):
                     if yaml_key in data:
                         existing = data[yaml_key]
                         # Merge: list extends list, dict merges dict
-                        if isinstance(existing, list) and isinstance(parsed_content, list):
+                        if isinstance(existing, list) and isinstance(
+                            parsed_content, list
+                        ):
                             data[yaml_key] = existing + parsed_content
-                        elif isinstance(existing, dict) and isinstance(parsed_content, dict):
+                        elif isinstance(existing, dict) and isinstance(
+                            parsed_content, dict
+                        ):
                             existing.update(parsed_content)
                         else:
                             return {
@@ -518,7 +525,9 @@ def _build_edit_yaml_config_handler(hass):
 
             # Serialize back to YAML
             try:
-                new_content = yaml_dumps(ry, data)
+                new_content = await hass.async_add_executor_job(
+                    lambda: yaml_dumps(make_yaml(), data)
+                )
             except YAMLError as err:
                 return {
                     "success": False,
@@ -527,7 +536,9 @@ def _build_edit_yaml_config_handler(hass):
 
             # Validate the result parses cleanly
             try:
-                ry.load(StringIO(new_content))
+                await hass.async_add_executor_job(
+                    lambda: make_yaml().load(StringIO(new_content))
+                )
             except YAMLError as err:
                 return {
                     "success": False,

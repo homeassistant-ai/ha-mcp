@@ -12,11 +12,14 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import (
     ErrorCode,
     create_config_error,
     create_error_response,
-    create_resource_not_found_error,
     create_validation_error,
 )
 from ..utils.config_hash import compute_config_hash
@@ -34,6 +37,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
@@ -227,6 +231,30 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], normalized)
 
 
+def _strip_redundant_identifier_echo(
+    result: dict[str, Any],
+    *,
+    extra_excludes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Strip the redundant ``identifier`` echo from an upsert/delete response.
+
+    The canonical ``automation_id`` key (resolved entity_id, falling back to
+    input identifier or ``unique_id``) makes re-echoing the raw ``identifier``
+    redundant noise.
+
+    ``unique_id`` is intentionally retained — it's HA's internal identifier,
+    distinct from ``entity_id``/``automation_id``, and callers track it for
+    cleanup. Do not extend ``extra_excludes`` to ``"unique_id"``: that
+    regression broke E2E ``test_duplicate_automation_prevention`` at 5fe5338.
+
+    ``extra_excludes`` lets a call site drop additional internal keys the
+    spread shouldn't surface (e.g. ``"success"`` on the python_transform
+    branch, where the caller manages that key directly).
+    """
+    excluded = {"identifier", *extra_excludes}
+    return {k: v for k, v in result.items() if k not in excluded}
+
+
 class AutomationConfigTools:
     """Configuration management tools for Home Assistant automations."""
 
@@ -280,13 +308,32 @@ class AutomationConfigTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeds, falling back to the input `identifier` otherwise.
+
         EXAMPLES:
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
 
-        For comprehensive automation documentation, use ha_get_skill_home_assistant_best_practices.
+        For comprehensive automation documentation, use ha_get_skill_guide.
         """
         try:
+            # Empty/whitespace identifier would propagate to the internal
+            # config lookup and surface as a misleading
+            # ``RESOURCE_NOT_FOUND``. Structured ``VALIDATION_INVALID_PARAMETER``
+            # naming the parameter is cleaner — extension of the #1312
+            # validate_identifier_not_empty pattern to the automations
+            # family per #1313.
+            validate_identifier_not_empty(
+                identifier,
+                "identifier",
+                suggestions=[
+                    "Pass an automation entity_id (e.g. 'automation.morning_routine')",
+                    "Or pass the unique_id of an existing automation",
+                    "Use ha_search_entities(domain_filter='automation') to list automations",
+                ],
+            )
             normalized_config, config_hash = await self._get_automation_config_internal(identifier)
 
             # Resolve entity_id and fetch category from entity registry
@@ -300,38 +347,20 @@ class AutomationConfigTools:
             return {
                 "success": True,
                 "action": "get",
-                "identifier": identifier,
+                "automation_id": entity_id or identifier,
                 "config": normalized_config,
                 "config_hash": config_hash,
             }
+        except ToolError:
+            raise
         except Exception as e:
-            # Handle 404 errors gracefully (often used to verify deletion)
-            error_str = str(e)
-            if (
-                "404" in error_str
-                or "not found" in error_str.lower()
-                or "entity not found" in error_str.lower()
-            ):
-                logger.debug(
-                    f"Automation {identifier} not found (expected for deletion verification)"
-                )
-                error_response = create_resource_not_found_error(
-                    "Automation",
-                    identifier,
-                    details=f"Automation '{identifier}' does not exist in Home Assistant",
-                )
-                error_response["action"] = "get"
-                error_response["reason"] = "not_found"
-                raise_tool_error(error_response)
-
-            logger.error(f"Error getting automation: {e}")
             exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
                 suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Check Home Assistant connection",
-                    "Use ha_get_skill_home_assistant_best_practices for help",
+                    "Use ha_get_skill_guide for help",
                 ],
             )
 
@@ -403,6 +432,12 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when entity registration
+        succeeds, falling back to the input `identifier` (update path) or
+        the generated `unique_id` from the upsert response (fresh create
+        when no identifier was passed).
+
         Before reaching for ``ha_config_set_automation``, consider whether a
         dedicated tool fits the use case better:
 
@@ -422,6 +457,8 @@ class AutomationConfigTools:
           `{{ states(x) in [...] }}`
         - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
         - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
+        - Native `for:` field on `state`/`numeric_state` triggers and conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
         - `wait_for_trigger` instead of `wait_template`
         - `choose` action instead of template-based service names
         - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a
@@ -431,7 +468,7 @@ class AutomationConfigTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_home_assistant_best_practices`.
+        For comprehensive guidance, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -483,17 +520,25 @@ class AutomationConfigTools:
             "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
 
-        Motion-activated lighting with condition:
+        Motion-activated lighting — `for:` on the off-transition replaces action-delay:
         ha_config_set_automation(config={
             "alias": "Motion Light",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
-            "condition": [{"condition": "sun", "after": "sunset"}],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
-                {"delay": {"minutes": 5}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
+                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "off",
+                 "for": {"minutes": 5}, "id": "motion_off"}
             ],
-            "mode": "restart"
+            "action": [
+                {"choose": [
+                    {"conditions": [
+                        {"condition": "trigger", "id": "motion_on"},
+                        {"condition": "sun", "after": "sunset"}
+                    ],
+                     "sequence": [{"service": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
+                    {"conditions": [{"condition": "trigger", "id": "motion_off"}],
+                     "sequence": [{"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
+                ]}
+            ]
         })
 
         Update existing automation:
@@ -545,7 +590,7 @@ class AutomationConfigTools:
         ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
         For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: ha_get_skill_home_assistant_best_practices
+        - Use: ha_get_skill_guide
         - Or visit: https://www.home-assistant.io/docs/automation/
 
         TROUBLESHOOTING:
@@ -556,6 +601,23 @@ class AutomationConfigTools:
         """
         bp_warnings: list[str] = []
         try:
+            # ``identifier`` is optional (omit → create new with generated
+            # unique_id; pass → update existing). When provided, reject
+            # empty/whitespace up-front so the caller gets a structured
+            # parameter error instead of a misleading ``RESOURCE_NOT_FOUND``
+            # from the downstream lookup. The ``not identifier`` check
+            # further down the python_transform branch still handles the
+            # explicit ``identifier is None`` case for that mode.
+            if identifier is not None:
+                validate_identifier_not_empty(
+                    identifier,
+                    "identifier",
+                    suggestions=[
+                        "Omit identifier to create a new automation",
+                        "Or pass a valid automation entity_id / unique_id to update",
+                    ],
+                    context={"action": "set"},
+                )
             # Validate mutual exclusivity of config and python_transform
             if config is not None and python_transform is not None:
                 raise_tool_error(
@@ -646,12 +708,15 @@ class AutomationConfigTools:
                 response: dict[str, Any] = {
                     "success": True,
                     "action": "python_transform",
-                    "identifier": identifier,
+                    "automation_id": (
+                        entity_id or identifier or result.get("unique_id")
+                    ),
                     "config_hash": new_config_hash,
                     "python_expression": python_transform,
                     "message": f"Automation {identifier} updated via Python transform",
-                    # Merge upsert result, excluding "success" (we set it ourselves)
-                    **{k: v for k, v in result.items() if k != "success"},
+                    **_strip_redundant_identifier_echo(
+                        result, extra_excludes=("success",)
+                    ),
                 }
                 if bp_warnings:
                     response["best_practice_warnings"] = bp_warnings
@@ -701,7 +766,7 @@ class AutomationConfigTools:
 
             # If the client could not verify the entity was registered, warn but don't hard-fail.
             if result.get("entity_not_verified"):
-                result["warning"] = (
+                result.setdefault("warnings", []).append(
                     "Automation was submitted to Home Assistant but the entity was not found "
                     "after polling. The automation may still have been created -- check Home "
                     "Assistant logs and try reloading automations. Common causes: "
@@ -717,12 +782,18 @@ class AutomationConfigTools:
             if not entity_id and identifier and identifier.startswith("automation."):
                 entity_id = identifier
             if wait_bool and entity_id:
+                action_word = "created" if identifier is None else "updated"
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
-                        result["warning"] = f"Automation created but {entity_id} not yet queryable. It may take a moment to become available."
-                except Exception as e:
-                    result["warning"] = f"Automation created but verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Automation {action_word} but {entity_id} not yet queryable. "
+                            "It may take a moment to become available."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Automation {action_word} but verification failed: {e}"
+                    )
 
             # Apply category to entity registry if provided
             if effective_category and entity_id:
@@ -735,21 +806,26 @@ class AutomationConfigTools:
 
             merge_validation_meta(result, validation_meta)
 
+            automation_id = entity_id or identifier or result.get("unique_id")
             return {
                 "success": True,
-                **result,
+                # automation_id omitted when all three fallbacks are falsy —
+                # the create path is unguarded by validate_identifier_not_empty,
+                # and surfacing automation_id=None would lie about resolvability.
+                # HA's upsert contract makes this branch unreachable in practice.
+                **({"automation_id": automation_id} if automation_id else {}),
+                **_strip_redundant_identifier_echo(result),
             }
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error upserting automation: {e}")
             suggestions = [
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search_entities(domain_filter='automation') to find automations",
-                "Use ha_get_skill_home_assistant_best_practices for help",
+                "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
                 suggestions.append(
@@ -976,6 +1052,11 @@ class AutomationConfigTools:
         """
         Delete a Home Assistant automation.
 
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeded before the delete, falling back to the input
+        `identifier` otherwise.
+
         EXAMPLES:
         - Delete automation: ha_config_remove_automation("automation.old_automation")
         - Delete by unique_id: ha_config_remove_automation("my_unique_id")
@@ -983,6 +1064,15 @@ class AutomationConfigTools:
         **WARNING:** Deleting an automation removes it permanently from your Home Assistant configuration.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                identifier,
+                "identifier",
+                suggestions=[
+                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                ],
+                context={"operation": "remove_automation"},
+            )
             # Resolve entity_id for wait verification (identifier may be a unique_id)
             entity_id_for_wait = await self._resolve_automation_entity_id(identifier)
             if not entity_id_for_wait:
@@ -998,35 +1088,34 @@ class AutomationConfigTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id_for_wait)
                     if not removed:
-                        result["warning"] = f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
-                except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Deletion confirmed by API but {entity_id_for_wait} may still appear briefly."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
-            return {"success": True, "action": "delete", **result}
+            return {
+                "success": True,
+                "action": "delete",
+                "automation_id": (
+                    entity_id_for_wait or identifier or result.get("unique_id")
+                ),
+                **_strip_redundant_identifier_echo(result),
+            }
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error(f"Error deleting automation: {e}")
-            error_str = str(e).lower()
-            if "404" in error_str or "not found" in error_str:
-                error_response = create_resource_not_found_error(
-                    "Automation",
-                    identifier,
-                    details=f"Automation '{identifier}' does not exist",
-                )
-            else:
-                error_response = exception_to_structured_error(
-                    e,
-                    context={"identifier": identifier},
-                    raise_error=False,
-                )
-            error_response["action"] = "delete"
-            # Add automation-specific suggestions
-            if "error" in error_response and isinstance(error_response["error"], dict):
-                error_response["error"]["suggestions"] = [
+            exception_to_structured_error(
+                e,
+                context={"identifier": identifier, "action": "delete"},
+                suggestions=[
                     "Verify automation exists using ha_search_entities(domain_filter='automation')",
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
-                ]
-            raise_tool_error(error_response)
+                ],
+            )
 
 
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

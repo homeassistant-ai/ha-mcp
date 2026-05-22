@@ -38,6 +38,18 @@ Use best judgement - not all changes require new tests, but the overall feature/
 - E2E tests (preferred for tools): `tests/src/e2e/`
 - Unit tests (utilities): `tests/src/unit/`
 
+## Exception Handling in Test Polling Loops
+
+Boot-phase verification helpers and async polling loops in `tests/src/e2e/` use **narrow `except (Specific1, Specific2, ...)` clauses + debug-level logging** for expected transient failures. Catch only the exception classes the polling target legitimately raises — e.g. `(requests.exceptions.RequestException, json.JSONDecodeError)` for direct HTTP polling, or the `_POLLING_TRANSIENT_ERRORS` tuple in `tests/src/e2e/utilities/wait_helpers.py` for MCP-client polling.
+
+Bugs — `TypeError`, `AttributeError`, `KeyError`, `AssertionError`, etc. — **must propagate** out of polling loops so they surface as clear test failures instead of being swallowed and retried until timeout.
+
+**Do NOT flag:**
+- Narrow `except (SpecificException, ...)` in polling/retry loops paired with `logger.debug(...)` — this is the intentional convention.
+- Broad `except Exception` at top-level setup/teardown handlers or cleanup loops marked `# pragma: no cover - cleanup best-effort`, where recovery is the same regardless of error class.
+
+See issue #1266.
+
 ## Security Patterns
 
 **Critical security checks (flag HIGH/CRITICAL severity):**
@@ -96,8 +108,8 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 **Flag MEDIUM severity when a new or modified tool docstring:**
 - Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
 - Is missing entirely or is still a placeholder
-- References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_home_assistant_best_practices`)
-- Embeds a full parameter schema instead of deferring to `ha_get_skill_home_assistant_best_practices`
+- References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_guide`)
+- Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
 - Multi-line docstring does not follow the structure template: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, (4) caveats. See AGENTS.md "Tool Docstrings" for details.
 
@@ -165,3 +177,13 @@ A change is BREAKING only if it removes functionality that users depend on.
 - Tool renaming with clear migration path
 
 **Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only flag CRITICAL when functionality is genuinely lost forever.
+
+## Non-Blocking Suggestions and Scope
+
+Scope is defined by the user (the maintainer / author of the PR), not by the reviewer (bot or human). **Never unilaterally file a follow-up issue or PR** — raise scope concerns in the PR review and let the user decide whether to address inline, defer, or dismiss. Do not skip legitimate findings — surface them.
+
+If you believe a finding is likely out of scope, say so explicitly so the user can verify: *"This may be out of scope — user should verify. I think it is out of scope because [specific reason]."* Do not bucket findings as "for a future PR" or "post-merge follow-up."
+
+Do not phrase findings as "post-merge follow-up," "nice to have," or "happy to file an issue" when the change is small and bundleable. Either apply the suggestion inline with a code suggestion block, or raise it plainly and let the user decide.
+
+See AGENTS.md § *Boy Scout Rule — Handling Discovered Improvements* for the author/agent-side rule.

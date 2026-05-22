@@ -12,12 +12,17 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     coerce_bool_param,
@@ -271,6 +276,20 @@ class GroupTools:
         **NOTE:** entities, add_entities, and remove_entities are mutually exclusive.
         """
         try:
+            # ``_validate_group_params`` only catches dots in object_id and
+            # entity-list issues; empty/whitespace object_id would slip
+            # through to ``call_service("group", "set", {"object_id": "", ...})``
+            # and surface as a misleading HA service-call failure. Symmetric
+            # with the ``ha_config_remove_group`` pre-flight added in this PR.
+            validate_identifier_not_empty(
+                object_id,
+                "object_id",
+                suggestions=[
+                    "Use ha_config_list_groups() to find existing group object_ids",
+                    "Or provide a fresh object_id (without 'group.' prefix) to create a new group",
+                ],
+                context={"operation": "set_group"},
+            )
             self._validate_group_params(object_id, entities, add_entities, remove_entities)
 
             service_data = self._build_group_service_data(
@@ -290,12 +309,18 @@ class GroupTools:
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             result: dict[str, Any] = {}
             if wait_bool:
+                action_word = "created" if is_create else "updated"
                 try:
                     registered = await wait_for_entity_registered(self._client, entity_id)
                     if not registered:
-                        result["warning"] = f"Group created but {entity_id} not yet queryable. It may take a moment to become available."
-                except Exception as e:
-                    result["warning"] = f"Group created but verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Group {action_word} but {entity_id} not yet queryable. "
+                            "It may take a moment to become available."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Group {action_word} but verification failed: {e}"
+                    )
 
             return {
                 "success": True,
@@ -360,7 +385,19 @@ class GroupTools:
         - This only removes old-style groups, not platform-specific groups.
         """
         try:
-            # Validate object_id
+            # Empty/whitespace would surface as a misleading service-call failure.
+            # Runs before the "." format check below so the empty/whitespace
+            # case is named first; the order is locked by the test in
+            # TestGroupsIdentifierValidation.
+            validate_identifier_not_empty(
+                object_id,
+                "object_id",
+                suggestions=[
+                    "Use ha_config_list_groups() to find existing group object_ids"
+                ],
+                context={"operation": "remove_group"},
+            )
+            # Validate object_id format
             if "." in object_id:
                 raise_tool_error(create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -382,9 +419,13 @@ class GroupTools:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
-                        result["warning"] = f"Deletion confirmed by API but {entity_id} may still appear briefly."
-                except Exception as e:
-                    result["warning"] = f"Deletion confirmed but removal verification failed: {e}"
+                        result.setdefault("warnings", []).append(
+                            f"Deletion confirmed by API but {entity_id} may still appear briefly."
+                        )
+                except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                    result.setdefault("warnings", []).append(
+                        f"Deletion confirmed but removal verification failed: {e}"
+                    )
 
             return {
                 "success": True,

@@ -21,7 +21,14 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.4.1"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.5.3"
+  # Disable Testcontainers' Ryuk reaper: it has been reported to leave
+  # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
+  # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
+  # enclosing ``with container:`` context manager — Python guarantees
+  # its ``__exit__`` fires on both normal and exception flows, so the
+  # Ryuk safety net is not needed for deterministic cleanup. Refs #366.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
   # Comprehensive E2E validation for main branch

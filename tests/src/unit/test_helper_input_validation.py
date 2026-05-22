@@ -107,9 +107,19 @@ def register_tools(mock_client):
     return registered
 
 
-def _wire_default_ws(mock_client, helper_type: str) -> None:
+def _wire_default_ws(
+    mock_client,
+    helper_type: str,
+    existing_config: dict[str, Any] | None = None,
+) -> None:
+    """Seed the WS-response handler. ``existing_config`` overrides the
+    default seed the update path merges from, used by the parity-guard tests
+    to construct a specific starting state.
+    """
     mock_client.send_websocket_message = AsyncMock(
-        side_effect=mock_client._make_ws_responses(helper_type)
+        side_effect=mock_client._make_ws_responses(
+            helper_type, existing_config=existing_config
+        )
     )
 
 
@@ -173,6 +183,55 @@ class TestTagAutoGeneratesTagId:
         msg = _find_msg(mock_client, "tag/create")
         assert msg is not None
         assert msg["tag_id"] == "custom-tag-id"
+
+    async def test_create_skips_entity_registration_wait(
+        self, register_tools, mock_client
+    ):
+        """Tags don't have entity states — the create branch must not call
+        ``wait_for_entity_registered``.
+
+        The update branch already documents this (line 2949-2981 in
+        tools_config_helpers.py): tags live in their own tag registry and
+        never appear in ``/api/states/<entity_id>``. The create branch was
+        previously calling ``wait_for_entity_registered`` against a
+        synthesized ``tag.<id>`` slug, which 404s for the full timeout on
+        every single tag-create — burning ~10s per tag-create test on
+        every CI run. This test pins the fix.
+        """
+        _wire_default_ws(mock_client, "tag")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as wait_mock:
+            await register_tools["ha_config_set_helper"](
+                helper_type="tag",
+                name="My Tag",
+                tag_id="some-tag",
+            )
+        wait_mock.assert_not_awaited()
+
+    async def test_create_non_tag_still_waits_for_registration(
+        self, register_tools, mock_client
+    ):
+        """Non-tag helper types still wait for entity registration.
+
+        The skip is scoped specifically to ``helper_type == "tag"`` —
+        input_boolean / input_number / etc. continue to use
+        ``wait_for_entity_registered`` to gate ``area_id`` /``labels``
+        registry updates and to surface a queryability warning to callers.
+        """
+        _wire_default_ws(mock_client, "input_boolean")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as wait_mock:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="My Bool",
+            )
+        wait_mock.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -511,5 +570,358 @@ class TestUpdateRangeValidation:
                 helper_type="input_select",
                 helper_id="mode",
                 options=["A", "A"],
+            )
+        _assert_invalid_param(excinfo)
+
+
+# ---------------------------------------------------------------------------
+# input_select initial-in-options + input_datetime has_date/has_time guards —
+# create-side coverage plus the corresponding update-path parity.
+# ---------------------------------------------------------------------------
+
+
+class TestInputSelectInitialInOptions:
+    """input_select: ``initial`` must be one of ``options`` on both branches.
+
+    Each scenario must produce the same ``VALIDATION_INVALID_PARAMETER`` error
+    on both code paths, so a caller hitting the invariant gets the same
+    actionable message regardless of action.
+    """
+
+    # --- Create-side coverage ---
+
+    async def test_create_rejects_initial_not_in_options(
+        self, register_tools, mock_client
+    ):
+        _wire_default_ws(mock_client, "input_select")
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                name="Mode",
+                options=["A", "B"],
+                initial="C",
+            )
+        _assert_invalid_param(excinfo)
+        assert "initial" in str(excinfo.value).lower()
+
+    async def test_create_valid_initial_passes(self, register_tools, mock_client):
+        _wire_default_ws(mock_client, "input_select")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                name="Mode",
+                options=["A", "B", "C"],
+                initial="B",
+            )
+        msg = _find_msg(mock_client, "input_select/create")
+        assert msg is not None
+        assert msg["initial"] == "B"
+
+    # --- Update-side coverage ---
+
+    async def test_update_rejects_new_initial_not_in_new_options(
+        self, register_tools, mock_client
+    ):
+        """Both ``options`` and ``initial`` supplied; initial isn't in the new list."""
+        _wire_default_ws(
+            mock_client,
+            "input_select",
+            {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                helper_id="mode",
+                options=["X", "Y"],
+                initial="Z",
+            )
+        _assert_invalid_param(excinfo)
+        assert "initial" in str(excinfo.value).lower()
+
+    async def test_update_rejects_existing_initial_falls_out_of_new_options(
+        self, register_tools, mock_client
+    ):
+        """Caller changes only ``options``; the existing-merged ``initial`` is no
+        longer in the new list — the parity guard catches the resolved-after-merge
+        invalid combo before the WS write."""
+        _wire_default_ws(
+            mock_client,
+            "input_select",
+            {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                helper_id="mode",
+                options=["X", "Y"],
+            )
+        _assert_invalid_param(excinfo)
+        assert "initial" in str(excinfo.value).lower()
+
+    async def test_update_rejects_new_initial_outside_existing_options(
+        self, register_tools, mock_client
+    ):
+        """Caller changes only ``initial``; the value isn't in the existing options."""
+        _wire_default_ws(
+            mock_client,
+            "input_select",
+            {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                helper_id="mode",
+                initial="Z",
+            )
+        _assert_invalid_param(excinfo)
+        assert "initial" in str(excinfo.value).lower()
+
+    async def test_update_happy_path_passes(self, register_tools, mock_client):
+        """Valid merge — happy path. Guards against false-positive rejections."""
+        _wire_default_ws(
+            mock_client,
+            "input_select",
+            {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                helper_id="mode",
+                options=["A", "B", "C"],
+                initial="C",
+            )
+        msg = _find_msg(mock_client, "input_select/update")
+        assert msg is not None
+        assert msg["options"] == ["A", "B", "C"]
+        assert msg["initial"] == "C"
+
+
+class TestInputDatetimeHasDateOrTime:
+    """input_datetime: at least one of has_date/has_time must be True on both branches.
+
+    The create and update branches each call the shared validator with the
+    resolved-after-merge ``(has_date, has_time)`` pair; either explicit
+    ``(False, False)`` from the caller or an update that disables the one
+    remaining True component is caught before the WS write.
+    """
+
+    # --- Create-side coverage ---
+
+    async def test_create_rejects_both_false(self, register_tools, mock_client):
+        _wire_default_ws(mock_client, "input_datetime")
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                name="Schedule",
+                has_date=False,
+                has_time=False,
+            )
+        _assert_invalid_param(excinfo)
+        assert "has_date" in str(excinfo.value) or "has_time" in str(excinfo.value)
+
+    async def test_create_with_only_date_passes(self, register_tools, mock_client):
+        _wire_default_ws(mock_client, "input_datetime")
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                name="DateOnly",
+                has_date=True,
+                has_time=False,
+            )
+        msg = _find_msg(mock_client, "input_datetime/create")
+        assert msg is not None
+        assert msg["has_date"] is True
+        assert msg["has_time"] is False
+
+    # --- Update-side coverage ---
+
+    async def test_update_rejects_disabling_both_components(
+        self, register_tools, mock_client
+    ):
+        """Caller sets both False explicitly; the merged payload would write
+        a broken-entity state into HA."""
+        _wire_default_ws(
+            mock_client,
+            "input_datetime",
+            {"id": "abc123", "name": "Schedule", "has_date": True, "has_time": True},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                helper_id="schedule",
+                has_date=False,
+                has_time=False,
+            )
+        _assert_invalid_param(excinfo)
+
+    async def test_update_rejects_disabling_only_remaining_component(
+        self, register_tools, mock_client
+    ):
+        """Existing has only has_time=True; caller disables has_time. The merge
+        resolves to (False, False) — a fall-out the guard catches."""
+        _wire_default_ws(
+            mock_client,
+            "input_datetime",
+            {"id": "abc123", "name": "TimeOnly", "has_date": False, "has_time": True},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                helper_id="timeonly",
+                has_time=False,
+            )
+        _assert_invalid_param(excinfo)
+
+    async def test_update_happy_path_keeps_both_true(
+        self, register_tools, mock_client
+    ):
+        """Valid merge passes — guards against false-positive rejection on a
+        no-op-ish update."""
+        _wire_default_ws(
+            mock_client,
+            "input_datetime",
+            {"id": "abc123", "name": "Schedule", "has_date": True, "has_time": True},
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                helper_id="schedule",
+                has_date=True,
+            )
+        msg = _find_msg(mock_client, "input_datetime/update")
+        assert msg is not None
+        assert msg["has_date"] is True
+        assert msg["has_time"] is True
+
+    async def test_update_happy_path_omits_both_against_one_remaining(
+        self, register_tools, mock_client
+    ):
+        """Caller passes neither ``has_date`` nor ``has_time``; existing has
+        ``(False, True)``. The merge resolves to the existing state — no fall
+        to ``(False, False)``, so the guard must not reject."""
+        _wire_default_ws(
+            mock_client,
+            "input_datetime",
+            {"id": "abc123", "name": "TimeOnly", "has_date": False, "has_time": True},
+        )
+        with patch(
+            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_datetime",
+                helper_id="timeonly",
+                name="Renamed",
+            )
+        msg = _find_msg(mock_client, "input_datetime/update")
+        assert msg is not None
+        assert msg["has_date"] is False
+        assert msg["has_time"] is True
+
+
+# ---------------------------------------------------------------------------
+# Direct validator contract tests — exercise the helpers' own invariants
+# rather than the tool's WS plumbing, so the shape-guard semantics are
+# pinned independently of any future call-site refactor.
+# ---------------------------------------------------------------------------
+
+
+class TestValidateInitialInOptionsShapeGuard:
+    """``_validate_initial_in_options`` early-return contract.
+
+    Non-list ``options`` (or ``initial=None``) must pass through silently —
+    no ``TypeError`` from ``initial not in options``, no ``ToolError``. The
+    current callers feed lists, but a future caller might not; the guard
+    keeps that latent path from raising a confusing diagnostic.
+    """
+
+    def test_none_options_returns_silently(self):
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        # No raise — the guard short-circuits before the membership check.
+        _validate_initial_in_options(None, "anything")
+
+    def test_string_options_returns_silently(self):
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        _validate_initial_in_options("not a list", "anything")
+
+    def test_dict_options_returns_silently(self):
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        _validate_initial_in_options({"a": 1}, "a")
+
+    def test_none_initial_with_list_options_returns_silently(self):
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        # ``initial=None`` is the unset case — passes regardless of options.
+        _validate_initial_in_options(["A", "B"], None)
+
+    def test_helper_type_param_threads_to_error_context(self):
+        """A non-default ``helper_type`` reaches the error message + context."""
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        with pytest.raises(ToolError) as excinfo:
+            _validate_initial_in_options(["A", "B"], "Z", helper_type="some_other")
+        _assert_invalid_param(excinfo)
+        assert "some_other" in str(excinfo.value)
+
+
+class TestValidateInitialInOptionsEdges:
+    """Edge cases on the ``(options, initial)`` membership check."""
+
+    def test_empty_string_initial_rejected_against_non_empty_options(self):
+        """``initial=""`` is a set value (not ``None``) and must reject when
+        not in ``options`` — the truthy-only ``if initial:`` shortcut the
+        pre-helper inline code had would have silently dropped it."""
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        with pytest.raises(ToolError) as excinfo:
+            _validate_initial_in_options(["A", "B"], "")
+        _assert_invalid_param(excinfo)
+
+    def test_empty_options_with_any_initial_rejected(self):
+        """``options=[]`` means no value can be valid; an ``initial`` must
+        reject. The update path can reach this if the caller passes
+        ``options=[]`` explicitly or the existing config has no options."""
+        from ha_mcp.tools.tools_config_helpers import _validate_initial_in_options
+
+        with pytest.raises(ToolError) as excinfo:
+            _validate_initial_in_options([], "A")
+        _assert_invalid_param(excinfo)
+
+    async def test_update_rejects_initial_empty_string_against_existing_options(
+        self, register_tools, mock_client
+    ):
+        """End-to-end edge: caller passes ``initial=""`` on update against
+        non-empty existing options. The update path must reject the same
+        way the create path would."""
+        _wire_default_ws(
+            mock_client,
+            "input_select",
+            {"id": "abc123", "name": "Mode", "options": ["A", "B"], "initial": "A"},
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_select",
+                helper_id="mode",
+                initial="",
             )
         _assert_invalid_param(excinfo)

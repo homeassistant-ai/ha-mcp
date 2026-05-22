@@ -82,6 +82,20 @@ class HomeAssistantCommandError(HomeAssistantError):
     """
 
 
+class HomeAssistantCommandTimeout(HomeAssistantError):
+    """WebSocket ``send_command`` timed out waiting for HA's response.
+
+    Sibling of ``HomeAssistantCommandError`` (not a subclass) so existing
+    ``except HomeAssistantCommandError`` sites — including the match
+    dispatch in ``helpers._classify_exception`` — keep their original
+    semantics. Callers that specifically want to handle our 30s WS
+    round-trip timeout (e.g. short-lived waiter cleanup that should
+    swallow a timeout instead of masking the real wait result) catch
+    this type directly. Replaces a bare ``Exception("Command timeout")``
+    string-match pattern (#1382 Patch76 review).
+    """
+
+
 class HomeAssistantClient:
     """Authenticated HTTP client for Home Assistant API."""
 
@@ -135,6 +149,13 @@ class HomeAssistantClient:
             timeout=httpx.Timeout(self.timeout),
             verify=self.verify_ssl,
         )
+
+        # Lazy-populated by ``_is_supervised_install``. ``None`` means
+        # "not probed yet"; ``True`` is cached for the session lifetime
+        # (HAOS-ness can't change at runtime). ``False`` is NOT cached so a
+        # transient probe failure on the first call doesn't permanently
+        # disable the supervised branch — subsequent calls re-probe.
+        self._supervised_detected: bool | None = None
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
@@ -455,17 +476,30 @@ class HomeAssistantClient:
     async def get_error_log(self) -> str:
         """Get Home Assistant error log.
 
-        Branch on ``is_running_in_addon()``: inside the add-on container,
-        HA Core's ``bootstrap.py`` sets ``err_log_path = None`` when the
-        ``SUPERVISOR`` env var is present, so ``hass.data[DATA_LOGGING]``
-        is never populated and the ``APIErrorLog`` view is not registered
-        — ``/api/error_log`` returns 404 by-design on HA OS / Supervised.
-        Route to ``_supervisor_logs_get("core")`` on this branch: same
-        content (HA Core's container log) via a different transport
-        (Supervisor REST). On non-addon installs keep the
-        ``/api/error_log`` proxy path.
+        Three-way branch depending on how this client reaches HA:
 
-        Same root cause and fix shape as ``get_addon_logs`` — see #1116.
+        - **Addon context** (``is_running_in_addon()`` True — i.e.
+          ``SUPERVISOR_TOKEN`` is set, meaning this process is the
+          ha-mcp add-on container talking to the Supervisor sibling):
+          go direct to Supervisor REST at
+          ``http://supervisor/core/logs``.
+        - **External client → HAOS/Supervised** (``is_running_in_addon()``
+          False AND ``hassio`` is listed in HA's loaded components): use
+          the HA Core hassio proxy at ``/api/hassio/core/logs`` with the
+          user LLA. ``/api/error_log`` is unregistered by design on
+          Supervised installs — HA Core's ``bootstrap.py:646-671`` sets
+          ``err_log_path = None`` when ``SUPERVISOR`` is in the env, so
+          ``hass.data[DATA_LOGGING]`` is never populated and the
+          ``APIErrorLog`` view (``api/__init__.py:89-90``) never registers.
+          The hassio proxy reaches the same underlying log stream.
+        - **External client → Container/pip HA** (neither of the above):
+          keep the historical ``/api/error_log`` proxy path.
+
+        The middle branch was discovered by the HAOS E2E tier (#1326): the
+        test harness runs ha-mcp externally against a booted HAOS, hits
+        the unregistered endpoint, and the old binary branch surfaced as
+        a confusing 404. Verified end-to-end with the user's real HAOS
+        and against HA Core source.
 
         Raises:
             HomeAssistantAuthError: 401, or empty ``SUPERVISOR_TOKEN`` on
@@ -479,9 +513,72 @@ class HomeAssistantClient:
             logger.debug("Fetching error log via Supervisor direct (core service)")
             return await self._supervisor_logs_get("core")
 
-        logger.debug("Fetching error log via HA Core proxy")
-        response = await self._request("GET", "/error_log")
-        return response if isinstance(response, str) else str(response)
+        if await self._is_supervised_install():
+            logger.debug(
+                "Fetching error log via HA Core /hassio/core/logs proxy (supervised)"
+            )
+            raw_response = await self._raw_request(
+                "GET",
+                "/hassio/core/logs?lines=20000",
+                headers={"Accept": "text/plain"},
+            )
+            return raw_response.text
+
+        logger.debug("Fetching error log via HA Core proxy (Container/pip)")
+        raw_response = await self._raw_request(
+            "GET", "/error_log", headers={"Accept": "text/plain"}
+        )
+        return raw_response.text
+
+    async def _is_supervised_install(self) -> bool:
+        """Detect whether the target HA is a Supervised / HAOS install.
+
+        Probes ``/api/config`` once per client instance and returns
+        ``"hassio" in components``. Cached for the session lifetime on
+        BOTH definite outcomes (True or False), since a successful
+        ``/api/config`` response with or without ``hassio`` is a
+        definitive signal — HA's loaded-components set doesn't change
+        between Supervised and Container at runtime.
+
+        Cache is NOT poisoned on probe failure: a transient network
+        glitch or HTTP error returns False without setting the cache,
+        so the next call re-probes. This is the only path that
+        intentionally fails open — caller proceeds on the historical
+        Container branch (which on HAOS will also fail, but with a
+        clearer 404 than a probe-side exception would surface).
+
+        Auth / connection / HTTP errors are caught explicitly; runtime
+        bugs (TypeError, AttributeError) and BaseException derivatives
+        (KeyboardInterrupt, CancelledError) deliberately propagate so
+        they're not silenced as "not supervised".
+        """
+        if self._supervised_detected is not None:
+            return self._supervised_detected
+        try:
+            config = await self._request("GET", "/config")
+        except (
+            HomeAssistantAuthError,
+            HomeAssistantAPIError,
+            HomeAssistantConnectionError,
+            httpx.HTTPError,
+            TimeoutError,
+        ) as exc:
+            # Fail-open on transport / HTTP-layer failures only. Note:
+            # a 401 here likely means the LLA is bad and the /error_log
+            # fallback will also 401 — the user gets a clearer auth error
+            # from that path than a swallowed probe error would surface.
+            # Logged at WARNING so it's visible at default log levels
+            # without spamming on every call (probe runs at most once
+            # per session per outcome).
+            logger.warning(
+                "Supervised-install probe failed (fail-open to non-supervised): %r",
+                exc,
+            )
+            return False
+        components = config.get("components", []) if isinstance(config, dict) else []
+        is_supervised = isinstance(components, list) and "hassio" in components
+        self._supervised_detected = is_supervised
+        return is_supervised
 
     async def get_addon_logs(self, slug: str) -> str:
         """Fetch an add-on's container logs.
@@ -527,7 +624,7 @@ class HomeAssistantClient:
 
         - ``"addons/<slug>"`` for add-on container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
-          multicast, observer}) for system-service logs
+          cli, multicast, observer}) for system-service logs
 
         Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
         endpoint uses a different base URL (``http://supervisor``) and a
@@ -645,18 +742,42 @@ class HomeAssistantClient:
         return await self._supervisor_logs_get(f"addons/{slug}")
 
     async def _get_system_service_logs(self, service: str) -> str:
-        """Fetch HA system-service logs directly from Supervisor's REST API.
+        """Fetch HA system-service logs.
 
-        Hits ``http://supervisor/{service}/logs``. ``service`` must be one of
-        the seven Supervisor-managed services: ``supervisor``, ``host``,
-        ``core``, ``dns``, ``audio``, ``multicast``, ``observer``. Caller is
-        responsible for validating ``service`` against the allowed set; this
-        helper does no validation and will raise ``HomeAssistantAPIError`` on
-        any unknown path (404 from Supervisor).
+        ``service`` must be one of the eight Supervisor-managed services:
+        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
+        ``multicast``, ``observer``. Caller is responsible for validating
+        ``service`` against the allowed set; this helper does no validation
+        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
 
-        Requires ``hassio_role: manager`` like the addon-logs path.
+        Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
+        inside the addon container goes directly to Supervisor at
+        ``http://supervisor/{service}/logs`` with the Supervisor token
+        (``hassio_role: manager`` required). On non-addon installs (Docker
+        without Supervisor, pyinstaller, pip pointing at a normal HA URL),
+        falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
+
+        All seven slugs are whitelisted in HA Core's hassio proxy
+        (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
+        an admin LLA is sufficient to reach any of them from outside the
+        addon.
+
+        Closes #1260: pre-fix this method had only the addon-direct branch,
+        so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the
+        ``SUPERVISOR_TOKEN``-absent fail-fast in ``_supervisor_logs_get`` for
+        every service, while the sibling ``source="supervisor"`` (addon
+        logs) call kept working through its own Core-proxy fallback.
         """
-        return await self._supervisor_logs_get(service)
+        if is_running_in_addon():
+            return await self._supervisor_logs_get(service)
+
+        logger.debug(f"Fetching {service} logs via HA Core proxy")
+        response = await self._raw_request(
+            "GET",
+            f"/hassio/{service}/logs",
+            headers={"Accept": "text/plain"},
+        )
+        return response.text
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """
@@ -675,6 +796,9 @@ class HomeAssistantClient:
             else:
                 return False, "Invalid response from Home Assistant"
         except Exception as e:
+            # Intentional broad-catch: is_connected() contract maps any failure
+            # to (False, error_msg); styleguide § "broad except at top-level
+            # setup/teardown handlers" applies (connection probe is the analog).
             logger.error(f"Failed to connect to Home Assistant: {e}")
             return False, str(e)
 
@@ -716,7 +840,7 @@ class HomeAssistantClient:
                     f"Converted entity_id {identifier} to unique_id {unique_id}"
                 )
                 return str(unique_id)
-            except Exception as e:
+            except HomeAssistantError as e:
                 raise HomeAssistantAPIError(
                     f"Failed to resolve automation {identifier}: {str(e)}",
                     status_code=404,
@@ -746,8 +870,8 @@ class HomeAssistantClient:
                 "GET", f"/config/automation/config/{unique_id}"
             )
             return response
-        except Exception as e:
-            if "404" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -782,6 +906,30 @@ class HomeAssistantClient:
             operation = "updated"
             logger.debug(f"Updating automation with unique_id: {unique_id}")
 
+        # Reject mismatch between resolved storage key and inner ``config["id"]``.
+        # HA stores by the inner id field even though the URL carries one too —
+        # a divergence silently overwrites the automation whose unique_id matches
+        # the inner id, while reporting success for the URL target (#1404).
+        config_id = config.get("id")
+        if config_id is not None and str(config_id) != str(unique_id):
+            if identifier is None:
+                raise HomeAssistantAPIError(
+                    "Cannot create automation with explicit config['id']="
+                    f"{config_id!r}: Home Assistant stores by the inner id, "
+                    "which would silently overwrite an existing automation. "
+                    "Omit 'id' from config to auto-generate, or pass identifier "
+                    "to update an existing automation.",
+                    status_code=400,
+                )
+            raise HomeAssistantAPIError(
+                f"Mismatched automation id: identifier={identifier!r} resolves "
+                f"to unique_id={unique_id!r}, but config['id']={config_id!r}. "
+                "Refusing to write to prevent overwriting the wrong automation. "
+                f"Remove 'id' from config or set it to the resolved unique_id "
+                f"({unique_id!r}).",
+                status_code=400,
+            )
+
         # Add unique_id to config for updates
         if unique_id and "id" not in config:
             config = {**config, "id": unique_id}
@@ -808,18 +956,22 @@ class HomeAssistantClient:
             if entity_not_verified:
                 result["entity_not_verified"] = True
             return result
-        except Exception as e:
-            if "400" in str(e):
+        except HomeAssistantAPIError as e:
+            if e.status_code == 400:
                 raise HomeAssistantAPIError(
                     f"Invalid automation configuration: {str(e)}", status_code=400
                 ) from e
             raise
 
+    # 3-attempt × 6s upper-bound budget; first poll 0.1s catches the
+    # typical sub-1s entity-publish window.
+    _POLL_CADENCE: tuple[float, ...] = (0.1, 1.0, 4.9)
+
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Poll HA state to find the entity_id assigned to a newly created automation."""
         try:
-            for attempt in range(3):
-                await asyncio.sleep(1 * (attempt + 1))
+            for sleep_time in self._POLL_CADENCE:
+                await asyncio.sleep(sleep_time)
                 states = await self.get_states()
                 for state in states:
                     if not state.get("entity_id", "").startswith("automation."):
@@ -830,9 +982,14 @@ class HomeAssistantClient:
                             f"Found actual entity_id for unique_id {unique_id}: {entity_id}"
                         )
                         return entity_id
-        except Exception as e:
+        except HomeAssistantError as e:
+            # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
+            # Mirrors test-side _POLLING_TRANSIENT_ERRORS in
+            # tests/src/e2e/utilities/wait_helpers.py and styleguide §
+            # "Exception Handling in Test Polling Loops".
             logger.warning(
-                f"Failed to query actual entity_id for unique_id {unique_id}: {e}"
+                f"Failed to query actual entity_id for unique_id {unique_id}: {e}",
+                exc_info=True,
             )
             return None
 
@@ -1018,6 +1175,73 @@ class HomeAssistantClient:
         logger.debug(f"Aborting options flow: {flow_id}")
         return await self._request(
             "DELETE", f"/config/config_entries/options/flow/{flow_id}"
+        )
+
+    async def start_config_subentry_flow(
+        self,
+        entry_id: str,
+        subentry_type: str,
+        *,
+        subentry_id: str | None = None,
+        show_advanced_options: bool | None = None,
+    ) -> dict[str, Any]:
+        """Start a config subentry create or reconfigure flow."""
+        # HA requires the handler as [parent_entry_id, subentry_type].
+        payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
+        if subentry_id is not None:
+            payload["subentry_id"] = subentry_id
+        if show_advanced_options is not None:
+            payload["show_advanced_options"] = show_advanced_options
+
+        logger.debug(
+            "Starting config subentry flow for entry %s and type %s",
+            entry_id,
+            subentry_type,
+        )
+        return await self._request(
+            "POST",
+            "/config/config_entries/subentries/flow",
+            json=payload,
+        )
+
+    async def submit_config_subentry_flow_step(
+        self, flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Submit data for a config subentry flow step."""
+        logger.debug("Submitting config subentry flow step for flow_id: %s", flow_id)
+        return await self._request(
+            "POST",
+            f"/config/config_entries/subentries/flow/{flow_id}",
+            json=user_input,
+        )
+
+    async def abort_config_subentry_flow(self, flow_id: str) -> dict[str, Any]:
+        """Abort an in-progress config subentry flow."""
+        logger.debug("Aborting config subentry flow: %s", flow_id)
+        return await self._request(
+            "DELETE", f"/config/config_entries/subentries/flow/{flow_id}"
+        )
+
+    async def list_config_subentries(self, entry_id: str) -> dict[str, Any]:
+        """List subentries for a config entry."""
+        logger.debug("Listing config subentries for entry: %s", entry_id)
+        return await self.send_websocket_message(
+            {"type": "config_entries/subentries/list", "entry_id": entry_id}
+        )
+
+    async def delete_config_subentry(
+        self,
+        entry_id: str,
+        subentry_id: str,
+    ) -> dict[str, Any]:
+        """Delete a config subentry."""
+        logger.debug("Deleting config subentry %s for entry %s", subentry_id, entry_id)
+        return await self.send_websocket_message(
+            {
+                "type": "config_entries/subentries/delete",
+                "entry_id": entry_id,
+                "subentry_id": subentry_id,
+            }
         )
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:

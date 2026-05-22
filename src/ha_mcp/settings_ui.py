@@ -68,40 +68,21 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",
+    # Skill guide carries the bundled best-practices trigger conditions
+    # in its description — tool-only clients (claude.ai, etc.) rely on
+    # seeing it in the catalog. Disabling it would silently break the
+    # "consult skill before writing config" workflow.
+    "ha_get_skill_guide",
 }
 
 # Tools created by FastMCP transforms (not registered through
-# local_provider). The ``ResourcesAsTools`` transform — subclassed in
-# server.py as ``HaResourcesAsTools`` — appends ``ha_list_resources`` and
-# ``ha_read_resource`` at runtime, so they never show up in
-# ``local_provider._list_tools()``. Inject stub metadata so the UI can
-# render them and ``mcp.disable()`` can hide them from the catalog.
-#
-# Keys MUST match ``HaResourcesAsTools.LIST_TOOL_NAME`` / ``READ_TOOL_NAME``;
-# server.py is not imported here to avoid a top-level cycle, but the
-# ``test_transform_generated_tool_names_match_class_constants`` unit test
-# fails fast if either side drifts.
-TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {
-    "ha_list_resources": {
-        "title": "List Resources",
-        "primary_tag": "System",
-        "description": (
-            "List bundled skill files and other MCP resources exposed via "
-            "skill:// URIs. Fallback for clients that do not support MCP "
-            "resources natively."
-        ),
-        "readOnlyHint": True,
-    },
-    "ha_read_resource": {
-        "title": "Read Resource",
-        "primary_tag": "System",
-        "description": (
-            "Read a skill or resource by URI. Fallback for clients that do "
-            "not support MCP resources natively."
-        ),
-        "readOnlyHint": True,
-    },
-}
+# local_provider). No transform-generated tools are currently in use —
+# ``ha_get_skill_guide`` is registered the normal way and is visible
+# through ``local_provider._list_tools()``. Kept as an empty dict so
+# UI rendering, type contracts, and tests don't need to special-case
+# the "no transform tools" path; populate when a future transform
+# appends tools that need settings-UI visibility.
+TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 
 # Tools that exist in the codebase but are only registered when a
 # corresponding feature flag/env var is set. When the flag is off, these
@@ -893,7 +874,7 @@ def register_settings_routes(
             }
         )
 
-    async def _restart_addon(_: Request) -> JSONResponse:
+    async def _restart_addon(request: Request) -> JSONResponse:
         if not os.environ.get("SUPERVISOR_TOKEN"):
             return JSONResponse(
                 create_error_response(
@@ -903,13 +884,44 @@ def register_settings_routes(
                 ),
                 status_code=400,
             )
-        # Short timeout — the supervisor kills our process during restart so
-        # the connection will drop. A connection drop is actually success.
+        # Optional slug from the request body lets callers restart a sibling
+        # addon instead of self. The UI's restart button posts an empty body
+        # and gets the historical self-restart behavior; the inaddon E2E
+        # suite uses ``slug`` to exercise the Supervisor restart wire
+        # contract against a non-test-critical addon (the dev addon's
+        # session would otherwise drop). The token's hassio_role gates
+        # whether the call actually succeeds for non-self targets.
+        #
+        # The slug is interpolated into the Supervisor endpoint URL, so it
+        # must be tightly constrained — Supervisor addon slugs are
+        # ``[a-z0-9_]+`` per the addon-config schema, but defending against
+        # path-traversal (``..``, ``/``, URL-encoded variants) at the edge
+        # is cheaper than relying on Supervisor to reject every bad shape.
+        # Reject anything outside ``[A-Za-z0-9_-]`` and silently fall back
+        # to ``self`` — same outcome as no body.
+        target_slug = "self"
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            requested = payload.get("slug")
+            if (
+                isinstance(requested, str)
+                and requested.strip()
+                and all(c.isalnum() or c in "_-" for c in requested.strip())
+            ):
+                target_slug = requested.strip()
+
+        endpoint = f"/addons/{target_slug}/restart"
+        # Short timeout — when restarting self, the supervisor kills our
+        # process during restart so the connection will drop. A connection
+        # drop is actually success on that path.
         try:
             async with make_supervisor_httpx_client(
                 timeout=5.0, verify=server.settings.verify_ssl
             ) as client:
-                resp = await client.post("/addons/self/restart")
+                resp = await client.post(endpoint)
         except (httpx.ReadError, httpx.RemoteProtocolError):
             # Connection dropped mid-request — restart is happening.
             # `ConnectError` is deliberately NOT in this tuple: it fires
@@ -917,7 +929,7 @@ def register_settings_routes(
             # Supervisor socket misconfigured) and means the restart was
             # never initiated. Falls through to the `httpx.HTTPError`
             # handler below, which returns 502 + CONNECTION_FAILED.
-            logger.info("Restart request connection dropped (expected during restart)")
+            logger.info("Restart request connection dropped (expected during self-restart)")
             return JSONResponse({"success": True, "message": "Restart initiated"})
         except httpx.HTTPError as e:
             logger.exception("Failed to reach Supervisor for restart")
@@ -931,7 +943,12 @@ def register_settings_routes(
 
         if resp.status_code >= 400:
             body = resp.text
-            logger.error("Supervisor restart failed: %d %s", resp.status_code, body)
+            logger.error(
+                "Supervisor restart failed (slug=%s): %d %s",
+                target_slug,
+                resp.status_code,
+                body,
+            )
             return JSONResponse(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
