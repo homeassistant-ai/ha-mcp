@@ -279,10 +279,7 @@ def _check_template_string(
     # reframes #695 from "enumerate bad shapes" to "surface every template
     # in a logic position". Specific detectors above keep their tailored
     # messages.
-    if (
-        len(warnings) == initial_count
-        and _RE_ANY_TEMPLATE.search(template)
-    ):
+    if len(warnings) == initial_count and _RE_ANY_TEMPLATE.search(template):
         warnings.append(
             f"Template detected in {position} — if this maps to a native option "
             "(`numeric_state`, `state`, `time`, `sun`, `zone`, `device`), use that "
@@ -304,9 +301,7 @@ def _check_choose_actions(
             _check_condition_templates(
                 option.get("conditions", []), warnings, skill_prefix
             )
-            _check_action_tree(
-                option.get("sequence", []), warnings, skill_prefix
-            )
+            _check_action_tree(option.get("sequence", []), warnings, skill_prefix)
 
 
 def _check_repeat_actions(
@@ -445,7 +440,9 @@ def _check_target_dict(
                     f"hardcode the literal value instead. The self-reference is always "
                     f"resolvable at write time, so the template adds runtime cost without "
                     f"any flexibility."
-                    + _ref(skill_prefix, "template-guidelines.md#when-to-avoid-templates")
+                    + _ref(
+                        skill_prefix, "template-guidelines.md#when-to-avoid-templates"
+                    )
                 )
             else:
                 warnings.append(
@@ -453,7 +450,9 @@ def _check_target_dict(
                     f"or use a `choose` action with native conditions to dispatch to different "
                     f"hardcoded targets. Templates in target fields fail silently if they "
                     f"resolve to a non-existent entity."
-                    + _ref(skill_prefix, "template-guidelines.md#when-to-avoid-templates")
+                    + _ref(
+                        skill_prefix, "template-guidelines.md#when-to-avoid-templates"
+                    )
                 )
 
 

@@ -46,7 +46,12 @@ def _get_monthly_versions_between(current: str, target: str) -> list[str]:
     """Return .0 monthly versions between current (exclusive) and target (inclusive)."""
     current_parts = _parse_version(current)
     target_parts = _parse_version(target)
-    if not current_parts or not target_parts or len(current_parts) < 2 or len(target_parts) < 2:
+    if (
+        not current_parts
+        or not target_parts
+        or len(current_parts) < 2
+        or len(target_parts) < 2
+    ):
         if target_parts and len(target_parts) >= 2:
             return [f"{target_parts[0]}.{target_parts[1]}.0"]
         return []
@@ -82,7 +87,8 @@ def _extract_blog_content(html: str) -> str:
         return _strip_html(article.group(1))
     content = re.search(
         r"(<h[12][^>]*>.*?)(?=<div[^>]*id=\"discourse|<footer[^>]*>|</body>)",
-        html, re.DOTALL | re.IGNORECASE,
+        html,
+        re.DOTALL | re.IGNORECASE,
     )
     if content:
         return _strip_html(content.group(1))
@@ -93,7 +99,8 @@ def _parse_breaking_changes_html(html: str, source_url: str) -> dict[str, Any] |
     """Extract 'Backward-incompatible changes' section entries from blog HTML."""
     section_match = re.search(
         r'id="backward-incompatible-changes"[^>]*>.*?</h2>(.*?)(?=<h2[ >]|</article>|</main>)',
-        html, re.DOTALL | re.IGNORECASE,
+        html,
+        re.DOTALL | re.IGNORECASE,
     )
     if not section_match:
         return None
@@ -118,10 +125,16 @@ def _parse_patch_breaking_changes(body: str, version: str) -> dict[str, Any] | N
     for line in body.split("\n"):
         if "(breaking-change)" not in line.lower():
             continue
-        clean = re.sub(r"\(breaking-change\)", "", line, flags=re.IGNORECASE).lstrip("-*").strip()
+        clean = (
+            re.sub(r"\(breaking-change\)", "", line, flags=re.IGNORECASE)
+            .lstrip("-*")
+            .strip()
+        )
         if not clean:
             continue
-        doc_match = re.search(r"\[([^\]]+?)\s+(?:docs|documentation)\]", clean, re.IGNORECASE)
+        doc_match = re.search(
+            r"\[([^\]]+?)\s+(?:docs|documentation)\]", clean, re.IGNORECASE
+        )
         integration = doc_match.group(1).strip() if doc_match else "unknown"
         entries.append({"integration": integration, "description": clean})
 
@@ -163,15 +176,21 @@ async def _fetch_release_data_for_version(
         return None
 
 
-async def _fetch_release_data(current_version: str, target_version: str) -> dict[str, Any]:
+async def _fetch_release_data(
+    current_version: str, target_version: str
+) -> dict[str, Any]:
     """Fetch release notes and breaking changes for all monthly versions in range."""
     monthly = _get_monthly_versions_between(current_version, target_version)
     if not monthly:
         return {"entries": [], "count": 0, "versions_checked": [], "release_notes": []}
 
     async with httpx.AsyncClient(
-        timeout=20.0, follow_redirects=True,
-        headers={"User-Agent": "HomeAssistant-MCP-Server", "Accept": "application/vnd.github+json"},
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            "User-Agent": "HomeAssistant-MCP-Server",
+            "Accept": "application/vnd.github+json",
+        },
     ) as http_client:
         results = await asyncio.gather(
             *[_fetch_release_data_for_version(http_client, v) for v in monthly],
@@ -187,14 +206,20 @@ async def _fetch_release_data(current_version: str, target_version: str) -> dict
             continue
         versions_checked.append(version)
         src = result.get("source_url", "")
-        all_entries.extend({**entry, "version": version} for entry in result.get("entries", []))
+        all_entries.extend(
+            {**entry, "version": version} for entry in result.get("entries", [])
+        )
         notes = result.get("release_notes", "")
         if notes:
-            release_notes.append({"version": version, "content": notes, "source_url": src})
+            release_notes.append(
+                {"version": version, "content": notes, "source_url": src}
+            )
 
     return {
-        "entries": all_entries, "count": len(all_entries),
-        "versions_checked": versions_checked, "release_notes": release_notes,
+        "entries": all_entries,
+        "count": len(all_entries),
+        "versions_checked": versions_checked,
+        "release_notes": release_notes,
     }
 
 
@@ -292,9 +317,11 @@ async def _try_raw_cdn(
             if response.status_code == 200:
                 content = response.text
                 if content and len(content) > 50:
-                    logger.debug(f"Successfully fetched release notes from raw CDN: {raw_url}")
+                    logger.debug(
+                        f"Successfully fetched release notes from raw CDN: {raw_url}"
+                    )
                     return {"notes": content, "source": "github_raw"}
-        except Exception as raw_error:
+        except httpx.RequestError as raw_error:
             logger.debug(f"Failed to fetch from {raw_url}: {raw_error}")
     return None
 
@@ -320,7 +347,9 @@ async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None
         # https://github.com/owner/repo/releases/tag/v1.2.3
         # https://github.com/owner/repo/releases/v1.2.3
 
-        github_pattern = r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/([^/?#]+)"
+        github_pattern = (
+            r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/([^/?#]+)"
+        )
         match = re.match(github_pattern, release_url)
 
         if not match:
@@ -412,9 +441,7 @@ async def _fetch_core_release_notes(version: str) -> dict[str, str] | None:
                 # Check if rate limited
                 remaining = response.headers.get("X-RateLimit-Remaining", "0")
                 if remaining == "0":
-                    logger.warning(
-                        f"GitHub API rate limit exceeded for {api_url}"
-                    )
+                    logger.warning(f"GitHub API rate limit exceeded for {api_url}")
             else:
                 logger.debug(
                     f"GitHub API returned status {response.status_code} for Core release {version}"
@@ -461,7 +488,9 @@ class UpdateTools:
                 "release_url": attributes.get("release_url"),
                 "can_install": not attributes.get("in_progress", False),
                 "in_progress": attributes.get("in_progress", False),
-                "supports_release_notes": _supports_release_notes(entity_id, attributes),
+                "supports_release_notes": _supports_release_notes(
+                    entity_id, attributes
+                ),
                 "skipped_version": attributes.get("skipped_version"),
                 "auto_update": attributes.get("auto_update", False),
                 "category": _categorize_update(entity_id, attributes),
@@ -478,8 +507,13 @@ class UpdateTools:
 
         # Group by category
         categories: dict[str, list[dict[str, Any]]] = {
-            "core": [], "os": [], "supervisor": [],
-            "addons": [], "hacs": [], "devices": [], "other": [],
+            "core": [],
+            "os": [],
+            "supervisor": [],
+            "addons": [],
+            "hacs": [],
+            "devices": [],
+            "other": [],
         }
 
         for update in all_updates:
@@ -505,11 +539,13 @@ class UpdateTools:
     ) -> dict[str, Any]:
         """Internal helper to get details for a specific update entity."""
         if not entity_id.startswith("update."):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Invalid entity_id format. Must start with 'update.'",
-                context={"entity_id": entity_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Invalid entity_id format. Must start with 'update.'",
+                    context={"entity_id": entity_id},
+                )
+            )
 
         entity_state = await self._client.get_entity_state(entity_id)
         attributes = entity_state.get("attributes", {})
@@ -680,14 +716,18 @@ class UpdateTools:
         """
         try:
             if entity_id is None:
-                include_skipped_bool = coerce_bool_param(
-                    include_skipped, "include_skipped", default=False
-                ) or False
+                include_skipped_bool = (
+                    coerce_bool_param(include_skipped, "include_skipped", default=False)
+                    or False
+                )
                 return await self._list_updates(include_skipped_bool)
             else:
-                include_rn_bool = coerce_bool_param(
-                    include_release_notes, "include_release_notes", default=False
-                ) or False
+                include_rn_bool = (
+                    coerce_bool_param(
+                        include_release_notes, "include_release_notes", default=False
+                    )
+                    or False
+                )
                 return await self._get_update_details(entity_id, include_rn_bool)
 
         except ToolError:
@@ -695,17 +735,24 @@ class UpdateTools:
         except Exception as e:
             error_msg = str(e)
             if entity_id and ("404" in error_msg or "not found" in error_msg.lower()):
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Update entity not found: {entity_id}",
-                    context={"entity_id": entity_id},
-                    suggestions=["Use ha_get_updates() without entity_id to see all available updates"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Update entity not found: {entity_id}",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_get_updates() without entity_id to see all available updates"
+                        ],
+                    )
+                )
             logger.error(f"Failed to get updates: {e}")
-            exception_to_structured_error(e, suggestions=[
-                "Check Home Assistant connection",
-                "Verify API access permissions",
-            ])
+            exception_to_structured_error(
+                e,
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify API access permissions",
+                ],
+            )
 
 
 def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

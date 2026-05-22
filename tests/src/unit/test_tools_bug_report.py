@@ -28,7 +28,10 @@ def mock_mcp():
     mcp._tools = {}
 
     def add_tool(method):
-        name = getattr(getattr(method, "__fastmcp__", None), "name", None) or method.__name__
+        name = (
+            getattr(getattr(method, "__fastmcp__", None), "name", None)
+            or method.__name__
+        )
 
         async def _wrapper(*args, **kwargs):
             return await method(*args, **kwargs)

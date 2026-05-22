@@ -50,6 +50,7 @@ def _parse_event_data(data: str | dict[str, Any] | None) -> dict[str, Any] | Non
         )
     return raw if isinstance(raw, dict) else None
 
+
 logger = logging.getLogger(__name__)
 
 # Services that produce observable state changes on entities
@@ -121,7 +122,8 @@ class ServiceTools:
 
     @staticmethod
     def _parse_service_data(
-        data: str | dict[str, Any] | None, entity_id: str | None,
+        data: str | dict[str, Any] | None,
+        entity_id: str | None,
     ) -> dict[str, Any]:
         """Parse and validate the data parameter into a service_data dict."""
         try:
@@ -155,7 +157,10 @@ class ServiceTools:
 
     @staticmethod
     def _build_timeout_response(
-        domain: str, service: str, entity_id: str | None, data: str | dict[str, Any] | None,
+        domain: str,
+        service: str,
+        entity_id: str | None,
+        data: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build a partial-success response for service call timeouts."""
         return {
@@ -219,7 +224,11 @@ class ServiceTools:
                 f"Service executed but state verification failed: {e}"
             )
 
-    @tool(name="ha_call_service", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Call Service"})
+    @tool(
+        name="ha_call_service",
+        tags={"Service & Device Control"},
+        annotations={"destructiveHint": True, "title": "Call Service"},
+    )
     @log_tool_usage
     async def ha_call_service(
         self,
@@ -313,7 +322,10 @@ class ServiceTools:
             # Wait for entity state to change
             if should_wait and entity_id is not None:
                 await self._verify_state_change(
-                    entity_id, service, initial_state, response,
+                    entity_id,
+                    service,
+                    initial_state,
+                    response,
                 )
 
             return response
@@ -355,7 +367,11 @@ class ServiceTools:
                 suggestions=suggestions,
             )
 
-    @tool(name="ha_get_operation_status", tags={"Service & Device Control"}, annotations={"readOnlyHint": True, "title": "Get Operation Status"})
+    @tool(
+        name="ha_get_operation_status",
+        tags={"Service & Device Control"},
+        annotations={"readOnlyHint": True, "title": "Get Operation Status"},
+    )
     @log_tool_usage
     async def ha_get_operation_status(
         self,
@@ -415,7 +431,11 @@ class ServiceTools:
                 ],
             )
 
-    @tool(name="ha_bulk_control", tags={"Service & Device Control"}, annotations={"destructiveHint": True, "title": "Bulk Control"})
+    @tool(
+        name="ha_bulk_control",
+        tags={"Service & Device Control"},
+        annotations={"destructiveHint": True, "title": "Bulk Control"},
+    )
     @log_tool_usage
     async def ha_bulk_control(
         self,

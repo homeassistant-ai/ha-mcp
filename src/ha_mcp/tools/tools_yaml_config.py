@@ -38,9 +38,7 @@ logger = logging.getLogger(__name__)
 _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 
 
-async def _check_storage_mode_dashboard_collision(
-    client: Any, yaml_path: str
-) -> None:
+async def _check_storage_mode_dashboard_collision(client: Any, yaml_path: str) -> None:
     """Raise a ToolError if a storage-mode dashboard already owns the requested
     url_path; otherwise return without doing anything.
 
@@ -50,7 +48,7 @@ async def _check_storage_mode_dashboard_collision(
     """
     if not yaml_path.startswith(_LOVELACE_DASHBOARD_PREFIX):
         return
-    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX):]
+    url_path = yaml_path[len(_LOVELACE_DASHBOARD_PREFIX) :]
     try:
         dashboards = await fetch_dashboards_list(client)
     except Exception as exc:

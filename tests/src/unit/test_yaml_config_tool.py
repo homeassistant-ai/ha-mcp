@@ -51,9 +51,7 @@ async def test_storage_collision_blocks_dispatch(monkeypatch):
     fn, client = await _make_tool()
     client.send_websocket_message = AsyncMock(
         return_value={
-            "result": [
-                {"url_path": "energy-dash", "mode": "storage", "id": "abc"}
-            ]
+            "result": [{"url_path": "energy-dash", "mode": "storage", "id": "abc"}]
         }
     )
 
@@ -75,9 +73,7 @@ async def test_no_collision_dispatches(monkeypatch):
     fn, client = await _make_tool()
     client.send_websocket_message = AsyncMock(
         return_value={
-            "result": [
-                {"url_path": "other-dash", "mode": "storage", "id": "abc"}
-            ]
+            "result": [{"url_path": "other-dash", "mode": "storage", "id": "abc"}]
         }
     )
     await fn(
@@ -136,9 +132,7 @@ async def test_yaml_mode_existing_does_not_block(monkeypatch):
     fn, client = await _make_tool()
     client.send_websocket_message = AsyncMock(
         return_value={
-            "result": [
-                {"url_path": "energy-dash", "mode": "yaml", "id": "abc"}
-            ]
+            "result": [{"url_path": "energy-dash", "mode": "yaml", "id": "abc"}]
         }
     )
     await fn(
@@ -169,9 +163,7 @@ async def test_remove_action_skips_collision_check(monkeypatch):
     # Set up the collision return so we'd notice if the check ran.
     client.send_websocket_message = AsyncMock(
         return_value={
-            "result": [
-                {"url_path": "energy-dash", "mode": "storage", "id": "abc"}
-            ]
+            "result": [{"url_path": "energy-dash", "mode": "storage", "id": "abc"}]
         }
     )
     await fn(

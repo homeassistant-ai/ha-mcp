@@ -423,17 +423,21 @@ def _build_formatted_report(
         for key, value in config_toggles.items():
             report_lines.append(f"  {key}: {value}")
     if startup_logs:
-        report_lines.extend([
-            "",
-            f"=== Startup Logs ({len(startup_logs)} entries) ===",
-            startup_log_summary,
-        ])
+        report_lines.extend(
+            [
+                "",
+                f"=== Startup Logs ({len(startup_logs)} entries) ===",
+                startup_log_summary,
+            ]
+        )
     if recent_logs:
-        report_lines.extend([
-            "",
-            f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
-            log_summary,
-        ])
+        report_lines.extend(
+            [
+                "",
+                f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
+                log_summary,
+            ]
+        )
     if addon_logs:
         report_lines.extend(["", "=== Add-on Container Logs ===", addon_logs])
     return "\n".join(report_lines)
