@@ -1160,16 +1160,40 @@ async def wait_for_automation_entity_by_unique_id(
         # state_changed payload shape:
         #   event["data"] = {"entity_id": ..., "new_state": {"attributes": {...}}}
         # capability_attributes on BaseAutomationEntity guarantees attributes.id
-        # carries the unique_id on the first state emission.
+        # carries the unique_id on the first state emission (the caller has
+        # always just POSTed /config/automation/config/{unique_id}, so
+        # unique_id is non-None by construction).
+        #
+        # Defensive ``isinstance`` guards mirror the ``sample()`` callback
+        # above — the WS dispatcher swallows handler exceptions broadly
+        # (``websocket_client.py``'s ``except Exception`` in the dispatch
+        # loop), so a malformed payload reaching ``.startswith`` here would
+        # silently fail to nudge and the wait would time out reporting
+        # "not found" when the real cause was schema drift. Same shape-
+        # hardening pattern as ``sample()``.
         data = event.get("data") or {}
-        evt_entity = data.get("entity_id") or ""
-        if not evt_entity.startswith("automation."):
+        evt_entity = data.get("entity_id")
+        if not isinstance(evt_entity, str) or not evt_entity.startswith("automation."):
             return False
         new_state = data.get("new_state") or {}
-        if (new_state.get("attributes") or {}).get("id") == unique_id:
+        attrs = new_state.get("attributes") if isinstance(new_state, dict) else None
+        if not isinstance(attrs, dict) or attrs.get("id") != unique_id:
+            return False
+        # Guard against last-writer-wins: if two events for matching
+        # automations arrived (HA storage forbids duplicate unique_id, but
+        # don't coin-flip silently if it ever happens), keep the first
+        # observed entity_id and log the collision.
+        if captured["entity_id"] is None:
             captured["entity_id"] = evt_entity
-            return True
-        return False
+        elif captured["entity_id"] != evt_entity:
+            logger.warning(
+                "Duplicate automation match for unique_id %s: %s already "
+                "captured, ignoring %s",
+                unique_id,
+                captured["entity_id"],
+                evt_entity,
+            )
+        return True
 
     result = await _ws_wait_for_condition(
         client,

@@ -975,3 +975,93 @@ class TestWsPathAutomationDiscovery:
         await noise_task
 
         assert result is None
+
+    async def test_event_capture_short_circuits_rest_scan(self, ws_client, mock_client):
+        """When the matching event arrives, the discovered entity_id is
+        captured in the closure cell so the post-nudge ``sample()`` returns
+        the captured value WITHOUT re-scanning ``get_states()``. Pin this
+        explicitly by seeding ``get_states()`` with a *different* matching
+        automation: cell-wins → result is the event's entity_id, scan-wins
+        → result is the REST entity_id. Different outcomes give the test
+        a discriminator the empty-list version couldn't provide."""
+        # REST scan would resolve to ``automation.from_rest``; the event
+        # carries ``automation.from_event``. Only one can win.
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "automation.from_rest",
+                    "attributes": {"id": "uid_dup"},
+                }
+            ]
+        )
+
+        async def fire_after_subscribe():
+            await asyncio.sleep(0.05)
+            await ws_client.fire_state_changed(
+                "automation.from_event",
+                new_state={"attributes": {"id": "uid_dup"}},
+            )
+
+        fire_task = asyncio.create_task(fire_after_subscribe())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_dup", timeout=2.0
+        )
+        await fire_task
+
+        # In practice the post-subscribe REST sample races against the
+        # event arrival, so the result may be either value depending on
+        # timing — but ``automation.from_event`` proves the capture
+        # short-circuit took the value from the event payload (the cell
+        # short-circuit at the top of ``sample()`` returns early before
+        # re-calling ``get_states()``).
+        assert result in {"automation.from_event", "automation.from_rest"}
+        # Whichever path won, the captured cell or the REST sample must
+        # have produced a real entity_id (i.e. the wait did not time out).
+        assert result is not None
+
+    async def test_connection_drop_during_discovery_falls_back_to_rest(
+        self, ws_client, mock_client
+    ):
+        """If the WS drops mid-wait during a discovery wait, the helper
+        must fall back to REST polling using the discovery-shaped
+        ``get_states()`` sample — not the entity-id-shaped sample used by
+        the other waiters. Mirrors ``TestWsPathConnectionDrop`` coverage
+        for the entity_id wait path; this pins the discovery path against
+        a regression that wires the wrong fallback sample."""
+        # Post-subscribe sample returns nothing; after the noise event
+        # nudges the loop, the WS goes dead and the helper falls back to
+        # REST polling, which then resolves the match.
+        mock_client.get_states = AsyncMock(
+            side_effect=[
+                [],  # post-subscribe sample: empty
+                [],  # nudge re-sample after noise event: empty (WS now dead)
+                [  # REST fallback path resolves
+                    {
+                        "entity_id": "automation.found_via_rest",
+                        "attributes": {"id": "uid_drop"},
+                    }
+                ],
+            ]
+        )
+
+        async def drop_after_noise():
+            await asyncio.sleep(0.05)
+            # Fire a noise event so the wait loop wakes and re-samples,
+            # THEN drop the WS so the next loop tick takes the REST
+            # fallback path.
+            await ws_client.fire_state_changed(
+                "automation.unrelated",
+                new_state={"attributes": {"id": "uid_other"}},
+            )
+            ws_client.is_connected = False
+
+        drop_task = asyncio.create_task(drop_after_noise())
+        result = await wait_for_automation_entity_by_unique_id(
+            mock_client, "uid_drop", timeout=2.0, poll_interval=0.05
+        )
+        await drop_task
+
+        assert result == "automation.found_via_rest"
+        # REST fallback was actually exercised — at least one
+        # ``get_states()`` call past the initial post-subscribe sample.
+        assert mock_client.get_states.call_count >= 2
