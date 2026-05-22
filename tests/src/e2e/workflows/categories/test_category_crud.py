@@ -195,9 +195,11 @@ class TestCategoryCRUD:
         Test deleting a non-existent category returns a structured error,
         not success=True.
 
-        Source path: WebSocket result.success=False →
-        raise_tool_error(SERVICE_CALL_FAILED, "Failed to delete category: ...").
-        Hardened from if/else-log pattern to explicit assertions.
+        Source path: WebSocket ``result.success=False`` with a ``"not found"``
+        error string routes through the per-#1297 RESOURCE_NOT_FOUND branch
+        in ``tools_categories.ha_config_remove_category`` (KP13 review #4 —
+        category mutation paths now classify not-found as RESOURCE_NOT_FOUND
+        instead of the generic SERVICE_CALL_FAILED).
         """
         logger.info("Testing delete non-existent category")
 
@@ -210,12 +212,12 @@ class TestCategoryCRUD:
         assert not data.get("success"), (
             f"Expected failure for nonexistent category, got success=True: {data}"
         )
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
-            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data.get('error')}"
         )
         error_msg = str(data.get("error", "")).lower()
-        assert "doesn't exist" in error_msg or "not found" in error_msg, (
-            f"Expected 'doesn't exist'/'not found' in error message, got: {data.get('error')}"
+        assert "not found" in error_msg, (
+            f"Expected 'not found' in error message, got: {data.get('error')}"
         )
 
 

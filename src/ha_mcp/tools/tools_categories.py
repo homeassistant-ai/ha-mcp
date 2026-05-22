@@ -36,7 +36,11 @@ class CategoryTools:
     @tool(
         name="ha_config_get_category",
         tags={"Labels & Categories"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Category"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Category",
+        },
     )
     @log_tool_usage
     async def ha_config_get_category(
@@ -133,7 +137,7 @@ class CategoryTools:
                 available_ids = [cat.get("category_id") for cat in categories[:10]]
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Category not found: {category_id}",
                         context={
                             "category_id": category_id,
@@ -247,6 +251,22 @@ class CategoryTools:
                     "message": f"Successfully {action_past} category: {name}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Category not found: {category_id}",
+                            context={
+                                "name": name,
+                                "scope": scope,
+                                "category_id": category_id,
+                            },
+                            suggestions=[
+                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
@@ -276,7 +296,11 @@ class CategoryTools:
     @tool(
         name="ha_config_remove_category",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Category"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Category",
+        },
     )
     @log_tool_usage
     async def ha_config_remove_category(
@@ -333,6 +357,18 @@ class CategoryTools:
                     "message": f"Successfully deleted category: {category_id}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Category not found: {category_id}",
+                            context={"category_id": category_id, "scope": scope},
+                            suggestions=[
+                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,

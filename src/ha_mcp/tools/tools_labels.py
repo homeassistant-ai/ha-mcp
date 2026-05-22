@@ -33,7 +33,11 @@ class LabelTools:
     @tool(
         name="ha_config_get_label",
         tags={"Labels & Categories"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Label"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Label",
+        },
     )
     @log_tool_usage
     async def ha_config_get_label(
@@ -83,11 +87,13 @@ class LabelTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to get labels"),
-                    context={"label_id": label_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to get labels"),
+                        context={"label_id": label_id},
+                    )
+                )
 
             labels = result.get("result", [])
 
@@ -112,21 +118,32 @@ class LabelTools:
                 }
             else:
                 available_ids = [lbl.get("label_id") for lbl in labels[:10]]
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Label not found: {label_id}",
-                    context={"label_id": label_id, "available_label_ids": available_ids},
-                    suggestions=["Use ha_config_get_label() without label_id to see all labels"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Label not found: {label_id}",
+                        context={
+                            "label_id": label_id,
+                            "available_label_ids": available_ids,
+                        },
+                        suggestions=[
+                            "Use ha_config_get_label() without label_id to see all labels"
+                        ],
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error getting labels: {e}")
-            exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"label_id": label_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                ],
+            )
 
     @tool(
         name="ha_config_set_label",
@@ -228,26 +245,48 @@ class LabelTools:
                     "message": f"Successfully {action_past} label: {name}",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {action} label: {result.get('error', 'Unknown error')}",
-                    context={"name": name, "label_id": label_id},
-                ))
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Label not found: {label_id}",
+                            context={"name": name, "label_id": label_id},
+                            suggestions=[
+                                "Use ha_config_get_label() without label_id to see all labels",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to {action} label: {result.get('error', 'Unknown error')}",
+                        context={"name": name, "label_id": label_id},
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error setting label {name!r}: {e}")
-            exception_to_structured_error(e, context={"name": name, "label_id": label_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify the label name is valid",
-                "For updates, verify the label_id exists using ha_config_get_label()",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"name": name, "label_id": label_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify the label name is valid",
+                    "For updates, verify the label_id exists using ha_config_get_label()",
+                ],
+            )
 
     @tool(
         name="ha_config_remove_label",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Label"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Label",
+        },
     )
     @log_tool_usage
     async def ha_config_remove_label(
@@ -295,20 +334,38 @@ class LabelTools:
                     "message": f"Successfully deleted label: {label_id}",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to delete label: {result.get('error', 'Unknown error')}",
-                    context={"label_id": label_id},
-                ))
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Label not found: {label_id}",
+                            context={"label_id": label_id},
+                            suggestions=[
+                                "Use ha_config_get_label() without label_id to see all labels",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to delete label: {result.get('error', 'Unknown error')}",
+                        context={"label_id": label_id},
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error removing label {label_id!r}: {e}")
-            exception_to_structured_error(e, context={"label_id": label_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify the label_id exists using ha_config_get_label()",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"label_id": label_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify the label_id exists using ha_config_get_label()",
+                ],
+            )
 
 
 def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
