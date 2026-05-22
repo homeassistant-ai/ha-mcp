@@ -829,7 +829,7 @@ async def _restore_category(client: Any, entity_id: str, config: Any) -> Any:
 
 async def _fetch_group(client: Any, entity_id: str) -> Any:
     eid = entity_id if entity_id.startswith("group.") else f"group.{entity_id}"
-    state = await _rest_get_or_none(client, f"/api/states/{eid}")
+    state = await _rest_get_or_none(client, f"states/{eid}")
     if state is None:
         return None
     attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
@@ -850,7 +850,7 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
         service_data["entities"] = config["entities"]
     if config.get("icon"):
         service_data["icon"] = config["icon"]
-    return await _rest_post(client, "/api/services/group/set", service_data)
+    return await _rest_post(client, "services/group/set", service_data)
 
 
 # Calendar events — calendar.get_events to fetch, calendar.create/update services.
@@ -907,7 +907,7 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     data = {k: v for k, v in config.items() if k != "calendar_entity_id"}
     return await _rest_post(
         client,
-        "/api/services/calendar/create_event",
+        "services/calendar/create_event",
         {"entity_id": cal, **data},
     )
 
@@ -1007,7 +1007,7 @@ async def _restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
     data = {k: v for k, v in config.items() if k != "todo_entity_id"}
     return await _rest_post(
         client,
-        "/api/services/todo/add_item",
+        "services/todo/add_item",
         {"entity_id": cal, **data},
     )
 
@@ -1016,7 +1016,7 @@ async def _restore_todo_item(client: Any, entity_id: str, config: Any) -> Any:
 
 
 async def _fetch_entity_state(client: Any, entity_id: str) -> Any:
-    return await _rest_get_or_none(client, f"/api/states/{entity_id}")
+    return await _rest_get_or_none(client, f"states/{entity_id}")
 
 
 async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any:
@@ -1028,7 +1028,7 @@ async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any
         }
     else:
         payload = {"state": str(config)}
-    return await _rest_post(client, f"/api/states/{entity_id}", payload)
+    return await _rest_post(client, f"states/{entity_id}", payload)
 
 
 # Integration enable/disable — restore re-applies the disabled flag.
