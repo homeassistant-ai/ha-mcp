@@ -2166,7 +2166,7 @@ function renderPolicyCard(toolName, rule) {
         '</select>' +
         '<input type="text" class="policy-predicate-path" placeholder="args.domain">' +
         '<input type="text" class="policy-predicate-value" ' +
-          'placeholder=\'"lock"  or  ["lock","alarm"]  (JSON)\'>' +
+          'placeholder="JSON: &quot;lock&quot; or [&quot;lock&quot;,&quot;alarm&quot;]">' +
         '<button class="policy-predicate-form-save">Save predicate</button>' +
         '<button class="policy-predicate-form-cancel">Cancel</button>' +
         '<div class="policy-predicate-form-error" style="display:none;"></div>' +
