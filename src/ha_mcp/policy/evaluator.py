@@ -40,22 +40,26 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
     pv = predicate.value
     match predicate.op:
         case "eq":
-            return val == pv
+            return bool(val == pv)
         case "neq":
-            return val != pv
+            return bool(val != pv)
         case "in":
             return val in (pv or [])
         case "not_in":
             return val not in (pv or [])
         # `regex` is re.search (substring match). Anchor with ^...$ for full-match.
         case "regex":
-            return isinstance(val, str) and re.search(pv, val) is not None
+            return (
+                isinstance(val, str)
+                and isinstance(pv, str)
+                and re.search(pv, val) is not None
+            )
         case "contains":
             return isinstance(val, (str, list, tuple, set)) and pv in val
         case "gt":
-            return val > pv
+            return bool(val > pv)
         case "lt":
-            return val < pv
+            return bool(val < pv)
     return False
 
 
