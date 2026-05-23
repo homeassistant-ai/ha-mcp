@@ -44,8 +44,8 @@ class ApprovalQueue:
     def remember(self, tool_name: str, args_hash: str, *, minutes: int) -> None:
         if minutes <= 0:
             return
-        self._remember[(tool_name, args_hash)] = (
-            datetime.now(UTC) + timedelta(minutes=minutes)
+        self._remember[(tool_name, args_hash)] = datetime.now(UTC) + timedelta(
+            minutes=minutes
         )
 
     def is_remembered(self, tool_name: str, args_hash: str) -> bool:

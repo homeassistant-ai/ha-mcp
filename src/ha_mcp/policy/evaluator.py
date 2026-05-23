@@ -1,7 +1,7 @@
 """Evaluate a tool call against a Policy. Pure functions — no I/O, no state."""
 
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from .model import Policy, Predicate, Rule
@@ -9,7 +9,7 @@ from .model import Policy, Predicate, Rule
 _MISSING = object()
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     ALLOW = "allow"
     REQUIRE_APPROVAL = "require_approval"
 
@@ -39,15 +39,23 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
         return False
     pv = predicate.value
     match predicate.op:
-        case "eq":       return val == pv
-        case "neq":      return val != pv
-        case "in":       return val in (pv or [])
-        case "not_in":   return val not in (pv or [])
+        case "eq":
+            return val == pv
+        case "neq":
+            return val != pv
+        case "in":
+            return val in (pv or [])
+        case "not_in":
+            return val not in (pv or [])
         # `regex` is re.search (substring match). Anchor with ^...$ for full-match.
-        case "regex":    return isinstance(val, str) and re.search(pv, val) is not None
-        case "contains": return isinstance(val, (str, list, tuple, set)) and pv in val
-        case "gt":       return val > pv
-        case "lt":       return val < pv
+        case "regex":
+            return isinstance(val, str) and re.search(pv, val) is not None
+        case "contains":
+            return isinstance(val, (str, list, tuple, set)) and pv in val
+        case "gt":
+            return val > pv
+        case "lt":
+            return val < pv
     return False
 
 
@@ -57,8 +65,9 @@ def match_rule(rule: Rule, tool_name: str, args: dict[str, Any]) -> bool:
     return all(match_predicate(p, args) for p in rule.when)
 
 
-def find_matching_rule(tool_name: str, args: dict[str, Any],
-                       policy: Policy) -> Rule | None:
+def find_matching_rule(
+    tool_name: str, args: dict[str, Any], policy: Policy
+) -> Rule | None:
     for rule in policy.rules:
         if match_rule(rule, tool_name, args):
             return rule
@@ -70,6 +79,8 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
         return Verdict.ALLOW
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
-    return (Verdict.REQUIRE_APPROVAL
-            if policy.default_action == "require_approval"
-            else Verdict.ALLOW)
+    return (
+        Verdict.REQUIRE_APPROVAL
+        if policy.default_action == "require_approval"
+        else Verdict.ALLOW
+    )

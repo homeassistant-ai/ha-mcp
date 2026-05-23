@@ -36,7 +36,9 @@ def queue():
 async def test_disabled_policy_passes_through(queue):
     mw = PolicyMiddleware(policy_provider=lambda: Policy(enabled=False), queue=queue)
     call_next = AsyncMock(return_value="real_result")
-    result = await mw.on_call_tool(make_context("ha_call_service", {"domain": "lock"}), call_next)
+    result = await mw.on_call_tool(
+        make_context("ha_call_service", {"domain": "lock"}), call_next
+    )
     assert result == "real_result"
 
 
@@ -75,7 +77,9 @@ async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
     pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     args = {"domain": "lock"}
-    entry = queue.create("ha_call_service", compute_args_hash(args), args, ttl_minutes=5)
+    entry = queue.create(
+        "ha_call_service", compute_args_hash(args), args, ttl_minutes=5
+    )
     queue.approve(entry.token)
     call_next = AsyncMock(return_value="ok")
     result = await mw.on_call_tool(make_context("ha_call_service", args), call_next)
@@ -88,8 +92,9 @@ async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
 
 @pytest.mark.anyio
 async def test_block_then_approve_returns_real_result(queue):
-    pol = Policy(enabled=True, wait_seconds=5,
-                 rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(
+        enabled=True, wait_seconds=5, rules=[Rule(tool_name="ha_call_service")]
+    )
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock(return_value="real_result")
 
@@ -102,14 +107,16 @@ async def test_block_then_approve_returns_real_result(queue):
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver_after_short_delay)
         result = await mw.on_call_tool(
-            make_context("ha_call_service", {"domain": "lock"}), call_next)
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
     assert result == "real_result"
 
 
 @pytest.mark.anyio
 async def test_block_then_deny_raises_denied(queue):
-    pol = Policy(enabled=True, wait_seconds=5,
-                 rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(
+        enabled=True, wait_seconds=5, rules=[Rule(tool_name="ha_call_service")]
+    )
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock()
 
@@ -122,7 +129,8 @@ async def test_block_then_deny_raises_denied(queue):
         async with anyio.create_task_group() as tg:
             tg.start_soon(denier)
             await mw.on_call_tool(
-                make_context("ha_call_service", {"domain": "lock"}), call_next)
+                make_context("ha_call_service", {"domain": "lock"}), call_next
+            )
     body = json.loads(ei.value.args[0])
     assert body["error"]["code"] == "USER_DENIED"
     call_next.assert_not_called()
@@ -136,7 +144,8 @@ async def test_timeout_raises_pending_error_and_keeps_entry(queue):
 
     with pytest.raises(ToolError) as ei:
         await mw.on_call_tool(
-            make_context("ha_call_service", {"domain": "lock"}), call_next)
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
     body = json.loads(ei.value.args[0])
     assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
     assert "approve_url" in body["error"]["context"]
@@ -177,7 +186,8 @@ async def test_recall_with_mutated_args_creates_new_pending(queue):
 
     with pytest.raises(ToolError):
         await mw.on_call_tool(
-            make_context("ha_call_service", {"domain": "lock"}), call_next)
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
     first_pending = queue.list_pending()[0]
     queue.approve(first_pending.token)
 
@@ -185,15 +195,19 @@ async def test_recall_with_mutated_args_creates_new_pending(queue):
     with pytest.raises(ToolError):
         await mw.on_call_tool(
             make_context("ha_call_service", {"domain": "alarm_control_panel"}),
-            call_next)
+            call_next,
+        )
     call_next.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_remember_minutes_caches_for_subsequent_calls(queue):
-    pol = Policy(enabled=True, rules=[
-        Rule(tool_name="ha_call_service", remember_minutes=10),
-    ])
+    pol = Policy(
+        enabled=True,
+        rules=[
+            Rule(tool_name="ha_call_service", remember_minutes=10),
+        ],
+    )
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=5)
     call_next = AsyncMock(return_value="ok")
     args = {"domain": "lock"}
@@ -205,7 +219,9 @@ async def test_remember_minutes_caches_for_subsequent_calls(queue):
     result1: object = None
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver)
-        result1 = await mw.on_call_tool(make_context("ha_call_service", args), call_next)
+        result1 = await mw.on_call_tool(
+            make_context("ha_call_service", args), call_next
+        )
     assert result1 == "ok"
 
     # second call with same args proceeds via remember-cache without any pending entry

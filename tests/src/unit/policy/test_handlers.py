@@ -11,13 +11,15 @@ from ha_mcp.policy.model import Policy, Rule
 
 def make_app(tmp_path: Path, queue: ApprovalQueue) -> TestClient:
     h = build_policy_handlers(data_dir=tmp_path, queue=queue)
-    app = Starlette(routes=[
-        Route("/api/policy/config", h["policy_get_config"], methods=["GET"]),
-        Route("/api/policy/config", h["policy_put_config"], methods=["PUT"]),
-        Route("/api/policy/pending", h["policy_get_pending"], methods=["GET"]),
-        Route("/api/policy/approve", h["policy_post_approve"], methods=["POST"]),
-        Route("/api/policy/deny", h["policy_post_deny"], methods=["POST"]),
-    ])
+    app = Starlette(
+        routes=[
+            Route("/api/policy/config", h["policy_get_config"], methods=["GET"]),
+            Route("/api/policy/config", h["policy_put_config"], methods=["PUT"]),
+            Route("/api/policy/pending", h["policy_get_pending"], methods=["GET"]),
+            Route("/api/policy/approve", h["policy_post_approve"], methods=["POST"]),
+            Route("/api/policy/deny", h["policy_post_deny"], methods=["POST"]),
+        ]
+    )
     return TestClient(app)
 
 
@@ -70,7 +72,11 @@ def test_deny_flow(tmp_path):
 
 def test_approve_bad_json_body_400(tmp_path):
     c = make_app(tmp_path, ApprovalQueue())
-    r = c.post("/api/policy/approve", content=b"not-json", headers={"content-type": "application/json"})
+    r = c.post(
+        "/api/policy/approve",
+        content=b"not-json",
+        headers={"content-type": "application/json"},
+    )
     assert r.status_code == 400
 
 
@@ -82,7 +88,11 @@ def test_approve_non_object_body_400(tmp_path):
 
 def test_deny_bad_json_body_400(tmp_path):
     c = make_app(tmp_path, ApprovalQueue())
-    r = c.post("/api/policy/deny", content=b"not-json", headers={"content-type": "application/json"})
+    r = c.post(
+        "/api/policy/deny",
+        content=b"not-json",
+        headers={"content-type": "application/json"},
+    )
     assert r.status_code == 400
 
 
@@ -99,7 +109,13 @@ def test_get_pending_returns_full_shape(tmp_path):
     r = c.get("/api/policy/pending")
     assert r.status_code == 200
     payload = r.json()["pending"][0]
-    assert set(payload.keys()) == {"token", "tool_name", "args_preview", "created_at", "expires_at"}
+    assert set(payload.keys()) == {
+        "token",
+        "tool_name",
+        "args_preview",
+        "created_at",
+        "expires_at",
+    }
     assert payload["tool_name"] == "ha_x"
     assert payload["args_preview"] == {"foo": "bar"}
     # ISO 8601 with timezone

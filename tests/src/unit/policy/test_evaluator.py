@@ -1,8 +1,8 @@
 import pytest
 
 from ha_mcp.policy.evaluator import (
-    Verdict,
     _MISSING,
+    Verdict,
     evaluate,
     extract_path,
     find_matching_rule,
@@ -26,20 +26,23 @@ class TestExtractPath:
 
 # --- match_predicate ---
 class TestMatchPredicate:
-    @pytest.mark.parametrize("op,value,arg,expected", [
-        ("eq", "lock", "lock", True),
-        ("eq", "lock", "light", False),
-        ("neq", "lock", "light", True),
-        ("in", ["lock", "alarm_control_panel"], "lock", True),
-        ("in", ["lock"], "light", False),
-        ("not_in", ["lock"], "light", True),
-        ("regex", r"^lock\..*", "lock.front", True),
-        ("regex", r"^lock\..*", "light.kitchen", False),
-        ("contains", "lock", "front_door_lock", True),
-        ("gt", 5, 10, True),
-        ("gt", 5, 3, False),
-        ("lt", 5, 3, True),
-    ])
+    @pytest.mark.parametrize(
+        "op,value,arg,expected",
+        [
+            ("eq", "lock", "lock", True),
+            ("eq", "lock", "light", False),
+            ("neq", "lock", "light", True),
+            ("in", ["lock", "alarm_control_panel"], "lock", True),
+            ("in", ["lock"], "light", False),
+            ("not_in", ["lock"], "light", True),
+            ("regex", r"^lock\..*", "lock.front", True),
+            ("regex", r"^lock\..*", "light.kitchen", False),
+            ("contains", "lock", "front_door_lock", True),
+            ("gt", 5, 10, True),
+            ("gt", 5, 3, False),
+            ("lt", 5, 3, True),
+        ],
+    )
     def test_ops(self, op, value, arg, expected):
         p = Predicate(path="args.x", op=op, value=value)
         assert match_predicate(p, {"x": arg}) is expected
@@ -73,14 +76,21 @@ class TestMatchRule:
         assert match_rule(r, "anything", {}) is True
 
     def test_all_predicates_must_match(self):
-        r = Rule(tool_name="ha_call_service", when=[
-            Predicate(path="args.domain", op="eq", value="lock"),
-            Predicate(path="args.service", op="eq", value="unlock"),
-        ])
-        assert match_rule(r, "ha_call_service",
-                          {"domain": "lock", "service": "unlock"}) is True
-        assert match_rule(r, "ha_call_service",
-                          {"domain": "lock", "service": "lock"}) is False
+        r = Rule(
+            tool_name="ha_call_service",
+            when=[
+                Predicate(path="args.domain", op="eq", value="lock"),
+                Predicate(path="args.service", op="eq", value="unlock"),
+            ],
+        )
+        assert (
+            match_rule(r, "ha_call_service", {"domain": "lock", "service": "unlock"})
+            is True
+        )
+        assert (
+            match_rule(r, "ha_call_service", {"domain": "lock", "service": "lock"})
+            is False
+        )
 
 
 # --- evaluate ---
@@ -98,20 +108,30 @@ class TestEvaluate:
         assert evaluate("ha_call_service", {}, p) == Verdict.REQUIRE_APPROVAL
 
     def test_rule_match_returns_require(self):
-        p = Policy(enabled=True, rules=[
-            Rule(tool_name="ha_call_service", when=[
-                Predicate(path="args.domain", op="in", value=["lock"])])])
-        assert evaluate("ha_call_service", {"domain": "lock"}, p) == \
-               Verdict.REQUIRE_APPROVAL
-        assert evaluate("ha_call_service", {"domain": "light"}, p) == \
-               Verdict.ALLOW
+        p = Policy(
+            enabled=True,
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.domain", op="in", value=["lock"])],
+                )
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"domain": "lock"}, p)
+            == Verdict.REQUIRE_APPROVAL
+        )
+        assert evaluate("ha_call_service", {"domain": "light"}, p) == Verdict.ALLOW
 
     def test_first_match_wins(self):
         """Rules evaluated in order; caller finds the matching rule's lifetime via find_matching_rule."""
-        p = Policy(enabled=True, rules=[
-            Rule(tool_name="ha_call_service", remember_minutes=10),
-            Rule(tool_name="ha_call_service", remember_minutes=999),
-        ])
+        p = Policy(
+            enabled=True,
+            rules=[
+                Rule(tool_name="ha_call_service", remember_minutes=10),
+                Rule(tool_name="ha_call_service", remember_minutes=999),
+            ],
+        )
         first = find_matching_rule("ha_call_service", {}, p)
         assert first is not None
         assert first.remember_minutes == 10

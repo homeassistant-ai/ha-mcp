@@ -36,16 +36,20 @@ def build_policy_handlers(
         return JSONResponse({"saved": True})
 
     async def get_pending(_: Request) -> JSONResponse:
-        return JSONResponse({"pending": [
+        return JSONResponse(
             {
-                "token": e.token,
-                "tool_name": e.tool_name,
-                "args_preview": e.args_preview,
-                "created_at": e.created_at.isoformat(),
-                "expires_at": e.expires_at.isoformat(),
+                "pending": [
+                    {
+                        "token": e.token,
+                        "tool_name": e.tool_name,
+                        "args_preview": e.args_preview,
+                        "created_at": e.created_at.isoformat(),
+                        "expires_at": e.expires_at.isoformat(),
+                    }
+                    for e in queue.list_pending()
+                ]
             }
-            for e in queue.list_pending()
-        ]})
+        )
 
     async def post_approve(request: Request) -> JSONResponse:
         try:
@@ -53,7 +57,9 @@ def build_policy_handlers(
         except (ValueError, TypeError):
             return JSONResponse({"error": "invalid JSON body"}, status_code=400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+            return JSONResponse(
+                {"error": "body must be a JSON object"}, status_code=400
+            )
         token = body.get("token")
         if not token or queue.get(token) is None:
             return JSONResponse({"error": "unknown token"}, status_code=404)
@@ -68,7 +74,9 @@ def build_policy_handlers(
         except (ValueError, TypeError):
             return JSONResponse({"error": "invalid JSON body"}, status_code=400)
         if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+            return JSONResponse(
+                {"error": "body must be a JSON object"}, status_code=400
+            )
         token = body.get("token")
         if not token or queue.get(token) is None:
             return JSONResponse({"error": "unknown token"}, status_code=404)

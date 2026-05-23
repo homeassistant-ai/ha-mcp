@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import anyio
 import pytest
 
 from ha_mcp.policy.approval_queue import (
@@ -46,7 +47,6 @@ def test_remember_cache_expired():
 
 
 # --- appended for Task 2.2: pending-entry lifecycle ---
-import anyio
 
 
 def test_create_returns_pending_entry():

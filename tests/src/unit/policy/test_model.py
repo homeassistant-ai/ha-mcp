@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
-from ha_mcp.policy.model import Predicate, Rule, Policy
+
+from ha_mcp.policy.model import Policy, Predicate, Rule
 
 
 class TestPredicate:
@@ -54,8 +55,13 @@ class TestPolicy:
             rules=[
                 Rule(
                     tool_name="ha_call_service",
-                    when=[Predicate(path="args.domain", op="in",
-                                    value=["lock", "alarm_control_panel"])],
+                    when=[
+                        Predicate(
+                            path="args.domain",
+                            op="in",
+                            value=["lock", "alarm_control_panel"],
+                        )
+                    ],
                 ),
             ],
         )

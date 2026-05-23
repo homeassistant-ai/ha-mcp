@@ -15,8 +15,12 @@ def test_load_missing_file_returns_default(tmp_path: Path):
 def test_save_and_roundtrip(tmp_path: Path):
     original = Policy(
         enabled=True,
-        rules=[Rule(tool_name="ha_call_service",
-                    when=[Predicate(path="args.domain", op="eq", value="lock")])],
+        rules=[
+            Rule(
+                tool_name="ha_call_service",
+                when=[Predicate(path="args.domain", op="eq", value="lock")],
+            )
+        ],
     )
     save_policy(tmp_path, original)
     loaded = load_policy(tmp_path)
@@ -41,5 +45,9 @@ def test_serialized_shape_is_stable(tmp_path: Path):
     save_policy(tmp_path, Policy())
     data = json.loads((tmp_path / POLICY_FILENAME).read_text())
     assert set(data.keys()) == {
-        "enabled", "default_action", "wait_seconds", "approval_ttl_minutes", "rules",
+        "enabled",
+        "default_action",
+        "wait_seconds",
+        "approval_ttl_minutes",
+        "rules",
     }

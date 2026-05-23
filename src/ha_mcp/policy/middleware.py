@@ -17,12 +17,14 @@ from .model import Policy
 
 # Toolsearch proxy meta-tools — always pass through; the inner real-tool
 # call re-enters the middleware via ctx.fastmcp.call_tool() and gets gated there.
-PROXY_META_TOOLS = frozenset({
-    "ha_call_read_tool",
-    "ha_call_write_tool",
-    "ha_call_delete_tool",
-    "ha_search_tools",
-})
+PROXY_META_TOOLS = frozenset(
+    {
+        "ha_call_read_tool",
+        "ha_call_write_tool",
+        "ha_call_delete_tool",
+        "ha_search_tools",
+    }
+)
 
 
 class PolicyMiddleware(Middleware):
@@ -65,7 +67,8 @@ class PolicyMiddleware(Middleware):
         existing = self._queue.find(name, args_hash)
         if existing and existing.decision == "approved":
             self._queue.consume_and_maybe_remember(
-                existing, remember_minutes=rule.remember_minutes if rule else 0,
+                existing,
+                remember_minutes=rule.remember_minutes if rule else 0,
             )
             return await call_next(context)
         if existing and existing.decision == "denied":
@@ -73,16 +76,24 @@ class PolicyMiddleware(Middleware):
             raise self._denied_error()
 
         pending = existing or self._queue.create(
-            name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes,
+            name,
+            args_hash,
+            args,
+            ttl_minutes=policy.approval_ttl_minutes,
         )
         approval_url = self._approval_url_builder(pending.token)
 
-        wait = self._wait_override if self._wait_override is not None else policy.wait_seconds
+        wait = (
+            self._wait_override
+            if self._wait_override is not None
+            else policy.wait_seconds
+        )
         await self._wait_for_decision(context, pending, approval_url, wait)
 
         if pending.decision == "approved":
             self._queue.consume_and_maybe_remember(
-                pending, remember_minutes=rule.remember_minutes if rule else 0,
+                pending,
+                remember_minutes=rule.remember_minutes if rule else 0,
             )
             return await call_next(context)
         if pending.decision == "denied":
@@ -101,7 +112,8 @@ class PolicyMiddleware(Middleware):
         deadline = anyio.current_time() + wait_seconds
         while anyio.current_time() < deadline and pending.decision == "pending":
             await self._safe_report_progress(
-                context, f"Awaiting user approval — open {approval_url}")
+                context, f"Awaiting user approval — open {approval_url}"
+            )
             remaining = deadline - anyio.current_time()
             if remaining <= 0:
                 break
@@ -118,33 +130,43 @@ class PolicyMiddleware(Middleware):
 
     @staticmethod
     def _denied_error() -> ToolError:
-        return ToolError(json.dumps({
-            "success": False,
-            "error": {
-                "code": "USER_DENIED",
-                "message": "User explicitly denied this tool call.",
-                "suggestions": ["Do not retry without confirming with the user first."],
-            },
-        }))
+        return ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "USER_DENIED",
+                        "message": "User explicitly denied this tool call.",
+                        "suggestions": [
+                            "Do not retry without confirming with the user first."
+                        ],
+                    },
+                }
+            )
+        )
 
     def _pending_error(self, pending: PendingApproval, approval_url: str) -> ToolError:
         remaining = int((pending.expires_at - pending.created_at).total_seconds())
-        return ToolError(json.dumps({
-            "success": False,
-            "error": {
-                "code": "USER_APPROVAL_REQUIRED",
-                "message": (
-                    f"User approval required. Open {approval_url} to review the "
-                    "exact call and approve. Re-call this tool with the same "
-                    "arguments after the user approves."
-                ),
-                "context": {
-                    "approve_url": approval_url,
-                    "expires_in_seconds": remaining,
-                },
-                "suggestions": [
-                    "Tell the user to click the approval link.",
-                    "Re-call this tool with the same arguments after the user approves.",
-                ],
-            },
-        }))
+        return ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "USER_APPROVAL_REQUIRED",
+                        "message": (
+                            f"User approval required. Open {approval_url} to review the "
+                            "exact call and approve. Re-call this tool with the same "
+                            "arguments after the user approves."
+                        ),
+                        "context": {
+                            "approve_url": approval_url,
+                            "expires_in_seconds": remaining,
+                        },
+                        "suggestions": [
+                            "Tell the user to click the approval link.",
+                            "Re-call this tool with the same arguments after the user approves.",
+                        ],
+                    },
+                }
+            )
+        )
