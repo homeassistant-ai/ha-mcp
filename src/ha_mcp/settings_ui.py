@@ -907,6 +907,56 @@ let toolStates = {};
 let saveTimer = null;
 let openGroups = new Set();
 
+// Per-tool "security gated" toggle state mirrors policy.rules from
+// /api/policy/config. A tool is gated iff there's any rule with a
+// matching tool_name (with or without predicates). The Tools tab
+// uses this set to render the third toggle alongside enabled/pinned.
+const policyState = {
+  enabled: false,
+  gatedTools: new Set(),
+};
+
+async function loadPolicyState() {
+  try {
+    const r = await fetch('./api/policy/config');
+    if (!r.ok) {
+      policyState.enabled = false;
+      policyState.gatedTools = new Set();
+      return;
+    }
+    const p = await r.json();
+    policyState.enabled = !!p.enabled;
+    policyState.gatedTools = new Set((p.rules || []).map(rule => rule.tool_name));
+  } catch (_e) {
+    // Policy endpoint unavailable (sidecar stub) — leave gatedTools empty.
+    policyState.enabled = false;
+    policyState.gatedTools = new Set();
+  }
+}
+
+async function syncPolicyRule(toolName, gated) {
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  const policy = await r.json();
+  policy.rules = policy.rules || [];
+  if (gated) {
+    if (!policy.rules.some(rule => rule.tool_name === toolName)) {
+      policy.rules.push({tool_name: toolName, when: [], remember_minutes: 0});
+    }
+  } else {
+    policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
+  }
+  const w = await fetch('./api/policy/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(policy),
+  });
+  if (!w.ok) {
+    const body = await w.text();
+    throw new Error('PUT failed: ' + w.status + ' ' + body);
+  }
+}
+
 async function loadTools() {
   let resp;
   try {
@@ -928,6 +978,10 @@ async function loadTools() {
   }
   toolData = data.tools || [];
   toolStates = data.states || {};
+  // Load policy state before the first render so the "security gated"
+  // toggle reflects current policy.rules. loadPolicyState() never throws
+  // — it leaves gatedTools empty on failure.
+  await loadPolicyState();
   if (toolData.length === 0) {
     // Empty tool list is a sidecar misconfiguration — usually the
     // parent stdio process couldn't dump the metadata cache. Tell
@@ -1214,13 +1268,39 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>pinned</span>` +
           `</div>` +
+          `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
+               `title="${policyState.enabled ? '' : 'Enable Tool Security Policies in addon config first.'}">` +
+            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
+              `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
+              `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
+              `<span class="slider"></span></label>` +
+            `<span>security gated</span>` +
+          `</div>` +
         `</div>`;
 
       const inputs = div.querySelectorAll('input[type="checkbox"]');
       inputs.forEach(input => {
         if (input.disabled) return;
-        input.addEventListener('change', (e) => {
+        input.addEventListener('change', async (e) => {
           const field = e.target.dataset.field;
+          if (field === 'gated') {
+            // Optimistic UI: flip local state, sync to server, rollback on failure.
+            // Gated lives in policy.rules (not tool_config), so we skip scheduleSave().
+            const wasGated = policyState.gatedTools.has(t.name);
+            const nowGated = e.target.checked;
+            if (nowGated) policyState.gatedTools.add(t.name);
+            else policyState.gatedTools.delete(t.name);
+            try {
+              await syncPolicyRule(t.name, nowGated);
+            } catch (err) {
+              if (wasGated) policyState.gatedTools.add(t.name);
+              else policyState.gatedTools.delete(t.name);
+              e.target.checked = wasGated;
+              alert('Failed to update tool security policy: ' + err.message);
+            }
+            render();
+            return;
+          }
           const currentState = getState(t.name);
           let newState = currentState;
           if (field === 'enabled') {
@@ -1858,6 +1938,11 @@ document.querySelectorAll('.tab').forEach(tab => {
     );
     if (target === 'backups') { loadBackupConfig(); loadBackups(); }
     if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+    if (target === 'tools') {
+      // Refresh gated-toggle state in case the user changed rules from
+      // the Tool Security Policies tab while it was active.
+      loadPolicyState().then(render).catch(() => {});
+    }
   });
 });
 
