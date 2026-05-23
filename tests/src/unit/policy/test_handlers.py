@@ -157,6 +157,28 @@ def test_get_config_returns_500_when_policy_corrupt(tmp_path):
     assert "error" in body
 
 
+def test_put_with_stale_version_returns_409(tmp_path):
+    """Optimistic concurrency: PUT with stale version → 409.
+
+    save_policy bumps version on every write. A second writer that GET'd
+    the policy *before* the first PUT will carry the old version, and
+    its PUT must be rejected so the user sees the conflict instead of
+    silently clobbering the first writer's edit.
+    """
+    c = make_app(tmp_path, ApprovalQueue())
+    # First write: starts at version=0 → on-disk becomes 1.
+    body0 = Policy(enabled=True).model_dump(mode="json")
+    assert c.put("/api/policy/config", json=body0).status_code == 200
+    # Second writer carries the old version=0 instead of re-reading.
+    stale = Policy(enabled=False, version=0).model_dump(mode="json")
+    r = c.put("/api/policy/config", json=stale)
+    assert r.status_code == 409
+    payload = r.json()
+    assert "policy version mismatch" in payload["error"]
+    assert payload["current_version"] == 1
+    assert payload["current_policy"]["enabled"] is True
+
+
 def test_get_pending_returns_full_shape(tmp_path):
     queue = ApprovalQueue()
     queue.create("ha_x", "abc", {"foo": "bar"}, ttl_minutes=5)

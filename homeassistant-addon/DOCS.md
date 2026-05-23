@@ -281,7 +281,7 @@ Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behin
 **When to enable:**
 - Shared installations where you want a human in the loop for destructive or security-relevant operations
 - Locks, alarms, and other entities where an LLM mistake has real-world consequences
-- Whenever you want a hard audit trail of which tool calls were explicitly allowed
+- Whenever you want a per-call user-approval prompt before high-stakes operations run (locks, automations, etc.)
 
 **When to leave disabled (default):**
 - Single-user setups where you're comfortable with the LLM acting autonomously

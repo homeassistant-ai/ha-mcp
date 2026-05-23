@@ -52,6 +52,13 @@ class TestPredicate:
         with pytest.raises(ValidationError, match="op='lt' requires"):
             Predicate(path="args.x", op="lt", value=None)
 
+    def test_exists_rejects_value(self):
+        # 'exists' is a presence-only check; accepting a value silently
+        # would mislead a user into thinking it compares against that
+        # value. Reject at construction so the mistake surfaces in the UI.
+        with pytest.raises(ValidationError, match="op='exists' must not have a value"):
+            Predicate(path="args.x", op="exists", value="anything")
+
 
 class TestRule:
     def test_minimal_rule(self):

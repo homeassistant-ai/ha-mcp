@@ -57,9 +57,15 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
         case "contains":
             return isinstance(val, (str, list, tuple, set)) and pv in val
         case "gt":
-            return bool(val > pv)
+            try:
+                return bool(val > pv)
+            except TypeError:
+                return False
         case "lt":
-            return bool(val < pv)
+            try:
+                return bool(val < pv)
+            except TypeError:
+                return False
     return False
 
 

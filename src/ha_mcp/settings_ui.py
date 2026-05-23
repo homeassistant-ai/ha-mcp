@@ -482,31 +482,27 @@ async def _get_tool_metadata(
     return tools
 
 
-class ToolVisibilityResult(NamedTuple):
-    """Outcome of applying ``tool_config.json`` to the FastMCP instance.
+class UserToolStateOverrides(NamedTuple):
+    """User-explicit per-tool state overrides loaded from tool_config.json.
 
-    Attributes:
-        pinned_names: Tools the user explicitly pinned via the UI. The
-            server adds these to ``always_visible`` on top of the
-            DEFAULT_PINNED_TOOLS set so they bypass the search transform.
-        enabled_names: Tools whose state is explicitly ``"enabled"`` in
-            ``tool_config.json``. The server subtracts these from
-            ``DEFAULT_PINNED_TOOLS`` when building the effective pinned
-            set so users can unpin a default-pinned tool by toggling it
-            to plain "enabled" in the Tools tab. Tools with no entry in
-            the config (the common case) are NOT in this set, so they
-            keep their default pinning.
+    Both sets are immutable frozensets so callers can't pollute the
+    return value. They are disjoint by construction (a tool_config entry
+    has one state per tool).
+
+    - ``pinned_names``: tools the user explicitly set to "pinned"
+    - ``enabled_names``: tools the user explicitly set to "enabled"
+      (used by _apply_tool_search to unpin defaults the user re-enabled)
     """
 
-    pinned_names: set[str]
-    enabled_names: set[str]
+    pinned_names: frozenset[str]
+    enabled_names: frozenset[str]
 
 
 def apply_tool_visibility(
     mcp: FastMCP,
     config: dict[str, Any],
     settings: Settings,
-) -> ToolVisibilityResult:
+) -> UserToolStateOverrides:
     """Apply tool visibility from config, respecting safety toggles.
 
     Args:
@@ -515,7 +511,7 @@ def apply_tool_visibility(
         settings: The server Settings (for enable_yaml_config_editing etc.).
 
     Returns:
-        A :class:`ToolVisibilityResult` carrying the user-pinned tools
+        A :class:`UserToolStateOverrides` carrying the user-pinned tools
         and the user-explicitly-enabled tools. The caller (server.py)
         uses ``enabled_names`` to filter ``DEFAULT_PINNED_TOOLS`` so a
         user can unpin a default by flipping it to "enabled" in the UI.
@@ -550,8 +546,13 @@ def apply_tool_visibility(
 
     mcp.enable(names=MANDATORY_TOOLS)
 
-    return ToolVisibilityResult(
-        pinned_names=pinned_names, enabled_names=enabled_names
+    assert pinned_names.isdisjoint(enabled_names), (
+        "pinned and enabled overrides must be disjoint by construction"
+    )
+
+    return UserToolStateOverrides(
+        pinned_names=frozenset(pinned_names),
+        enabled_names=frozenset(enabled_names),
     )
 
 
@@ -972,6 +973,23 @@ async function loadPolicyState() {
   }
 }
 
+// Wrap PUT /api/policy/config so every caller gets identical handling of
+// the 409 (optimistic-concurrency) and other failure paths. The full
+// policy round-trips through every caller, so the version GET'd here
+// goes back out in the PUT body and the server can reject stale writes.
+async function policyPut(policy, opLabel) {
+  const w = await fetch('./api/policy/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(policy),
+  });
+  if (w.status === 409) {
+    throw new Error(opLabel + ' failed: policy was modified in another tab/session. Reload the page, then re-apply your changes.');
+  }
+  if (!w.ok) throw new Error(opLabel + ' failed: ' + w.status + ' ' + await w.text());
+  return await w.json();
+}
+
 async function syncPolicyRule(toolName, gated) {
   const r = await fetch('./api/policy/config');
   if (!r.ok) throw new Error('Could not load policy: ' + r.status);
@@ -984,15 +1002,7 @@ async function syncPolicyRule(toolName, gated) {
   } else {
     policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
   }
-  const w = await fetch('./api/policy/config', {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(policy),
-  });
-  if (!w.ok) {
-    const body = await w.text();
-    throw new Error('PUT failed: ' + w.status + ' ' + body);
-  }
+  await policyPut(policy, 'Sync gated toggle');
 }
 
 async function loadTools() {
@@ -1894,6 +1904,10 @@ const FEATURE_META = {
     label: "Enable custom component integration (beta)",
     help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
   },
+  enable_tool_security_policies: {
+    label: "Enable Tool Security Policies",
+    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument predicates are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  },
 };
 
 const ORIGIN_LOCKED_NOTE = {
@@ -2085,10 +2099,10 @@ function renderPolicyCards(policy) {
     return;
   }
   emptyEl.style.display = 'none';
-  // Group rules by tool_name. For v1 we expect one rule per tool (the
-  // Tools-tab toggle creates exactly one), but defensively handle the
-  // case where a hand-edited file has multiple entries: each becomes
-  // its own card so the user can see/edit them all.
+  // Group rules by tool_name. The Tools-tab toggle creates exactly one
+  // rule per tool; defensively handle the case where a hand-edited file
+  // has multiple entries: each becomes its own card so the user can
+  // see/edit them all.
   const byTool = {};
   rules.forEach((r, idx) => {
     const key = r.tool_name + '\u0000' + idx;
@@ -2315,15 +2329,7 @@ async function savePolicyRule(toolName, ruleObj) {
     // and save). Append rather than silently drop the edit.
     policy.rules.push(ruleObj);
   }
-  const w = await fetch('./api/policy/config', {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(policy),
-  });
-  if (!w.ok) {
-    const body = await w.text();
-    throw new Error('PUT failed: ' + w.status + ' ' + body);
-  }
+  await policyPut(policy, 'Save rule');
 }
 
 async function removePolicyRule(toolName) {
@@ -2350,24 +2356,11 @@ async function saveGlobalSettings() {
   const policy = await resp.json();
   policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
   policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
-  let put;
   try {
-    put = await fetch('./api/policy/config', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(policy),
-    });
-  } catch (e) {
-    statusEl.textContent = 'Network error: ' + e.message;
-    return;
-  }
-  if (put.ok) {
+    await policyPut(policy, 'Save global settings');
     statusEl.textContent = 'Saved.';
-  } else {
-    let detail;
-    try { detail = (await put.json()).error || put.statusText; }
-    catch (_e) { detail = put.statusText; }
-    statusEl.textContent = 'Save failed: ' + detail;
+  } catch (e) {
+    statusEl.textContent = e.message;
   }
 }
 
@@ -2389,7 +2382,7 @@ async function policyLoadPending() {
     return;
   }
   list.innerHTML = pending.map(p => (
-    '<div style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
+    '<div data-pending-token="' + escapeHtml(p.token) + '" style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
     '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
     escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
@@ -2409,13 +2402,29 @@ async function policyLoadPending() {
 }
 
 async function policyDecide(token, action) {
+  let resp;
   try {
-    await fetch('./api/policy/' + action, {
+    resp = await fetch('./api/policy/' + action, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({token: token}),
     });
-  } catch (_e) {}
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    let body;
+    try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
+    if (resp.status === 409 && body.current_decision) {
+      alert("This approval was already " + body.current_decision +
+            " — possibly by another tab or session.");
+    } else if (resp.status === 404) {
+      alert("This approval token is no longer valid (already consumed or expired).");
+    } else {
+      alert('Approval action failed: ' + (body.error || resp.statusText));
+    }
+  }
   policyLoadPending();
 }
 
@@ -2465,6 +2474,32 @@ document.addEventListener('click', (e) => {
 
 loadFeatureFlags();
 loadTools();
+
+// Auto-activate tab from ?tab=<name> query string (used by approval URLs
+// generated by the policy middleware: /settings?tab=tool-security-policies&token=...).
+// If a &token=X is present and the target is the policy tab, scroll to
+// the matching pending entry once policyLoadPending() resolves.
+(function activateTabFromQuery() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get('tab');
+    if (!target) return;
+    const tabBtn = document.querySelector('.tab[data-panel="' + target + '"]');
+    if (!tabBtn) return;
+    activateTab(target);
+    const token = params.get('token');
+    if (token && target === 'tool-security-policies') {
+      // policyLoadPending() runs inside activateTab; wait a tick then
+      // scroll to the matching pending entry if it exists.
+      setTimeout(() => {
+        const row = document.querySelector('[data-pending-token="' + token + '"]');
+        if (row && row.scrollIntoView) {
+          row.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+      }, 500);
+    }
+  } catch (_) { /* best-effort */ }
+})();
 </script>
 </body>
 </html>
@@ -2498,11 +2533,23 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
     async def put_config(request: Request) -> JSONResponse:
         try:
-            policy = Policy.model_validate(await request.json())
+            new_policy = Policy.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        save_policy(data_dir, policy)
-        return JSONResponse({"saved": True})
+        # Mirror main-server optimistic concurrency: reject if on-disk
+        # version moved between this caller's GET and PUT.
+        current = load_policy(data_dir)
+        if new_policy.version != current.version:
+            return JSONResponse(
+                {
+                    "error": "policy version mismatch — reload before saving",
+                    "current_version": current.version,
+                    "current_policy": current.model_dump(mode="json"),
+                },
+                status_code=409,
+            )
+        save_policy(data_dir, new_policy)
+        return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def unavailable(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -2549,6 +2596,16 @@ class _SupervisorOptionsError(NamedTuple):
     message: str
     status_code: int
 
+    @classmethod
+    def transport(cls, message: str) -> _SupervisorOptionsError:
+        """Build a transport-class error (always HTTP 502 upstream)."""
+        return cls(kind="transport", message=message, status_code=502)
+
+    @classmethod
+    def validation(cls, message: str, status_code: int) -> _SupervisorOptionsError:
+        """Build a validation-class error preserving supervisor's status code."""
+        return cls(kind="validation", message=message, status_code=status_code)
+
 
 async def _supervisor_fetch_current_options(
     verify_ssl: bool,
@@ -2583,44 +2640,38 @@ async def _supervisor_fetch_current_options(
         # env var, but treat this as transport (env / setup failure) so
         # a future third caller missing the gate gets a sane 502 rather
         # than an uncaught 500.
-        return {}, _SupervisorOptionsError(
-            "transport", f"Supervisor client unavailable: {exc}", 502
+        return {}, _SupervisorOptionsError.transport(
+            f"Supervisor client unavailable: {exc}"
         )
     except httpx.HTTPError as exc:
-        return {}, _SupervisorOptionsError(
-            "transport",
-            f"Could not reach Supervisor for current options: {exc}",
-            502,
+        return {}, _SupervisorOptionsError.transport(
+            f"Could not reach Supervisor for current options: {exc}"
         )
     if resp.status_code >= 400:
         # Supervisor returning a 4xx/5xx for /info is itself a transport-
         # class failure (we never sent body — there is no schema for
         # the GET to validate). 502 with CONNECTION_FAILED is right.
-        return {}, _SupervisorOptionsError(
-            "transport",
-            (
-                f"Supervisor returned {resp.status_code} for "
-                f"/addons/self/info: {resp.text[:300]}"
-            ),
-            502,
+        return {}, _SupervisorOptionsError.transport(
+            f"Supervisor returned {resp.status_code} for "
+            f"/addons/self/info: {resp.text[:300]}"
         )
     try:
         body = resp.json()
     except ValueError:
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor returned non-JSON for /addons/self/info", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor returned non-JSON for /addons/self/info"
         )
     # Supervisor REST envelope is {"result": "ok", "data": {...}}. Older
     # mocks / variants may return the data dict directly — handle both.
     data = body.get("data") if isinstance(body, dict) and "data" in body else body
     if not isinstance(data, dict):
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor /addons/self/info had non-object body", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor /addons/self/info had non-object body"
         )
     options = data.get("options")
     if not isinstance(options, dict):
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor /addons/self/info had no options dict", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor /addons/self/info had no options dict"
         )
     return options, None
 
@@ -2654,16 +2705,15 @@ async def _supervisor_merge_and_post_options(
         ) as sclient:
             resp = await sclient.post("/addons/self/options", json={"options": merged})
     except RuntimeError as exc:
-        return False, _SupervisorOptionsError(
-            "transport", f"Supervisor client unavailable: {exc}", 502
+        return False, _SupervisorOptionsError.transport(
+            f"Supervisor client unavailable: {exc}"
         )
     except httpx.HTTPError as exc:
-        return False, _SupervisorOptionsError(
-            "transport", f"Supervisor options POST failed: {exc}", 502
+        return False, _SupervisorOptionsError.transport(
+            f"Supervisor options POST failed: {exc}"
         )
     if resp.status_code >= 400:
-        return False, _SupervisorOptionsError(
-            "validation",
+        return False, _SupervisorOptionsError.validation(
             (
                 f"Supervisor rejected options update ({resp.status_code}): "
                 f"{resp.text[:400]}"
@@ -3825,11 +3875,10 @@ def build_settings_handlers(
 
     # Tool security policies (issue #966). The main server attaches an
     # ApprovalQueue to the server object once PolicyMiddleware is wired
-    # in (Task 5.2). Only the main server can serve the live
-    # pending/approve/deny endpoints because the queue is in-memory; the
-    # sidecar (or a main server without the queue attribute yet) falls
-    # back to stub handlers that serve config GET/PUT and return 503 for
-    # live approval routes.
+    # in. Only the main server can serve the live pending/approve/deny
+    # endpoints because the queue is in-memory; the sidecar (or a main
+    # server without the queue attribute yet) falls back to stub handlers
+    # that serve config GET/PUT and return 503 for live approval routes.
     approval_queue = (
         getattr(server, "approval_queue", None) if server is not None else None
     )
@@ -3883,7 +3932,7 @@ def register_settings_routes(
     # "_settings_secret_prefix", "")`` so the closure picks up the value
     # set here, even though ``_apply_tool_security_policies`` ran in __init__
     # before this function was called.
-    server._settings_secret_prefix = secret_prefix  # noqa: SLF001
+    server._settings_secret_prefix = secret_prefix
 
     if not is_addon and not secret_prefix:
         logger.warning(

@@ -46,6 +46,11 @@ class Predicate(BaseModel):
                 raise ValueError(f"op={op!r} requires value: list")
         elif op in ("gt", "lt") and v is None:
             raise ValueError(f"op={op!r} requires a non-None comparable value")
+        elif op == "exists":
+            if v is not None:
+                raise ValueError(
+                    "op='exists' must not have a value (presence-only check)"
+                )
         return v
 
 
@@ -85,3 +90,4 @@ class Policy(BaseModel):
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)
+    version: int = Field(default=0, ge=0)

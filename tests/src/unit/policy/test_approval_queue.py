@@ -68,7 +68,7 @@ def test_approve_sets_decision_and_fires_event():
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
     assert q.approve(p.token) is True
     assert p.decision == "approved"
-    assert p.event.is_set()
+    assert p._event.is_set()
 
 
 def test_deny_sets_decision_and_fires_event():
@@ -76,7 +76,7 @@ def test_deny_sets_decision_and_fires_event():
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
     assert q.deny(p.token) is True
     assert p.decision == "denied"
-    assert p.event.is_set()
+    assert p._event.is_set()
 
 
 def test_approve_unknown_token_returns_false():
@@ -171,5 +171,6 @@ async def test_event_wakes_waiter():
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver)
-        await p.event.wait()
+        decision = await p.wait()
+    assert decision == "approved"
     assert p.decision == "approved"

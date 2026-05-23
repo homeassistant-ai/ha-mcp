@@ -33,6 +33,23 @@ def _fake_get_request():
     return MagicMock(name="request")
 
 
+def _fake_post_request_with_token():
+    """Stand-in for a POST request whose JSON body is ``{"token": "nope"}``.
+
+    The live approve/deny handlers call ``await request.json()`` then
+    look up ``body["token"]`` — return a coroutine that yields that
+    dict so the handler runs through to the queue lookup and returns
+    404 (unknown token). The stub handler ignores the body entirely.
+    """
+
+    async def _json():
+        return {"token": "nope"}
+
+    req = MagicMock(name="request")
+    req.json = _json
+    return req
+
+
 @pytest.fixture(autouse=True)
 def _reset_data_dir_cache():
     """Match test_settings_ui.py: clear the memoized data-dir between cases."""
@@ -45,21 +62,42 @@ def _reset_data_dir_cache():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "setup_name,expected_pending_status",
+    "setup_name,expected_stub_status",
     [
         ("sidecar", 503),
         ("no_server", 503),
         ("no_queue", 503),
-        ("live", 200),
+        ("live", None),  # None = not stub; live status varies per route
+    ],
+)
+@pytest.mark.parametrize(
+    "route_name,live_expected_status",
+    [
+        # All 3 live routes MUST NOT 503. Status varies:
+        #   pending → 200 (empty list)
+        #   approve/deny → 404 (token "nope" not in queue)
+        ("policy_get_pending", 200),
+        ("policy_post_approve", 404),
+        ("policy_post_deny", 404),
     ],
 )
 async def test_handler_selection(
     setup_name: str,
-    expected_pending_status: int,
+    expected_stub_status: int | None,
+    route_name: str,
+    live_expected_status: int,
     tmp_path,
     monkeypatch,
 ):
-    """``policy_get_pending`` returns 503 from the stub and 200 from the live handler."""
+    """Stub vs live handler selection covers all 3 policy routes.
+
+    The branch under test is ``build_settings_handlers``'s
+    ``if not is_sidecar and approval_queue is not None`` — when that
+    fails, ALL three live routes (pending/approve/deny) must fall back
+    to stub handlers that 503. The old version tested only
+    ``policy_get_pending``, so a regression that mis-wired approve or
+    deny would have slipped through.
+    """
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
 
     server: object | None
@@ -83,7 +121,15 @@ async def test_handler_selection(
         raise AssertionError(f"unknown setup_name {setup_name!r}")
 
     handlers = build_settings_handlers(server, is_sidecar=is_sidecar)
-    assert "policy_get_pending" in handlers
+    assert route_name in handlers
 
-    response = await handlers["policy_get_pending"](_fake_get_request())
-    assert response.status_code == expected_pending_status
+    request = (
+        _fake_get_request()
+        if route_name == "policy_get_pending"
+        else _fake_post_request_with_token()
+    )
+    response = await handlers[route_name](request)
+    expected = (
+        live_expected_status if expected_stub_status is None else expected_stub_status
+    )
+    assert response.status_code == expected

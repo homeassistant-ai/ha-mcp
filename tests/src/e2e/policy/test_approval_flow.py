@@ -5,7 +5,8 @@ instance plus an MCP client driving the middleware over HTTP. Once the e2e
 suite gains a fixture for the tool security policies pipeline (settings UI
 routes mounted + middleware registered against the same FastMCP), this test
 should be filled in. The integration coverage at
-``tests/src/unit/policy/test_integration.py`` exercises the in-process
+``tests/src/unit/policy/test_middleware.py`` (test_recall_after_approval_executes,
+test_recall_with_mutated_args_creates_new_pending, etc.) exercises the in-process
 block/approve/recall loop in the meantime.
 
 Run via ``cd tests && uv run pytest src/e2e/policy/``.

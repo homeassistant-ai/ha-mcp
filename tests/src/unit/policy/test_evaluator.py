@@ -56,9 +56,26 @@ class TestMatchPredicate:
         assert match_predicate(p, {}) is False
 
     def test_missing_path_never_matches_except_exists(self):
-        for op in ["eq", "in", "regex", "contains", "gt"]:
-            p = Predicate(path="args.x", op=op, value="anything")
+        # Use op-appropriate values so the Predicate field_validator doesn't
+        # reject at construction; we're testing the matcher's missing-path branch.
+        for op, value in [
+            ("eq", "anything"),
+            ("in", ["anything"]),
+            ("regex", "anything"),
+            ("contains", "anything"),
+            ("gt", 1),
+        ]:
+            p = Predicate(path="args.x", op=op, value=value)
             assert match_predicate(p, {}) is False
+
+    def test_gt_lt_type_mismatch_returns_false(self):
+        # Comparing a str against an int raises TypeError in Python 3;
+        # the matcher must degrade to False so a hand-edited policy with
+        # the wrong predicate value-type doesn't crash a tool call.
+        p_gt = Predicate(path="args.x", op="gt", value=5)
+        assert match_predicate(p_gt, {"x": "not-a-number"}) is False
+        p_lt = Predicate(path="args.x", op="lt", value=5)
+        assert match_predicate(p_lt, {"x": "not-a-number"}) is False
 
 
 # --- match_rule ---

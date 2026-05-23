@@ -317,7 +317,7 @@ async def test_wait_loop_wakes_on_event_not_polling(queue):
 
     With ``wait_seconds=30``, an approval fired at t=0.05 should resolve
     well before t=15 (the polling-fallback inner-loop interval). If
-    someone removes the ``pending.event.wait()`` call and leaves only
+    someone removes the ``pending.wait()`` call and leaves only
     the ``move_on_after(15)`` polling fallback, the loop would block for
     the full 15s before the next iteration noticed the decision flip;
     this test catches that regression.

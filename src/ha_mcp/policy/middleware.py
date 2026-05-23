@@ -50,7 +50,7 @@ class PolicyMiddleware(Middleware):
         self._policy_provider = policy_provider
         self._queue = queue
         self._approval_url_builder = approval_url_builder or (
-            lambda token: f"/api/policy/approve?token={token}"
+            lambda token: f"/settings?tab=tool-security-policies&token={token}"
         )
         self._wait_override = wait_seconds
 
@@ -152,13 +152,16 @@ class PolicyMiddleware(Middleware):
                 ctx,
                 progress=0,
                 total=0,
-                message=f"Awaiting user approval — open {approval_url}",
+                message=(
+                    f"Awaiting user approval — open this URL to review the call "
+                    f"in the Tool Security Policies tab and approve it: {approval_url}"
+                ),
             )
             remaining = deadline - anyio.current_time()
             if remaining <= 0:
                 break
             with anyio.move_on_after(min(15, remaining)):
-                await pending.event.wait()
+                await pending.wait()
 
     @staticmethod
     def _denied_error() -> ToolError:
@@ -190,9 +193,9 @@ class PolicyMiddleware(Middleware):
                     "error": {
                         "code": "USER_APPROVAL_REQUIRED",
                         "message": (
-                            f"User approval required. Open {approval_url} to review the "
-                            "exact call and approve. Re-call this tool with the same "
-                            "arguments after the user approves."
+                            f"User approval required. Open this URL to review the call "
+                            f"in the Tool Security Policies tab and approve it: {approval_url}. "
+                            "Re-call this tool with the same arguments after the user approves."
                         ),
                         "context": {
                             "approve_url": approval_url,

@@ -49,6 +49,11 @@ def test_policy_middleware_attached_when_enabled():
     args, _kwargs = stub.mcp.add_middleware.call_args
     assert len(args) == 1
     assert isinstance(args[0], PolicyMiddleware)
+    # Queue identity: the middleware MUST hold the same ApprovalQueue
+    # instance the server exposes via stub.approval_queue. If these
+    # diverge, /api/policy/approve and the middleware's wait-loop look
+    # at different queues and approvals silently never unblock the call.
+    assert args[0]._queue is stub.approval_queue
 
 
 def test_policy_middleware_not_attached_when_disabled():

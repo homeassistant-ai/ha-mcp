@@ -27,12 +27,16 @@ def load_policy(data_dir: Path) -> Policy:
 
 
 def save_policy(data_dir: Path, policy: Policy) -> None:
+    # Bump version on every save so optimistic-concurrency callers can
+    # detect mid-flight edits (PUT /api/policy/config 409s when the
+    # caller's payload version != on-disk version).
+    bumped = policy.model_copy(update={"version": policy.version + 1})
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / POLICY_FILENAME
     fd, tmp_path = tempfile.mkstemp(prefix=f".{POLICY_FILENAME}.", dir=data_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(policy.model_dump(mode="json"), f, indent=2, sort_keys=True)
+            json.dump(bumped.model_dump(mode="json"), f, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except Exception:
         Path(tmp_path).unlink(missing_ok=True)

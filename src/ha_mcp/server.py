@@ -379,6 +379,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         from .settings_ui import apply_tool_visibility, load_tool_config
 
         config = load_tool_config(self.settings)
+        # When tool_config.json is absent (fresh install), `config` is falsy
+        # and we leave self._user_enabled_tools at its __init__ default (empty
+        # set). That yields no defaults filtered in _apply_tool_search, which
+        # is correct: a fresh install gets the full DEFAULT_PINNED_TOOLS set.
         if config:
             result = apply_tool_visibility(self.mcp, config, self.settings)
             if result.pinned_names:
@@ -872,8 +876,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             from .utils.data_paths import get_data_dir
         except ImportError:
             logger.exception(
-                "Tool security policies enabled but policy package failed to import; "
-                "middleware not installed."
+                "Tool Security Policies enabled (ENABLE_TOOL_SECURITY_POLICIES=true) "
+                "but the policy package failed to import. TOOL SECURITY GATING IS NOT ACTIVE; "
+                "all tool calls pass through ungated. Verify ha_mcp.policy is importable."
             )
             return
 
@@ -896,7 +901,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # correctly against the settings page the user navigates to.
         def _approval_url(token: str) -> str:
             prefix = getattr(self, "_settings_secret_prefix", "") or ""
-            return f"{prefix}/api/policy/approve?token={token}"
+            return f"{prefix}/settings?tab=tool-security-policies&token={token}"
 
         try:
             self.mcp.add_middleware(
@@ -911,7 +916,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 data_dir,
             )
         except Exception:
-            logger.exception("Failed to register PolicyMiddleware")
+            logger.exception(
+                "Failed to register PolicyMiddleware (data_dir=%s, "
+                "ENABLE_TOOL_SECURITY_POLICIES=true). TOOL SECURITY GATING IS NOT ACTIVE; "
+                "all tool calls pass through ungated.",
+                data_dir,
+            )
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between

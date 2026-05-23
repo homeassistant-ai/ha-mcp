@@ -35,11 +35,24 @@ def build_policy_handlers(
 
     async def put_config(request: Request) -> JSONResponse:
         try:
-            policy = Policy.model_validate(await request.json())
+            new_policy = Policy.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        save_policy(data_dir, policy)
-        return JSONResponse({"saved": True})
+        # Optimistic concurrency: reject if the on-disk version moved
+        # between this caller's GET and PUT. Returns the current policy
+        # so the client can rebase if it wants to retry.
+        current = load_policy(data_dir)
+        if new_policy.version != current.version:
+            return JSONResponse(
+                {
+                    "error": "policy version mismatch — reload before saving",
+                    "current_version": current.version,
+                    "current_policy": current.model_dump(mode="json"),
+                },
+                status_code=409,
+            )
+        save_policy(data_dir, new_policy)
+        return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def get_pending(_: Request) -> JSONResponse:
         return JSONResponse(

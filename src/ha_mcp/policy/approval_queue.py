@@ -29,7 +29,7 @@ class PendingApproval:
     created_at: datetime
     expires_at: datetime
     _decision: Decision = "pending"
-    event: anyio.Event = field(default_factory=anyio.Event)
+    _event: anyio.Event = field(default_factory=anyio.Event)
 
     @property
     def decision(self) -> Decision:
@@ -40,8 +40,13 @@ class PendingApproval:
         if self._decision != "pending":
             return False
         self._decision = outcome
-        self.event.set()
+        self._event.set()
         return True
+
+    async def wait(self) -> Decision:
+        """Block until decided; return the final Decision."""
+        await self._event.wait()
+        return self._decision
 
     def __post_init__(self) -> None:
         if self.expires_at <= self.created_at:
