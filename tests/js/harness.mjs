@@ -130,6 +130,17 @@ class FakeClock {
   // to the real event loop with setImmediate.
   async advance(untilMs) {
     const target = this.now + untilMs;
+
+    // Drain microtasks aggressively up front. The script under test may
+    // be awaiting a chain of stubbed-fetch promises before it hits its
+    // first setTimeout — if we checked for ready timers immediately,
+    // we'd see none and return without advancing, leaving the script
+    // suspended forever. Letting promises resolve first gives them a
+    // chance to schedule timers we can then fire.
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+
     // Outer loop in case a fired task schedules more tasks before target.
     // Cap iterations to surface runaway recursion as a test failure rather
     // than hanging the suite.
@@ -142,7 +153,19 @@ class FakeClock {
           nextId = id;
         }
       }
-      if (nextId == null) break;
+      if (nextId == null) {
+        // No ready timers. Drain microtasks one more time in case a
+        // recently-resolved promise just queued one, then re-check.
+        for (let i = 0; i < 10; i++) {
+          await new Promise((r) => setImmediate(r));
+        }
+        let stillNone = true;
+        for (const [, t] of this.tasks) {
+          if (t.time <= target) { stillNone = false; break; }
+        }
+        if (stillNone) break;
+        continue;
+      }
       const task = this.tasks.get(nextId);
       this.now = task.time;
       if (task.interval != null) {

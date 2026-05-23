@@ -192,6 +192,24 @@ def astro_vars_prelude(vars_: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _strip_astro_frontmatter(source: str) -> str:
+    """Drop the leading ``--- ... ---`` block if present.
+
+    Astro frontmatter is TypeScript that runs at build-time, not JS that
+    runs in the browser, so any ``<script>`` substring inside a comment
+    or string there is not a real script tag. Stripping it before
+    searching prevents
+    ``// below in the <script> block keyed off the entry's id``
+    (line 17 of setup.astro) from being mis-matched as the script.
+    """
+    if not source.startswith("---\n"):
+        return source
+    close = source.find("\n---\n", 4)
+    if close == -1:
+        return source
+    return source[close + len("\n---\n") :]
+
+
 def extract_script_body(source: str, *, marker: str = "<script>") -> str:
     """Return the first non-external inline ``<script>`` body in ``source``.
 
@@ -199,17 +217,20 @@ def extract_script_body(source: str, *, marker: str = "<script>") -> str:
     attributed forms like Astro's ``<script define:vars={...}>``. The body
     is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
-    skipped — they have no inline body to extract.
+    skipped — they have no inline body to extract. Astro frontmatter is
+    skipped before searching so ``<script>`` mentions in frontmatter
+    comments don't match.
     """
-    for match in re.finditer(r"<script\b([^>]*)>", source):
+    search_source = _strip_astro_frontmatter(source)
+    for match in re.finditer(r"<script\b([^>]*)>", search_source):
         attrs = match.group(1)
         if re.search(r"\bsrc\s*=", attrs):
             continue
         start = match.end()
-        end = source.find("</script>", start)
+        end = search_source.find("</script>", start)
         if end == -1:
             raise ValueError("unterminated <script> in source")
-        return source[start:end]
+        return search_source[start:end]
     raise ValueError(f"no inline <script> tag in source (marker hint: {marker!r})")
 
 
@@ -303,7 +324,7 @@ def discover_script_surfaces() -> list[ScriptSurface]:
     site_dir = repo_root / "site" / "src"
     if site_dir.is_dir():
         for path in sorted(site_dir.rglob("*.astro")):
-            text = path.read_text(encoding="utf-8")
+            text = _strip_astro_frontmatter(path.read_text(encoding="utf-8"))
             for match in re.finditer(r"<script\b([^>]*)>", text):
                 attrs = match.group(1)
                 if re.search(r"\bsrc\s*=", attrs):
