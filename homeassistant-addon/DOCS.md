@@ -296,6 +296,8 @@ backup_hint: normal
 secret_path: ""  # Leave empty for auto-generation
 ```
 
+*Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
+
 ---
 
 ## Security
