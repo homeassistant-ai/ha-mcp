@@ -13,7 +13,7 @@ Use ha_search_entities(query='calendar', domain_filter='calendar') to find calen
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -328,7 +328,10 @@ class TestCalendarEventLifecycle:
             pytest.skip("No writable calendar found for testing")
 
         summary = f"E2E Deletable Test Event {uuid.uuid4().hex[:8]}"
-        now = datetime.now()
+        # TZ-aware so ISO 8601 strings stay unambiguous when the test runner
+        # and the HA instance are in different timezones (matches the
+        # convention in tests/src/e2e/workflows/core/test_history.py).
+        now = datetime.now(UTC)
         start = (now + timedelta(days=1)).replace(
             hour=14, minute=0, second=0, microsecond=0
         )
