@@ -36,4 +36,3 @@ def test_blocked_call_then_approve_then_recall() -> None:
        ``USER_APPROVAL_REQUIRED`` again, confirming strict args binding
        (the gate does not blanket-approve every future call to the tool).
     """
-    raise NotImplementedError

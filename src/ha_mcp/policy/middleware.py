@@ -19,8 +19,13 @@ from .model import Policy
 
 logger = logging.getLogger(__name__)
 
-# Toolsearch proxy meta-tools — always pass through; the inner real-tool
-# call re-enters the middleware via ctx.fastmcp.call_tool() and gets gated there.
+# Toolsearch proxy meta-tools — always pass through. Gating the proxy
+# directly would be wrong: rule predicates target the REAL tool's args
+# (e.g. args.domain), but the proxy receives wrapped {"name": "...",
+# "arguments": {...}} envelopes. The proxy re-dispatches via
+# ctx.fastmcp.call_tool(name, arguments), which re-enters the middleware
+# chain with the real tool name and args, so the inner call gets gated
+# correctly there.
 PROXY_META_TOOLS = frozenset(
     {
         "ha_call_read_tool",

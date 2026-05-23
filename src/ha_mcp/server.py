@@ -856,9 +856,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         layer (``build_settings_handlers``) can discover the same queue
         via ``getattr(server, "approval_queue", None)``.
 
-        Policies are reloaded from disk on every gated call (cheap; the
-        file is tens of bytes) so live updates via the UI take effect
-        immediately without restart and without a stale in-memory cache.
+        Policies are reloaded from disk on every gated call (a small
+        JSON file, typically well under a kB) so live updates via the
+        UI take effect immediately without restart and without a stale
+        in-memory cache.
         """
         if not self.settings.enable_tool_security_policies:
             return
