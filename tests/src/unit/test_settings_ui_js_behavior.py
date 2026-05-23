@@ -35,10 +35,14 @@ def settings_script() -> str:
     return extract_script_body(_SETTINGS_HTML)
 
 
-# Minimum DOM the script touches during init (``loadFeatureFlags()`` and
-# ``loadTools()`` run unconditionally at script tail) plus the restart
-# UI elements every restart test asserts against. Building this once per
-# test keeps each test independent without paying re-render cost.
+# Minimum DOM the script touches during init. The script registers
+# top-level click/input listeners against a dozen+ elements that don't
+# logically belong in a "restart UI" test, but ``document.getElementById(...)
+# .addEventListener(...)`` throws if any element is missing, aborting
+# script init before our restart-flow assertions can even run. Element
+# inventory comes from ``grep -h "document.getElementById" settings_ui.py``;
+# refresh this set when adding new top-level handlers in the production
+# script.
 MIN_DOM = """
 <!DOCTYPE html>
 <html><body>
@@ -50,10 +54,20 @@ MIN_DOM = """
   <input id="search" />
   <div id="groups"></div>
   <div id="summary"></div>
+  <table><tbody id="featuresBody"></tbody></table>
   <div id="backupConfigForm"></div>
   <div id="backupConfigActions"></div>
   <button id="backupConfigSave"></button>
   <div id="backupConfigStatus"></div>
+  <button id="backupRefresh"></button>
+  <button id="backupBulkDelete"></button>
+  <select id="backupDomain"></select>
+  <select id="backupEntity"></select>
+  <select id="backupState"></select>
+  <tbody id="backupList"></tbody>
+  <div id="modalBackdrop"><div id="modalBody"></div></div>
+  <span id="modalTitle"></span>
+  <button id="modalClose"></button>
   <div id="panel-tools" class="panel active"></div>
   <div id="panel-server" class="panel"></div>
   <div id="panel-backups" class="panel"></div>

@@ -106,6 +106,11 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
             '<button id="start-over"></button>',
             '<div id="config-summary"></div>',
             '<div id="setup-instructions"></div>',
+            # Both `section-config` (the whole config section, toggled by
+            # updateSections) and `config-section` (the inner code block,
+            # toggled by generateConfig for UI-format clients) exist —
+            # similar names, distinct elements in the real page.
+            '<div id="config-section"></div>',
             '<pre id="config-output"><code></code></pre>',
             '<div id="replace-hints"></div>',
             '<div id="config-notes"></div>',
