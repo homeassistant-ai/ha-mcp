@@ -60,9 +60,7 @@ class TestCalendarEvents:
         if not calendar_entity:
             pytest.skip("No calendar entities available for testing")
 
-        logger.info(
-            f"Testing ha_config_get_calendar_events with {calendar_entity}..."
-        )
+        logger.info(f"Testing ha_config_get_calendar_events with {calendar_entity}...")
 
         result = await mcp_client.call_tool(
             "ha_config_get_calendar_events", {"entity_id": calendar_entity}
@@ -166,9 +164,9 @@ class TestCalendarEvents:
 
         # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid format test completed")
@@ -378,9 +376,9 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity create test completed")
@@ -450,9 +448,9 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity delete test completed")
@@ -472,9 +470,9 @@ async def test_calendar_tools_overview(mcp_client):
     get_data = await safe_call_tool(
         mcp_client, "ha_config_get_calendar_events", {"entity_id": "calendar.test"}
     )
-    assert (
-        "events" in get_data or "error" in get_data
-    ), "ha_config_get_calendar_events should return events or error"
+    assert "events" in get_data or "error" in get_data, (
+        "ha_config_get_calendar_events should return events or error"
+    )
     logger.info("ha_config_get_calendar_events tool is registered and functional")
 
     # Test create event tool registration
@@ -489,9 +487,9 @@ async def test_calendar_tools_overview(mcp_client):
             "end": (now + timedelta(hours=1)).isoformat(),
         },
     )
-    assert (
-        "event" in create_data or "error" in create_data
-    ), "ha_config_set_calendar_event should return event or error"
+    assert "event" in create_data or "error" in create_data, (
+        "ha_config_set_calendar_event should return event or error"
+    )
     logger.info("ha_config_set_calendar_event tool is registered and functional")
 
     # Test delete event tool registration
@@ -500,9 +498,9 @@ async def test_calendar_tools_overview(mcp_client):
         "ha_config_remove_calendar_event",
         {"entity_id": "calendar.test", "uid": "test-uid"},
     )
-    assert (
-        "uid" in delete_data or "error" in delete_data
-    ), "ha_config_remove_calendar_event should return uid or error"
+    assert "uid" in delete_data or "error" in delete_data, (
+        "ha_config_remove_calendar_event should return uid or error"
+    )
     logger.info("ha_config_remove_calendar_event tool is registered and functional")
 
     logger.info("All calendar tools are properly registered")
