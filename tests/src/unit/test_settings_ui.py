@@ -129,9 +129,27 @@ class TestApplyToolVisibility:
         settings = MagicMock()
         settings.enable_yaml_config_editing = True
         config = {"tools": {"ha_restart": "pinned", "ha_hacs_info": "enabled"}}
-        pinned = apply_tool_visibility(mcp, config, settings)
-        assert "ha_restart" in pinned
-        assert "ha_hacs_info" not in pinned
+        result = apply_tool_visibility(mcp, config, settings)
+        assert "ha_restart" in result.pinned_names
+        assert "ha_hacs_info" not in result.pinned_names
+
+    def test_returns_explicitly_enabled_names(self):
+        """Tools toggled to ``"enabled"`` are surfaced so the server can
+        unpin them from DEFAULT_PINNED_TOOLS (#966)."""
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        config = {
+            "tools": {
+                "ha_manage_backup": "enabled",  # would otherwise be a default pin
+                "ha_restart": "pinned",
+                "ha_hacs_info": "disabled",
+            }
+        }
+        result = apply_tool_visibility(mcp, config, settings)
+        assert "ha_manage_backup" in result.enabled_names
+        assert "ha_restart" not in result.enabled_names
+        assert "ha_hacs_info" not in result.enabled_names
 
     def test_empty_config_no_disable(self):
         mcp = MagicMock()
@@ -140,6 +158,42 @@ class TestApplyToolVisibility:
         config = {}
         apply_tool_visibility(mcp, config, settings)
         mcp.disable.assert_not_called()
+
+    def test_default_pinned_tool_can_be_unpinned_via_enabled_state(self):
+        """End-to-end coverage for the #966 unpin-default behavior.
+
+        Mirrors the server-side filter in
+        ``HomeAssistantSmartMCPServer._apply_tool_search``: the effective
+        ``always_visible`` set is ``DEFAULT_PINNED_TOOLS`` minus any tool
+        the user explicitly toggled to ``"enabled"``. A tool's presence
+        in ``DEFAULT_PINNED_TOOLS`` is a default, not a floor — users get
+        the final say via the Tools tab.
+        """
+        from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
+
+        # Pick a default-pinned tool that's NOT in MANDATORY_TOOLS so the
+        # config-side disable path can't interfere with the assertion.
+        # ha_config_get_automation is in DEFAULT_PINNED_TOOLS but not in
+        # MANDATORY_TOOLS.
+        assert "ha_config_get_automation" in DEFAULT_PINNED_TOOLS
+        assert "ha_config_get_automation" not in MANDATORY_TOOLS
+
+        mcp = MagicMock()
+        settings = MagicMock()
+        settings.enable_yaml_config_editing = True
+        config = {"tools": {"ha_config_get_automation": "enabled"}}
+        result = apply_tool_visibility(mcp, config, settings)
+
+        # Server.py's filter: pinned = [n for n in DEFAULT_PINNED_TOOLS
+        #                              if n not in result.enabled_names]
+        effective_pinned = [
+            name
+            for name in DEFAULT_PINNED_TOOLS
+            if name not in result.enabled_names
+        ]
+        assert "ha_config_get_automation" not in effective_pinned
+        # Tools NOT in the config keep their default pinning.
+        assert "ha_manage_backup" in effective_pinned
 
 
 @pytest.fixture(autouse=True)

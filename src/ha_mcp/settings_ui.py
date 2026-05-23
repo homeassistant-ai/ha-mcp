@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
@@ -82,6 +82,11 @@ MANDATORY_TOOLS: set[str] = {
     # seeing it in the catalog. Disabling it would silently break the
     # "consult skill before writing config" workflow.
     "ha_get_skill_guide",
+    # Backups are operational essentials — needed as the pre-change safety
+    # net before config edits and as the recovery path after them. Added
+    # per #966 alongside the per-tool approval middleware so even users
+    # who aggressively disable everything keep a working backup tool.
+    "ha_manage_backup",
 }
 
 # Tools created by FastMCP transforms (not registered through
@@ -457,20 +462,47 @@ async def _get_tool_metadata(
     return tools
 
 
+class ToolVisibilityResult(NamedTuple):
+    """Outcome of applying ``tool_config.json`` to the FastMCP instance.
+
+    Attributes:
+        pinned_names: Tools the user explicitly pinned via the UI. The
+            server adds these to ``always_visible`` on top of the
+            DEFAULT_PINNED_TOOLS set so they bypass the search transform.
+        enabled_names: Tools whose state is explicitly ``"enabled"`` in
+            ``tool_config.json``. The server subtracts these from
+            ``DEFAULT_PINNED_TOOLS`` when building the effective pinned
+            set so users can unpin a default-pinned tool by toggling it
+            to plain "enabled" in the Tools tab. Tools with no entry in
+            the config (the common case) are NOT in this set, so they
+            keep their default pinning.
+    """
+
+    pinned_names: set[str]
+    enabled_names: set[str]
+
+
 def apply_tool_visibility(
     mcp: FastMCP,
     config: dict[str, Any],
     settings: Settings,
-) -> set[str]:
+) -> ToolVisibilityResult:
     """Apply tool visibility from config, respecting safety toggles.
 
     Args:
         mcp: The FastMCP instance to enable/disable tools on.
         config: The tool_config.json contents (per-tool states).
         settings: The server Settings (for enable_yaml_config_editing etc.).
+
+    Returns:
+        A :class:`ToolVisibilityResult` carrying the user-pinned tools
+        and the user-explicitly-enabled tools. The caller (server.py)
+        uses ``enabled_names`` to filter ``DEFAULT_PINNED_TOOLS`` so a
+        user can unpin a default by flipping it to "enabled" in the UI.
     """
     disabled_names: set[str] = set()
     pinned_names: set[str] = set()
+    enabled_names: set[str] = set()
 
     tool_states = config.get("tools", {})
     for name, state in tool_states.items():
@@ -478,6 +510,8 @@ def apply_tool_visibility(
             disabled_names.add(name)
         elif state == "pinned":
             pinned_names.add(name)
+        elif state == "enabled":
+            enabled_names.add(name)
 
     # AND semantics for the YAML safety toggle: the tool is disabled if
     # *either* the safety toggle is off *or* the user disabled it in the UI.
@@ -496,7 +530,9 @@ def apply_tool_visibility(
 
     mcp.enable(names=MANDATORY_TOOLS)
 
-    return pinned_names
+    return ToolVisibilityResult(
+        pinned_names=pinned_names, enabled_names=enabled_names
+    )
 
 
 _SETTINGS_HTML = (

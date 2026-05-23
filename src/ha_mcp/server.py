@@ -91,6 +91,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._tools_registry: ToolsRegistry | None = None
         # Populated by _apply_settings_visibility from tool_config.json on startup
         self._user_pinned_tools: list[str] = []
+        # Tools the user explicitly toggled to "enabled" in the Tools tab.
+        # Used by _apply_tool_search to remove default-pinned tools from
+        # the always_visible set so users can unpin defaults (#966).
+        self._user_enabled_tools: set[str] = set()
+        # Set by register_settings_routes (settings_ui.py) when the
+        # settings UI routes are mounted under the secret-prefixed path.
+        # Declared on __init__ so pyright doesn't flag the external
+        # assignment as reportAttributeAccessIssue.
+        self._settings_secret_prefix: str = ""
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -278,9 +287,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
                 "Once you know a tool\u2019s name, you do NOT need to search "
                 "again \u2014 call it directly.\n\n"
-                f"A few critical tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}). Everything else must "
-                f"be discovered via search.\n\n"
+                f"A few default tools are listed directly "
+                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
+                f"starting pins, but users can unpin any of them via the "
+                f"Tools tab in the settings UI, so the actual visible set "
+                f"may be a subset of this list. Everything else must be "
+                f"discovered via search.\n\n"
                 "DO NOT assume a capability is unavailable because you "
                 "don't see a direct tool for it. ALWAYS search first."
             )
@@ -368,9 +380,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         config = load_tool_config(self.settings)
         if config:
-            pinned = apply_tool_visibility(self.mcp, config, self.settings)
-            if pinned:
-                self._user_pinned_tools = list(pinned)
+            result = apply_tool_visibility(self.mcp, config, self.settings)
+            if result.pinned_names:
+                self._user_pinned_tools = list(result.pinned_names)
+            # Captured even when empty so _apply_tool_search can subtract
+            # explicit "enabled" entries from DEFAULT_PINNED_TOOLS — this
+            # is how users unpin a default-pinned tool from the UI.
+            self._user_enabled_tools = set(result.enabled_names)
             logger.info(
                 "Applied persisted tool config (%d entries)",
                 len(config.get("tools", {})),
@@ -769,12 +785,19 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list: defaults + user-configured pins.
+        # Build the always_visible list: defaults (minus tools the user
+        # explicitly toggled to "enabled" in the Tools tab) + user pins.
         # The skill guide tool is part of DEFAULT_PINNED_TOOLS and is
         # also in MANDATORY_TOOLS (settings UI strips it from any
         # disable list before applying), so the catalog presence is
         # protected from both the search transform and user disables.
-        pinned = list(self._PINNED_TOOLS)
+        # Filtering by _user_enabled_tools is how a user unpins a
+        # default-pinned tool — flipping its UI state to "enabled" (not
+        # "pinned") removes it from the always_visible set so it goes
+        # behind the search proxy like any other tool.
+        pinned = [
+            name for name in self._PINNED_TOOLS if name not in self._user_enabled_tools
+        ]
         pinned.extend(self._user_pinned_tools)
 
         # ``ha_manage_custom_tool`` was previously pinned here whenever
