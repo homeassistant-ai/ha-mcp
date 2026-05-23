@@ -1,14 +1,14 @@
 """Python wrapper for the JSDOM harness at ``tests/js/harness.mjs``.
 
-Used by ``test_settings_ui_js_behavior.py`` and ``test_astro_js_behavior.py``
-to drive real ``<script>`` bodies through a Node + JSDOM sandbox and assert
-on observable side effects (fetches issued, broadcasts emitted, DOM mutated,
-``location.reload`` invoked).
+Used by the ``test_*_js_behavior.py`` modules under ``tests/src/unit/``
+to drive real ``<script>`` bodies through a Node + JSDOM sandbox and
+assert on observable side effects (fetches issued, broadcasts emitted,
+DOM mutated, ``location.reload`` invoked).
 
-This complements — does not replace — the ``node --check`` parse guard in
-``TestRenderedHTMLJsSyntax``. The parse guard remains the cheap canary that
-catches Python-consumed escape sequences and other syntax errors; this
-harness layers behavioural assertions on top.
+Layered on top of — not a replacement for — the auto-discovery parse
+guard in ``test_rendered_scripts_parse.py``. The parse guard is the
+cheap canary that catches Python-consumed escape sequences and other
+syntax errors; this harness adds behavioural assertions.
 """
 
 from __future__ import annotations
@@ -40,9 +40,10 @@ def _jsdom_installed() -> bool:
 def skip_if_unsupported() -> None:
     """Skip the calling test when node or jsdom is missing.
 
-    CI installs both (see ``.github/workflows/test.yml``). Local devs who
-    haven't run ``npm install`` in ``tests/js/`` get a skip instead of a
-    confusing failure.
+    CI installs both in the ``unit-tests`` job
+    (``.github/workflows/pr.yml``). Local devs who haven't run
+    ``npm install`` in ``tests/js/`` get a skip instead of a confusing
+    failure.
     """
     if not _node_available():
         pytest.skip("node not installed — install Node.js to run JS behaviour tests")
@@ -97,21 +98,30 @@ def run_script(
     settle_ms: int = 120000,
     timeout_s: float = 15.0,
     language: str = "js",
+    broadcast_channel_unavailable: bool = False,
 ) -> HarnessResult:
     """Run ``script`` in JSDOM and return observed side effects.
 
     Parameters mirror the JSON contract in ``tests/js/harness.mjs``.
 
     ``fetch_map`` keys are URL substrings; values are
-    ``{"status": int, "body"?: str, "json"?: any, "throw"?: str}``.
-    Missing routes default to 404.
+    ``{"status": int, "body"?: str, "json"?: any, "throw"?: str,
+    "responses"?: [...]}``. ``responses`` sequences per-call overrides;
+    the last entry sticks after exhaustion. Missing routes default to
+    404.
 
-    ``invoke`` runs after the script body — use it to call a function the
-    script exposes on ``window`` (e.g. ``"await window.restartAddon();"``)
+    ``invoke`` runs after the script body — use it to call a function
+    the script exposes on ``window`` (e.g. ``"await window.restartAddon();"``)
     or to dispatch DOM events.
 
-    ``settle_ms`` is virtual time, not wall time — set generously (default
-    covers the 60 s addon-restart probe window with margin).
+    ``settle_ms`` is virtual time, not wall time — set generously
+    (default covers the 60 s addon-restart probe window with margin).
+
+    ``broadcast_channel_unavailable`` deletes ``window.BroadcastChannel``
+    before the script runs, so the production
+    ``typeof BroadcastChannel === 'function'`` null-guard branch is
+    exercised. Without this, JSDOM always provides BroadcastChannel and
+    the guard never fires in tests.
     """
     skip_if_unsupported()
 
@@ -124,6 +134,7 @@ def run_script(
         "initialHtml": initial_html or "<!DOCTYPE html><html><body></body></html>",
         "settleMs": settle_ms,
         "language": language,
+        "broadcastChannelUnavailable": broadcast_channel_unavailable,
     }
 
     proc = subprocess.run(
@@ -192,36 +203,44 @@ def astro_vars_prelude(vars_: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _strip_astro_frontmatter(source: str) -> str:
+def _strip_astro_frontmatter(source: str, *, source_label: str = "<source>") -> str:
     """Drop the leading ``--- ... ---`` block if present.
 
     Astro frontmatter is TypeScript that runs at build-time, not JS that
     runs in the browser, so any ``<script>`` substring inside a comment
     or string there is not a real script tag. Stripping it before
-    searching prevents
-    ``// below in the <script> block keyed off the entry's id``
-    (line 17 of setup.astro) from being mis-matched as the script.
+    searching prevents matches against frontmatter comments.
+
+    Raises ``ValueError`` when frontmatter opens (``---\\n``) but never
+    closes — silently returning the source would let the caller find
+    bogus ``<script>`` matches inside the frontmatter prose with no
+    indication that the frontmatter itself is malformed.
     """
     if not source.startswith("---\n"):
         return source
     close = source.find("\n---\n", 4)
     if close == -1:
-        return source
+        raise ValueError(
+            f"{source_label}: Astro frontmatter opens (---) but never closes",
+        )
     return source[close + len("\n---\n") :]
 
 
-def extract_script_body(source: str, *, marker: str = "<script>") -> str:
+def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     """Return the first non-external inline ``<script>`` body in ``source``.
 
-    Handles both the bare ``<script>`` form used by ``_SETTINGS_HTML`` and
-    attributed forms like Astro's ``<script define:vars={...}>``. The body
-    is everything between the opening tag's ``>`` and the next
+    Handles both the bare ``<script>`` form used by ``_SETTINGS_HTML``
+    and attributed forms like Astro's ``<script define:vars={...}>``.
+    The body is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
     skipped — they have no inline body to extract. Astro frontmatter is
     skipped before searching so ``<script>`` mentions in frontmatter
     comments don't match.
+
+    ``source_label`` (e.g. a file path) is included in the raised
+    ``ValueError`` so callers know which surface was malformed.
     """
-    search_source = _strip_astro_frontmatter(source)
+    search_source = _strip_astro_frontmatter(source, source_label=source_label)
     for match in re.finditer(r"<script\b([^>]*)>", search_source):
         attrs = match.group(1)
         if re.search(r"\bsrc\s*=", attrs):
@@ -229,9 +248,9 @@ def extract_script_body(source: str, *, marker: str = "<script>") -> str:
         start = match.end()
         end = search_source.find("</script>", start)
         if end == -1:
-            raise ValueError("unterminated <script> in source")
+            raise ValueError(f"{source_label}: unterminated <script> tag")
         return search_source[start:end]
-    raise ValueError(f"no inline <script> tag in source (marker hint: {marker!r})")
+    raise ValueError(f"{source_label}: no inline <script> tag found")
 
 
 # ---------------------------------------------------------------------------
@@ -249,67 +268,50 @@ class ScriptSurface:
     """
 
     surface_id: str
-    """Short stable id used as the pytest parameter id (e.g. ``settings_ui``)."""
-
     source_path: Path
-    """Absolute path to the file the script body was extracted from."""
-
     script: str
-    """The extracted ``<script>`` body, after Python/Astro evaluation when needed."""
-
     language: str
-    """``"js"`` or ``"ts"`` — drives whether the harness transpiles before eval."""
+    """``"js"`` or ``"ts"`` — drives whether the harness transpiles
+    before eval (Astro defaults inline ``<script>`` to TypeScript)."""
+
+
+def _script_attr_language(attrs: str) -> str:
+    """Map an Astro ``<script ...>`` attribute string to ``"js"`` / ``"ts"``.
+
+    Astro defaults inline ``<script>`` to TypeScript since v3. The
+    ``define:vars`` and ``is:inline`` directives both flip it to JS
+    (define:vars injects JSON.parse calls into a JS body; is:inline
+    emits the body verbatim). An explicit ``lang="js"`` likewise opts
+    out of TS; ``lang="ts"`` is the explicit form matching the default.
+    """
+    if "define:vars" in attrs or "is:inline" in attrs:
+        return "js"
+    m = re.search(r"""\blang\s*=\s*['"]([a-z]+)['"]""", attrs)
+    if m:
+        return "js" if m.group(1).lower() == "js" else "ts"
+    return "ts"
 
 
 def discover_script_surfaces() -> list[ScriptSurface]:
     """Walk the repo for every rendered ``<script>`` surface that ships.
 
     Returns one entry per surface, in stable order. Future ``<script>``
-    surfaces added under ``src/ha_mcp/**/*.py`` (HTML in Python triple-
-    quoted strings) or ``site/src/**/*.{astro,html}`` are picked up
-    automatically by the auto-discovery test, so the parse-time guard
-    extends without code changes.
-
-    Astro pages with TypeScript inside ``<script>`` (no ``is:inline``,
-    no ``define:vars``) are tagged ``language="ts"`` so the harness
-    transpiles them via esbuild before parsing.
+    surfaces added under ``src/ha_mcp/**/*.py`` (registered in
+    ``_PY_RENDERERS`` below) or any ``site/src/**/*.astro`` page are
+    picked up automatically, so the parse-time guard extends without
+    code changes to the test.
     """
     repo_root = Path(__file__).resolve().parents[3]
     surfaces: list[ScriptSurface] = []
 
-    # Python-embedded UI: each entry is a callable that returns the
-    # rendered HTML — usually a module-level constant accessed via a
-    # lambda, or a render function called with placeholder args. The
-    # callable form keeps consent_form's ``create_consent_html(...)``
-    # discoverable without inventing a synthetic constant.
-    def _render_consent() -> str:
-        from ha_mcp.auth.consent_form import create_consent_html
-
-        return create_consent_html(
-            client_id="test-client",
-            redirect_uri="https://test.local/cb",
-            state="state-x",
-            txn_id="txn-y",
-        )
-
-    def _render_settings() -> str:
-        from ha_mcp.settings_ui import _SETTINGS_HTML
-
-        return _SETTINGS_HTML
-
-    py_entries: list[tuple[str, str, Any]] = [
-        # (surface_id, dotted module ref for source_path, html-renderer)
-        ("settings_ui", "ha_mcp.settings_ui", _render_settings),
-        ("consent_form", "ha_mcp.auth.consent_form", _render_consent),
-    ]
-    for surface_id, module_name, render in py_entries:
+    for surface_id, module_name, render in _PY_RENDERERS:
         try:
             module = __import__(module_name, fromlist=["__file__"])
         except ImportError as exc:
             raise RuntimeError(
                 f"discover_script_surfaces: cannot import {module_name}: {exc}",
             ) from exc
-        body = extract_script_body(render(), marker=f"<script in {module_name}>")
+        body = extract_script_body(render(), source_label=module_name)
         surfaces.append(
             ScriptSurface(
                 surface_id=surface_id,
@@ -320,39 +322,65 @@ def discover_script_surfaces() -> list[ScriptSurface]:
         )
 
     # Astro pages and layouts. The site lives outside the package; walk
-    # the static source. Skip external <script src=...> tags.
+    # the static source. Raise rather than silently skip when site/src/
+    # is missing — discovery returning a partial result would let a
+    # whole-surface regression masquerade as success in the parse test.
     site_dir = repo_root / "site" / "src"
-    if site_dir.is_dir():
-        for path in sorted(site_dir.rglob("*.astro")):
-            text = _strip_astro_frontmatter(path.read_text(encoding="utf-8"))
-            for match in re.finditer(r"<script\b([^>]*)>", text):
-                attrs = match.group(1)
-                if re.search(r"\bsrc\s*=", attrs):
-                    continue
-                end = text.find("</script>", match.end())
-                if end == -1:
-                    continue
-                body = text[match.end() : end]
-                # `define:vars` interpolation is JSON, not TS — Astro
-                # builds the page by prepending `const k = JSON.parse(...);`
-                # for each var. For parse coverage we strip the directive
-                # away (the body itself is plain JS).
-                #
-                # `<script>` without `define:vars`, `is:inline`, or `lang`
-                # defaults to TypeScript in Astro since v3.
-                if "define:vars" in attrs or "is:inline" in attrs:
-                    language = "js"
-                else:
-                    language = "ts"
-                rel = path.relative_to(site_dir).with_suffix("")
-                surface_id = f"astro_{str(rel).replace('/', '_').replace(chr(92), '_')}"
-                surfaces.append(
-                    ScriptSurface(
-                        surface_id=surface_id,
-                        source_path=path,
-                        script=body,
-                        language=language,
-                    ),
-                )
+    if not site_dir.is_dir():
+        raise RuntimeError(
+            f"discover_script_surfaces: expected {site_dir} to exist; "
+            "site source missing means no Astro surfaces would be covered",
+        )
+    for path in sorted(site_dir.rglob("*.astro")):
+        text = _strip_astro_frontmatter(
+            path.read_text(encoding="utf-8"),
+            source_label=str(path.relative_to(repo_root)),
+        )
+        for match in re.finditer(r"<script\b([^>]*)>", text):
+            attrs = match.group(1)
+            if re.search(r"\bsrc\s*=", attrs):
+                continue
+            end = text.find("</script>", match.end())
+            if end == -1:
+                continue
+            body = text[match.end() : end]
+            rel = path.relative_to(site_dir).with_suffix("")
+            surface_id = f"astro_{rel.as_posix().replace('/', '_')}"
+            surfaces.append(
+                ScriptSurface(
+                    surface_id=surface_id,
+                    source_path=path,
+                    script=body,
+                    language=_script_attr_language(attrs),
+                ),
+            )
 
     return surfaces
+
+
+# Python-embedded UI surfaces. Each entry is
+# ``(surface_id, importable_module, render_callable)``; the callable
+# returns the rendered HTML (a module-level constant or a render
+# function invoked with placeholder args). Add a new entry to register
+# a new Python-rendered UI for parse coverage.
+def _render_settings_html() -> str:
+    from ha_mcp.settings_ui import _SETTINGS_HTML
+
+    return _SETTINGS_HTML
+
+
+def _render_consent_html() -> str:
+    from ha_mcp.auth.consent_form import create_consent_html
+
+    return create_consent_html(
+        client_id="test-client",
+        redirect_uri="https://test.local/cb",
+        state="state-x",
+        txn_id="txn-y",
+    )
+
+
+_PY_RENDERERS: list[tuple[str, str, Any]] = [
+    ("settings_ui", "ha_mcp.settings_ui", _render_settings_html),
+    ("consent_form", "ha_mcp.auth.consent_form", _render_consent_html),
+]

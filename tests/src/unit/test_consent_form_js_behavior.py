@@ -30,12 +30,12 @@ def consent_form_html() -> str:
 
 
 def _build_form_dom(consent_html: str) -> tuple[str, str]:
-    """Return ``(initial_html, script_body)`` extracted from the rendered form.
+    """Return ``(rendered_html, extracted_script_body)``.
 
-    The consent form's JS depends on three element ids that the form
-    markup provides (``consent-form``, ``submit-btn``, ``loading``,
-    ``btn-text``). Run the full rendered HTML as the DOM so the script
-    operates on the real markup it ships with.
+    The form's JS reads four element ids (``consent-form``,
+    ``submit-btn``, ``loading``, ``btn-text``); passing the rendered
+    HTML as the harness DOM ensures the script sees the real markup it
+    ships with.
     """
     script = extract_script_body(consent_html)
     return consent_html, script

@@ -1,22 +1,24 @@
 """Behavioural tests for the rendered ``<script>`` body in ``settings_ui.py``.
 
-The existing ``TestRenderedHTMLJsSyntax`` class only verifies that the
-script body parses. These tests use the JSDOM harness at
-``tests/js/harness.mjs`` to drive the script through realistic flows and
-assert on observable side effects (HTTP calls issued, BroadcastChannel
-messages emitted, DOM mutations, ``location.reload`` invocations).
+Use the JSDOM harness at ``tests/js/harness.mjs`` to drive the script
+through realistic flows and assert on observable side effects (HTTP
+calls issued, BroadcastChannel messages emitted, DOM mutations,
+``location.reload`` invocations).
 
-The behaviours under test were introduced by PR #1420 (unified
-addon-restart flow) and named in issue #1422 as the coverage gap a
-client-side regression would otherwise leak into master with no test
-failure.
+These tests catch the "broken page with no in-page diagnostic" failure
+class — script-level errors silently abort handler init and leave the
+page stuck on its initial state with no signal in the UI. The
+parse-time guard in ``test_rendered_scripts_parse.py`` catches syntax
+breaks; this file catches behavioural regressions on top of it.
 """
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from ._js_harness import extract_script_body, run_script
+from ._js_harness import HarnessResult, extract_script_body, run_script
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -35,44 +37,118 @@ def settings_script() -> str:
     return extract_script_body(_SETTINGS_HTML)
 
 
-# Minimum DOM the script touches during init. The script registers
-# top-level click/input listeners against a dozen+ elements that don't
-# logically belong in a "restart UI" test, but ``document.getElementById(...)
-# .addEventListener(...)`` throws if any element is missing, aborting
-# script init before our restart-flow assertions can even run. Element
-# inventory comes from ``grep -h "document.getElementById" settings_ui.py``;
-# refresh this set when adding new top-level handlers in the production
-# script.
-MIN_DOM = """
-<!DOCTYPE html>
-<html><body>
-  <div id="status"></div>
-  <button id="restartBtn" style="display:none"></button>
-  <div id="restartNotice"><span id="restartNoticeText"></span></div>
-  <div id="sidecarStopRow" style="display:none"></div>
-  <button id="stopSidecarBtn"></button>
-  <input id="search" />
-  <div id="groups"></div>
-  <div id="summary"></div>
-  <table><tbody id="featuresBody"></tbody></table>
-  <div id="backupConfigForm"></div>
-  <div id="backupConfigActions"></div>
-  <button id="backupConfigSave"></button>
-  <div id="backupConfigStatus"></div>
-  <button id="backupRefresh"></button>
-  <button id="backupBulkDelete"></button>
-  <select id="backupDomain"></select>
-  <select id="backupEntity"></select>
-  <select id="backupState"></select>
-  <tbody id="backupList"></tbody>
-  <div id="modalBackdrop"><div id="modalBody"></div></div>
-  <span id="modalTitle"></span>
-  <button id="modalClose"></button>
-  <div id="panel-tools" class="panel active"></div>
-  <div id="panel-server" class="panel"></div>
-  <div id="panel-backups" class="panel"></div>
-</body></html>
-"""
+# Element ids the script binds top-level handlers on. Drift between
+# this set and what the production script reaches via
+# ``document.getElementById(...).addEventListener(...)`` is checked at
+# import time by ``_assert_min_dom_covers_handlers`` below, so a future
+# handler that lands without a matching DOM stub fails the suite
+# immediately with a clear message instead of letting tests silently
+# fail at init.
+_TOP_LEVEL_ELEMENT_IDS = [
+    "status",
+    "restartBtn",
+    "restartNotice",
+    "restartNoticeText",
+    "sidecarStopRow",
+    "stopSidecarBtn",
+    "search",
+    "groups",
+    "summary",
+    "featuresBody",
+    "backupConfigForm",
+    "backupConfigActions",
+    "backupConfigSave",
+    "backupConfigStatus",
+    "backupRefresh",
+    "backupBulkDelete",
+    "backupDomain",
+    "backupEntity",
+    "backupState",
+    "backupList",
+    "modalBackdrop",
+    "modalBody",
+    "modalTitle",
+    "modalClose",
+    "panel-tools",
+    "panel-server",
+    "panel-backups",
+]
+
+
+def _build_min_dom() -> str:
+    """Render an HTML document that supplies every element the script
+    binds a top-level handler on, so the init pass doesn't throw on a
+    missing-element addEventListener call.
+    """
+    rows = []
+    for el_id in _TOP_LEVEL_ELEMENT_IDS:
+        if el_id.startswith("backup") and el_id.endswith(("Domain", "Entity", "State")):
+            rows.append(f'<select id="{el_id}"></select>')
+        elif el_id in ("backupList", "featuresBody"):
+            rows.append(f'<table><tbody id="{el_id}"></tbody></table>')
+        elif el_id == "modalBackdrop":
+            rows.append('<div id="modalBackdrop"><div id="modalBody"></div></div>')
+        elif el_id == "modalBody":
+            continue  # rendered as a child of modalBackdrop above
+        elif el_id.startswith("panel-"):
+            rows.append(f'<div id="{el_id}" class="panel"></div>')
+        elif el_id in (
+            "restartBtn",
+            "stopSidecarBtn",
+            "backupConfigSave",
+            "backupRefresh",
+            "backupBulkDelete",
+            "modalClose",
+        ):
+            rows.append(f'<button id="{el_id}"></button>')
+        elif el_id == "restartNotice":
+            rows.append(
+                '<div id="restartNotice"><span id="restartNoticeText"></span></div>'
+            )
+        elif el_id == "restartNoticeText":
+            continue  # rendered as a child of restartNotice above
+        elif el_id == "search":
+            rows.append('<input id="search" />')
+        else:
+            rows.append(f'<div id="{el_id}"></div>')
+    body = "\n  ".join(rows)
+    return f"<!DOCTYPE html>\n<html><body>\n  {body}\n</body></html>"
+
+
+MIN_DOM = _build_min_dom()
+
+
+def _assert_min_dom_covers_handlers() -> None:
+    """Fail at collection time if the production script's top-level
+    ``document.getElementById(...)`` calls drift past
+    ``_TOP_LEVEL_ELEMENT_IDS``. Without this, a production change that
+    adds a new top-level ``getElementById(...).addEventListener(...)``
+    would throw during JSDOM init, every restart-flow assertion in the
+    file would silently fail with empty-side-effect outputs, and a
+    maintainer would have to dig through ``result.errors`` to find the
+    actual root cause.
+    """
+    from ha_mcp.settings_ui import _SETTINGS_HTML
+
+    script = extract_script_body(_SETTINGS_HTML)
+    # Top-level (not indented) getElementById(...) calls — handlers
+    # bound at script load time. Indented calls are inside functions
+    # and only run when those functions execute, which our tests
+    # control.
+    referenced = set(
+        re.findall(r"^document\.getElementById\('([^']+)'\)", script, re.M)
+    )
+    missing = referenced - set(_TOP_LEVEL_ELEMENT_IDS)
+    if missing:
+        raise RuntimeError(
+            "settings_ui.py top-level getElementById ids drifted past "
+            f"_TOP_LEVEL_ELEMENT_IDS in this test file: {sorted(missing)}. "
+            "Add them and rebuild MIN_DOM.",
+        )
+
+
+_assert_min_dom_covers_handlers()
+
 
 # Default routes for the init-time fetches. Individual tests merge in
 # their own entries via ``{**DEFAULT_FETCHES, "/restart": ...}``.
@@ -94,6 +170,24 @@ DEFAULT_FETCHES: dict[str, dict] = {
         "json": {},
     },
 }
+
+
+def _assert_clean_init(result: HarnessResult) -> None:
+    """Fail loud on any script-init or transpile error.
+
+    Each test in this file asserts on side effects (fetches, broadcasts,
+    reloads, alerts). When the script throws at init time the side
+    effects come back empty, the side-effect assertion fires with a
+    misleading message ("expected 1 POST, got 0"), and the actual root
+    cause sits in ``result.errors``. Calling this at the top of every
+    test surfaces the real error first.
+    """
+    init_errors = [
+        e
+        for e in result.errors
+        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
+    ]
+    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +212,8 @@ class TestRestartAddonFlow:
         restarts and a redundant page reload.
         """
         # Info returns a baseline that never flips, so the probe loop
-        # keeps running for the full RESTART_PROBE_MAX_TOTAL_MS window —
-        # plenty of time for both restartAddon() invocations to race.
+        # keeps running for the full probe-timeout window — plenty of
+        # time for both restartAddon() invocations to race.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/restart": {"status": 200, "json": {}},
@@ -133,6 +227,7 @@ class TestRestartAddonFlow:
               window.restartAddon();
             """,
         )
+        _assert_clean_init(result)
 
         restart_posts = [
             f
@@ -149,7 +244,7 @@ class TestRestartAddonFlow:
     ) -> None:
         """4xx is a genuine config error (e.g. SUPERVISOR_TOKEN unset).
 
-        Restart was NOT initiated → the page must stay, the user must
+        Restart was NOT initiated — the page must stay, the user must
         see the failure message, and the button must remain enabled so
         they can retry after fixing the config. No broadcast — other
         tabs would only see a misleading "restart in progress".
@@ -165,21 +260,27 @@ class TestRestartAddonFlow:
             settings_script,
             initial_html=MIN_DOM,
             fetch_map=fetches,
-            invoke="await window.restartAddon();",
+            invoke="""
+              await window.restartAddon();
+              // Snapshot the button's post-flow state on body for the
+              // assertion below — querying via JS is more robust than
+              // string-slicing the serialised dom.
+              const btn = document.getElementById('restartBtn');
+              document.body.dataset.restartBtnDisabled = String(btn.disabled);
+              document.body.dataset.restartBtnText = btn.textContent || '';
+            """,
         )
+        _assert_clean_init(result)
 
         assert result.reloads == 0, "4xx response must not trigger a page reload"
         assert result.broadcasts_of_type("restart-initiated") == [], (
             "4xx response must not broadcast restart-initiated to other tabs"
         )
-        # The error surfaces via alert() so the user is forced to read it.
         assert any("SUPERVISOR_TOKEN unset" in a for a in result.alerts), (
             f"expected alert with config error, got alerts={result.alerts}"
         )
-        # Button must be re-enabled for retry.
-        assert 'disabled=""' not in result.dom or "restartBtn" not in result.dom, (
-            "button should be re-enabled after a 4xx (no disabled attr); "
-            f"dom snippet: {result.dom[:500]}"
+        assert 'data-restart-btn-disabled="false"' in result.dom, (
+            "restartBtn.disabled should be false after a 4xx retry path"
         )
 
     def test_5xx_response_falls_through_to_reload_cycle(
@@ -192,14 +293,11 @@ class TestRestartAddonFlow:
         through to the poll-and-reload cycle, not surface the 5xx as a
         config error.
         """
-        # The script hits /api/settings/info three times in this flow:
-        #   1. loadTools() at script init (for the is_addon / is_sidecar
-        #      branch in the restart-notice copy)
-        #   2. restartAddon() pre-POST, to capture the baseline instance_id
-        #   3. _probeAddonRestarted() after the POST, to detect the flip
-        # The first two return baseline; the third (and any further probe
-        # iterations — the last entry sticks) returns the flipped id so
-        # the probe exits with restarted=true.
+        # Three sequenced /api/settings/info responses: the script hits
+        # this endpoint at script init (loadTools), again pre-POST in
+        # restartAddon (baseline capture), and a third time in the probe
+        # loop. The last entry sticks, so any additional probe iteration
+        # also sees the flipped id.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/restart": {"status": 503, "body": ""},
@@ -217,10 +315,8 @@ class TestRestartAddonFlow:
             fetch_map=fetches,
             invoke="await window.restartAddon();",
         )
+        _assert_clean_init(result)
 
-        # With info always returning a "new" id, the probe finds the flip
-        # almost immediately and triggers reload. The fact that the
-        # restart endpoint returned 5xx must not short-circuit this.
         assert result.reloads >= 1, (
             f"5xx restart response must still trigger reload cycle, "
             f"reloads={result.reloads}, errors={result.errors}"
@@ -233,13 +329,14 @@ class TestRestartAddonFlow:
 
         If supervisor silently fails to restart, the OLD process keeps
         answering 200. Pre-fix, the probe would see a 200 and reload —
-        but the user would land back on the same broken instance. Post-
-        fix, the probe must keep polling until ``instance_id`` differs.
+        but the user would land back on the same broken instance.
+        Post-fix, the probe must keep polling until ``instance_id``
+        differs.
 
-        Here we force info to always return the same id as the baseline,
-        confirm the probe DOES NOT reload, and confirm the manual-reload
-        fallback UI lands (so the user isn't left in an indefinite
-        spinner).
+        Here we force info to always return the same id as the
+        baseline, confirm the probe DOES NOT reload, and confirm the
+        manual-reload fallback UI lands (so the user isn't left in an
+        indefinite spinner).
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -257,25 +354,27 @@ class TestRestartAddonFlow:
             # 80s of virtual time covers the 60s probe window with margin.
             settle_ms=80000,
         )
+        _assert_clean_init(result)
 
         assert result.reloads == 0, (
             "probe must not reload when instance_id never flips — "
             "that would land the user back on the same broken instance"
         )
-        # Manual-reload fallback message must surface.
         assert "did not come back online" in result.dom.lower(), (
             f"expected manual-reload fallback message, dom={result.dom[:600]}"
         )
 
 
 # ---------------------------------------------------------------------------
-# BroadcastChannel listener
+# BroadcastChannel listener + null-guard
 # ---------------------------------------------------------------------------
 
 
 class TestBroadcastChannelListener:
     """The cross-tab restart UX hinges on every open tab reacting to the
-    originating tab's broadcasts. These tests pin the listener contract.
+    originating tab's broadcasts. These tests pin the listener contract,
+    plus the null-guard that lets the page boot in browsing contexts
+    where BroadcastChannel is unavailable.
     """
 
     def test_restart_required_event_shows_notice_banner(
@@ -294,19 +393,20 @@ class TestBroadcastChannelListener:
                 },
             ],
         )
+        _assert_clean_init(result)
 
         # The notice div picks up the "show" class via classList.add.
         assert 'class="show"' in result.dom or "show" in result.dom, (
-            f"restartNotice should have 'show' class after restart-required "
-            f"broadcast; dom={result.dom[:600]}"
+            "restartNotice should have 'show' class after restart-required broadcast"
         )
 
     def test_restart_initiated_event_runs_reload_cycle_in_listening_tab(
         self, settings_script: str
     ) -> None:
         """The originating tab broadcasts ``restart-initiated`` so every
-        OTHER tab runs its own poll-then-reload cycle. Without this, the
-        non-originating tabs stay on a stale connection to a dead addon.
+        OTHER tab runs its own poll-then-reload cycle. Without this,
+        the non-originating tabs stay on a stale connection to a dead
+        addon.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -331,10 +431,39 @@ class TestBroadcastChannelListener:
                 },
             ],
         )
+        _assert_clean_init(result)
 
         assert result.reloads >= 1, (
             f"listening tab should reload after restart-initiated broadcast; "
             f"reloads={result.reloads}, errors={result.errors}"
+        )
+
+    def test_script_boots_without_broadcastchannel_global(
+        self, settings_script: str
+    ) -> None:
+        """The ``typeof BroadcastChannel === 'function'`` null-guard at
+        module init lets the page render in iframe / older-browser
+        contexts where BroadcastChannel is undefined.
+
+        Removing the guard would throw a ReferenceError during init and
+        every page interaction (including the restart button, which is
+        the user's recovery path) would fail.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            broadcast_channel_unavailable=True,
+            invoke="""
+              // Confirm the page reached interactive state — restartBtn
+              // listener wired, no init throw.
+              const btn = document.getElementById('restartBtn');
+              document.body.dataset.boot = btn ? 'ok' : 'no-btn';
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-boot="ok"' in result.dom, (
+            "page must boot when BroadcastChannel is undefined"
         )
 
 
@@ -371,14 +500,11 @@ class TestSaveFeatureFlagJsonParseFallback:
             fetch_map=fetches,
             invoke="await window.saveFeatureFlag('foo', true);",
         )
+        _assert_clean_init(result)
 
-        # restartNotice should have been shown.
         assert "show" in result.dom, (
-            f"restartNotice should have 'show' class after truncated-body save; "
-            f"dom={result.dom[:600]}"
+            "restartNotice should have 'show' class after truncated-body save"
         )
-        # Cross-tab broadcast should have fired so other tabs surface the
-        # banner too.
         assert result.broadcasts_of_type("restart-required"), (
             f"truncated-body save should broadcast restart-required, "
             f"got broadcasts={result.broadcasts}"
@@ -387,8 +513,8 @@ class TestSaveFeatureFlagJsonParseFallback:
     def test_error_response_does_not_default_to_restart_required(
         self, settings_script: str
     ) -> None:
-        """The fallback only applies on ``resp.ok`` — error responses must
-        surface the HTTP status, not silently claim success.
+        """The fallback only applies on ``resp.ok`` — error responses
+        must surface the HTTP status, not silently claim success.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -403,8 +529,8 @@ class TestSaveFeatureFlagJsonParseFallback:
             fetch_map=fetches,
             invoke="await window.saveFeatureFlag('foo', true);",
         )
+        _assert_clean_init(result)
 
-        # No broadcast emitted on failure.
         assert not result.broadcasts_of_type("restart-required"), (
             f"failed save must not broadcast restart-required; "
             f"got broadcasts={result.broadcasts}"

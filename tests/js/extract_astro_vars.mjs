@@ -14,6 +14,7 @@
 // Outputs: {"clientsData": [...], "platformsData": [...]}
 
 import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
 import { transformSync } from "esbuild";
 
 function readStdin() {
@@ -34,24 +35,29 @@ function extractFrontmatter(source) {
   return m[1];
 }
 
+function stripImports(fm) {
+  // Drop both single-line (`import X from 'y';`) and multi-line
+  // (`import {\n  a,\n  b,\n} from 'y';`) import statements. The
+  // grammar matches `import` at line start optionally followed by
+  // anything up to the first semicolon, including newlines. Doesn't
+  // need to be a perfect TS parser — Astro frontmatter imports always
+  // sit at the top before any other statements.
+  return fm.replace(/^[ \t]*import\b[\s\S]*?;[ \t]*\n?/gm, "");
+}
+
 function sanitiseFrontmatter(fm) {
-  // Drop imports (would fail to resolve in this context) and lines that
-  // reach into `import.meta` (Astro-only). Leave const / let / function
-  // declarations intact so consts the test asks for are still in scope.
-  //
-  // Then prepend stubs for the most common Astro-injected globals so
-  // helper functions in the frontmatter (e.g. `withBase` referencing
-  // `base = import.meta.env.BASE_URL`) don't ReferenceError when re-
-  // evaluated outside Astro.
+  // Drop imports (would fail to resolve in this context) and lines
+  // that reach into `import.meta` (Astro-only). Then prepend stubs for
+  // the most common Astro-injected globals so frontmatter helpers
+  // (e.g. `withBase` referencing `base = import.meta.env.BASE_URL`)
+  // don't ReferenceError when re-evaluated outside Astro.
   const stubs = `const base = "";\n`;
-  return (
-    stubs +
-    fm
-      .split("\n")
-      .filter((line) => !/^\s*import\b/.test(line))
-      .filter((line) => !/\bimport\.meta\b/.test(line))
-      .join("\n")
-  );
+  const noImports = stripImports(fm);
+  const noImportMeta = noImports
+    .split("\n")
+    .filter((line) => !/\bimport\.meta\b/.test(line))
+    .join("\n");
+  return stubs + noImportMeta;
 }
 
 async function main() {
@@ -61,11 +67,13 @@ async function main() {
   const cleaned = sanitiseFrontmatter(extractFrontmatter(src));
 
   // Append a JSON serialiser for each requested name so we get a single
-  // structured payload back. ``stringify`` runs after every const in
-  // ``cleaned`` is in scope.
+  // structured payload back. `stringify` runs after every const in
+  // `cleaned` is in scope.
   const names = req.names || [];
-  const payload = names.map((n) => `"${n}": typeof ${n} !== 'undefined' ? ${n} : null`);
-  const program = `${cleaned}\n;process.stdout.write(JSON.stringify({${payload.join(",")}}));`;
+  const payload = names.map(
+    (n) => `"${n}": typeof ${n} !== 'undefined' ? ${n} : null`,
+  );
+  const program = `${cleaned}\n;__result = JSON.stringify({${payload.join(",")}});`;
 
   const transpiled = transformSync(program, {
     loader: "ts",
@@ -73,9 +81,18 @@ async function main() {
     format: "esm",
   }).code;
 
-  // Evaluate in this same module — esbuild output is plain JS now.
-  // Using indirect eval keeps the top-level scope clean.
-  (0, eval)(transpiled);
+  // vm.runInContext rather than eval so the project's "no eval()" lint
+  // stays clean. New context per invocation (no globals from the host)
+  // — `__result` is the only handoff back.
+  const ctx = createContext({ __result: null });
+  try {
+    runInContext(transpiled, ctx, { filename: `astro-vars:${req.path}` });
+  } catch (e) {
+    throw new Error(
+      `evaluating frontmatter of ${req.path}: ${(e && e.stack) || e}`,
+    );
+  }
+  process.stdout.write(ctx.__result ?? "{}");
 }
 
 main().catch((e) => {

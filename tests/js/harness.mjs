@@ -1,4 +1,4 @@
-// JSDOM harness for behavioral tests of in-page <script> bodies.
+// JSDOM harness for behavioural tests of in-page <script> bodies.
 //
 // Reads a JSON request from stdin, evaluates the script inside a JSDOM
 // window with stubbed fetch / BroadcastChannel / timers / dialogs, then
@@ -8,14 +8,14 @@
 // Request shape:
 //   {
 //     script:           string,   // body to eval (no <script> tags)
-//     prelude:          string,   // JS to run before `script` (e.g. Astro define:vars injection)
+//     prelude:          string,   // JS to run before `script` (Astro define:vars injection)
 //     invoke:           string,   // JS to run after `script` (e.g. "await window.restartAddon()")
 //     initialHtml:      string,   // DOM seed (defaults to a blank page)
-//     fetchMap:         { [pattern]: { status, ok?, body?, json?, throw? } },
+//     fetchMap:         { [pattern]: { status, ok?, body?, json?, throw?, responses? } },
 //     broadcastEvents:  [{ channel, data, delayMs? }],
-//     settleMs:         number,   // virtual-time advance after script + invoke (defaults to 120000)
-//     language:         "js" | "ts",  // when "ts", `script` and `invoke` are transpiled via esbuild
-//                                     //   before being evaluated (no type-checking, just type-stripping)
+//     settleMs:         number,   // virtual-time advance after script + invoke (default 120000)
+//     language:         "js" | "ts",  // when "ts", `script` and `invoke` are type-stripped via esbuild
+//     broadcastChannelUnavailable: bool, // when true, `typeof BroadcastChannel === 'undefined'`
 //   }
 //
 // Response shape:
@@ -27,22 +27,23 @@
 //     confirms:   [string],
 //     console:    [{ level, args }],
 //     status:     string | null,        // last value passed to updateStatus()
-//     dom:        string,                // window.document.body.innerHTML
-//     errors:     [string],              // thrown errors during script / invoke
+//     dom:        string,                // window.document.documentElement.outerHTML
+//     errors:     [string],              // thrown errors during script / invoke / timer callbacks
 //   }
 //
-// Time is faked: setTimeout / setInterval / Date.now run on a virtual
-// clock that advances by `settleMs` after the script finishes. Real
-// wall-clock waits would make a 60s addon-restart probe untestable.
+// Only setTimeout / setInterval / Date.now run on the virtual clock.
+// new Date() / performance.now() / queueMicrotask continue to report
+// wall time — tests against code that reads those sources will see
+// real wall-clock values.
 
 import { JSDOM, VirtualConsole } from "jsdom";
+import { runInContext } from "node:vm";
 import { transformSync } from "esbuild";
 
 function maybeTranspile(source, language) {
   if (!source || language !== "ts") return source;
-  // type-strip only — `loader: "ts"` keeps esbuild from doing TSX/JSX
-  // transforms; ES2020 target keeps modern syntax (top-level await,
-  // optional chaining) intact for jsdom + node-24 to evaluate.
+  // ES2020 target keeps top-level await + optional chaining intact for
+  // the current node + jsdom evaluator; `loader: "ts"` skips JSX handling.
   return transformSync(source, {
     loader: "ts",
     target: "es2020",
@@ -63,7 +64,6 @@ function readStdin() {
 }
 
 function buildFetchStub(fetchMap, fetches) {
-  // Per-pattern call counter for sequenced `responses: [...]` entries.
   const counters = new Map();
   return async function fetch(url, init) {
     const method = (init && init.method) || "GET";
@@ -85,8 +85,8 @@ function buildFetchStub(fetchMap, fetches) {
       entry = { status: 404, body: "" };
     }
     // Sequenced responses: each call advances the index, the last entry
-    // sticks after exhaustion (matches the "addon comes back online and
-    // stays online" shape these probe loops need).
+    // sticks after exhaustion (matches "addon comes back online and
+    // stays online" — the shape these probe loops need).
     if (Array.isArray(entry.responses)) {
       const idx = counters.get(matchedPattern) ?? 0;
       counters.set(matchedPattern, idx + 1);
@@ -115,10 +115,11 @@ function buildFetchStub(fetchMap, fetches) {
 }
 
 class FakeClock {
-  constructor() {
+  constructor(errors) {
     this.now = 0;
     this.nextId = 1;
     this.tasks = new Map(); // id -> { time, fn, interval }
+    this._errors = errors;
   }
   setTimeout(fn, delay = 0) {
     const id = this.nextId++;
@@ -138,25 +139,20 @@ class FakeClock {
     this.tasks.delete(id);
   }
   // Advance virtual time up to `untilMs`, firing every ready task in
-  // chronological order. Microtasks between tasks are flushed by yielding
-  // to the real event loop with setImmediate.
+  // chronological order. Microtasks between tasks are flushed by
+  // yielding to setImmediate.
   async advance(untilMs) {
     const target = this.now + untilMs;
 
-    // Drain microtasks aggressively up front. The script under test may
-    // be awaiting a chain of stubbed-fetch promises before it hits its
-    // first setTimeout — if we checked for ready timers immediately,
-    // we'd see none and return without advancing, leaving the script
-    // suspended forever. Letting promises resolve first gives them a
-    // chance to schedule timers we can then fire.
+    // Drain microtasks first — the script may be awaiting a fetch chain
+    // and hasn't registered any timers yet. Checking immediately would
+    // return without advancing and leave the script suspended.
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setImmediate(r));
     }
 
-    // Outer loop in case a fired task schedules more tasks before target.
-    // Cap iterations to surface runaway recursion as a test failure rather
-    // than hanging the suite.
-    for (let safety = 0; safety < 100000; safety++) {
+    const SAFETY_CAP = 100000;
+    for (let safety = 0; safety < SAFETY_CAP; safety++) {
       let nextId = null;
       let nextTime = Infinity;
       for (const [id, t] of this.tasks) {
@@ -166,8 +162,6 @@ class FakeClock {
         }
       }
       if (nextId == null) {
-        // No ready timers. Drain microtasks one more time in case a
-        // recently-resolved promise just queued one, then re-check.
         for (let i = 0; i < 10; i++) {
           await new Promise((r) => setImmediate(r));
         }
@@ -187,33 +181,46 @@ class FakeClock {
       }
       try {
         task.fn();
-      } catch (_e) {
-        // Swallow — the test asserts on side effects, not on whether
-        // a single timer callback throws.
+      } catch (e) {
+        // Side-effect tests don't fail on per-callback throws (the loop
+        // must keep draining), but record so a swallowed regression
+        // still surfaces in result.errors instead of looking like
+        // "feature didn't fire".
+        this._errors.push(`timer callback: ${(e && e.stack) || e}`);
       }
-      // Yield so any microtasks queued by the callback (await chains in
-      // the production code) get to run before the next timer fires.
       await new Promise((r) => setImmediate(r));
+    }
+    if (this.tasks.size > 0 && [...this.tasks.values()].some((t) => t.time <= target)) {
+      // Hit SAFETY_CAP with timers still ready — likely a runaway
+      // self-rescheduling setInterval in the script under test. Record
+      // loudly so tests don't see "feature didn't fire" silence.
+      this._errors.push(
+        `clock.advance: hit ${SAFETY_CAP}-iteration cap with ${this.tasks.size} tasks still pending — likely runaway setInterval`,
+      );
     }
     this.now = target;
   }
 }
 
 class FakeBroadcastChannel {
-  constructor(name, registry) {
+  constructor(name, registry, errors) {
     this.name = name;
     this.listeners = [];
     this._registry = registry;
+    this._errors = errors;
     if (!registry.byName.has(name)) registry.byName.set(name, []);
     registry.byName.get(name).push(this);
   }
   postMessage(data) {
     this._registry.posts.push({ channel: this.name, data });
-    // Same-tab self-delivery is not part of the BroadcastChannel contract
-    // (browsers only deliver to OTHER same-origin contexts), so we don't
-    // dispatch back to `this`. Other channels with the same name would
-    // receive it; the harness uses one channel per test, so that's a
-    // no-op here.
+    // Spec: deliver to every OTHER same-name channel in the same
+    // browsing context; never deliver back to the sender. Honour the
+    // contract even though the harness typically opens one channel per
+    // test — production code (and future tests) may open multiple.
+    const peers = this._registry.byName.get(this.name) || [];
+    for (const ch of peers) {
+      if (ch !== this) ch._dispatch(data);
+    }
   }
   addEventListener(type, fn) {
     if (type === "message") this.listeners.push(fn);
@@ -231,8 +238,10 @@ class FakeBroadcastChannel {
     for (const fn of [...this.listeners]) {
       try {
         fn(ev);
-      } catch (_e) {
-        // Same rationale as the clock: surface effects, not listener throws.
+      } catch (e) {
+        this._errors.push(
+          `broadcast listener (${this.name}): ${(e && e.stack) || e}`,
+        );
       }
     }
   }
@@ -272,18 +281,20 @@ async function main() {
   virtualConsole.on("error", (...args) =>
     consoleLog.push({ level: "error", args: args.map(String) }),
   );
-  // location.reload() / assign() / href= are unforgeable [Unforgeable]
-  // properties in jsdom — they cannot be monkey-patched on the instance
-  // (non-configurable, non-writable). JSDOM's reload impl throws a
-  // "Not implemented: navigation" error onto the virtual console's
-  // jsdomError channel rather than as a real JS exception. Counting
-  // those errors is the supported way to observe reload calls in tests.
+  // location.reload() / assign() / href= are unforgeable IDL properties
+  // in jsdom — they can't be monkey-patched on the instance. JSDOM's
+  // reload impl writes a "Not implemented: navigation" entry to the
+  // virtualConsole's jsdomError channel rather than raising in JS.
+  // Counting those is the supported way to observe reload calls.
+  // Anything else on this channel is a genuine script-level fault —
+  // route it to `errors` so tests asserting `not result.errors` catch
+  // it instead of burying it in `console` where tests rarely look.
   virtualConsole.on("jsdomError", (err) => {
     const msg = (err && err.message) || String(err);
     if (msg.includes("Not implemented: navigation")) {
       reloads += 1;
     } else {
-      consoleLog.push({ level: "error", args: [msg] });
+      errors.push(`jsdom error: ${msg}`);
     }
   });
 
@@ -295,11 +306,9 @@ async function main() {
   });
   const { window } = dom;
 
-  const clock = new FakeClock();
+  const clock = new FakeClock(errors);
   const channelRegistry = { byName: new Map(), posts: broadcasts };
 
-  // Wire stubs onto window. Done via Object.defineProperty for setTimeout
-  // because JSDOM defines it as a non-writable getter on the prototype.
   Object.defineProperty(window, "setTimeout", {
     value: (fn, delay) => clock.setTimeout(fn, delay),
     configurable: true,
@@ -327,14 +336,16 @@ async function main() {
   });
 
   window.fetch = buildFetchStub(fetchMap, fetches);
-  window.BroadcastChannel = function (name) {
-    return new FakeBroadcastChannel(name, channelRegistry);
-  };
-  // Restore typeof check: the production code does
-  //   `typeof BroadcastChannel === 'function' ? new BroadcastChannel(...) : null`
-  // and that branch must report 'function' for our stub.
-  // (Functions naturally report 'function' for typeof, so the assignment
-  // above already satisfies it; no extra work required.)
+  if (req.broadcastChannelUnavailable) {
+    // Simulate a browsing context where BroadcastChannel is undefined,
+    // so the production `typeof BroadcastChannel === 'function'`
+    // null-guard branch is exercised.
+    delete window.BroadcastChannel;
+  } else {
+    window.BroadcastChannel = function (name) {
+      return new FakeBroadcastChannel(name, channelRegistry, errors);
+    };
+  }
 
   window.alert = (msg) => {
     alerts.push(String(msg));
@@ -344,14 +355,8 @@ async function main() {
     return true;
   };
 
-  // location.reload counting is wired through the virtualConsole's
-  // jsdomError handler above — see the comment there for why the
-  // unforgeable IDL property forces that route.
-
-  // Expose a status sink so the rendered script's updateStatus() — when
-  // it falls back to console-log or similar — can be observed. The script
-  // generally writes into a DOM element, so the DOM dump in the response
-  // covers it too; we capture window.__lastStatus when set explicitly.
+  // Status sink so a rendered script's updateStatus() can be observed
+  // out-of-band (the DOM dump in the response normally covers it).
   Object.defineProperty(window, "__captureStatus", {
     value: (text) => {
       lastStatus = String(text);
@@ -364,44 +369,51 @@ async function main() {
   const language = req.language || "js";
   let scriptBody = req.script || "";
   let invoke = req.invoke || "";
+  let transpileFailed = false;
   try {
     scriptBody = maybeTranspile(scriptBody, language);
     invoke = maybeTranspile(invoke, language);
   } catch (e) {
     errors.push(`transpile failure (${language}): ${(e && e.message) || e}`);
+    transpileFailed = true;
   }
 
-  // Run prelude + script at global scope so top-level `function` and
-  // `var` declarations land on `window`, matching how a real browser
-  // hoists them out of an inline `<script>` block. Wrapping the script
-  // in an async IIFE would scope `function restartAddon() {…}` to the
-  // IIFE — invoke's `window.restartAddon()` then resolves to undefined
-  // and throws TypeError.
-  //
-  // Invoke runs separately inside an async IIFE so `await` works and we
-  // can capture its rejection. Errors from the script body's
-  // synchronous init bubble through the try/catch below.
-  const initProgram = `${prelude}\n${scriptBody}`;
-  try {
-    window.eval(initProgram);
-  } catch (e) {
-    errors.push(`script init: ${(e && e.stack) || e}`);
+  if (!transpileFailed) {
+    // Run prelude + script at global scope of the JSDOM window's own VM
+    // context (via `dom.getInternalVMContext()` + node's `vm.runInContext`)
+    // so top-level `function` / `var` declarations land on `window`,
+    // matching how a real browser hoists them out of an inline
+    // `<script>` block. Wrapping in an async IIFE would scope
+    // `function restartAddon() {…}` to the IIFE — invoke's
+    // `window.restartAddon()` then resolves to undefined and throws
+    // TypeError. Using vm.runInContext rather than eval also keeps the
+    // project's "no eval()" lint clean.
+    //
+    // Invoke runs separately inside an async IIFE so `await` works and
+    // we can capture its rejection.
+    const vmContext = dom.getInternalVMContext();
+    const initProgram = `${prelude}\n${scriptBody}`;
+    try {
+      runInContext(initProgram, vmContext, { filename: "harness:init" });
+    } catch (e) {
+      errors.push(`script init: ${(e && e.stack) || e}`);
+    }
+
+    const invokeProgram = `
+      (async () => { ${invoke} })().then(
+        () => { window.__harnessDone = true; },
+        (e) => { window.__harnessError = (e && e.stack) || String(e); window.__harnessDone = true; },
+      );
+    `;
+    try {
+      runInContext(invokeProgram, vmContext, { filename: "harness:invoke" });
+    } catch (e) {
+      errors.push(`invoke: ${(e && e.stack) || e}`);
+    }
   }
 
-  const invokeProgram = `
-    (async () => { ${invoke} })().then(
-      () => { window.__harnessDone = true; },
-      (e) => { window.__harnessError = (e && e.stack) || String(e); window.__harnessDone = true; },
-    );
-  `;
-  try {
-    window.eval(invokeProgram);
-  } catch (e) {
-    errors.push(`invoke: ${(e && e.stack) || e}`);
-  }
-
-  // Drain microtasks before advancing fake time so the script reaches its
-  // first `await fetch(...)` and registers the resulting `.then` chain.
+  // Drain microtasks before advancing fake time so the script reaches
+  // its first `await fetch(...)` and registers the resulting `.then` chain.
   await new Promise((r) => setImmediate(r));
 
   // Apply scheduled broadcast injections on the virtual clock.
@@ -433,10 +445,9 @@ async function main() {
     confirms,
     console: consoleLog,
     status: lastStatus,
-    // outerHTML so the html/head/body tags and their own attributes
-    // (e.g. ``document.body.dataset.foo`` writes a body attr, not a child)
-    // make it into the serialised snapshot. Tests routinely write
-    // dataset attrs on body as a side-channel for in-page state.
+    // outerHTML so body's own attributes (set via
+    // `document.body.dataset.foo`) survive into the snapshot, not just
+    // body's children.
     dom: window.document.documentElement.outerHTML,
     errors,
   };

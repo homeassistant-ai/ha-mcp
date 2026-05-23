@@ -1,22 +1,19 @@
 """Parse-time guard for every rendered ``<script>`` surface in the repo.
 
 Auto-discovers each surface via :func:`_js_harness.discover_script_surfaces`
-and verifies the rendered body parses as JavaScript (or, for Astro pages
-that use plain ``<script>`` without ``define:vars`` / ``is:inline``, as
-TypeScript via esbuild's type-stripping transform).
+and verifies the rendered body parses as JavaScript (or, for Astro
+pages that use plain ``<script>`` without ``define:vars`` /
+``is:inline``, as TypeScript via esbuild's type-stripping transform).
 
-This subsumes the original ``TestRenderedHTMLJsSyntax`` (which only
-checked ``_SETTINGS_HTML``) and extends parse coverage automatically as
-new UI surfaces ship — settings UI, consent form, Astro layout, Astro
-pages. No registration needed: drop a new ``.astro`` file under
-``site/src/`` or add a ``create_*_html`` function to a registered module
-and the next test run picks it up.
+Parse coverage extends automatically as new UI surfaces ship — drop a
+new ``.astro`` file under ``site/src/`` or register a renderer in
+``_js_harness.py::_PY_RENDERERS`` and the next test run picks it up.
 
 A parse failure here is catastrophic — a Python-consumed ``\\n`` inside
 a single-quoted JS string, an unbalanced brace from a hand-edit, an
 Astro template-literal that didn't close cleanly — all abort the entire
 script before any handler runs, leaving the page stuck on its initial
-``Loading...`` indicator with no in-page diagnostic (the page-level
+state with no in-page diagnostic (the page-level
 ``window.addEventListener('error', ...)`` cannot catch parse-time
 errors). The cheap ``node --check`` / esbuild parse here is the canary
 that catches it before users do.
@@ -24,6 +21,7 @@ that catches it before users do.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -40,10 +38,22 @@ from ._js_harness import (
 # ``[astro_pages_setup]``).
 _SURFACES: list[ScriptSurface] = discover_script_surfaces()
 
+# CI sets ``CI=true`` (GitHub Actions does this by default). When set,
+# any missing-dependency skip path in this file flips to fail so a
+# workflow drift that drops the install step doesn't quietly lose
+# parse coverage. Locally the skips stay informative.
+_IN_CI = os.environ.get("CI", "").lower() in ("1", "true", "yes")
+
+
+def _missing_dep(message: str) -> None:
+    if _IN_CI:
+        pytest.fail(f"CI: {message}")
+    pytest.skip(message)
+
 
 def _check_node_available() -> None:
     if shutil.which("node") is None:
-        pytest.skip("node not installed — install Node.js to run parse guard")
+        _missing_dep("node not installed — install Node.js to run parse guard")
 
 
 @pytest.mark.parametrize(
@@ -63,12 +73,12 @@ def test_rendered_script_parses(surface: ScriptSurface, tmp_path) -> None:
     _check_node_available()
 
     if surface.language == "ts":
-        # esbuild's CLI accepts piped input; --loader=ts strips types and
-        # raises non-zero on syntax errors. Bundled with the harness deps
-        # at tests/js/node_modules/.bin/esbuild.
+        # esbuild's CLI accepts piped input; --loader=ts strips types
+        # and raises non-zero on syntax errors. Bundled with the
+        # harness deps at tests/js/node_modules/.bin/esbuild.
         esbuild = JS_DEPS_DIR / "node_modules" / ".bin" / "esbuild"
         if not esbuild.is_file():
-            pytest.skip(
+            _missing_dep(
                 "esbuild not installed — run `npm install` in tests/js/ "
                 "to enable TypeScript parse coverage",
             )

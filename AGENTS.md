@@ -570,11 +570,14 @@ assert result.reloads == 1
 assert result.broadcasts_of_type("restart-required")
 ```
 
-The harness fakes time (`setTimeout` / `Date.now` on a virtual clock —
-60s probe windows take milliseconds), stubs `fetch` from a URL pattern
-map, captures `location.reload` via JSDOM's `jsdomError` channel
-(unforgeable IDL property), and provides a `BroadcastChannel` shim that
-can be primed with cross-tab events.
+The harness fakes `setTimeout` / `setInterval` / `Date.now` on a
+virtual clock (a 60 s production probe completes in milliseconds of
+wall time), stubs `fetch` from a URL pattern map (with optional
+`responses: [...]` sequencing for state-flip flows), captures
+`location.reload` via JSDOM's `jsdomError` channel (unforgeable IDL
+property), and provides a `BroadcastChannel` shim that can be primed
+with cross-tab events. `new Date()` / `performance.now()` continue to
+report wall time — only the three sources above are faked.
 
 Astro `<script>` blocks without `define:vars` / `is:inline` are
 TypeScript by default — pass `language="ts"` to `run_script` and the
@@ -592,9 +595,17 @@ result = run_script(script, prelude=prelude, ...)
 CI installs Node + jsdom in the `unit-tests` job (`.github/workflows/pr.yml`).
 Local devs without `tests/js/node_modules/` get clean skips.
 
-When adding a new UI surface: drop the file, add behavioural tests in
-`tests/src/unit/test_*_js_behavior.py` mirroring the existing per-
-surface modules; parse coverage is automatic.
+When adding a new UI surface:
+- Python-rendered HTML: register the renderer in
+  `_js_harness.py::_PY_RENDERERS` so the auto-discovery walker picks
+  it up for parse coverage.
+- Astro page: drop the `.astro` file under `site/src/`; discovery walks
+  the tree automatically.
+- Behavioural tests: add a `test_<surface>_js_behavior.py` module
+  alongside the existing ones (`test_settings_ui_js_behavior.py`,
+  `test_astro_setup_js_behavior.py`, `test_astro_tools_js_behavior.py`,
+  `test_astro_layout_js_behavior.py`, `test_consent_form_js_behavior.py`)
+  — pattern is one module per UI surface.
 
 ## Setup Wizard (`site/src/pages/setup.astro`)
 
