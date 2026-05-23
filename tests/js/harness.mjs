@@ -372,6 +372,39 @@ async function main() {
     writable: true,
   });
 
+  // JSDOM intentionally omits layout-dependent DOM APIs. Stubbing them
+  // as no-ops here lets rendered scripts that call them as best-effort
+  // UX (smooth scroll, focus management) keep running — without the
+  // stubs each call throws "not a function" from inside a timer
+  // callback and the new timer-error routing surfaces those as test
+  // failures, even though the production behaviour is fine.
+  for (const proto of [window.Element.prototype, window.HTMLElement.prototype]) {
+    if (typeof proto.scrollIntoView !== "function") {
+      Object.defineProperty(proto, "scrollIntoView", {
+        value: function () {},
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  if (typeof window.scrollTo !== "function") {
+    window.scrollTo = () => {};
+  }
+  if (typeof window.matchMedia !== "function") {
+    window.matchMedia = (query) => ({
+      matches: false,
+      media: String(query),
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    });
+  }
+
   const prelude = req.prelude || "";
   const language = req.language || "js";
   let scriptBody = req.script || "";
