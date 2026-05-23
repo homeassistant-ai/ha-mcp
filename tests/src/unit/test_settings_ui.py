@@ -1952,6 +1952,78 @@ class TestSaveToolsResponseShape:
         assert "pinned" not in body
 
 
+class TestSettingsInfoEndpoint:
+    """``GET /api/settings/info`` exposes per-process identity so the
+    restart-then-reload JS cycle can prove a restart actually happened.
+
+    Without ``instance_id`` the JS poll cycle can't tell the difference
+    between "addon successfully restarted and the new instance is up"
+    and "addon never restarted (silent supervisor failure) and the OLD
+    instance is still serving 200" — both look identical to a status-
+    only probe. Pins the contract: ``instance_id`` must be present,
+    stable within a process, and ``started_at`` must be a positive
+    epoch-seconds float.
+    """
+
+    def _capture_handler(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/info") and "GET" in methods:
+                    captured["get"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["get"]
+
+    @pytest.mark.asyncio
+    async def test_returns_instance_id_and_started_at(self, monkeypatch):
+        from ha_mcp.settings_ui import (
+            _PROCESS_INSTANCE_ID,
+            _PROCESS_STARTED_AT,
+        )
+
+        handler = self._capture_handler(monkeypatch)
+        resp = await handler(MagicMock())
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        # Pre-existing fields still there.
+        assert "is_addon" in body
+        assert "is_sidecar" in body
+        # New restart-detection fields.
+        assert body["instance_id"] == _PROCESS_INSTANCE_ID
+        assert body["started_at"] == _PROCESS_STARTED_AT
+        # Sanity: instance_id is a non-empty string, started_at is a
+        # positive epoch-seconds float (i.e. truly an instant in time,
+        # not a serialization artifact).
+        assert isinstance(body["instance_id"], str)
+        assert len(body["instance_id"]) > 0
+        assert isinstance(body["started_at"], int | float)
+        assert body["started_at"] > 0
+
+    @pytest.mark.asyncio
+    async def test_instance_id_stable_within_process(self, monkeypatch):
+        """Two calls within the same process must return the same
+        ``instance_id``. Without this invariant the JS poll cycle
+        would see the value flip on every call and reload immediately,
+        completely defeating the restart-detection contract.
+        """
+        handler = self._capture_handler(monkeypatch)
+        first = json.loads((await handler(MagicMock())).body)
+        second = json.loads((await handler(MagicMock())).body)
+        assert first["instance_id"] == second["instance_id"]
+        assert first["started_at"] == second["started_at"]
+
+
 class TestFeatureGatedToolsCustomCode:
     """``ha_manage_custom_tool`` (gated by ``enable_code_mode``) must
     appear in the settings-UI tool list when the toggle is off — same

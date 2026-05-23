@@ -14,6 +14,8 @@ import contextlib
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDict
 
@@ -62,6 +64,17 @@ class ToolStub(TypedDict):
 
 
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
+
+# Per-process identity surfaced via ``/api/settings/info`` so the
+# restart UI can tell whether the addon actually restarted (vs. the
+# poll-cycle succeeding against the still-running OLD instance because
+# the supervisor restart silently no-op'd). Generated once at module
+# import; a fresh Python process gets a fresh value, so any restart
+# that actually swaps processes flips both. ``started_at`` is Unix
+# epoch seconds for human debuggability; ``instance_id`` is the
+# load-bearing identifier the JS poll compares against.
+_PROCESS_INSTANCE_ID: str = uuid.uuid4().hex
+_PROCESS_STARTED_AT: float = time.time()
 
 logger = logging.getLogger(__name__)
 
@@ -953,28 +966,52 @@ const restartChannel =
 // page reloads.
 let restartInProgress = false;
 
-async function _probeAddonReady() {
-  // Resolve true when ``/api/settings/info`` returns 200 (addon is
-  // serving HTTP again), false when we hit the cap. Caller decides
-  // whether to reload, surface a "didn't come back" message, or
-  // both. ``cache: 'no-store'`` so the browser doesn't serve a
-  // stale 200 from before the restart.
+async function _fetchSettingsInfo() {
+  // Read ``/api/settings/info`` once; return the parsed JSON or null
+  // on any failure. ``cache: 'no-store'`` so the browser can't serve
+  // a stale 200 from before the restart.
+  try {
+    const resp = await fetch('./api/settings/info', {cache: 'no-store'});
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function _probeAddonRestarted(previousInstanceId) {
+  // Resolve true when ``/api/settings/info`` returns a different
+  // ``instance_id`` than the one captured before the restart —
+  // proves a NEW process is serving, not the same OLD one (which
+  // would happen if supervisor silently failed to restart and the
+  // probe just saw the still-running upstream answer 200). When
+  // ``previousInstanceId`` is null (couldn't capture pre-restart,
+  // or server is on an older build that doesn't expose the field)
+  // fall back to "any 200 means it's back" — same behavior as
+  // before this fix landed, so we degrade gracefully.
   const deadline = Date.now() + RESTART_PROBE_MAX_TOTAL_MS;
   while (Date.now() < deadline) {
-    try {
-      const resp = await fetch('./api/settings/info', {cache: 'no-store'});
-      if (resp.ok) return true;
-    } catch (_e) {
-      // Connection drop / DNS / ingress 5xx while addon is down —
-      // expected. Suppress noise: a console.warn here would spam the
-      // devtools log during every restart.
+    const info = await _fetchSettingsInfo();
+    if (info) {
+      if (previousInstanceId) {
+        if (info.instance_id && info.instance_id !== previousInstanceId) {
+          return true;
+        }
+        // Same instance_id (or field missing on the response) — keep
+        // polling; do NOT reload yet because the restart hasn't
+        // actually happened yet.
+      } else {
+        // No baseline to compare against — best we can do is the
+        // old "200 = up" check.
+        return true;
+      }
     }
     await new Promise(r => setTimeout(r, RESTART_PROBE_INTERVAL_MS));
   }
   return false;
 }
 
-async function _runRestartReloadCycle() {
+async function _runRestartReloadCycle(previousInstanceId) {
   const btn = document.getElementById('restartBtn');
   // Initial grace lets supervisor actually kill the addon before we
   // start probing — otherwise the first probe may hit the OLD
@@ -982,13 +1019,14 @@ async function _runRestartReloadCycle() {
   btn.textContent = 'Restarting…';
   await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
   btn.textContent = 'Waiting for add-on to come back online…';
-  const ready = await _probeAddonReady();
-  if (ready) {
+  const restarted = await _probeAddonRestarted(previousInstanceId);
+  if (restarted) {
     window.location.reload();
   } else {
-    // Probe gave up after RESTART_PROBE_MAX_TOTAL_MS. Restart may
-    // have failed entirely or supervisor is genuinely slow. Surface
-    // a clear next-step instead of silently doing nothing.
+    // Probe gave up after RESTART_PROBE_MAX_TOTAL_MS. Restart either
+    // never actually fired (silent supervisor failure → instance_id
+    // never flipped) OR supervisor is genuinely slower than the cap.
+    // Surface a clear next-step instead of silently doing nothing.
     btn.textContent = 'Add-on did not come back online — reload manually';
     btn.disabled = false;
     restartInProgress = false;
@@ -1002,6 +1040,12 @@ async function restartAddon() {
   restartInProgress = true;
   btn.disabled = true;
   btn.textContent = 'Restarting…';
+  // Capture the current process's ``instance_id`` BEFORE firing the
+  // restart so the poll cycle has a baseline to compare against.
+  // null is fine — the probe degrades to the old "any 200 means up"
+  // mode rather than refusing to reload.
+  const info = await _fetchSettingsInfo();
+  const previousInstanceId = info?.instance_id ?? null;
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
     if (!resp.ok && resp.status < 500) {
@@ -1031,11 +1075,15 @@ async function restartAddon() {
     console.warn('restartAddon fetch dropped (expected during self-restart):', _e);
   }
   // Other tabs need to run the same cycle so they reload to the fresh
-  // addon, not stay on a stale view. Broadcast BEFORE we sleep.
+  // addon, not stay on a stale view. Broadcast the baseline so each
+  // tab compares against the same pre-restart ``instance_id``.
   if (restartChannel) {
-    restartChannel.postMessage({type: 'restart-initiated'});
+    restartChannel.postMessage({
+      type: 'restart-initiated',
+      previousInstanceId,
+    });
   }
-  await _runRestartReloadCycle();
+  await _runRestartReloadCycle(previousInstanceId);
 }
 
 // Listener: when ANY tab broadcasts a save that needs a restart, all
@@ -1051,7 +1099,11 @@ if (restartChannel) {
       restartInProgress = true;
       const btn = document.getElementById('restartBtn');
       if (btn) btn.disabled = true;
-      _runRestartReloadCycle();
+      // Use the originating tab's baseline ``instance_id`` so every
+      // tab waits for the SAME ``instance_id`` flip before reloading.
+      // Falls back to null → "any 200 = ready" mode if the originator
+      // couldn't capture one.
+      _runRestartReloadCycle(data.previousInstanceId ?? null);
     }
   });
 }
@@ -2275,8 +2327,23 @@ def build_settings_handlers(
         # button (HTML show/hide); it MUST NOT leak True for HTTP modes
         # since stopping the FastMCP-mounted route would mean killing
         # the MCP server itself.
+        #
+        # ``instance_id`` + ``started_at`` are surfaced so the
+        # restart-then-reload JS cycle can prove a restart actually
+        # happened (the value flips across processes) instead of
+        # trusting that a poll returning 200 means the new instance
+        # is up — a silent restart no-op would otherwise see the OLD
+        # instance still answering and the page would reload to the
+        # same state.
         addon = False if is_sidecar else is_running_in_addon()
-        return JSONResponse({"is_addon": addon, "is_sidecar": is_sidecar})
+        return JSONResponse(
+            {
+                "is_addon": addon,
+                "is_sidecar": is_sidecar,
+                "instance_id": _PROCESS_INSTANCE_ID,
+                "started_at": _PROCESS_STARTED_AT,
+            }
+        )
 
     async def _get_feature_flags(_: Request) -> JSONResponse:
         """Return live feature-flag values + per-field origin + editable flag.
