@@ -28,8 +28,9 @@ import subprocess
 import pytest
 
 from ._js_harness import (
-    JS_DEPS_DIR,
     ScriptSurface,
+    _esbuild_binary,
+    _node_binary,
     discover_script_surfaces,
 )
 
@@ -52,7 +53,7 @@ def _missing_dep(message: str) -> None:
 
 
 def _check_node_available() -> None:
-    if shutil.which("node") is None:
+    if shutil.which(_node_binary()) is None:
         _missing_dep("node not installed — install Node.js to run parse guard")
 
 
@@ -74,9 +75,10 @@ def test_rendered_script_parses(surface: ScriptSurface, tmp_path) -> None:
 
     if surface.language == "ts":
         # esbuild's CLI accepts piped input; --loader=ts strips types
-        # and raises non-zero on syntax errors. Bundled with the
-        # harness deps at tests/js/node_modules/.bin/esbuild.
-        esbuild = JS_DEPS_DIR / "node_modules" / ".bin" / "esbuild"
+        # and raises non-zero on syntax errors. Defaults to the local
+        # install from package-lock; ``ESBUILD_BINARY`` env var
+        # overrides for environments that supply it elsewhere.
+        esbuild = _esbuild_binary()
         if not esbuild.is_file():
             _missing_dep(
                 "esbuild not installed — run `npm install` in tests/js/ "
@@ -103,7 +105,7 @@ def test_rendered_script_parses(surface: ScriptSurface, tmp_path) -> None:
     js_file = tmp_path / f"{surface.surface_id}.js"
     js_file.write_text(surface.script, encoding="utf-8")
     result = subprocess.run(
-        ["node", "--check", str(js_file)],
+        [_node_binary(), "--check", str(js_file)],
         capture_output=True,
         text=True,
         check=False,

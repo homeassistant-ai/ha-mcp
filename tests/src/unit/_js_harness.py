@@ -14,6 +14,7 @@ syntax errors; this harness adds behavioural assertions.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -29,8 +30,27 @@ EXTRACT_ASTRO_VARS_PATH = HARNESS_PATH.parent / "extract_astro_vars.mjs"
 JS_DEPS_DIR = HARNESS_PATH.parent
 
 
+def _node_binary() -> str:
+    """Return the node binary to invoke. Default is PATH-resolved
+    ``node``; ``NODE_BINARY`` env var overrides for sandboxed runners
+    that pin a specific path.
+    """
+    return os.environ.get("NODE_BINARY", "node")
+
+
+def _esbuild_binary() -> Path:
+    """Return the esbuild binary path. Default is the project-local
+    install from ``tests/js/package-lock.json``; ``ESBUILD_BINARY`` env
+    var overrides for environments that supply esbuild elsewhere.
+    """
+    override = os.environ.get("ESBUILD_BINARY")
+    if override:
+        return Path(override)
+    return JS_DEPS_DIR / "node_modules" / ".bin" / "esbuild"
+
+
 def _node_available() -> bool:
-    return shutil.which("node") is not None
+    return shutil.which(_node_binary()) is not None
 
 
 def _jsdom_installed() -> bool:
@@ -138,7 +158,7 @@ def run_script(
     }
 
     proc = subprocess.run(
-        ["node", str(HARNESS_PATH)],
+        [_node_binary(), str(HARNESS_PATH)],
         input=json.dumps(request),
         capture_output=True,
         text=True,
@@ -175,7 +195,7 @@ def extract_astro_frontmatter_vars(
     """
     skip_if_unsupported()
     proc = subprocess.run(
-        ["node", str(EXTRACT_ASTRO_VARS_PATH)],
+        [_node_binary(), str(EXTRACT_ASTRO_VARS_PATH)],
         input=json.dumps({"path": str(astro_path), "names": names}),
         capture_output=True,
         text=True,

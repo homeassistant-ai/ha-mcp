@@ -293,11 +293,11 @@ class TestRestartAddonFlow:
         through to the poll-and-reload cycle, not surface the 5xx as a
         config error.
         """
-        # Three sequenced /api/settings/info responses: the script hits
-        # this endpoint at script init (loadTools), again pre-POST in
-        # restartAddon (baseline capture), and a third time in the probe
-        # loop. The last entry sticks, so any additional probe iteration
-        # also sees the flipped id.
+        # Seed the info endpoint with two baseline responses then a
+        # flipped one. The harness's `responses: [...]` shape advances
+        # per call and sticks on the last entry, so any number of
+        # probe iterations beyond the first sees the flip — that's
+        # what lets the probe terminate with restarted=true.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/restart": {"status": 503, "body": ""},

@@ -24,6 +24,7 @@ fixture to drift.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -153,8 +154,17 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
         ]
     )
 
+    # Client tiles also carry `data-transports` (a JSON array) — the
+    # script's connection-click handler reads it via JSON.parse to
+    # decide which connection options apply per client. Missing the
+    # attr triggers `JSON.parse(undefined)` and aborts the wizard
+    # interaction with a non-obvious error.
     parts.extend(
-        f'<button data-client="{c["id"]}">{c["name"]}</button>'
+        "<button data-client=\"{cid}\" data-transports='{transports}'>{name}</button>".format(
+            cid=c["id"],
+            name=c["name"],
+            transports=json.dumps(c.get("transports", [])),
+        )
         for c in wizard_vars["clientsData"]
     )
     parts.extend(
@@ -185,7 +195,9 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
 
 
 class TestWizardStateMachine:
-    """Each connection shape exposes a different section sequence."""
+    """Local / network / remote each unlock a different section
+    sequence; the tests below pin the visibility shape after each step.
+    """
 
     def test_initial_state_only_client_section_visible(
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]

@@ -343,7 +343,14 @@ async function main() {
     delete window.BroadcastChannel;
   } else {
     window.BroadcastChannel = function (name) {
-      return new FakeBroadcastChannel(name, channelRegistry, errors);
+      try {
+        return new FakeBroadcastChannel(name, channelRegistry, errors);
+      } catch (e) {
+        // Surface constructor failures explicitly instead of letting
+        // the rendered script see a corrupt object.
+        errors.push(`BroadcastChannel ctor: ${(e && e.stack) || e}`);
+        throw e;
+      }
     };
   }
 
