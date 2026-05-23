@@ -777,10 +777,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         pinned = list(self._PINNED_TOOLS)
         pinned.extend(self._user_pinned_tools)
 
-        # Pin code mode tool so it gets individual permission gating
-        # rather than being hidden behind the BM25 search proxy.
-        if self.settings.enable_code_mode:
-            pinned.append("ha_manage_custom_tool")
+        # ``ha_manage_custom_tool`` was previously pinned here whenever
+        # code mode was enabled, so users could gate it via per-tool MCP
+        # permission prompts even when toolsearch hid the catalog. The
+        # per-tool approval middleware shipped in #966 now gates it at
+        # call time regardless of catalog visibility, so it no longer
+        # needs an explicit pin just to be reachable for gating.
 
         # The client may not support resources or server instructions — add
         # skills hint to the search tool description (the one place the LLM
