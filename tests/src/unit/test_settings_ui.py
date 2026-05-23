@@ -1495,6 +1495,36 @@ class TestSupervisorOptionsHelpers:
         # No assertion — passing means the swallowed exception didn't
         # propagate out of the background task.
 
+    @pytest.mark.asyncio
+    async def test_schedule_self_restart_catches_runtime_error(
+        self, monkeypatch, caplog
+    ):
+        """``make_supervisor_httpx_client`` raises ``RuntimeError`` when
+        ``SUPERVISOR_TOKEN`` is unset. The two supervisor *options*
+        helpers already catch this; the schedule helper used to let it
+        escape as an uncaught task exception (asyncio surfaces it as
+        "Task exception was never retrieved" at GC time, server-visible
+        but not the loud ERROR-line of the other failure modes). Pin
+        the parity catch so the user gets a clear log when the rare
+        race fires.
+        """
+        import logging
+
+        from ha_mcp.settings_ui import _schedule_supervisor_self_restart
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        with caplog.at_level(logging.ERROR, logger="ha_mcp.settings_ui"):
+            _schedule_supervisor_self_restart(verify_ssl=True, delay=0)
+            await _drain_background_restart_tasks()
+
+        # Look for the specific log message we expect — broader
+        # "any ERROR record" would let unrelated noise pass the test.
+        assert any(
+            "SUPERVISOR_TOKEN unset" in rec.message
+            for rec in caplog.records
+            if rec.levelno >= logging.ERROR
+        ), "expected a logged ERROR mentioning the missing token"
+
 
 class TestSaveBackupConfigAddonMode:
     """Addon-mode ``POST /api/settings/backup-config`` flow.
@@ -1794,6 +1824,132 @@ class TestSaveFeatureFlagsAddonMode:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert body["error"]["code"] == "INTERNAL_ERROR"
+
+
+class TestSaveFeatureFlagsStandaloneMode:
+    """Non-addon ``POST /api/settings/features`` flow.
+
+    Pins the file/default-mode response shape introduced when the save
+    handlers unified on ``restart_required``. The JS in
+    ``saveFeatureFlag`` branches on ``data.restart_required`` to show
+    the cross-tab restart banner; a regression to the old bare
+    ``{"success": True}`` shape would silently hide the banner for
+    every standalone / Docker / Claude Desktop user. Lock the shape.
+    """
+
+    def _make_request(self, body):
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    def _capture_post_handler(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Point feature-flag persistence at the test's temp dir so we
+        # don't write to the real data dir.
+        monkeypatch.setattr("ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path)
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/features") and "POST" in methods:
+                    captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["post"]
+
+    @pytest.mark.asyncio
+    async def test_standalone_save_returns_unified_contract_shape(
+        self, monkeypatch, tmp_path
+    ):
+        """File-mode response must match the unified
+        ``{success, applied, mode, restart_required}`` shape — same
+        keys as Tools and Server Settings save endpoints. The
+        ``restart_required: True`` carries the banner cue; ``mode:
+        "file"`` distinguishes the persistence path; ``applied``
+        echoes the new value(s) so the client can confirm what stuck.
+        """
+        post_handler = self._capture_post_handler(monkeypatch, tmp_path)
+
+        resp = await post_handler(
+            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+        )
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["mode"] == "file"
+        assert body["restart_required"] is True
+        assert body["applied"] == {"enable_yaml_config_editing": True}
+        # Legacy field names from earlier iterations must not creep
+        # back in alongside the new shape.
+        assert "restarting" not in body
+
+
+class TestSaveToolsResponseShape:
+    """Pins the unified ``{success, applied, mode, restart_required}``
+    response shape on ``POST /api/settings/tools``. Previously returned
+    ``disabled`` and ``pinned`` count fields that no JS or test code
+    actually consumed; replaced with ``applied`` + ``mode`` so the
+    three save endpoints (Tools, Server Settings, Backups) share the
+    same contract and a cross-tab BroadcastChannel listener can react
+    uniformly. A regression to either the old counts shape or a
+    bare ``{"success": True}`` would break the JS banner.
+    """
+
+    def _make_request(self, body):
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    def _capture_post_handler(self, monkeypatch, tmp_path):
+        # Point the tool-config write at the test temp dir.
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/tools") and "POST" in methods:
+                    captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["post"]
+
+    @pytest.mark.asyncio
+    async def test_save_returns_unified_contract_shape(self, monkeypatch, tmp_path):
+        post_handler = self._capture_post_handler(monkeypatch, tmp_path)
+
+        resp = await post_handler(
+            self._make_request(
+                {"states": {"ha_get_state": "pinned", "ha_search_entities": "disabled"}}
+            )
+        )
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["mode"] == "file"
+        assert body["restart_required"] is True
+        assert body["applied"] == {
+            "ha_get_state": "pinned",
+            "ha_search_entities": "disabled",
+        }
+        # The retired count fields must not leak through.
+        assert "disabled" not in body
+        assert "pinned" not in body
 
 
 class TestFeatureGatedToolsCustomCode:

@@ -921,42 +921,139 @@ async function stopSidecar() {
   }
 }
 
-const RESTART_RELOAD_DELAY_S = 10;
+// Restart-readiness probe tunables. The grace period gives supervisor
+// time to actually kill the addon (so a too-eager first probe doesn't
+// hit the OLD instance and reload before the new one is up). The poll
+// interval is short enough to feel responsive on a fast restart, long
+// enough to not hammer ingress. The cap is the user-visible upper
+// bound; HAOS addon restarts are typically 15-25s but cold-start +
+// image pull can stretch further, so 60s gives genuine breathing room
+// before we tell the user the auto-reload failed.
+const RESTART_PROBE_INITIAL_GRACE_MS = 3000;
+const RESTART_PROBE_INTERVAL_MS = 2000;
+const RESTART_PROBE_MAX_TOTAL_MS = 60000;
+
+// Cross-tab restart broadcast channel. When any tab saves a setting
+// that needs a restart, it posts ``restart-required`` so the other
+// tabs surface the same banner. When any tab fires the supervisor
+// restart, it posts ``restart-initiated`` so the other tabs run the
+// same poll-then-reload cycle — that way ALL tabs come back to the
+// fresh addon instead of leaving stale ones spinning.
+const restartChannel =
+  typeof BroadcastChannel === 'function'
+    ? new BroadcastChannel('ha-mcp-settings')
+    : null;
+
+// Module-level concurrency guard. The button's ``disabled`` attribute
+// blocks normal clicks, but a second invocation via DevTools / a
+// keyboard accessibility tool / a cross-tab broadcast would otherwise
+// queue a second supervisor restart + a second auto-reload. Cleared
+// only on a 4xx genuine config error (so the user can reload and try
+// again); otherwise stays true through the restart cycle until the
+// page reloads.
+let restartInProgress = false;
+
+async function _probeAddonReady() {
+  // Resolve true when ``/api/settings/info`` returns 200 (addon is
+  // serving HTTP again), false when we hit the cap. Caller decides
+  // whether to reload, surface a "didn't come back" message, or
+  // both. ``cache: 'no-store'`` so the browser doesn't serve a
+  // stale 200 from before the restart.
+  const deadline = Date.now() + RESTART_PROBE_MAX_TOTAL_MS;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch('./api/settings/info', {cache: 'no-store'});
+      if (resp.ok) return true;
+    } catch (_e) {
+      // Connection drop / DNS / ingress 5xx while addon is down —
+      // expected. Suppress noise: a console.warn here would spam the
+      // devtools log during every restart.
+    }
+    await new Promise(r => setTimeout(r, RESTART_PROBE_INTERVAL_MS));
+  }
+  return false;
+}
+
+async function _runRestartReloadCycle() {
+  const btn = document.getElementById('restartBtn');
+  // Initial grace lets supervisor actually kill the addon before we
+  // start probing — otherwise the first probe may hit the OLD
+  // instance and we reload before the new one is up.
+  btn.textContent = 'Restarting…';
+  await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
+  btn.textContent = 'Waiting for add-on to come back online…';
+  const ready = await _probeAddonReady();
+  if (ready) {
+    window.location.reload();
+  } else {
+    // Probe gave up after RESTART_PROBE_MAX_TOTAL_MS. Restart may
+    // have failed entirely or supervisor is genuinely slow. Surface
+    // a clear next-step instead of silently doing nothing.
+    btn.textContent = 'Add-on did not come back online — reload manually';
+    btn.disabled = false;
+    restartInProgress = false;
+  }
+}
 
 async function restartAddon() {
+  if (restartInProgress) return;
   const btn = document.getElementById('restartBtn');
   if (!confirm('Restart the add-on now? The page will reload automatically once the add-on is back online.')) return;
+  restartInProgress = true;
   btn.disabled = true;
   btn.textContent = 'Restarting…';
-  // Only suppress the auto-reload on a genuine config error (4xx like
-  // SUPERVISOR_TOKEN missing). Anything else — 200, 5xx from ingress
-  // when supervisor killed our upstream mid-response, or a thrown
-  // network error from the same kill — means the restart is in flight
-  // and we should reload after the addon comes back.
-  let configError = false;
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
     if (!resp.ok && resp.status < 500) {
-      configError = true;
+      // 4xx is a genuine config error (e.g. SUPERVISOR_TOKEN unset).
+      // The restart was NOT initiated — surface the error and let the
+      // user fix the underlying cause. Keep button enabled so they
+      // can retry once the issue is resolved. Don't broadcast (other
+      // tabs would only see a misleading "restart in progress").
       let msg = 'Restart failed';
       try {
         const err = await resp.json();
-        if (err && err.error && err.error.message) {
-          msg = 'Failed: ' + err.error.message;
-        }
-      } catch (_e) {}
+        if (err?.error?.message) msg = 'Failed: ' + err.error.message;
+      } catch (_e) { /* leave default msg */ }
       btn.textContent = msg;
       btn.disabled = false;
+      restartInProgress = false;
       alert(msg);
+      return;
     }
+    // 200 OK → background task scheduled. 5xx → ingress upstream
+    // drop, restart IS in flight. Both fall through to the reload
+    // cycle.
   } catch (_e) {
-    // Connection lost mid-request — restart in flight, fall through.
+    // Network error mid-request — supervisor killed our upstream.
+    // Restart in flight; fall through. Log for debug, suppress the
+    // unused-binding lint.
+    console.warn('restartAddon fetch dropped (expected during self-restart):', _e);
   }
-  if (!configError) {
-    btn.textContent =
-      'Restarting… page will reload in ' + RESTART_RELOAD_DELAY_S + 's';
-    setTimeout(() => window.location.reload(), RESTART_RELOAD_DELAY_S * 1000);
+  // Other tabs need to run the same cycle so they reload to the fresh
+  // addon, not stay on a stale view. Broadcast BEFORE we sleep.
+  if (restartChannel) {
+    restartChannel.postMessage({type: 'restart-initiated'});
   }
+  await _runRestartReloadCycle();
+}
+
+// Listener: when ANY tab broadcasts a save that needs a restart, all
+// open tabs surface the banner. When ANY tab fires the restart, all
+// open tabs run their own poll-then-reload cycle so none of them are
+// left holding a stale connection to a now-dead addon.
+if (restartChannel) {
+  restartChannel.addEventListener('message', (e) => {
+    const data = e.data || {};
+    if (data.type === 'restart-required') {
+      document.getElementById('restartNotice').classList.add('show');
+    } else if (data.type === 'restart-initiated' && !restartInProgress) {
+      restartInProgress = true;
+      const btn = document.getElementById('restartBtn');
+      if (btn) btn.disabled = true;
+      _runRestartReloadCycle();
+    }
+  });
 }
 
 const DEFAULT_PINNED = """
@@ -1167,6 +1264,10 @@ async function saveConfig() {
   if (resp.ok) {
     updateStatus('Saved — restart required', true);
     document.getElementById('restartNotice').classList.add('show');
+    // Cross-tab sync — other open settings tabs surface the same
+    // banner so the user can click Restart from whichever tab they
+    // are on.
+    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
   } else {
     updateStatus('Save failed!');
   }
@@ -1317,12 +1418,18 @@ async function saveBackupConfig() {
     if (data.restart_required) {
       // Unified restart flow — save persists but does NOT auto-restart.
       // Surface the cross-tab restart-required banner; user picks the
-      // moment via the global Restart Add-on button. Refresh the form
-      // so origins update (default → addon/file etc.) but skip the
-      // backup-list reload until after the actual restart.
+      // moment via the global Restart Add-on button.
+      //
+      // Don't reload the form here. In addon mode the GET reads
+      // env-derived ``get_global_settings()`` values which are still
+      // stale (Supervisor has the new options but ``start.py``
+      // doesn't re-derive env vars until the next addon boot). Reloading
+      // would snap the form back to old values, look like the save
+      // reverted, and clobber any further edits the user wanted to
+      // bundle before clicking Restart.
       statusEl.textContent = 'Saved — restart required';
       document.getElementById('restartNotice').classList.add('show');
-      loadBackupConfig();
+      if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
     } else {
       statusEl.textContent = 'Saved.';
       // Refresh display so origins update (default → file, etc.).
@@ -1632,12 +1739,17 @@ async function saveFeatureFlag(fieldName, value) {
     return;
   }
   let data = null;
-  try { data = await resp.json(); } catch (_e) {}
+  try { data = await resp.json(); } catch (_e) {
+    // On a 200 OK with truncated / non-JSON body, default to the
+    // "restart needed" state so the user gets the banner — silently
+    // skipping it would let them think the change took effect live
+    // and they'd never restart. Only do this on resp.ok; for an
+    // error response we want the HTTP status to drive the message.
+    if (resp.ok) data = {restart_required: true};
+  }
   if (!resp.ok) {
     let msg = `Save failed (HTTP ${resp.status})`;
-    if (data && data.error && data.error.message) {
-      msg = 'Save failed: ' + data.error.message;
-    }
+    if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
     updateStatus(msg);
     return;
   }
@@ -1648,8 +1760,9 @@ async function saveFeatureFlag(fieldName, value) {
   // button is hidden (no supervisor to drive it) but the banner still
   // surfaces "restart required" as guidance.
   updateStatus('Saved — restart required', true);
-  if (data && data.restart_required) {
+  if (data?.restart_required) {
     document.getElementById('restartNotice').classList.add('show');
+    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
   }
 }
 
@@ -1888,6 +2001,17 @@ def _schedule_supervisor_self_restart(
         except (httpx.ReadError, httpx.RemoteProtocolError):
             # Supervisor killed us mid-call — expected; no action needed.
             pass
+        except RuntimeError:
+            # ``make_supervisor_httpx_client`` raises RuntimeError when
+            # SUPERVISOR_TOKEN is unset. The route guard at handler entry
+            # already checks for this, but a race that unsets the token
+            # between request entry and the 300ms-later task wakeup
+            # would otherwise propagate uncaught and surface only as
+            # asyncio's "Task exception was never retrieved" at GC time.
+            # Log it loudly so the user can find it in the addon log.
+            # Mirrors the same RuntimeError catch in the supervisor
+            # options helpers.
+            logger.exception("Background self-restart aborted: SUPERVISOR_TOKEN unset")
         except httpx.HTTPError:
             logger.exception("Background self-restart failed")
 
@@ -2025,11 +2149,18 @@ def build_settings_handlers(
             pinned_count,
         )
 
+        # Same response shape as ``_save_feature_flags`` and
+        # ``_save_backup_config``: every save endpoint returns
+        # ``{success, applied, mode, restart_required}`` so the JS can
+        # branch on a single field and BroadcastChannel listeners in
+        # other tabs can react uniformly. Tool config writes only ever
+        # land in the on-disk JSON (no Supervisor round-trip), hence
+        # ``mode="file"`` regardless of addon/standalone deployment.
         return JSONResponse(
             {
                 "success": True,
-                "disabled": disabled_count,
-                "pinned": pinned_count,
+                "applied": states,
+                "mode": "file",
                 "restart_required": True,
             }
         )
@@ -2201,17 +2332,22 @@ def build_settings_handlers(
         Routing by per-field origin (see
         :func:`config.get_feature_flag_origin`):
 
-        - **addon**: POST the merged options to Supervisor and schedule
-          an addon restart so ``start.py`` re-derives env vars from
-          ``config.yaml`` on the next boot. Web UI edits and
-          Configuration-tab edits land in the same place, so the two
-          surfaces stay in sync.
+        - **addon**: POST the merged options to Supervisor and return
+          ``restart_required=True``. ``start.py`` will re-derive env
+          vars from ``config.yaml`` on the next addon boot — but the
+          actual restart is fired by the user clicking the global
+          Restart Add-on button, NOT by this handler. Web UI edits
+          and Configuration-tab edits land in the same place, so the
+          two surfaces stay in sync after the restart.
         - **env**: refuse — env var explicitly set wins. Returns
           ``VALIDATION_INVALID_PARAMETER`` with the env var name so
           the UI can surface the locking source.
         - **file** / **default**: merge into the override file in the
           data dir; takes effect on the next
-          ``get_global_settings()`` call (cache reset).
+          ``get_global_settings()`` call (cache reset). The response
+          still carries ``restart_required=True`` because most
+          flag descriptions advertise "Requires restart to take
+          effect" — the UI shows the banner regardless of mode.
         """
         from .config import (
             _FEATURE_FLAG_INT_BOUNDS,
@@ -2407,9 +2543,10 @@ def build_settings_handlers(
             # restart (Tools, Server Settings, Backups) returns
             # ``restart_required=True`` and lets the user pick when to
             # fire the actual restart via the global Restart Add-on
-            # button. Don't auto-restart here — racing the response
-            # against the supervisor kill caused the "Restart failed"
-            # alert reported by the user.
+            # button. Don't auto-restart from the save handler —
+            # supervisor would kill the addon before this JSON response
+            # could flush through HA ingress, surfacing as a spurious
+            # "Restart failed" alert at the browser.
             return JSONResponse(
                 {
                     "success": True,
@@ -2501,17 +2638,26 @@ def build_settings_handlers(
             )
 
         # Publish the change so the same process picks it up on the
-        # next ``get_global_settings()`` call (server-restart still
-        # required for many flags — the UI surfaces that — but the
-        # cached singleton must not return the stale pre-write
-        # values to subsequent /api/settings/features GETs).
-        # ``restart_required=True`` because every flag in
-        # FEATURE_META carries "Requires restart to take effect" in its
-        # help text — file-mode saves persist the value but the live
-        # process keeps the old reads until the MCP host is restarted
+        # next ``get_global_settings()`` call. The cached singleton
+        # must not return the stale pre-write values to subsequent
+        # /api/settings/features GETs.
+        #
+        # ``restart_required=True`` because the feature flags here gate
+        # tool registration, FastMCP transforms, and other startup-time
+        # reads. File-mode persists the value, but the live process
+        # keeps the old behavior until the MCP host is restarted
         # (Claude Desktop relaunch, Docker container restart, etc.).
+        # Surfacing the banner is the same contract Tools, Server
+        # Settings, and Backups all advertise.
         _reset_global_settings()
-        return JSONResponse({"success": True, "mode": "file", "restart_required": True})
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": new_overrides,
+                "mode": "file",
+                "restart_required": True,
+            }
+        )
 
     # ---- Auto-backup routes (#1288) ----
 
@@ -2779,16 +2925,21 @@ def build_settings_handlers(
         """Persist auto-backup config edits and publish to the live process.
 
         Routing:
-        - Addon mode: POST ``/addons/self/options`` to update ``config.yaml``,
-          then ``/addons/self/restart`` to make the new values take effect via
-          ``start.py``'s env-var write at next boot. The HTTP response races
-          the restart-induced socket drop; the JS treats both 200 and
-          connection-drop as success and reloads the page after ~30s.
-        - Standalone (file) mode: refuse any field that's pinned by an env
-          var (process or ``.env``) — return 409 with the offending names so
-          the UI can refresh and show the read-only banner. Editable fields
-          merge into ``<data_dir>/backup_settings.json`` and a Settings
-          cache reset publishes them immediately (no restart).
+        - Addon mode: POST ``/addons/self/options`` (with the existing
+          options merged so required schema keys like ``backup_hint``
+          survive the full-replacement validation) and return
+          ``restart_required=True``. ``start.py`` will re-derive env
+          vars from ``config.yaml`` on the next addon boot, but the
+          actual restart is fired by the user clicking the global
+          Restart Add-on button — NOT by this handler. Same unified
+          flow as the Tools and Server Settings save endpoints.
+        - Standalone (file) mode: refuse any field that's pinned by an
+          env var (process or ``.env``) — return 409 with the offending
+          names so the UI can refresh and show the read-only banner.
+          Editable fields merge into
+          ``<data_dir>/backup_settings.json`` and a Settings cache
+          reset publishes them immediately, hence
+          ``restart_required=False``.
         """
         try:
             payload = await request.json()
