@@ -24,6 +24,7 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
 options:
   backup_hint: "normal"
   enable_tool_search: false
+  enable_per_tool_approval: false
   enable_yaml_config_editing: false
   enable_code_mode: false
   enable_lite_docstrings: false
@@ -38,6 +39,7 @@ schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_tool_search: bool?
+  enable_per_tool_approval: bool?
   enable_yaml_config_editing: bool?
   enable_code_mode: bool?
   enable_lite_docstrings: bool?
