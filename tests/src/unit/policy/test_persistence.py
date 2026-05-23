@@ -24,7 +24,10 @@ def test_save_and_roundtrip(tmp_path: Path):
     )
     save_policy(tmp_path, original)
     loaded = load_policy(tmp_path)
-    assert loaded == original
+    # save_policy bumps version on write (optimistic concurrency contract);
+    # compare every other field, then version separately.
+    assert loaded.version == original.version + 1
+    assert loaded.model_copy(update={"version": 0}) == original
 
 
 def test_save_writes_atomically(tmp_path: Path):
@@ -49,4 +52,5 @@ def test_serialized_shape_is_stable(tmp_path: Path):
         "wait_seconds",
         "approval_ttl_minutes",
         "rules",
+        "version",
     }

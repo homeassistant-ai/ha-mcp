@@ -206,9 +206,7 @@ class TestApplyToolVisibility:
         # Server.py's filter: pinned = [n for n in DEFAULT_PINNED_TOOLS
         #                              if n not in result.enabled_names]
         effective_pinned = [
-            name
-            for name in DEFAULT_PINNED_TOOLS
-            if name not in result.enabled_names
+            name for name in DEFAULT_PINNED_TOOLS if name not in result.enabled_names
         ]
         assert "ha_config_get_automation" not in effective_pinned
         # Tools NOT in the config keep their default pinning.
