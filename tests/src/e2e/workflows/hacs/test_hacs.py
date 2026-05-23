@@ -155,7 +155,9 @@ class TestHacsSearchInstalled:
 
         # No filter should be applied
         assert data["category_filter"] is None, "No category filter should be applied"
-        assert data["installed_only"] is True, "Response should indicate installed_only=True"
+        assert data["installed_only"] is True, (
+            "Response should indicate installed_only=True"
+        )
 
         logger.info("List all installed test passed")
 
@@ -187,9 +189,7 @@ class TestHacsSearchInstalled:
                 f"Repo {repo.get('name')} should be installed"
             )
 
-        logger.info(
-            f"Search installed with query: {data['total_matches']} matches"
-        )
+        logger.info(f"Search installed with query: {data['total_matches']} matches")
 
     async def test_list_by_category(self, mcp_client):
         """
