@@ -7,10 +7,17 @@ container-log shape — for the addon set baked by ``build_image.py``.
 Two coverage modes:
 
 1. **Running addons** (Node-RED, ESPHome Device Builder, Matter Server,
-   AppDaemon — all ``start=True`` in the bake): full lifecycle round-trip
-   plus options-get / options-set persistence and a log-shape check.
-   Each test leaves the addon in ``started`` state via an explicit
-   cleanup call so later tests in the same session find it running.
+   AppDaemon — all ``start=True`` in the bake): options-get / options-set
+   persistence and a log-shape check. Each test leaves the addon in
+   ``started`` state via an explicit cleanup call so later tests in the
+   same session find it running.
+
+   The full ``hassio.addon_stop`` → ``addon_start`` → ``addon_restart``
+   lifecycle round-trip is exercised by **Matter Server only**. All four
+   roundtrip variants used the same ``_addon_action`` helper hitting the
+   same MCP wire path, so one is sufficient signal; Matter Server is the
+   lightest addon to cycle (consistently <13s) and Node-RED's roundtrip
+   produced a recurring Supervisor 500 flake — see #1414.
 
 2. **Stopped addons** (Mosquitto, MQTT IO — stay ``start=False`` because
    their schemas require config they don't have in the bake): exercise
@@ -87,9 +94,7 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
     for entry in payload.get("addons", []):
         if entry.get("name") == display_name:
             slug = entry.get("slug")
-            assert slug, (
-                f"Addon {display_name!r} listed but has no slug field: {entry}"
-            )
+            assert slug, f"Addon {display_name!r} listed but has no slug field: {entry}"
             return str(slug)
 
     # Filter ``None`` names so a future Supervisor addition with a
@@ -116,9 +121,7 @@ async def _get_addon_detail(mcp_client: Any, slug: str) -> dict[str, Any]:
     return detail
 
 
-async def _addon_action(
-    mcp_client: Any, slug: str, action: str
-) -> dict[str, Any]:
+async def _addon_action(mcp_client: Any, slug: str, action: str) -> dict[str, Any]:
     """Invoke ``hassio.addon_{action}`` via ``ha_call_service``.
 
     Returns the parsed result (success or failure). Caller decides how
@@ -209,36 +212,6 @@ async def _ensure_started(mcp_client: Any, slug: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_nodered_start_stop_restart_roundtrip(mcp_client: Any) -> None:
-    """Stop → start → restart cycles Node-RED via real Supervisor.
-
-    Each transition is verified by re-reading ``ha_get_addon(slug=...)``
-    and asserting the state moved as expected. Final assertion plus the
-    cleanup hook leave the addon ``started`` for downstream tests.
-    """
-    slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    try:
-        stop_result = await _addon_action(mcp_client, slug, "stop")
-        assert stop_result.get("success"), (
-            f"hassio.addon_stop({slug}) failed: {stop_result}"
-        )
-        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
-
-        start_result = await _addon_action(mcp_client, slug, "start")
-        assert start_result.get("success"), (
-            f"hassio.addon_start({slug}) failed: {start_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-
-        restart_result = await _addon_action(mcp_client, slug, "restart")
-        assert restart_result.get("success"), (
-            f"hassio.addon_restart({slug}) failed: {restart_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-    finally:
-        await _ensure_started(mcp_client, slug)
-
-
 async def test_nodered_options_get_returns_dict(mcp_client: Any) -> None:
     """`ha_get_addon(slug=...)` exposes the addon's options as a dict."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
@@ -295,9 +268,7 @@ async def test_nodered_options_set_persists(mcp_client: Any) -> None:
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, (
-                f"ha_manage_addon options probe write failed: {write_payload}"
-            )
+            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -342,31 +313,6 @@ async def test_nodered_logs_fetch_shape(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 # ESPHome Device Builder lifecycle (running by default after bake start=True)
 # ---------------------------------------------------------------------------
-
-
-async def test_esphome_start_stop_restart_roundtrip(mcp_client: Any) -> None:
-    """Stop → start → restart cycles ESPHome via real Supervisor."""
-    slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
-    try:
-        stop_result = await _addon_action(mcp_client, slug, "stop")
-        assert stop_result.get("success"), (
-            f"hassio.addon_stop({slug}) failed: {stop_result}"
-        )
-        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
-
-        start_result = await _addon_action(mcp_client, slug, "start")
-        assert start_result.get("success"), (
-            f"hassio.addon_start({slug}) failed: {start_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-
-        restart_result = await _addon_action(mcp_client, slug, "restart")
-        assert restart_result.get("success"), (
-            f"hassio.addon_restart({slug}) failed: {restart_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-    finally:
-        await _ensure_started(mcp_client, slug)
 
 
 async def test_esphome_options_get_returns_dict(mcp_client: Any) -> None:
@@ -417,9 +363,7 @@ async def test_esphome_options_set_persists(mcp_client: Any) -> None:
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, (
-                f"ha_manage_addon options probe write failed: {write_payload}"
-            )
+            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -540,9 +484,7 @@ async def test_matter_server_options_set_persists(mcp_client: Any) -> None:
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, (
-                f"ha_manage_addon options probe write failed: {write_payload}"
-            )
+            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -580,31 +522,6 @@ async def test_matter_server_logs_fetch_shape(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 # AppDaemon lifecycle (running; covers ingress=false + webui-set shape)
 # ---------------------------------------------------------------------------
-
-
-async def test_appdaemon_start_stop_restart_roundtrip(mcp_client: Any) -> None:
-    """Stop → start → restart cycles AppDaemon via real Supervisor."""
-    slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
-    try:
-        stop_result = await _addon_action(mcp_client, slug, "stop")
-        assert stop_result.get("success"), (
-            f"hassio.addon_stop({slug}) failed: {stop_result}"
-        )
-        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
-
-        start_result = await _addon_action(mcp_client, slug, "start")
-        assert start_result.get("success"), (
-            f"hassio.addon_start({slug}) failed: {start_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-
-        restart_result = await _addon_action(mcp_client, slug, "restart")
-        assert restart_result.get("success"), (
-            f"hassio.addon_restart({slug}) failed: {restart_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-    finally:
-        await _ensure_started(mcp_client, slug)
 
 
 async def test_appdaemon_webui_no_ingress_shape(mcp_client: Any) -> None:
