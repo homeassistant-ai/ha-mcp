@@ -543,6 +543,59 @@ src/ha_mcp/
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
 
+## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
+
+Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui.py`,
+`src/ha_mcp/auth/consent_form.py`, every `.astro` page under `site/src/`)
+gets parse coverage automatically via
+`tests/src/unit/test_rendered_scripts_parse.py`. The discovery walker in
+`_js_harness.py::discover_script_surfaces` picks up new surfaces on its
+next run — no registration needed when you add a new UI.
+
+For behavioural tests (`restartInProgress` guard, wizard state machine,
+copy-button idempotency, etc.), use the JSDOM harness:
+
+```python
+from ._js_harness import extract_script_body, run_script
+
+script = extract_script_body(rendered_html)
+result = run_script(
+    script,
+    initial_html="<!DOCTYPE html>...",
+    fetch_map={"/api/foo": {"status": 200, "json": {...}}},
+    broadcast_events=[{"channel": "ch-name", "data": {"type": "..."}}],
+    invoke="await window.someExposedFn();",
+)
+assert result.reloads == 1
+assert result.broadcasts_of_type("restart-required")
+```
+
+The harness fakes time (`setTimeout` / `Date.now` on a virtual clock —
+60s probe windows take milliseconds), stubs `fetch` from a URL pattern
+map, captures `location.reload` via JSDOM's `jsdomError` channel
+(unforgeable IDL property), and provides a `BroadcastChannel` shim that
+can be primed with cross-tab events.
+
+Astro `<script>` blocks without `define:vars` / `is:inline` are
+TypeScript by default — pass `language="ts"` to `run_script` and the
+harness strips types via esbuild before evaluation. For Astro pages
+that need wizard data (`clientsData`, etc. via `define:vars`), use
+`extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject the
+real production data:
+
+```python
+vars_ = extract_astro_frontmatter_vars(astro_path, ["clientsData", ...])
+prelude = astro_vars_prelude(vars_)
+result = run_script(script, prelude=prelude, ...)
+```
+
+CI installs Node + jsdom in the `unit-tests` job (`.github/workflows/pr.yml`).
+Local devs without `tests/js/node_modules/` get clean skips.
+
+When adding a new UI surface: drop the file, add behavioural tests in
+`tests/src/unit/test_*_js_behavior.py` mirroring the existing per-
+surface modules; parse coverage is automatic.
+
 ## Setup Wizard (`site/src/pages/setup.astro`)
 
 Single-file Astro page that drives the on-site setup flow. Both the metadata (which clients/platforms/connections/deployments exist) and the per-client instruction prose live in this one file.

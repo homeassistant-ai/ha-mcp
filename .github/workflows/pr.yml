@@ -128,15 +128,26 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - name: Install git for submodule checkout
-      run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+    - name: Install git and Node.js
+      # Node + npm power the JS behaviour tests under tests/src/unit/
+      # (harness in tests/js/) — they spawn `node tests/js/harness.mjs`
+      # to drive rendered <script> bodies through JSDOM. Without node
+      # the tests skip; install here so coverage actually runs.
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq git nodejs npm >/dev/null 2>&1
 
     - uses: actions/checkout@v6
       with:
         submodules: true
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: uv sync --all-extras --dev
+
+    - name: Install JS test dependencies (jsdom, esbuild)
+      # `npm ci` enforces package-lock.json — same reproducibility
+      # discipline as uv.lock on the Python side.
+      run: npm ci --prefix tests/js
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
