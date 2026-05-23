@@ -1770,7 +1770,7 @@ async function policyLoadPending() {
     '<div style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
     '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
     '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
-    escapeHtml(JSON.stringify(p.args_preview, null, 2)) + '</pre>' +
+    escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
     '<small style="color:var(--text-secondary)">Expires: ' + escapeHtml(p.expires_at) + '</small><br>' +
     '<div style="margin-top:8px; display:flex; gap:8px">' +
     '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">Approve</button>' +

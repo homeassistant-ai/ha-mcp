@@ -25,16 +25,47 @@ class PendingApproval:
     token: str
     tool_name: str
     args_hash: str
-    args_preview: dict[str, Any]
+    args: dict[str, Any]
     created_at: datetime
     expires_at: datetime
-    decision: Decision = "pending"
+    _decision: Decision = "pending"
     event: anyio.Event = field(default_factory=anyio.Event)
+
+    @property
+    def decision(self) -> Decision:
+        return self._decision
+
+    def decide(self, outcome: Literal["approved", "denied"]) -> bool:
+        """Transition pending -> outcome exactly once. Returns False if already decided."""
+        if self._decision != "pending":
+            return False
+        self._decision = outcome
+        self.event.set()
+        return True
+
+    def __post_init__(self) -> None:
+        if self.expires_at <= self.created_at:
+            raise ValueError("expires_at must be after created_at")
 
 
 class ApprovalQueue:
-    """In-memory store. Per-process. Token-keyed for HTTP lookup,
-    (tool, hash)-indexed for re-call lookup."""
+    """In-memory per-process approval queue with args-hash binding.
+
+    Pending approvals are bound to (tool_name, sha256(canonical_args)).
+    A re-call with mutated args produces a different hash and a new
+    pending entry, so an approval cannot be silently repurposed.
+
+    **Single-process only.** Multi-worker deployments (e.g.
+    ``uvicorn --workers N``) are unsupported — approvals created on
+    worker A do NOT propagate to worker B, so a re-call routed to a
+    different worker will look like a brand-new approval request.
+    The standard ha-mcp deployments (stdio, addon, ha-mcp-web) all
+    run single-worker.
+
+    **Restart loses pending tokens.** The persistent ``tool_policy.json``
+    rules survive a restart, but any in-flight approval tokens do not.
+    Users will need to re-issue an approval click after a restart.
+    """
 
     def __init__(self) -> None:
         self._by_token: dict[str, PendingApproval] = {}
@@ -62,7 +93,7 @@ class ApprovalQueue:
         self,
         tool_name: str,
         args_hash: str,
-        args_preview: dict[str, Any],
+        args: dict[str, Any],
         *,
         ttl_minutes: int,
     ) -> PendingApproval:
@@ -71,7 +102,7 @@ class ApprovalQueue:
             token=secrets.token_urlsafe(24),
             tool_name=tool_name,
             args_hash=args_hash,
-            args_preview=args_preview,
+            args=args,
             created_at=now,
             expires_at=now + timedelta(minutes=ttl_minutes),
         )
@@ -98,22 +129,14 @@ class ApprovalQueue:
         entry = self._by_token.get(token)
         if entry is None:
             return False
-        if entry.decision != "pending":
-            return False
-        entry.decision = "approved"
-        entry.event.set()
-        return True
+        return entry.decide("approved")
 
     def deny(self, token: str) -> bool:
         """Mark the entry denied. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
         if entry is None:
             return False
-        if entry.decision != "pending":
-            return False
-        entry.decision = "denied"
-        entry.event.set()
-        return True
+        return entry.decide("denied")
 
     def remove(self, token: str) -> None:
         self._by_token.pop(token, None)

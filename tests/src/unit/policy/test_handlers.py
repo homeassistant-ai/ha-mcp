@@ -167,12 +167,12 @@ def test_get_pending_returns_full_shape(tmp_path):
     assert set(payload.keys()) == {
         "token",
         "tool_name",
-        "args_preview",
+        "args",
         "created_at",
         "expires_at",
     }
     assert payload["tool_name"] == "ha_x"
-    assert payload["args_preview"] == {"foo": "bar"}
+    assert payload["args"] == {"foo": "bar"}
     # ISO 8601 with timezone
     assert "T" in payload["created_at"]
     assert "T" in payload["expires_at"]

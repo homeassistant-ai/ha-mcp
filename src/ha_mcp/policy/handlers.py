@@ -19,7 +19,6 @@ def build_policy_handlers(
     *,
     data_dir: Path,
     queue: ApprovalQueue,
-    on_policy_change: Callable[[Policy], None] | None = None,
 ) -> dict[str, Callable[[Request], Any]]:
 
     async def get_config(_: Request) -> JSONResponse:
@@ -40,8 +39,6 @@ def build_policy_handlers(
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         save_policy(data_dir, policy)
-        if on_policy_change:
-            on_policy_change(policy)
         return JSONResponse({"saved": True})
 
     async def get_pending(_: Request) -> JSONResponse:
@@ -51,7 +48,7 @@ def build_policy_handlers(
                     {
                         "token": e.token,
                         "tool_name": e.tool_name,
-                        "args_preview": e.args_preview,
+                        "args": e.args,
                         "created_at": e.created_at.isoformat(),
                         "expires_at": e.expires_at.isoformat(),
                     }
