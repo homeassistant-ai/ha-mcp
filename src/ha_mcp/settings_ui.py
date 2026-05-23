@@ -921,28 +921,41 @@ async function stopSidecar() {
   }
 }
 
+const RESTART_RELOAD_DELAY_S = 10;
+
 async function restartAddon() {
   const btn = document.getElementById('restartBtn');
-  if (!confirm('Restart the add-on now? The web UI will become unreachable for ~30 seconds.')) return;
+  if (!confirm('Restart the add-on now? The page will reload automatically once the add-on is back online.')) return;
   btn.disabled = true;
-  btn.textContent = 'Restarting...';
+  btn.textContent = 'Restarting…';
+  // Only suppress the auto-reload on a genuine config error (4xx like
+  // SUPERVISOR_TOKEN missing). Anything else — 200, 5xx from ingress
+  // when supervisor killed our upstream mid-response, or a thrown
+  // network error from the same kill — means the restart is in flight
+  // and we should reload after the addon comes back.
+  let configError = false;
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
-    if (resp.ok) {
-      btn.textContent = 'Restart initiated — reload page in ~30s';
-    } else {
+    if (!resp.ok && resp.status < 500) {
+      configError = true;
       let msg = 'Restart failed';
       try {
         const err = await resp.json();
-        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
+        if (err && err.error && err.error.message) {
+          msg = 'Failed: ' + err.error.message;
+        }
       } catch (_e) {}
       btn.textContent = msg;
       btn.disabled = false;
       alert(msg);
     }
   } catch (_e) {
-    // Connection lost mid-request is actually expected — the addon is restarting
-    btn.textContent = 'Restart initiated (connection dropped)';
+    // Connection lost mid-request — restart in flight, fall through.
+  }
+  if (!configError) {
+    btn.textContent =
+      'Restarting… page will reload in ' + RESTART_RELOAD_DELAY_S + 's';
+    setTimeout(() => window.location.reload(), RESTART_RELOAD_DELAY_S * 1000);
   }
 }
 
@@ -1204,7 +1217,7 @@ const BACKUP_FIELD_LABELS = {
 };
 
 const BACKUP_ORIGIN_LABELS = {
-  addon: 'Synced to Supervisor — save will restart the add-on.',
+  addon: 'Synced to Supervisor — restart required after save.',
   env: null,  // banner generated dynamically with the env var name
   file: 'Persisted locally; takes effect immediately.',
   default: 'Using default; first save creates a local override file.',
@@ -1300,14 +1313,18 @@ async function saveBackupConfig() {
       statusEl.textContent = msg;
       return;
     }
-    if (data.restarting) {
-      statusEl.textContent = 'Saved — addon is restarting. Reload in ~30s.';
-      // Surface the cross-tab restart banner so the user has a clear
-      // reload-when-ready signal regardless of which tab they're on.
+    btn.disabled = false;
+    if (data.restart_required) {
+      // Unified restart flow — save persists but does NOT auto-restart.
+      // Surface the cross-tab restart-required banner; user picks the
+      // moment via the global Restart Add-on button. Refresh the form
+      // so origins update (default → addon/file etc.) but skip the
+      // backup-list reload until after the actual restart.
+      statusEl.textContent = 'Saved — restart required';
       document.getElementById('restartNotice').classList.add('show');
+      loadBackupConfig();
     } else {
       statusEl.textContent = 'Saved.';
-      btn.disabled = false;
       // Refresh display so origins update (default → file, etc.).
       loadBackupConfig();
       loadBackups();
@@ -1497,7 +1514,7 @@ const ORIGIN_LOCKED_NOTE = {
 };
 
 const ORIGIN_INFO_NOTE = {
-  addon: 'Synced to the add-on Configuration tab — save will restart the add-on.',
+  addon: 'Synced to the add-on Configuration tab — restart required after save.',
 };
 
 async function loadFeatureFlags() {
@@ -1624,19 +1641,15 @@ async function saveFeatureFlag(fieldName, value) {
     updateStatus(msg);
     return;
   }
-  if (data && data.restarting) {
-    // Addon mode: the server has already POSTed the merged options to
-    // Supervisor and scheduled a self-restart in a background task —
-    // the user just needs to wait. Surface the restart-required banner
-    // so it is visible regardless of which tab they are on (the banner
-    // lives above the tabs).
-    updateStatus('Saved — add-on is restarting. Reload in ~30s.', true);
+  // Unified restart flow — save persists the change but does NOT fire
+  // the addon restart. The user picks when to restart by clicking the
+  // global Restart Add-on button in the cross-tab restart-required
+  // banner. Same UX as the Tools tab. In standalone modes the restart
+  // button is hidden (no supervisor to drive it) but the banner still
+  // surfaces "restart required" as guidance.
+  updateStatus('Saved — restart required', true);
+  if (data && data.restart_required) {
     document.getElementById('restartNotice').classList.add('show');
-  } else {
-    // Standalone modes: the cache is reset in-process. Most flags still
-    // require an MCP-host restart to take effect (the docstring on each
-    // flag says so) but the addon itself is not the host — just toast.
-    updateStatus('Saved — restart required', true);
   }
 }
 
@@ -2390,13 +2403,19 @@ def build_settings_handlers(
                     create_error_response(code, err.message),
                     status_code=err.status_code,
                 )
-            _schedule_supervisor_self_restart(server.settings.verify_ssl)
+            # Unified restart flow: every save that requires an addon
+            # restart (Tools, Server Settings, Backups) returns
+            # ``restart_required=True`` and lets the user pick when to
+            # fire the actual restart via the global Restart Add-on
+            # button. Don't auto-restart here — racing the response
+            # against the supervisor kill caused the "Restart failed"
+            # alert reported by the user.
             return JSONResponse(
                 {
                     "success": True,
                     "applied": new_overrides,
                     "mode": "addon",
-                    "restarting": True,
+                    "restart_required": True,
                 }
             )
 
@@ -2486,8 +2505,13 @@ def build_settings_handlers(
         # required for many flags — the UI surfaces that — but the
         # cached singleton must not return the stale pre-write
         # values to subsequent /api/settings/features GETs).
+        # ``restart_required=True`` because every flag in
+        # FEATURE_META carries "Requires restart to take effect" in its
+        # help text — file-mode saves persist the value but the live
+        # process keeps the old reads until the MCP host is restarted
+        # (Claude Desktop relaunch, Docker container restart, etc.).
         _reset_global_settings()
-        return JSONResponse({"success": True})
+        return JSONResponse({"success": True, "mode": "file", "restart_required": True})
 
     # ---- Auto-backup routes (#1288) ----
 
@@ -2817,19 +2841,15 @@ def build_settings_handlers(
                     create_error_response(code, sup_err.message),
                     status_code=sup_err.status_code,
                 )
-            # Background restart so this JSON response can flush through HA
-            # ingress before supervisor kills the addon. The old code POSTed
-            # synchronously and the kill-mid-response would convert into a
-            # 5xx Bad Gateway at the proxy, which the JS rendered as
-            # "Save failed" / "Restart failed" — see _restart_addon for the
-            # same fix.
-            _schedule_supervisor_self_restart(server.settings.verify_ssl)
+            # Unified restart flow — see _save_feature_flags for the
+            # rationale. Don't auto-restart from a save handler; the
+            # global Restart Add-on button is the single restart path.
             return JSONResponse(
                 {
                     "success": True,
                     "applied": clean,
                     "mode": "addon",
-                    "restarting": True,
+                    "restart_required": True,
                 }
             )
 
@@ -2871,13 +2891,18 @@ def build_settings_handlers(
                 status_code=500,
             )
         # Drop the cached Settings so the next read sees the merged value.
+        # File-mode auto-backup settings take effect immediately on the
+        # next ``get_global_settings()`` read — no restart needed, hence
+        # ``restart_required=False``. The JS uses the same field name on
+        # every save endpoint to decide whether to surface the
+        # restart-required banner.
         _reset_global_settings()
         return JSONResponse(
             {
                 "success": True,
                 "applied": clean,
                 "mode": "file",
-                "restarting": False,
+                "restart_required": False,
             }
         )
 

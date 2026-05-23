@@ -1094,7 +1094,13 @@ class TestSaveBackupConfigEndpoint:
         assert resp.status_code == 200
         body = json.loads(resp.body)
         assert body["mode"] == "file"
-        assert body["restarting"] is False
+        # File-mode auto-backup save applies live via the cache reset;
+        # no addon restart needed, hence restart_required=False. The
+        # field name was renamed from "restarting" → "restart_required"
+        # as part of the unified restart flow (Tools / Server Settings
+        # / Backups all use the same field).
+        assert body["restart_required"] is False
+        assert "restarting" not in body  # legacy field name must be gone
         on_disk = json.loads(override_path.read_text())
         assert on_disk["enable_auto_backup"] is True
         assert on_disk["auto_backup_throttle_minutes"] == 9
@@ -1526,7 +1532,20 @@ class TestSaveBackupConfigAddonMode:
         return captured["post"]
 
     @pytest.mark.asyncio
-    async def test_addon_save_merges_and_schedules_restart(self, monkeypatch):
+    async def test_addon_save_merges_without_restart_returns_restart_required(
+        self, monkeypatch
+    ):
+        """Unified restart flow: every save endpoint (Tools, Server
+        Settings, Backups) commits the change but **does not** fire the
+        addon restart. The user picks when to restart via the global
+        Restart Add-on button. The save response carries
+        ``restart_required=True`` so the cross-tab banner appears.
+
+        Pins the contract — a regression that re-introduces an
+        auto-restart from inside the save handler races the supervisor
+        kill against the JSON response flush and surfaces a spurious
+        "Restart failed" alert / "addon is restarting" message.
+        """
         post_handler = self._capture_post_handler(monkeypatch)
 
         merge_mock = AsyncMock(return_value=(True, None))
@@ -1547,12 +1566,13 @@ class TestSaveBackupConfigAddonMode:
         assert resp.status_code == 200
         body = json.loads(resp.body)
         assert body["mode"] == "addon"
-        assert body["restarting"] is True
+        assert body["restart_required"] is True
+        assert "restarting" not in body  # legacy field name must be gone
         merge_mock.assert_awaited_once_with(
             True,
             {"enable_auto_backup": True, "auto_backup_throttle_minutes": 5},
         )
-        schedule_mock.assert_called_once_with(True)
+        schedule_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_addon_save_surfaces_validation_error_with_supervisor_status(
@@ -1670,7 +1690,12 @@ class TestSaveFeatureFlagsAddonMode:
         return captured["post"]
 
     @pytest.mark.asyncio
-    async def test_addon_save_merges_and_schedules_restart(self, monkeypatch):
+    async def test_addon_save_merges_without_restart_returns_restart_required(
+        self, monkeypatch
+    ):
+        """Mirror of TestSaveBackupConfigAddonMode's counterpart — see
+        that test for the unified-restart-flow rationale.
+        """
         post_handler = self._capture_post_handler(monkeypatch)
 
         merge_mock = AsyncMock(return_value=(True, None))
@@ -1689,9 +1714,10 @@ class TestSaveFeatureFlagsAddonMode:
         assert resp.status_code == 200
         body = json.loads(resp.body)
         assert body["mode"] == "addon"
-        assert body["restarting"] is True
+        assert body["restart_required"] is True
+        assert "restarting" not in body
         merge_mock.assert_awaited_once_with(True, {"enable_yaml_config_editing": True})
-        schedule_mock.assert_called_once_with(True)
+        schedule_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_addon_save_surfaces_validation_error_with_supervisor_status(
