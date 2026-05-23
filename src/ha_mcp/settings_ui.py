@@ -725,6 +725,56 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Tool Security Policies — per-tool card layout (#966).
+     Cards reuse the surface/border variables already in use elsewhere
+     so they read consistently with backup-row / group blocks. */
+  .policy-rule-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; margin: 8px 0; }
+  .policy-rule-header { display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 8px; }
+  .policy-rule-header strong { font-size: 0.95rem; }
+  .policy-rule-remove { background: transparent; border: none;
+    color: var(--text-secondary); cursor: pointer; font-size: 1.1rem;
+    padding: 0 6px; }
+  .policy-rule-remove:hover { color: var(--danger); }
+  .policy-predicate-list { list-style: none; padding: 0; margin: 6px 0; }
+  .policy-predicate-row { padding: 4px 0; display: flex; align-items: center;
+    gap: 8px; flex-wrap: wrap; }
+  .policy-predicate-row code { background: var(--bg); padding: 3px 8px;
+    border-radius: 4px; font-size: 0.8rem; color: var(--text); }
+  .policy-predicate-row button { background: transparent; border: none;
+    color: var(--accent); cursor: pointer; font-size: 0.8rem; padding: 2px 4px; }
+  .policy-predicate-row button:hover { text-decoration: underline; }
+  .policy-add-predicate { background: transparent; border: 1px dashed var(--border);
+    color: var(--accent); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 0.85rem; margin-top: 4px; }
+  .policy-add-predicate:hover { background: var(--surface-hover); }
+  .policy-predicate-form { background: var(--bg); padding: 10px;
+    margin: 6px 0; border: 1px dashed var(--border); border-radius: 6px;
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .policy-predicate-form select,
+  .policy-predicate-form input { padding: 5px 8px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font-size: 0.85rem; }
+  .policy-predicate-form input.policy-predicate-path { min-width: 140px; }
+  .policy-predicate-form input.policy-predicate-value { min-width: 200px;
+    font-family: monospace; }
+  .policy-predicate-form-error { color: var(--danger); font-size: 0.78rem;
+    width: 100%; margin-top: 4px; }
+  .policy-rule-lifetime { margin: 10px 0; font-size: 0.85rem;
+    color: var(--text-secondary); }
+  .policy-rule-lifetime input { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; margin: 0 6px; }
+  .policy-save-rule { padding: 7px 14px; border-radius: 6px; border: none;
+    background: var(--surface-hover); color: var(--text-secondary);
+    font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+  .policy-save-rule:not(:disabled) { background: var(--accent); color: white;
+    cursor: pointer; }
+  .policy-save-rule:not(:disabled):hover { background: var(--accent-hover); }
+  .policy-save-rule:disabled { cursor: not-allowed; opacity: 0.6; }
+  .policy-save-status { margin-left: 10px; font-size: 0.8rem;
+    color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -798,40 +848,14 @@ _SETTINGS_HTML = (
 <div class="panel" id="panel-tool-security-policies">
   <h2>Tool Security Policies</h2>
   <p class="features-sub">
-    Opt-in gating for high-stakes tool calls (issue #966). When enabled, the
-    AI must obtain your approval here before executing tools that match a
-    rule. See the DOCS for predicate operators
-    (eq, neq, in, not_in, regex, contains, exists, gt, lt).
+    Per-tool approval gating for high-stakes calls (issue #966). Use the
+    <strong>Tools</strong> tab to enable gating for a tool, then refine
+    the matching rules and approval lifetime here. Predicate operators:
+    eq, neq, in, not_in, regex, contains, exists, gt, lt.
   </p>
-  <section id="policy-settings" style="margin-bottom:16px">
-    <div class="feature-row">
-      <div class="feature-info">
-        <div class="feature-name">Enabled</div>
-        <div class="feature-help">Master switch — when off, every tool runs without policy checks.</div>
-      </div>
-      <div class="feature-control">
-        <label class="switch">
-          <input type="checkbox" id="policy-enabled">
-          <span class="slider"></span>
-        </label>
-      </div>
-    </div>
-    <div class="feature-row">
-      <div class="feature-info">
-        <div class="feature-name">Default action</div>
-        <div class="feature-help">
-          <strong>Allow</strong> — only matched rules gate.
-          <strong>Require approval</strong> — every tool needs approval unless
-          a rule matches and overrides.
-        </div>
-      </div>
-      <div class="feature-control">
-        <select id="policy-default-action">
-          <option value="allow">Allow</option>
-          <option value="require_approval">Require approval</option>
-        </select>
-      </div>
-    </div>
+
+  <section id="policy-global-settings" style="margin-bottom:16px">
+    <h3 style="font-size:1rem;margin-bottom:8px">Global settings</h3>
     <div class="feature-row">
       <div class="feature-info">
         <div class="feature-name">Wait seconds (5-600)</div>
@@ -850,6 +874,10 @@ _SETTINGS_HTML = (
         <input type="number" id="policy-ttl-minutes" min="1" max="60">
       </div>
     </div>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
+      <button id="policy-save-global-btn" class="restart-btn">Save global settings</button>
+      <span id="policy-global-save-status" class="status"></span>
+    </div>
   </section>
 
   <section id="policy-pending" style="margin-bottom:16px">
@@ -858,20 +886,12 @@ _SETTINGS_HTML = (
   </section>
 
   <section id="policy-rules">
-    <h3 style="font-size:1rem;margin-bottom:8px">Rules (JSON)</h3>
-    <p class="features-sub">
-      Edit the <code>rules</code> array as JSON. Each rule has
-      <code>tool_name</code>, optional <code>when</code> predicates, and
-      optional <code>remember_minutes</code>.
-    </p>
-    <textarea id="policy-rules-json" rows="14"
-              style="width:100%; font-family:monospace; background:var(--surface);
-                     color:var(--text); border:1px solid var(--border);
-                     border-radius:8px; padding:10px; font-size:0.85rem"></textarea>
-    <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
-      <button id="policy-save-btn" class="restart-btn" style="display:inline-block">Save policy</button>
-      <span id="policy-save-status" class="status"></span>
+    <h3 style="font-size:1rem;margin-bottom:8px">Gated tools</h3>
+    <div id="policy-rules-empty" class="backup-empty" style="display:none;">
+      No tools currently security-gated. Enable per-tool gating from the
+      <a href="#" data-panel-link="tools">Tools</a> tab.
     </div>
+    <div id="policy-rules-list"></div>
   </section>
 </div>
 <div class="modal-backdrop" id="modalBackdrop">
@@ -1813,6 +1833,14 @@ async function saveFeatureFlag(fieldName, value) {
 // the main server (in-process ApprovalQueue). The sidecar serves
 // config GET/PUT but returns 503 for the live endpoints — the UI
 // degrades to "Live approvals unavailable in this mode."
+//
+// The card UI keeps an in-memory mutable copy of each rule
+// (policyRuleEdits[tool_name]) so the user can edit predicates /
+// remember_minutes locally before pressing "Save changes" on a card,
+// which then GETs current policy, replaces the rule entry, and PUTs.
+// This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
+let policyRuleEdits = {};
+
 async function policyLoadConfig() {
   let resp;
   try {
@@ -1820,47 +1848,304 @@ async function policyLoadConfig() {
   } catch (_e) { return; }
   if (!resp.ok) return;
   const p = await resp.json();
-  document.getElementById('policy-enabled').checked = !!p.enabled;
-  document.getElementById('policy-default-action').value = p.default_action || 'allow';
   document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
   document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
-  document.getElementById('policy-rules-json').value =
-    JSON.stringify(p.rules || [], null, 2);
+  renderPolicyCards(p);
 }
 
-async function policySaveConfig() {
-  const statusEl = document.getElementById('policy-save-status');
-  let rules;
-  try {
-    rules = JSON.parse(document.getElementById('policy-rules-json').value || '[]');
-  } catch (e) {
-    statusEl.textContent = 'Invalid JSON in rules: ' + e.message;
+function renderPolicyCards(policy) {
+  const listEl = document.getElementById('policy-rules-list');
+  const emptyEl = document.getElementById('policy-rules-empty');
+  listEl.innerHTML = '';
+  policyRuleEdits = {};
+  const rules = (policy && policy.rules) || [];
+  if (rules.length === 0) {
+    emptyEl.style.display = '';
     return;
   }
-  const body = {
-    enabled: document.getElementById('policy-enabled').checked,
-    default_action: document.getElementById('policy-default-action').value,
-    wait_seconds: parseInt(document.getElementById('policy-wait-seconds').value, 10),
-    approval_ttl_minutes: parseInt(document.getElementById('policy-ttl-minutes').value, 10),
-    rules: rules,
+  emptyEl.style.display = 'none';
+  // Group rules by tool_name. For v1 we expect one rule per tool (the
+  // Tools-tab toggle creates exactly one), but defensively handle the
+  // case where a hand-edited file has multiple entries: each becomes
+  // its own card so the user can see/edit them all.
+  const byTool = {};
+  rules.forEach((r, idx) => {
+    const key = r.tool_name + '\u0000' + idx;
+    byTool[key] = {tool_name: r.tool_name, rule: r, originalIndex: idx};
+  });
+  Object.keys(byTool).forEach(key => {
+    const entry = byTool[key];
+    // Deep clone the rule into the edit buffer so card-local changes
+    // don't mutate the server response until "Save changes".
+    const editKey = entry.tool_name;
+    policyRuleEdits[editKey] = JSON.parse(JSON.stringify(entry.rule));
+    listEl.appendChild(renderPolicyCard(entry.tool_name, policyRuleEdits[editKey]));
+  });
+}
+
+function displayPredicate(p) {
+  if (!p || !p.path) return '(invalid)';
+  if (p.op === 'exists') return p.path + ' exists';
+  const val = (p.value === undefined) ? 'null' : JSON.stringify(p.value);
+  return p.path + ' ' + p.op + ' ' + val;
+}
+
+function renderPolicyCard(toolName, rule) {
+  const card = document.createElement('div');
+  card.className = 'policy-rule-card';
+  card.dataset.tool = toolName;
+  rule.when = rule.when || [];
+  const predicateRows = rule.when.map((p, i) => (
+    '<li class="policy-predicate-row" data-idx="' + i + '">' +
+      '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
+      '<button class="policy-edit-predicate" data-idx="' + i + '">edit</button>' +
+      '<button class="policy-remove-predicate" data-idx="' + i + '">×</button>' +
+    '</li>'
+  )).join('');
+  const emptyHint = rule.when.length === 0
+    ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
+      '(no predicates — rule matches every call to this tool)</em></li>'
+    : '';
+  card.innerHTML =
+    '<div class="policy-rule-header">' +
+      '<strong>' + escapeHtml(toolName) + '</strong>' +
+      '<button class="policy-rule-remove" title="Remove from policy">×</button>' +
+    '</div>' +
+    '<div class="policy-rule-predicates">' +
+      '<label class="features-sub" style="display:block;margin-bottom:4px">' +
+        'Require approval when: (all must match — empty list = always)' +
+      '</label>' +
+      '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
+      '<button class="policy-add-predicate">+ Add predicate</button>' +
+      '<div class="policy-predicate-form" style="display:none;">' +
+        '<select class="policy-predicate-op">' +
+          '<option value="eq">eq</option>' +
+          '<option value="neq">neq</option>' +
+          '<option value="in">in</option>' +
+          '<option value="not_in">not_in</option>' +
+          '<option value="regex">regex</option>' +
+          '<option value="contains">contains</option>' +
+          '<option value="exists">exists</option>' +
+          '<option value="gt">gt</option>' +
+          '<option value="lt">lt</option>' +
+        '</select>' +
+        '<input type="text" class="policy-predicate-path" placeholder="args.domain">' +
+        '<input type="text" class="policy-predicate-value" ' +
+          'placeholder=\'"lock"  or  ["lock","alarm"]  (JSON)\'>' +
+        '<button class="policy-predicate-form-save">Save predicate</button>' +
+        '<button class="policy-predicate-form-cancel">Cancel</button>' +
+        '<div class="policy-predicate-form-error" style="display:none;"></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="policy-rule-lifetime">' +
+      '<label>Remember approval for:' +
+        '<input type="number" min="0" max="1440" class="policy-remember-minutes" ' +
+          'value="' + (rule.remember_minutes || 0) + '">' +
+        'minutes (0 = single-shot)' +
+      '</label>' +
+    '</div>' +
+    '<button class="policy-save-rule" disabled>Save changes</button>' +
+    '<span class="policy-save-status"></span>';
+
+  const markDirty = () => {
+    card.querySelector('.policy-save-rule').disabled = false;
+    card.querySelector('.policy-save-status').textContent = '';
   };
+
+  // Re-render the card in place after a predicate-list mutation so the
+  // rows reflect the new in-memory rule object.
+  const rerenderCard = () => {
+    const replacement = renderPolicyCard(toolName, rule);
+    // Preserve "dirty" indicator across re-render.
+    replacement.querySelector('.policy-save-rule').disabled = false;
+    card.replaceWith(replacement);
+  };
+
+  card.querySelector('.policy-rule-remove').addEventListener('click', async () => {
+    if (!confirm('Remove "' + toolName + '" from the security policy?')) return;
+    try {
+      await removePolicyRule(toolName);
+      delete policyRuleEdits[toolName];
+      card.remove();
+      // Refresh card list + empty state from server (also refreshes
+      // Tools-tab gated state on next visit via loadPolicyState).
+      await policyLoadConfig();
+    } catch (err) {
+      alert('Failed to remove rule: ' + err.message);
+    }
+  });
+
+  card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
+    rule.remember_minutes = parseInt(e.target.value, 10) || 0;
+    markDirty();
+  });
+
+  const formEl = card.querySelector('.policy-predicate-form');
+  const opEl = formEl.querySelector('.policy-predicate-op');
+  const pathEl = formEl.querySelector('.policy-predicate-path');
+  const valueEl = formEl.querySelector('.policy-predicate-value');
+  const errorEl = formEl.querySelector('.policy-predicate-form-error');
+  let editingIdx = -1;
+
+  const updateValueVisibility = () => {
+    valueEl.style.display = (opEl.value === 'exists') ? 'none' : '';
+  };
+  opEl.addEventListener('change', updateValueVisibility);
+
+  const openForm = (idx) => {
+    editingIdx = idx;
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+    if (idx >= 0) {
+      const p = rule.when[idx];
+      opEl.value = p.op || 'eq';
+      pathEl.value = p.path || '';
+      valueEl.value = (p.value === undefined || p.op === 'exists') ? '' : JSON.stringify(p.value);
+    } else {
+      opEl.value = 'eq';
+      pathEl.value = '';
+      valueEl.value = '';
+    }
+    updateValueVisibility();
+    formEl.style.display = '';
+  };
+
+  card.querySelector('.policy-add-predicate').addEventListener('click', () => openForm(-1));
+
+  card.querySelectorAll('.policy-edit-predicate').forEach(btn => {
+    btn.addEventListener('click', () => openForm(parseInt(btn.dataset.idx, 10)));
+  });
+
+  card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      rule.when.splice(idx, 1);
+      markDirty();
+      rerenderCard();
+    });
+  });
+
+  formEl.querySelector('.policy-predicate-form-cancel').addEventListener('click', () => {
+    formEl.style.display = 'none';
+    editingIdx = -1;
+  });
+
+  formEl.querySelector('.policy-predicate-form-save').addEventListener('click', () => {
+    const op = opEl.value;
+    const path = pathEl.value.trim();
+    if (!path) {
+      errorEl.textContent = 'path is required';
+      errorEl.style.display = '';
+      return;
+    }
+    const predicate = {path: path, op: op};
+    if (op !== 'exists') {
+      const raw = valueEl.value.trim();
+      if (!raw) {
+        errorEl.textContent = 'value is required (use JSON: "lock", ["a","b"], 100, true)';
+        errorEl.style.display = '';
+        return;
+      }
+      try {
+        predicate.value = JSON.parse(raw);
+      } catch (e) {
+        errorEl.textContent = 'Invalid JSON: ' + e.message;
+        errorEl.style.display = '';
+        return;
+      }
+    }
+    if (editingIdx >= 0) {
+      rule.when[editingIdx] = predicate;
+    } else {
+      rule.when.push(predicate);
+    }
+    markDirty();
+    rerenderCard();
+  });
+
+  card.querySelector('.policy-save-rule').addEventListener('click', async () => {
+    const btn = card.querySelector('.policy-save-rule');
+    const status = card.querySelector('.policy-save-status');
+    btn.disabled = true;
+    status.textContent = 'Saving...';
+    try {
+      await savePolicyRule(toolName, rule);
+      status.textContent = 'Saved.';
+    } catch (err) {
+      status.textContent = 'Save failed: ' + err.message;
+      btn.disabled = false;
+    }
+  });
+
+  return card;
+}
+
+async function savePolicyRule(toolName, ruleObj) {
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  const policy = await r.json();
+  policy.rules = policy.rules || [];
+  const idx = policy.rules.findIndex(rule => rule.tool_name === toolName);
+  if (idx >= 0) {
+    policy.rules[idx] = ruleObj;
+  } else {
+    // Defensive: a card exists for a tool with no server-side rule
+    // (e.g. the user removed the rule from another tab between load
+    // and save). Append rather than silently drop the edit.
+    policy.rules.push(ruleObj);
+  }
+  const w = await fetch('./api/policy/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(policy),
+  });
+  if (!w.ok) {
+    const body = await w.text();
+    throw new Error('PUT failed: ' + w.status + ' ' + body);
+  }
+}
+
+async function removePolicyRule(toolName) {
+  // Mirror syncPolicyRule(toolName, false) — kept as a separate helper
+  // so the card's remove button stays self-contained, but the on-wire
+  // shape is identical.
+  await syncPolicyRule(toolName, false);
+}
+
+async function saveGlobalSettings() {
+  const statusEl = document.getElementById('policy-global-save-status');
+  statusEl.textContent = 'Saving...';
   let resp;
   try {
-    resp = await fetch('./api/policy/config', {
+    resp = await fetch('./api/policy/config');
+  } catch (e) {
+    statusEl.textContent = 'Network error: ' + e.message;
+    return;
+  }
+  if (!resp.ok) {
+    statusEl.textContent = 'Load failed: ' + resp.status;
+    return;
+  }
+  const policy = await resp.json();
+  policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
+  policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
+  let put;
+  try {
+    put = await fetch('./api/policy/config', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
+      body: JSON.stringify(policy),
     });
   } catch (e) {
     statusEl.textContent = 'Network error: ' + e.message;
     return;
   }
-  if (resp.ok) {
+  if (put.ok) {
     statusEl.textContent = 'Saved.';
   } else {
     let detail;
-    try { detail = (await resp.json()).error || resp.statusText; }
-    catch (_e) { detail = resp.statusText; }
+    try { detail = (await put.json()).error || put.statusText; }
+    catch (_e) { detail = put.statusText; }
     statusEl.textContent = 'Save failed: ' + detail;
   }
 }
@@ -1913,7 +2198,7 @@ async function policyDecide(token, action) {
   policyLoadPending();
 }
 
-document.getElementById('policy-save-btn').addEventListener('click', policySaveConfig);
+document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
 
 // Poll for pending approvals every 3s when Tool Security Policies tab is visible.
 setInterval(() => {
@@ -1927,23 +2212,34 @@ setInterval(() => {
 // Generic dispatcher — every .tab button names its target panel via
 // data-panel, every .panel has matching id="panel-<name>". Adding a
 // new tab is one button + one panel div; no JS change needed.
+function activateTab(target) {
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.panel === target)
+  );
+  document.querySelectorAll('.panel').forEach(p =>
+    p.classList.toggle('active', p.id === 'panel-' + target)
+  );
+  if (target === 'backups') { loadBackupConfig(); loadBackups(); }
+  if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+  if (target === 'tools') {
+    // Refresh gated-toggle state in case the user changed rules from
+    // the Tool Security Policies tab while it was active.
+    loadPolicyState().then(render).catch(() => {});
+  }
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t =>
-      t.classList.toggle('active', t === tab)
-    );
-    const target = tab.dataset.panel;
-    document.querySelectorAll('.panel').forEach(p =>
-      p.classList.toggle('active', p.id === 'panel-' + target)
-    );
-    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-    if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
-    if (target === 'tools') {
-      // Refresh gated-toggle state in case the user changed rules from
-      // the Tool Security Policies tab while it was active.
-      loadPolicyState().then(render).catch(() => {});
-    }
-  });
+  tab.addEventListener('click', () => activateTab(tab.dataset.panel));
+});
+
+// Cross-tab links — any <a data-panel-link="<name>"> switches tabs
+// in-page rather than following the href (used by the "no gated
+// tools" empty state to point users at the Tools tab).
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('[data-panel-link]');
+  if (!link) return;
+  e.preventDefault();
+  activateTab(link.dataset.panelLink);
 });
 
 loadFeatureFlags();
