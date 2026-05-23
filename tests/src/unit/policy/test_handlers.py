@@ -66,3 +66,42 @@ def test_deny_flow(tmp_path):
     r = c.post("/api/policy/deny", json={"token": entry.token})
     assert r.status_code == 200
     assert queue.get(entry.token).decision == "denied"
+
+
+def test_approve_bad_json_body_400(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    r = c.post("/api/policy/approve", content=b"not-json", headers={"content-type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_approve_non_object_body_400(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    r = c.post("/api/policy/approve", json=["just-a-list"])
+    assert r.status_code == 400
+
+
+def test_deny_bad_json_body_400(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    r = c.post("/api/policy/deny", content=b"not-json", headers={"content-type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_deny_non_object_body_400(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    r = c.post("/api/policy/deny", json=["just-a-list"])
+    assert r.status_code == 400
+
+
+def test_get_pending_returns_full_shape(tmp_path):
+    queue = ApprovalQueue()
+    queue.create("ha_x", "abc", {"foo": "bar"}, ttl_minutes=5)
+    c = make_app(tmp_path, queue)
+    r = c.get("/api/policy/pending")
+    assert r.status_code == 200
+    payload = r.json()["pending"][0]
+    assert set(payload.keys()) == {"token", "tool_name", "args_preview", "created_at", "expires_at"}
+    assert payload["tool_name"] == "ha_x"
+    assert payload["args_preview"] == {"foo": "bar"}
+    # ISO 8601 with timezone
+    assert "T" in payload["created_at"]
+    assert "T" in payload["expires_at"]

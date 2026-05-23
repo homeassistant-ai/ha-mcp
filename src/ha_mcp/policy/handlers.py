@@ -48,7 +48,12 @@ def build_policy_handlers(
         ]})
 
     async def post_approve(request: Request) -> JSONResponse:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
         token = body.get("token")
         if not token or queue.get(token) is None:
             return JSONResponse({"error": "unknown token"}, status_code=404)
@@ -58,7 +63,12 @@ def build_policy_handlers(
         return JSONResponse({"approved": True})
 
     async def post_deny(request: Request) -> JSONResponse:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
         token = body.get("token")
         if not token or queue.get(token) is None:
             return JSONResponse({"error": "unknown token"}, status_code=404)
