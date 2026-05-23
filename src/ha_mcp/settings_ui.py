@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
@@ -1624,16 +1624,18 @@ async function saveFeatureFlag(fieldName, value) {
     updateStatus(msg);
     return;
   }
-  // In addon mode the server has already POSTed the merged options to
-  // Supervisor and scheduled a self-restart in a background task — the
-  // user just needs to wait. Surface the restart-required banner so it
-  // is visible regardless of which tab they are on (the banner now lives
-  // above the tabs). In standalone modes the cache is reset in-process
-  // and no restart is required, so just toast.
   if (data && data.restarting) {
+    // Addon mode: the server has already POSTed the merged options to
+    // Supervisor and scheduled a self-restart in a background task —
+    // the user just needs to wait. Surface the restart-required banner
+    // so it is visible regardless of which tab they are on (the banner
+    // lives above the tabs).
     updateStatus('Saved — add-on is restarting. Reload in ~30s.', true);
     document.getElementById('restartNotice').classList.add('show');
   } else {
+    // Standalone modes: the cache is reset in-process. Most flags still
+    // require an MCP-host restart to take effect (the docstring on each
+    // flag says so) but the addon itself is not the host — just toast.
     updateStatus('Saved — restart required', true);
   }
 }
@@ -1664,9 +1666,35 @@ loadTools();
 )
 
 
+class _SupervisorOptionsError(NamedTuple):
+    """Discriminated failure shape for the supervisor options helpers.
+
+    Two distinct failure classes need different recovery paths in the UI:
+
+    - ``kind="transport"``: network / DNS / Supervisor unreachable / token
+      missing. The route maps this to :class:`ErrorCode.CONNECTION_FAILED`
+      so the UI surfaces the "is HA running, check connectivity"
+      suggestions. ``status_code`` is always ``502`` for this kind.
+    - ``kind="validation"``: Supervisor accepted the request but rejected
+      the body against the addon schema (e.g. an unknown key, a missing
+      required field). The route maps this to
+      :class:`ErrorCode.CONFIG_VALIDATION_FAILED` and forwards the
+      supervisor ``status_code`` verbatim so the UI shows a real 4xx and
+      surfaces the schema-recovery suggestions.
+
+    Collapsing both into a single string return (the previous shape)
+    sent transport failures down the wrong recovery path. See
+    PR #1420's code review for the motivation.
+    """
+
+    kind: Literal["transport", "validation"]
+    message: str
+    status_code: int
+
+
 async def _supervisor_fetch_current_options(
     verify_ssl: bool,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], _SupervisorOptionsError | None]:
     """GET ``/addons/self/info`` and return the current options dict.
 
     Supervisor's ``/addons/self/options`` POST is a *full* replacement
@@ -1674,43 +1702,74 @@ async def _supervisor_fetch_current_options(
     present in the body. We can't ship a partial PATCH of just the
     fields the user changed, so callers must merge their changes into
     the full current options before posting. Mirrors the pattern in
-    ``homeassistant-addon/start.py::persist_addon_options``.
+    ``homeassistant-addon/start.py::maybe_persist_secret_path`` which
+    spreads existing config (``{**config, "secret_path": secret_path}``)
+    before calling ``persist_addon_options``.
 
-    Returns ``(options_dict, error_msg)``. On any error
-    (network failure, non-200 from supervisor, malformed JSON,
-    non-dict options field) the dict is ``{}`` and an error message
-    describes the failure for surfacing to the user.
+    Returns ``(options_dict, error)`` where ``error`` is a
+    :class:`_SupervisorOptionsError` carrying ``kind="transport"`` for
+    network / token / non-JSON failures (mapped to ``CONNECTION_FAILED``
+    upstream) and ``kind="validation"`` for supervisor ``>=400``
+    responses (mapped to ``CONFIG_VALIDATION_FAILED`` with supervisor's
+    real status code preserved). On success the dict carries the
+    full options and ``error`` is ``None``.
     """
     try:
         async with make_supervisor_httpx_client(
             timeout=10.0, verify=verify_ssl
         ) as sclient:
             resp = await sclient.get("/addons/self/info")
+    except RuntimeError as exc:
+        # `make_supervisor_httpx_client` raises RuntimeError when
+        # SUPERVISOR_TOKEN is unset. Both current callers gate on that
+        # env var, but treat this as transport (env / setup failure) so
+        # a future third caller missing the gate gets a sane 502 rather
+        # than an uncaught 500.
+        return {}, _SupervisorOptionsError(
+            "transport", f"Supervisor client unavailable: {exc}", 502
+        )
     except httpx.HTTPError as exc:
-        return {}, f"Could not reach Supervisor for current options: {exc}"
+        return {}, _SupervisorOptionsError(
+            "transport",
+            f"Could not reach Supervisor for current options: {exc}",
+            502,
+        )
     if resp.status_code >= 400:
-        return {}, (
-            f"Supervisor returned {resp.status_code} for "
-            f"/addons/self/info: {resp.text[:300]}"
+        # Supervisor returning a 4xx/5xx for /info is itself a transport-
+        # class failure (we never sent body — there is no schema for
+        # the GET to validate). 502 with CONNECTION_FAILED is right.
+        return {}, _SupervisorOptionsError(
+            "transport",
+            (
+                f"Supervisor returned {resp.status_code} for "
+                f"/addons/self/info: {resp.text[:300]}"
+            ),
+            502,
         )
     try:
         body = resp.json()
     except ValueError:
-        return {}, "Supervisor returned non-JSON for /addons/self/info"
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor returned non-JSON for /addons/self/info", 502
+        )
     # Supervisor REST envelope is {"result": "ok", "data": {...}}. Older
     # mocks / variants may return the data dict directly — handle both.
     data = body.get("data") if isinstance(body, dict) and "data" in body else body
     if not isinstance(data, dict):
-        return {}, "Supervisor /addons/self/info had non-object body"
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor /addons/self/info had non-object body", 502
+        )
     options = data.get("options")
     if not isinstance(options, dict):
-        return {}, "Supervisor /addons/self/info had no options dict"
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor /addons/self/info had no options dict", 502
+        )
     return options, None
 
 
 async def _supervisor_merge_and_post_options(
     verify_ssl: bool, field_changes: dict[str, Any]
-) -> tuple[bool, str | None]:
+) -> tuple[bool, _SupervisorOptionsError | None]:
     """Merge ``field_changes`` into supervisor's current options and POST.
 
     Necessary because supervisor's POST is full-replacement (see
@@ -1719,10 +1778,13 @@ async def _supervisor_merge_and_post_options(
     drops every other key (including required ones like ``backup_hint``)
     and supervisor rejects with a 400 ``addon_configuration_invalid_error``.
 
-    Returns ``(success, error_msg)``. On supervisor 4xx the error
-    message includes the supervisor body so the UI can surface
-    validation failures (e.g. attempting to set a key the addon's
-    schema doesn't declare on the production channel).
+    Returns ``(success, error)`` where ``error`` is a
+    :class:`_SupervisorOptionsError`. Transport failures (token missing,
+    network drop, malformed response from /info) bubble up from the
+    fetch helper unchanged. Supervisor 4xx on the actual POST is
+    classified as ``kind="validation"`` with supervisor's status code
+    preserved so the UI can show the real 4xx code and the
+    ``CONFIG_VALIDATION_FAILED`` recovery suggestions.
     """
     current, err = await _supervisor_fetch_current_options(verify_ssl)
     if err is not None:
@@ -1733,12 +1795,22 @@ async def _supervisor_merge_and_post_options(
             timeout=10.0, verify=verify_ssl
         ) as sclient:
             resp = await sclient.post("/addons/self/options", json={"options": merged})
+    except RuntimeError as exc:
+        return False, _SupervisorOptionsError(
+            "transport", f"Supervisor client unavailable: {exc}", 502
+        )
     except httpx.HTTPError as exc:
-        return False, f"Supervisor options POST failed: {exc}"
+        return False, _SupervisorOptionsError(
+            "transport", f"Supervisor options POST failed: {exc}", 502
+        )
     if resp.status_code >= 400:
-        return False, (
-            f"Supervisor rejected options update ({resp.status_code}): "
-            f"{resp.text[:400]}"
+        return False, _SupervisorOptionsError(
+            "validation",
+            (
+                f"Supervisor rejected options update ({resp.status_code}): "
+                f"{resp.text[:400]}"
+            ),
+            resp.status_code,
         )
     return True, None
 
@@ -1749,8 +1821,21 @@ async def _supervisor_merge_and_post_options(
 # Tasks remove themselves via ``add_done_callback`` when they finish.
 _BACKGROUND_RESTART_TASKS: set[asyncio.Task[None]] = set()
 
+# Delay (seconds) before the background self-restart task fires the
+# supervisor POST. Picked to give Starlette + uvicorn time to serialize
+# the JSONResponse onto the socket and have HA ingress flush it to the
+# browser BEFORE supervisor kills the addon container. Too short races
+# the response flush (browser sees a 5xx Bad Gateway from ingress); too
+# long delays the visible restart noticeably. 0.3s is comfortably above
+# observed flush times in addon-mode while staying well under any
+# reasonable user attention threshold. Tests override via the ``delay``
+# kwarg of ``_schedule_supervisor_self_restart``.
+_SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S: float = 0.3
 
-def _schedule_supervisor_self_restart(verify_ssl: bool, *, delay: float = 0.3) -> None:
+
+def _schedule_supervisor_self_restart(
+    verify_ssl: bool, *, delay: float = _SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S
+) -> None:
     """Schedule a background ``/addons/self/restart`` POST.
 
     Fire-and-forget on the current event loop so the request handler
@@ -2159,7 +2244,17 @@ def build_settings_handlers(
             fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS
         }
         new_overrides: dict[str, Any] = {}
+        # Per ``config.get_feature_flag_origin``, addon mode (i.e.
+        # ``SUPERVISOR_TOKEN`` set) makes the helper return ``"addon"``
+        # for *every* registered flag — there is no path that yields a
+        # mixed addon + file/default batch from a single addon-mode UI
+        # session. The loop still tracks ``addon_writes`` per-field as
+        # belt-and-braces in case a future origin-resolution change
+        # breaks that invariant; the post-loop assertion below makes the
+        # invariant explicit so a regression fails loudly instead of
+        # silently routing a file-mode write through Supervisor.
         addon_writes = False
+        file_or_default_writes = False
         for field_name, raw in raw_flags.items():
             if field_name not in known:
                 return JSONResponse(
@@ -2173,7 +2268,9 @@ def build_settings_handlers(
             origin = get_feature_flag_origin(env_name)
             if origin == "addon":
                 addon_writes = True
-            elif origin not in ("file", "default"):
+            elif origin in ("file", "default"):
+                file_or_default_writes = True
+            else:
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2234,15 +2331,33 @@ def build_settings_handlers(
         # required schema keys like ``backup_hint`` survive — see
         # _supervisor_merge_and_post_options for the rationale, and the
         # parallel handling in _save_backup_config.
-        if addon_writes:
-            if not os.environ.get("SUPERVISOR_TOKEN"):
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        "Supervisor token missing — cannot update add-on options",
+        #
+        # Reject mixed-origin batches loudly. The current
+        # ``get_feature_flag_origin`` implementation guarantees a single
+        # mode per request, but if a future change broke that invariant
+        # we would silently route a file/default-origin field through
+        # Supervisor (which would reject it as an unknown schema key in
+        # production addon mode) — better to fail clearly here.
+        if addon_writes and file_or_default_writes:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    (
+                        "Batch contains a mix of addon-origin and "
+                        "file/default-origin fields; route each batch "
+                        "through a single persistence path."
                     ),
-                    status_code=400,
-                )
+                ),
+                status_code=500,
+            )
+        if addon_writes:
+            # ``addon_writes=True`` is equivalent to
+            # ``is_running_in_addon()`` (origin=="addon" requires
+            # SUPERVISOR_TOKEN per ``get_feature_flag_origin``), so the
+            # only guard we still need here is the sidecar-shape
+            # ``server is None``. The helpers below catch the missing-
+            # token ``RuntimeError`` from ``make_supervisor_httpx_client``
+            # as defense-in-depth.
             if server is None:
                 return JSONResponse(
                     create_error_response(
@@ -2255,13 +2370,25 @@ def build_settings_handlers(
                 server.settings.verify_ssl, new_overrides
             )
             if not ok:
-                logger.warning("Supervisor feature-flag update failed: %s", err)
+                assert err is not None
+                logger.warning(
+                    "Supervisor feature-flag update failed (%s): %s",
+                    err.kind,
+                    err.message,
+                )
+                # Transport failures get CONNECTION_FAILED so the UI shows the
+                # "is HA reachable" suggestions; supervisor schema rejections
+                # get CONFIG_VALIDATION_FAILED with supervisor's real status
+                # code preserved so the UI shows the actual 4xx, not a generic
+                # 502. See _SupervisorOptionsError for the rationale.
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
+                )
                 return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        err or "Supervisor options update failed",
-                    ),
-                    status_code=502,
+                    create_error_response(code, err.message),
+                    status_code=err.status_code,
                 )
             _schedule_supervisor_self_restart(server.settings.verify_ssl)
             return JSONResponse(
@@ -2648,14 +2775,11 @@ def build_settings_handlers(
             return _bad_request(err)
 
         if is_running_in_addon():
-            if not os.environ.get("SUPERVISOR_TOKEN"):
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        "Supervisor token missing — cannot update add-on options",
-                    ),
-                    status_code=400,
-                )
+            # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
+            # helpers below also catch the missing-token ``RuntimeError``
+            # from ``make_supervisor_httpx_client`` as defense-in-depth,
+            # so we only still need the sidecar-shape ``server is None``
+            # guard.
             if server is None:
                 # Addon mode without a live server means we're in the
                 # stdio sidecar — but addon detection should already be
@@ -2669,22 +2793,29 @@ def build_settings_handlers(
             # Merge ``clean`` into the *full* current options before posting.
             # Supervisor validates against the addon schema and rejects any
             # body missing a required key (notably ``backup_hint`` on the
-            # production / dev manifests). The historical bug
-            # (#TODO: refer to PR) shipped just the auto-backup fields,
-            # producing `addon_configuration_invalid_error: Missing option
-            # 'backup_hint' in root` from supervisor and a confusing 400 in
+            # production / dev manifests). A previous version of this code
+            # shipped just the auto-backup fields, producing
+            # ``addon_configuration_invalid_error: Missing option
+            # 'backup_hint' in root`` from supervisor and a confusing 400 in
             # the UI even though the user only changed unrelated fields.
-            ok, err = await _supervisor_merge_and_post_options(
+            ok, sup_err = await _supervisor_merge_and_post_options(
                 server.settings.verify_ssl, clean
             )
             if not ok:
-                logger.warning("Supervisor backup-config update failed: %s", err)
+                assert sup_err is not None
+                logger.warning(
+                    "Supervisor backup-config update failed (%s): %s",
+                    sup_err.kind,
+                    sup_err.message,
+                )
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if sup_err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
+                )
                 return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        err or "Supervisor options update failed",
-                    ),
-                    status_code=502,
+                    create_error_response(code, sup_err.message),
+                    status_code=sup_err.status_code,
                 )
             # Background restart so this JSON response can flush through HA
             # ingress before supervisor kills the addon. The old code POSTed

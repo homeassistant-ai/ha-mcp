@@ -30,6 +30,25 @@ from ha_mcp.settings_ui import (
 SaveHandler = Callable[[Request], Awaitable[JSONResponse]]
 
 
+async def _drain_background_restart_tasks() -> None:
+    """Deterministically wait for every in-flight self-restart task.
+
+    `_schedule_supervisor_self_restart` is fire-and-forget but keeps
+    strong references in `_BACKGROUND_RESTART_TASKS` (so the GC doesn't
+    reap mid-run). Tests that exercise the schedule helper need to
+    wait for those tasks to finish before asserting on side effects;
+    `asyncio.sleep`-based polling is flaky on slow CI runners, so
+    snapshot the set and await each task.
+    """
+    import asyncio
+
+    from ha_mcp.settings_ui import _BACKGROUND_RESTART_TASKS
+
+    pending = list(_BACKGROUND_RESTART_TASKS)
+    if pending:
+        await asyncio.wait(pending)
+
+
 class TestConfigPersistence:
     """Test load/save of tool_config.json."""
 
@@ -722,28 +741,32 @@ class TestRestartAddon:
         (background task pattern — see
         ``test_self_restart_returns_200_and_schedules_background_task``),
         so the verifier here is "the schedule helper got called" rather
-        than "Supervisor was POSTed synchronously". The synchronous
-        ``httpx.AsyncClient`` path is also patched to confirm it is NOT
-        invoked for the fall-back-to-self case.
+        than "Supervisor was POSTed synchronously". Patch the supervisor
+        client factory at its public API to confirm the synchronous path
+        is NOT invoked for the fall-back-to-self case.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
         request = self._make_request(body=body)
 
-        sync_mock = AsyncMock()
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock(post=sync_mock))
-        cm.__aexit__ = AsyncMock(return_value=None)
         schedule_mock = MagicMock()
         monkeypatch.setattr(
             "ha_mcp.settings_ui._schedule_supervisor_self_restart",
             schedule_mock,
         )
 
-        with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
+        # Patch the same surface the schedule-vs-sync branch consults:
+        # ``make_supervisor_httpx_client`` (not the lower-level
+        # ``httpx.AsyncClient``). Lets us assert the synchronous POST
+        # was never awaited without juggling the AsyncClient context-
+        # manager dance inline.
+        response = MagicMock()
+        response.status_code = 200
+        patcher, mock_client = self._patch_supervisor_client(post_return=response)
+        with patcher:
             await restart(request)
 
         schedule_mock.assert_called_once_with(True)
-        sync_mock.assert_not_awaited()
+        mock_client.post.assert_not_awaited()
 
 
 class TestBackupSettingsOverridePersistence:
@@ -1209,9 +1232,37 @@ class TestSupervisorOptionsHelpers:
         assert options == {"backup_hint": "normal", "enable_tool_search": True}
 
     @pytest.mark.asyncio
-    async def test_fetch_current_options_supervisor_4xx_returns_error(
+    async def test_fetch_current_options_accepts_bare_options_dict(self, monkeypatch):
+        """``_supervisor_fetch_current_options`` documents that it accepts
+        BOTH the wrapped ``{"data": {"options": ...}}`` envelope AND a
+        bare ``{"options": ...}`` shape (older mocks / variants). Pin the
+        bare-dict path so a future supervisor variant or mock cleanup
+        cannot silently regress it.
+        """
+        from ha_mcp.settings_ui import _supervisor_fetch_current_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        response = MagicMock()
+        response.status_code = 200
+        response.json = MagicMock(
+            return_value={"options": {"backup_hint": "normal", "verify_ssl": True}}
+        )
+        patcher, _ = self._patch_supervisor_client(get_response=response)
+        with patcher:
+            options, err = await _supervisor_fetch_current_options(verify_ssl=True)
+        assert err is None
+        assert options == {"backup_hint": "normal", "verify_ssl": True}
+
+    @pytest.mark.asyncio
+    async def test_fetch_current_options_supervisor_4xx_returns_transport_error(
         self, monkeypatch
     ):
+        """Supervisor 4xx/5xx on the /info GET is a transport-class failure
+        (we sent no body — there is no schema for the GET to validate).
+        Must be classified ``kind="transport"`` with status_code=502 so
+        the route maps it to CONNECTION_FAILED rather than the
+        schema-recovery suggestions of CONFIG_VALIDATION_FAILED.
+        """
         from ha_mcp.settings_ui import _supervisor_fetch_current_options
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
@@ -1223,10 +1274,14 @@ class TestSupervisorOptionsHelpers:
             options, err = await _supervisor_fetch_current_options(verify_ssl=True)
         assert options == {}
         assert err is not None
-        assert "503" in err
+        assert err.kind == "transport"
+        assert err.status_code == 502
+        assert "503" in err.message
 
     @pytest.mark.asyncio
-    async def test_fetch_current_options_http_error_returns_error(self, monkeypatch):
+    async def test_fetch_current_options_http_error_returns_transport_error(
+        self, monkeypatch
+    ):
         from ha_mcp.settings_ui import _supervisor_fetch_current_options
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
@@ -1237,6 +1292,30 @@ class TestSupervisorOptionsHelpers:
             options, err = await _supervisor_fetch_current_options(verify_ssl=True)
         assert options == {}
         assert err is not None
+        assert err.kind == "transport"
+        assert err.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_fetch_current_options_runtime_error_returns_transport_error(
+        self, monkeypatch
+    ):
+        """``make_supervisor_httpx_client`` raises RuntimeError when
+        SUPERVISOR_TOKEN is unset. Both call sites gate on the env var
+        first, but the helper must still catch the RuntimeError as a
+        defense-in-depth measure so a future third caller missing the
+        gate doesn't get an uncaught 500.
+        """
+        from ha_mcp.settings_ui import _supervisor_fetch_current_options
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Without the env var, make_supervisor_httpx_client raises before
+        # any HTTP call — no patching needed.
+        options, err = await _supervisor_fetch_current_options(verify_ssl=True)
+        assert options == {}
+        assert err is not None
+        assert err.kind == "transport"
+        assert err.status_code == 502
+        assert "Supervisor client unavailable" in err.message
 
     @pytest.mark.asyncio
     async def test_merge_and_post_options_preserves_existing_keys(self, monkeypatch):
@@ -1299,10 +1378,15 @@ class TestSupervisorOptionsHelpers:
         assert merged["auto_backup_throttle_minutes"] == 5  # changed
 
     @pytest.mark.asyncio
-    async def test_merge_and_post_supervisor_400_returns_error(self, monkeypatch):
-        """Supervisor 4xx on the POST surfaces back as ``(False, msg)`` with
-        the body text included so the UI can show e.g. an
-        addon_configuration_invalid_error from a schema mismatch.
+    async def test_merge_and_post_supervisor_400_returns_validation_error(
+        self, monkeypatch
+    ):
+        """Supervisor 4xx on the POST is classified ``kind="validation"``
+        and supervisor's real status code is preserved. The route maps
+        validation errors to CONFIG_VALIDATION_FAILED and uses
+        supervisor's status_code (NOT 502) so the UI shows the actual
+        4xx. Collapsing transport + validation into a single 502 sent
+        users down the wrong recovery path in the previous version.
         """
         from ha_mcp.settings_ui import _supervisor_merge_and_post_options
 
@@ -1324,18 +1408,49 @@ class TestSupervisorOptionsHelpers:
             )
         assert ok is False
         assert err is not None
-        assert "400" in err
-        assert "backup_hint" in err
+        assert err.kind == "validation"
+        assert err.status_code == 400  # supervisor's status, NOT 502
+        assert "backup_hint" in err.message
+
+    @pytest.mark.asyncio
+    async def test_merge_and_post_transport_error_returns_transport_kind(
+        self, monkeypatch
+    ):
+        """``httpx.HTTPError`` on the POST (network drop / DNS failure /
+        supervisor unreachable) must be classified ``kind="transport"``
+        with status_code=502 so the route maps it to CONNECTION_FAILED.
+        """
+        from ha_mcp.settings_ui import _supervisor_merge_and_post_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        get_response = MagicMock()
+        get_response.status_code = 200
+        get_response.json = MagicMock(return_value={"data": {"options": {}}})
+        patcher, _ = self._patch_supervisor_client(
+            get_response=get_response,
+            post_side_effect=httpx.ConnectError("no route"),
+        )
+        with patcher:
+            ok, err = await _supervisor_merge_and_post_options(
+                verify_ssl=True, field_changes={"enable_auto_backup": True}
+            )
+        assert ok is False
+        assert err is not None
+        assert err.kind == "transport"
+        assert err.status_code == 502
 
     @pytest.mark.asyncio
     async def test_schedule_self_restart_fires_task_after_delay(self, monkeypatch):
         """``_schedule_supervisor_self_restart`` fires a background task
         that posts to ``/addons/self/restart`` after ``delay``. Override
-        the delay to 0 so this runs fast.
+        the delay to 0 and deterministically wait on the scheduled task
+        rather than ``asyncio.sleep``-ing — sleep is flaky on slow CI
+        runners.
         """
-        import asyncio
-
-        from ha_mcp.settings_ui import _schedule_supervisor_self_restart
+        from ha_mcp.settings_ui import (
+            _BACKGROUND_RESTART_TASKS,
+            _schedule_supervisor_self_restart,
+        )
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         post_response = MagicMock()
@@ -1345,10 +1460,14 @@ class TestSupervisorOptionsHelpers:
         )
         with patcher:
             _schedule_supervisor_self_restart(verify_ssl=True, delay=0)
-            # Yield to the event loop so the scheduled task runs.
-            await asyncio.sleep(0.05)
+            # Deterministic wait — gather the strong-ref set the helper
+            # maintains rather than relying on a fixed sleep.
+            await _drain_background_restart_tasks()
 
         mock_client.post.assert_awaited_with("/addons/self/restart")
+        # Strong-ref set self-clears via add_done_callback once the task
+        # finishes — pin that contract too.
+        assert set() == _BACKGROUND_RESTART_TASKS
 
     @pytest.mark.asyncio
     async def test_schedule_self_restart_swallows_connection_drop(self, monkeypatch):
@@ -1358,8 +1477,6 @@ class TestSupervisorOptionsHelpers:
         swallow these without logging at ERROR (we are mid-restart, by
         design).
         """
-        import asyncio
-
         from ha_mcp.settings_ui import _schedule_supervisor_self_restart
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
@@ -1368,7 +1485,7 @@ class TestSupervisorOptionsHelpers:
         )
         with patcher:
             _schedule_supervisor_self_restart(verify_ssl=True, delay=0)
-            await asyncio.sleep(0.05)
+            await _drain_background_restart_tasks()
         # No assertion — passing means the swallowed exception didn't
         # propagate out of the background task.
 
@@ -1438,15 +1555,67 @@ class TestSaveBackupConfigAddonMode:
         schedule_mock.assert_called_once_with(True)
 
     @pytest.mark.asyncio
-    async def test_addon_save_surfaces_supervisor_error(self, monkeypatch):
-        """Supervisor rejecting the merged options must surface to the
-        client (502 with the supervisor body) — the restart must not
-        fire if the options write itself failed.
+    async def test_addon_save_surfaces_validation_error_with_supervisor_status(
+        self, monkeypatch
+    ):
+        """Supervisor schema rejection (``kind="validation"``) must surface
+        as ``CONFIG_VALIDATION_FAILED`` with supervisor's real status
+        code preserved (not a generic 502). The restart must NOT fire
+        if the options write itself failed.
         """
+        from ha_mcp.settings_ui import _SupervisorOptionsError
+
         post_handler = self._capture_post_handler(monkeypatch)
 
         merge_mock = AsyncMock(
-            return_value=(False, "Supervisor rejected (400): bad schema")
+            return_value=(
+                False,
+                _SupervisorOptionsError(
+                    kind="validation",
+                    message="Supervisor rejected (400): bad schema",
+                    status_code=400,
+                ),
+            )
+        )
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+        )
+
+        resp = await post_handler(self._make_request({"enable_auto_backup": True}))
+
+        assert resp.status_code == 400  # supervisor's status, not 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+        assert "bad schema" in body["error"]["message"]
+        schedule_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_addon_save_surfaces_transport_error_as_connection_failed(
+        self, monkeypatch
+    ):
+        """Transport-class failures (``kind="transport"``) get mapped to
+        ``CONNECTION_FAILED`` with 502 — distinct recovery path from the
+        validation case (the UI shows "is HA reachable" suggestions
+        instead of schema-recovery suggestions).
+        """
+        from ha_mcp.settings_ui import _SupervisorOptionsError
+
+        post_handler = self._capture_post_handler(monkeypatch)
+
+        merge_mock = AsyncMock(
+            return_value=(
+                False,
+                _SupervisorOptionsError(
+                    kind="transport",
+                    message="Could not reach Supervisor: connect refused",
+                    status_code=502,
+                ),
+            )
         )
         schedule_mock = MagicMock()
         monkeypatch.setattr(
@@ -1461,7 +1630,7 @@ class TestSaveBackupConfigAddonMode:
         assert resp.status_code == 502
         body = json.loads(resp.body)
         assert body["success"] is False
-        assert "bad schema" in body["error"]["message"]
+        assert body["error"]["code"] == "CONNECTION_FAILED"
         schedule_mock.assert_not_called()
 
 
@@ -1525,11 +1694,28 @@ class TestSaveFeatureFlagsAddonMode:
         schedule_mock.assert_called_once_with(True)
 
     @pytest.mark.asyncio
-    async def test_addon_save_surfaces_supervisor_error(self, monkeypatch):
+    async def test_addon_save_surfaces_validation_error_with_supervisor_status(
+        self, monkeypatch
+    ):
+        """Mirror of the backup-config test: supervisor schema rejection
+        must surface as CONFIG_VALIDATION_FAILED with supervisor's real
+        status code, not a generic 502. (e.g. attempting to set a
+        beta-only flag on the production addon channel where the schema
+        doesn't include it.)
+        """
+        from ha_mcp.settings_ui import _SupervisorOptionsError
+
         post_handler = self._capture_post_handler(monkeypatch)
 
         merge_mock = AsyncMock(
-            return_value=(False, "Supervisor rejected (400): unknown option")
+            return_value=(
+                False,
+                _SupervisorOptionsError(
+                    kind="validation",
+                    message="Supervisor rejected (400): unknown option",
+                    status_code=400,
+                ),
+            )
         )
         schedule_mock = MagicMock()
         monkeypatch.setattr(
@@ -1543,10 +1729,45 @@ class TestSaveFeatureFlagsAddonMode:
             self._make_request({"flags": {"enable_yaml_config_editing": True}})
         )
 
-        assert resp.status_code == 502
+        assert resp.status_code == 400
         body = json.loads(resp.body)
         assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
         schedule_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_addon_save_returns_500_when_server_is_none(self, monkeypatch):
+        """Defensive guard for the stdio-sidecar shape. ``server is None``
+        means the handler was constructed without a live MCP server
+        (the sidecar process); addon detection should already be False
+        there, so this branch is type-checker + future-refactor safety
+        net rather than a user-visible code path. Pin it so removal
+        becomes a deliberate decision.
+        """
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/features") and "POST" in methods:
+                    captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        # server=None — the sidecar shape.
+        register_settings_routes(mcp, None, secret_path="/x")
+
+        resp = await captured["post"](
+            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+        )
+
+        assert resp.status_code == 500
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "INTERNAL_ERROR"
 
 
 class TestFeatureGatedToolsCustomCode:
