@@ -46,7 +46,6 @@ def test_serialized_shape_is_stable(tmp_path: Path):
     data = json.loads((tmp_path / POLICY_FILENAME).read_text())
     assert set(data.keys()) == {
         "enabled",
-        "default_action",
         "wait_seconds",
         "approval_ttl_minutes",
         "rules",

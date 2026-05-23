@@ -83,8 +83,4 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
         return Verdict.ALLOW
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
-    return (
-        Verdict.REQUIRE_APPROVAL
-        if policy.default_action == "require_approval"
-        else Verdict.ALLOW
-    )
+    return Verdict.ALLOW

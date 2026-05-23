@@ -62,6 +62,15 @@ class TestRule:
     def test_wildcard_tool_name(self):
         Rule(tool_name="*")
 
+    def test_rule_wildcard_accepted(self):
+        # Explicit wildcard construction succeeds and round-trips.
+        r = Rule(tool_name="*")
+        assert r.tool_name == "*"
+
+    def test_rule_rejects_empty_tool_name(self):
+        with pytest.raises(ValidationError, match="tool_name must be non-empty"):
+            Rule(tool_name="")
+
     def test_remember_minutes_non_negative(self):
         with pytest.raises(ValidationError):
             Rule(tool_name="ha_x", remember_minutes=-1)
@@ -71,14 +80,9 @@ class TestPolicy:
     def test_defaults(self):
         p = Policy()
         assert p.enabled is False
-        assert p.default_action == "allow"
         assert p.wait_seconds == 60
         assert p.approval_ttl_minutes == 5
         assert p.rules == []
-
-    def test_invalid_default_action(self):
-        with pytest.raises(ValidationError):
-            Policy(default_action="maybe")
 
     def test_user_example_from_issue(self):
         """Example from the maintainer: ha_call_service approval when domain is lock or alarm_control_panel."""

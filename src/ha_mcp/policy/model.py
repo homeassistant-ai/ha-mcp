@@ -50,7 +50,12 @@ class Predicate(BaseModel):
 
 
 class Rule(BaseModel):
-    """One policy rule: when this tool is called and all predicates match, require approval."""
+    """One policy rule.
+
+    When this tool is called and all `when` predicates match, the call
+    requires user approval. Use ``tool_name="*"`` to match any tool
+    (combine with predicates for cross-tool rules).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -58,14 +63,25 @@ class Rule(BaseModel):
     when: list[Predicate] = Field(default_factory=list)
     remember_minutes: int = Field(default=0, ge=0)
 
+    @field_validator("tool_name")
+    @classmethod
+    def _validate_tool_name(cls, v: str) -> str:
+        if not v:
+            raise ValueError("tool_name must be non-empty (use '*' for wildcard)")
+        return v
+
 
 class Policy(BaseModel):
-    """Full per-tool approval policy, persisted to tool_policy.json."""
+    """Full per-tool approval policy, persisted to tool_policy.json.
+
+    The system is always "allow unless a rule matches; rule = require
+    approval". There is no global deny/require-approval default — rules
+    grant approval gates, nothing else.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    default_action: Literal["allow", "require_approval"] = "allow"
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)

@@ -99,13 +99,9 @@ class TestEvaluate:
         p = Policy(enabled=False, rules=[Rule(tool_name="*")])
         assert evaluate("ha_call_service", {}, p) == Verdict.ALLOW
 
-    def test_no_rules_with_default_allow(self):
-        p = Policy(enabled=True, default_action="allow")
+    def test_no_rules_returns_allow(self):
+        p = Policy(enabled=True)
         assert evaluate("ha_call_service", {}, p) == Verdict.ALLOW
-
-    def test_no_rules_with_default_require(self):
-        p = Policy(enabled=True, default_action="require_approval")
-        assert evaluate("ha_call_service", {}, p) == Verdict.REQUIRE_APPROVAL
 
     def test_rule_match_returns_require(self):
         p = Policy(
