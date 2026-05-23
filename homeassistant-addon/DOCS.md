@@ -292,9 +292,10 @@ The policy engine is in beta. Off by default. Requires add-on restart to take ef
 **Example Configuration:**
 
 ```yaml
-backup_hint: normal
-secret_path: ""  # Leave empty for auto-generation
+enable_per_tool_approval: true
 ```
+
+Per-tool rules (including argument predicates like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Policies** tab in the web UI, not from `config.yaml`.
 
 *Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
