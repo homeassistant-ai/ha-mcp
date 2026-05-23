@@ -359,22 +359,33 @@ async function main() {
     errors.push(`transpile failure (${language}): ${(e && e.message) || e}`);
   }
 
-  // Wrap so awaits inside `invoke` work and so we can surface throws.
-  const program = `
-    (async () => {
-      ${prelude}
-      ${scriptBody}
-      ${invoke}
-    })().then(
+  // Run prelude + script at global scope so top-level `function` and
+  // `var` declarations land on `window`, matching how a real browser
+  // hoists them out of an inline `<script>` block. Wrapping the script
+  // in an async IIFE would scope `function restartAddon() {…}` to the
+  // IIFE — invoke's `window.restartAddon()` then resolves to undefined
+  // and throws TypeError.
+  //
+  // Invoke runs separately inside an async IIFE so `await` works and we
+  // can capture its rejection. Errors from the script body's
+  // synchronous init bubble through the try/catch below.
+  const initProgram = `${prelude}\n${scriptBody}`;
+  try {
+    window.eval(initProgram);
+  } catch (e) {
+    errors.push(`script init: ${(e && e.stack) || e}`);
+  }
+
+  const invokeProgram = `
+    (async () => { ${invoke} })().then(
       () => { window.__harnessDone = true; },
       (e) => { window.__harnessError = (e && e.stack) || String(e); window.__harnessDone = true; },
     );
   `;
-
   try {
-    window.eval(program);
+    window.eval(invokeProgram);
   } catch (e) {
-    errors.push((e && e.stack) || String(e));
+    errors.push(`invoke: ${(e && e.stack) || e}`);
   }
 
   // Drain microtasks before advancing fake time so the script reaches its
@@ -410,7 +421,11 @@ async function main() {
     confirms,
     console: consoleLog,
     status: lastStatus,
-    dom: window.document.body.innerHTML,
+    // outerHTML so the html/head/body tags and their own attributes
+    // (e.g. ``document.body.dataset.foo`` writes a body attr, not a child)
+    // make it into the serialised snapshot. Tests routinely write
+    // dataset attrs on body as a side-channel for in-page state.
+    dom: window.document.documentElement.outerHTML,
     errors,
   };
 
