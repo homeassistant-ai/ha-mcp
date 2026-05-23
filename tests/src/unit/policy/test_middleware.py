@@ -306,3 +306,87 @@ async def test_remember_minutes_caches_for_subsequent_calls(queue):
     result2 = await mw.on_call_tool(make_context("ha_call_service", args), call_next)
     assert result2 == "ok"
     assert queue.list_pending() == []
+
+
+# --- Wave 4B: wait-loop event-wake timing + multi-rule precedence ---
+
+
+@pytest.mark.anyio
+async def test_wait_loop_wakes_on_event_not_polling(queue):
+    """Verify the wait-loop exits on ``event.set()``, not on the 15s polling tick.
+
+    With ``wait_seconds=30``, an approval fired at t=0.05 should resolve
+    well before t=15 (the polling-fallback inner-loop interval). If
+    someone removes the ``pending.event.wait()`` call and leaves only
+    the ``move_on_after(15)`` polling fallback, the loop would block for
+    the full 15s before the next iteration noticed the decision flip;
+    this test catches that regression.
+    """
+    import time
+
+    pol = Policy(
+        enabled=True, wait_seconds=30, rules=[Rule(tool_name="ha_call_service")]
+    )
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
+    call_next = AsyncMock(return_value="ok")
+
+    async def approver():
+        await anyio.sleep(0.05)
+        queue.approve(queue.list_pending()[0].token)
+
+    start = time.monotonic()
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(approver)
+        result = await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+    elapsed = time.monotonic() - start
+
+    assert result == "ok"
+    assert elapsed < 1.0, (
+        f"Approval took {elapsed:.2f}s — event.wait() may have been bypassed"
+    )
+
+
+@pytest.mark.anyio
+async def test_multi_rule_first_match_wins_for_remember_minutes(queue):
+    """Two overlapping rules for the same tool — first match wins for ``remember_minutes``.
+
+    Catches a regression where ``evaluate()`` and ``find_matching_rule()``
+    drift apart on precedence ordering (e.g. one walks the list head-first
+    and the other tail-first, or one short-circuits on a later rule).
+    """
+    pol = Policy(
+        enabled=True,
+        rules=[
+            Rule(tool_name="ha_call_service", remember_minutes=10),  # first match
+            Rule(tool_name="ha_call_service", remember_minutes=999),
+        ],
+    )
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=5)
+    call_next = AsyncMock(return_value="ok")
+    args = {"domain": "lock"}
+
+    async def approver():
+        await anyio.sleep(0.05)
+        queue.approve(queue.list_pending()[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(approver)
+        await mw.on_call_tool(make_context("ha_call_service", args), call_next)
+
+    # is_remembered reflects the FIRST rule's 10-minute window, not 999.
+    args_hash = compute_args_hash(args)
+    assert queue.is_remembered("ha_call_service", args_hash) is True
+
+    # Internal: remember-until should be ~10 min in the future, not 999.
+    # Reaching into ``_remember`` is acceptable for this precedence test —
+    # other tests in this file (e.g. the TTL-rewind test) take a similar
+    # approach for properties not exposed on the public surface.
+    from datetime import UTC, datetime, timedelta
+
+    remember_until = queue._remember[("ha_call_service", args_hash)]
+    delta = remember_until - datetime.now(UTC)
+    assert delta < timedelta(minutes=20), (
+        f"remember window was {delta}; expected ~10min (first rule), not 999min (second rule)"
+    )
