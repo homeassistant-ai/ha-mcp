@@ -538,15 +538,20 @@ class TestRestartAddon:
     async def test_treats_connection_drop_as_success(self, monkeypatch, exc_cls):
         """Drop-as-success branch (the catch on
         `(ReadError, RemoteProtocolError)` inside the `httpx.AsyncClient`
-        block): the Supervisor kills our process mid-request during a
-        restart, so the connection-drop is the documented success signal —
-        not a failure to surface. ConnectError is excluded because it fires
-        BEFORE a connection is established (DNS / TCP refused / socket
-        misconfigured) and means Supervisor was unreachable, not that a
-        restart was initiated.
+        block): when restarting a *sibling* addon, the Supervisor kills
+        that target mid-request, so the connection-drop is the documented
+        success signal — not a failure to surface. ConnectError is
+        excluded because it fires BEFORE a connection is established (DNS
+        / TCP refused / socket misconfigured) and means Supervisor was
+        unreachable, not that a restart was initiated.
+
+        Self-restart no longer flows through this code path — see
+        ``test_self_restart_returns_200_and_schedules_background_task``
+        — so the synchronous error-surfacing only fires for non-self
+        slugs. Mirror that asymmetry here by targeting a non-self addon.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = self._make_request()
+        request = self._make_request(body={"slug": "core_ssh"})
 
         patcher, _ = self._patch_supervisor_client(post_side_effect=exc_cls("kill"))
         with patcher:
@@ -562,10 +567,11 @@ class TestRestartAddon:
         """ConnectError fires before a connection is established and means
         Supervisor was unreachable — must NOT be treated as a successful
         restart. Falls through to the generic `httpx.HTTPError` handler
-        which returns 502 with `CONNECTION_FAILED`.
+        which returns 502 with `CONNECTION_FAILED`. Self-restart no
+        longer touches this path; use a non-self slug to exercise it.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = self._make_request()
+        request = self._make_request(body={"slug": "core_ssh"})
 
         patcher, _ = self._patch_supervisor_client(
             post_side_effect=httpx.ConnectError("no route")
@@ -582,10 +588,11 @@ class TestRestartAddon:
     async def test_generic_http_error_returns_502(self, monkeypatch):
         """The generic `httpx.HTTPError` handler (catches anything not
         already special-cased) maps to 502 + CONNECTION_FAILED. Pins the
-        last unconvered transport-error path in `_restart_addon`.
+        last uncovered transport-error path in `_restart_addon` —
+        non-self slug exercises the synchronous branch.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = self._make_request()
+        request = self._make_request(body={"slug": "core_ssh"})
 
         # PoolTimeout subclasses httpx.HTTPError but is NOT in the
         # drop-as-success tuple — exercises the fall-through.
@@ -602,12 +609,15 @@ class TestRestartAddon:
 
     @pytest.mark.asyncio
     async def test_supervisor_4xx_returns_502(self, monkeypatch):
-        """When Supervisor returns a non-2xx status (e.g. 401 Unauthorized),
-        the handler must surface a 502 to the caller — the restart was not
-        initiated. Pins the `status_code >= 400` branch in `_restart_addon`.
+        """When Supervisor returns a non-2xx status (e.g. 401 Unauthorized)
+        for a *sibling* addon restart, the handler must surface a 502 to
+        the caller — the restart was not initiated. Pins the
+        `status_code >= 400` branch in `_restart_addon`. Self-restart
+        path no longer surfaces supervisor errors (see
+        ``_schedule_supervisor_self_restart``); use a non-self slug.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
-        request = self._make_request()
+        request = self._make_request(body={"slug": "core_ssh"})
 
         response = MagicMock()
         response.status_code = 401
@@ -621,18 +631,31 @@ class TestRestartAddon:
         assert body["success"] is False
 
     @pytest.mark.asyncio
-    async def test_posts_relative_url_for_self_restart(self, monkeypatch):
-        """No-body request POSTs ``/addons/self/restart`` — the UI button's path."""
+    async def test_self_restart_returns_200_and_schedules_background_task(
+        self, monkeypatch
+    ):
+        """No-body request → target_slug='self' → schedules a background
+        ``/addons/self/restart`` POST and returns 200 immediately so the
+        JSON response can flush through HA ingress *before* Supervisor
+        kills the addon mid-response. Without this, ingress converts the
+        dropped upstream into a 5xx Bad Gateway, which the JS rendered
+        as 'Restart failed' even when the restart actually succeeded.
+        """
         restart = self._capture_handler(monkeypatch, with_token=True)
         request = self._make_request()
 
-        response = MagicMock()
-        response.status_code = 200
-        patcher, mock_client = self._patch_supervisor_client(post_return=response)
-        with patcher:
-            await restart(request)
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart",
+            schedule_mock,
+        )
+        resp = await restart(request)
 
-        mock_client.post.assert_awaited_once_with("/addons/self/restart")
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert "Restart initiated" in body["message"]
+        schedule_mock.assert_called_once_with(True)
 
     @pytest.mark.asyncio
     async def test_slug_in_body_targets_named_addon(self, monkeypatch):
@@ -689,27 +712,38 @@ class TestRestartAddon:
     async def test_invalid_slug_in_body_falls_back_to_self(self, monkeypatch, body):
         """Malformed/missing ``slug`` field → restart targets ``self``.
 
-        Preserves the historical self-restart behavior when callers post a
-        body that doesn't carry a usable slug. The settings-UI restart
+        Preserves the historical self-restart behavior when callers post
+        a body that doesn't carry a usable slug. The settings-UI restart
         button posts no body at all; the explicit slug paths exist purely
         for the E2E test surface and should never accidentally redirect
         a self-restart to ``/addons//restart`` or similar.
+
+        Self-restart now flows through ``_schedule_supervisor_self_restart``
+        (background task pattern — see
+        ``test_self_restart_returns_200_and_schedules_background_task``),
+        so the verifier here is "the schedule helper got called" rather
+        than "Supervisor was POSTed synchronously". The synchronous
+        ``httpx.AsyncClient`` path is also patched to confirm it is NOT
+        invoked for the fall-back-to-self case.
         """
         restart = self._capture_handler(monkeypatch, with_token=True)
         request = self._make_request(body=body)
 
-        response = MagicMock()
-        response.status_code = 200
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=response)
+        sync_mock = AsyncMock()
         cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aenter__ = AsyncMock(return_value=MagicMock(post=sync_mock))
         cm.__aexit__ = AsyncMock(return_value=None)
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart",
+            schedule_mock,
+        )
 
         with patch("ha_mcp.settings_ui.httpx.AsyncClient", return_value=cm):
             await restart(request)
 
-        mock_client.post.assert_awaited_once_with("/addons/self/restart")
+        schedule_mock.assert_called_once_with(True)
+        sync_mock.assert_not_awaited()
 
 
 class TestBackupSettingsOverridePersistence:
@@ -1107,3 +1141,430 @@ class TestRenderedHTMLJsSyntax:
                 "Settings UI <script> body failed node --check:\n"
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
+
+
+class TestSupervisorOptionsHelpers:
+    """Module-level helpers for the addon-mode Supervisor options flow.
+
+    Supervisor's ``/addons/<slug>/options`` POST is a *full* replacement
+    validated against the addon schema, so a partial body (e.g. only the
+    auto-backup fields the user changed) is rejected with
+    ``addon_configuration_invalid_error`` when a required key like
+    ``backup_hint`` is omitted. These tests pin the merge contract that
+    ``_save_backup_config`` and ``_save_feature_flags`` now rely on in
+    addon mode.
+    """
+
+    def _patch_supervisor_client(
+        self,
+        *,
+        get_response=None,
+        post_response=None,
+        get_side_effect=None,
+        post_side_effect=None,
+    ):
+        """Return (patcher, mock_client) where mock_client.get/post are AsyncMocks."""
+        mock_client = MagicMock()
+        if get_side_effect is not None:
+            mock_client.get = AsyncMock(side_effect=get_side_effect)
+        else:
+            mock_client.get = AsyncMock(return_value=get_response)
+        if post_side_effect is not None:
+            mock_client.post = AsyncMock(side_effect=post_side_effect)
+        else:
+            mock_client.post = AsyncMock(return_value=post_response)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        factory = MagicMock(return_value=cm)
+        patcher = patch("ha_mcp.settings_ui.make_supervisor_httpx_client", factory)
+        return patcher, mock_client
+
+    @pytest.mark.asyncio
+    async def test_fetch_current_options_unwraps_data_envelope(self, monkeypatch):
+        """Supervisor wraps responses in ``{"result": "ok", "data": {...}}``.
+        The fetch helper must unwrap the envelope and return the inner
+        options dict.
+        """
+        from ha_mcp.settings_ui import _supervisor_fetch_current_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        response = MagicMock()
+        response.status_code = 200
+        response.json = MagicMock(
+            return_value={
+                "result": "ok",
+                "data": {
+                    "options": {
+                        "backup_hint": "normal",
+                        "enable_tool_search": True,
+                    }
+                },
+            }
+        )
+        patcher, _ = self._patch_supervisor_client(get_response=response)
+        with patcher:
+            options, err = await _supervisor_fetch_current_options(verify_ssl=True)
+        assert err is None
+        assert options == {"backup_hint": "normal", "enable_tool_search": True}
+
+    @pytest.mark.asyncio
+    async def test_fetch_current_options_supervisor_4xx_returns_error(
+        self, monkeypatch
+    ):
+        from ha_mcp.settings_ui import _supervisor_fetch_current_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        response = MagicMock()
+        response.status_code = 503
+        response.text = "Supervisor busy"
+        patcher, _ = self._patch_supervisor_client(get_response=response)
+        with patcher:
+            options, err = await _supervisor_fetch_current_options(verify_ssl=True)
+        assert options == {}
+        assert err is not None
+        assert "503" in err
+
+    @pytest.mark.asyncio
+    async def test_fetch_current_options_http_error_returns_error(self, monkeypatch):
+        from ha_mcp.settings_ui import _supervisor_fetch_current_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        patcher, _ = self._patch_supervisor_client(
+            get_side_effect=httpx.ConnectError("no route")
+        )
+        with patcher:
+            options, err = await _supervisor_fetch_current_options(verify_ssl=True)
+        assert options == {}
+        assert err is not None
+
+    @pytest.mark.asyncio
+    async def test_merge_and_post_options_preserves_existing_keys(self, monkeypatch):
+        """The merge must preserve untouched required keys (most importantly
+        ``backup_hint``, which has no ``?`` in the addon schema and would
+        cause supervisor to reject the entire POST with 400 if omitted).
+
+        Pins the fix for the bug where ``_save_backup_config`` was POSTing
+        only the auto-backup fields and dropping ``backup_hint`` in the
+        process — exact reproduction of the user-reported failure:
+        ``addon_configuration_invalid_error: Missing option 'backup_hint'
+        in root``.
+        """
+        from ha_mcp.settings_ui import _supervisor_merge_and_post_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        get_response = MagicMock()
+        get_response.status_code = 200
+        get_response.json = MagicMock(
+            return_value={
+                "data": {
+                    "options": {
+                        "backup_hint": "normal",
+                        "enable_tool_search": False,
+                        "verify_ssl": True,
+                        "auto_backup_throttle_minutes": 0,
+                        "auto_backup_retain_per_entity": 100,
+                        "enable_auto_backup": True,
+                    }
+                }
+            }
+        )
+        post_response = MagicMock()
+        post_response.status_code = 200
+        patcher, mock_client = self._patch_supervisor_client(
+            get_response=get_response, post_response=post_response
+        )
+        with patcher:
+            ok, err = await _supervisor_merge_and_post_options(
+                verify_ssl=True,
+                field_changes={
+                    "enable_auto_backup": False,
+                    "auto_backup_throttle_minutes": 5,
+                },
+            )
+
+        assert ok is True
+        assert err is None
+        # The POST body must contain backup_hint (unchanged) + the new values.
+        mock_client.post.assert_awaited_once()
+        post_call = mock_client.post.call_args
+        assert post_call.args[0] == "/addons/self/options"
+        body = post_call.kwargs["json"]
+        merged = body["options"]
+        assert merged["backup_hint"] == "normal"  # preserved
+        assert merged["verify_ssl"] is True  # preserved
+        assert merged["enable_tool_search"] is False  # preserved
+        assert merged["auto_backup_retain_per_entity"] == 100  # preserved
+        assert merged["enable_auto_backup"] is False  # changed
+        assert merged["auto_backup_throttle_minutes"] == 5  # changed
+
+    @pytest.mark.asyncio
+    async def test_merge_and_post_supervisor_400_returns_error(self, monkeypatch):
+        """Supervisor 4xx on the POST surfaces back as ``(False, msg)`` with
+        the body text included so the UI can show e.g. an
+        addon_configuration_invalid_error from a schema mismatch.
+        """
+        from ha_mcp.settings_ui import _supervisor_merge_and_post_options
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        get_response = MagicMock()
+        get_response.status_code = 200
+        get_response.json = MagicMock(return_value={"data": {"options": {}}})
+        post_response = MagicMock()
+        post_response.status_code = 400
+        post_response.text = (
+            "App has invalid options: Missing option 'backup_hint' in root"
+        )
+        patcher, _ = self._patch_supervisor_client(
+            get_response=get_response, post_response=post_response
+        )
+        with patcher:
+            ok, err = await _supervisor_merge_and_post_options(
+                verify_ssl=True, field_changes={"enable_auto_backup": True}
+            )
+        assert ok is False
+        assert err is not None
+        assert "400" in err
+        assert "backup_hint" in err
+
+    @pytest.mark.asyncio
+    async def test_schedule_self_restart_fires_task_after_delay(self, monkeypatch):
+        """``_schedule_supervisor_self_restart`` fires a background task
+        that posts to ``/addons/self/restart`` after ``delay``. Override
+        the delay to 0 so this runs fast.
+        """
+        import asyncio
+
+        from ha_mcp.settings_ui import _schedule_supervisor_self_restart
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        post_response = MagicMock()
+        post_response.status_code = 200
+        patcher, mock_client = self._patch_supervisor_client(
+            post_response=post_response
+        )
+        with patcher:
+            _schedule_supervisor_self_restart(verify_ssl=True, delay=0)
+            # Yield to the event loop so the scheduled task runs.
+            await asyncio.sleep(0.05)
+
+        mock_client.post.assert_awaited_with("/addons/self/restart")
+
+    @pytest.mark.asyncio
+    async def test_schedule_self_restart_swallows_connection_drop(self, monkeypatch):
+        """Self-restart deliberately kills the addon process — the
+        supervisor httpx call is expected to error out with
+        ReadError / RemoteProtocolError mid-flight. The helper must
+        swallow these without logging at ERROR (we are mid-restart, by
+        design).
+        """
+        import asyncio
+
+        from ha_mcp.settings_ui import _schedule_supervisor_self_restart
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        patcher, _ = self._patch_supervisor_client(
+            post_side_effect=httpx.ReadError("killed mid-call")
+        )
+        with patcher:
+            _schedule_supervisor_self_restart(verify_ssl=True, delay=0)
+            await asyncio.sleep(0.05)
+        # No assertion — passing means the swallowed exception didn't
+        # propagate out of the background task.
+
+
+class TestSaveBackupConfigAddonMode:
+    """Addon-mode ``POST /api/settings/backup-config`` flow.
+
+    Pins the fix for the user-reported supervisor 400 — the old code
+    POSTed only the three auto-backup fields, dropping ``backup_hint``
+    (the addon schema's only required key) and producing
+    ``addon_configuration_invalid_error``. The new flow merges through
+    ``_supervisor_merge_and_post_options`` and schedules a restart via
+    ``_schedule_supervisor_self_restart``.
+    """
+
+    def _make_request(self, body):
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    def _capture_post_handler(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/backup-config") and "POST" in methods:
+                    captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["post"]
+
+    @pytest.mark.asyncio
+    async def test_addon_save_merges_and_schedules_restart(self, monkeypatch):
+        post_handler = self._capture_post_handler(monkeypatch)
+
+        merge_mock = AsyncMock(return_value=(True, None))
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+        )
+
+        resp = await post_handler(
+            self._make_request(
+                {"enable_auto_backup": True, "auto_backup_throttle_minutes": 5}
+            )
+        )
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["mode"] == "addon"
+        assert body["restarting"] is True
+        merge_mock.assert_awaited_once_with(
+            True,
+            {"enable_auto_backup": True, "auto_backup_throttle_minutes": 5},
+        )
+        schedule_mock.assert_called_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_addon_save_surfaces_supervisor_error(self, monkeypatch):
+        """Supervisor rejecting the merged options must surface to the
+        client (502 with the supervisor body) — the restart must not
+        fire if the options write itself failed.
+        """
+        post_handler = self._capture_post_handler(monkeypatch)
+
+        merge_mock = AsyncMock(
+            return_value=(False, "Supervisor rejected (400): bad schema")
+        )
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+        )
+
+        resp = await post_handler(self._make_request({"enable_auto_backup": True}))
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "bad schema" in body["error"]["message"]
+        schedule_mock.assert_not_called()
+
+
+class TestSaveFeatureFlagsAddonMode:
+    """Addon-mode ``POST /api/settings/features`` flow.
+
+    Mirror of TestSaveBackupConfigAddonMode for feature flags. In addon
+    mode, ``get_feature_flag_origin`` returns ``"addon"`` for every
+    flag (because SUPERVISOR_TOKEN is set), so the handler must route
+    through Supervisor instead of refusing the write or persisting to
+    the override file (the file is ignored in addon mode anyway —
+    ``start.py`` rewrites env vars from ``config.yaml`` on every boot).
+    """
+
+    def _make_request(self, body):
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    def _capture_post_handler(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        captured: dict[str, SaveHandler] = {}
+
+        def custom_route_factory(path, methods):
+            def decorator(fn):
+                if path.endswith("/api/settings/features") and "POST" in methods:
+                    captured["post"] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        register_settings_routes(mcp, server, secret_path="/x")
+        return captured["post"]
+
+    @pytest.mark.asyncio
+    async def test_addon_save_merges_and_schedules_restart(self, monkeypatch):
+        post_handler = self._capture_post_handler(monkeypatch)
+
+        merge_mock = AsyncMock(return_value=(True, None))
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+        )
+
+        resp = await post_handler(
+            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+        )
+
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["mode"] == "addon"
+        assert body["restarting"] is True
+        merge_mock.assert_awaited_once_with(True, {"enable_yaml_config_editing": True})
+        schedule_mock.assert_called_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_addon_save_surfaces_supervisor_error(self, monkeypatch):
+        post_handler = self._capture_post_handler(monkeypatch)
+
+        merge_mock = AsyncMock(
+            return_value=(False, "Supervisor rejected (400): unknown option")
+        )
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._schedule_supervisor_self_restart", schedule_mock
+        )
+
+        resp = await post_handler(
+            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+        )
+
+        assert resp.status_code == 502
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        schedule_mock.assert_not_called()
+
+
+class TestFeatureGatedToolsCustomCode:
+    """``ha_manage_custom_tool`` (gated by ``enable_code_mode``) must
+    appear in the settings-UI tool list when the toggle is off — same
+    pattern as ``ha_config_set_yaml`` — so users discover the beta
+    feature and how to enable it. Pins the fix for the asymmetry the
+    user reported.
+    """
+
+    def test_custom_code_tool_is_listed(self):
+        from ha_mcp.settings_ui import FEATURE_GATED_TOOLS
+
+        assert "ha_manage_custom_tool" in FEATURE_GATED_TOOLS
+        entry = FEATURE_GATED_TOOLS["ha_manage_custom_tool"]
+        # The "Beta — set X" hint copy is keyed off ``disabled_by`` —
+        # without this the JS template renders no hint at all.
+        assert entry["disabled_by"] == "enable_code_mode"  # type: ignore[typeddict-item]
+        # Lives in the System group, matching ha_config_set_yaml so the
+        # related beta tools render together.
+        assert entry["primary_tag"] == "System"
