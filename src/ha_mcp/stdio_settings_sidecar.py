@@ -602,7 +602,7 @@ def _build_app(
             handlers["save_feature_flags"],
             methods=["POST"],
         ),
-        # Per-tool approval policy endpoints (#966). Pending/approve/deny
+        # Tool security policies endpoints (#966). Pending/approve/deny
         # are wired as stubs that return 503 in sidecar mode — the
         # in-memory ApprovalQueue lives in the main server process, so
         # only config GET/PUT are usefully reachable here.

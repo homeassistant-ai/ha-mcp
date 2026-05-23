@@ -1,1 +1,1 @@
-"""Per-tool approval policy for high-stakes MCP tool calls."""
+"""Tool security policies for high-stakes MCP tool calls."""

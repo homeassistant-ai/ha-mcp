@@ -195,10 +195,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
-        # Wire per-tool approval middleware (#966) — opt-in via
-        # ENABLE_PER_TOOL_APPROVAL. Must come last so the middleware
+        # Wire tool security policies middleware (#966) — opt-in via
+        # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
-        self._apply_per_tool_approval()
+        self._apply_tool_security_policies()
 
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
@@ -803,8 +803,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # ``ha_manage_custom_tool`` was previously pinned here whenever
         # code mode was enabled, so users could gate it via per-tool MCP
         # permission prompts even when toolsearch hid the catalog. The
-        # per-tool approval middleware shipped in #966 now gates it at
-        # call time regardless of catalog visibility, so it no longer
+        # tool security policies middleware shipped in #966 now gates it
+        # at call time regardless of catalog visibility, so it no longer
         # needs an explicit pin just to be reachable for gating.
 
         # The client may not support resources or server instructions — add
@@ -842,10 +842,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         except Exception:
             logger.exception("Failed to apply tool search transform")
 
-    def _apply_per_tool_approval(self) -> None:
-        """Register the per-tool approval middleware (#966).
+    def _apply_tool_security_policies(self) -> None:
+        """Register the tool security policies middleware (#966).
 
-        Opt-in via ``ENABLE_PER_TOOL_APPROVAL``. When enabled, every
+        Opt-in via ``ENABLE_TOOL_SECURITY_POLICIES``. When enabled, every
         tool call is funneled through :class:`PolicyMiddleware`, which
         consults the persisted :class:`Policy` and gates calls matching
         a rule until the user approves or denies via the settings UI's
@@ -860,7 +860,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         file is tens of bytes) so live updates via the UI take effect
         immediately without restart and without a stale in-memory cache.
         """
-        if not self.settings.enable_per_tool_approval:
+        if not self.settings.enable_tool_security_policies:
             return
 
         try:
@@ -871,7 +871,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             from .utils.data_paths import get_data_dir
         except ImportError:
             logger.exception(
-                "Per-tool approval enabled but policy package failed to import; "
+                "Tool security policies enabled but policy package failed to import; "
                 "middleware not installed."
             )
             return
@@ -906,7 +906,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
             )
             logger.info(
-                "Per-tool approval middleware registered (data_dir=%s)", data_dir
+                "Tool security policies middleware registered (data_dir=%s)",
+                data_dir,
             )
         except Exception:
             logger.exception("Failed to register PolicyMiddleware")

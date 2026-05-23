@@ -52,8 +52,8 @@ logger = logging.getLogger(__name__)
 # ``ha_config_set_yaml`` and ``ha_manage_custom_tool`` were previously
 # pinned here (the latter conditionally in server.py when code mode was
 # enabled) so users could gate them via per-tool MCP permission prompts
-# even when toolsearch hid the rest of the catalog. The per-tool approval
-# middleware shipped in #966 now gates those tools at call time
+# even when toolsearch hid the rest of the catalog. The tool security
+# policies middleware shipped in #966 now gates those tools at call time
 # regardless of catalog visibility, so they no longer need to be pinned
 # just to be reachable for gating — keeping them behind the search proxy
 # reduces the LLM's tool surface without sacrificing the safety check.

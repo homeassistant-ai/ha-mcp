@@ -329,9 +329,9 @@ class TestDefaultPinnedTools:
         ``ha_manage_custom_tool`` (arbitrary sandboxed Python execution)
         were previously pinned so users could gate them via per-tool MCP
         permission prompts even when toolsearch hid the rest of the
-        catalog. The per-tool approval middleware now gates them at call
-        time regardless of catalog visibility, so they should NOT be in
-        the default pinned set — keeping them out of the always-visible
+        catalog. The tool security policies middleware now gates them at
+        call time regardless of catalog visibility, so they should NOT be
+        in the default pinned set — keeping them out of the always-visible
         list reduces the LLM's tool surface without losing the safety
         check.
         """

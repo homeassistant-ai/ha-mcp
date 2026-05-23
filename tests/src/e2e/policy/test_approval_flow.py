@@ -1,10 +1,10 @@
-"""End-to-end test for per-tool approval middleware (#966).
+"""End-to-end test for tool security policies middleware (#966).
 
 Currently a placeholder — full e2e requires a testcontainers Home Assistant
 instance plus an MCP client driving the middleware over HTTP. Once the e2e
-suite gains a fixture for the per-tool approval pipeline (settings UI routes
-mounted + middleware registered against the same FastMCP), this test should
-be filled in. The integration coverage at
+suite gains a fixture for the tool security policies pipeline (settings UI
+routes mounted + middleware registered against the same FastMCP), this test
+should be filled in. The integration coverage at
 ``tests/src/unit/policy/test_integration.py`` exercises the in-process
 block/approve/recall loop in the meantime.
 

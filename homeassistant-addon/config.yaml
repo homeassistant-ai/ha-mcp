@@ -32,7 +32,7 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   backup_hint: "normal"
   enable_tool_search: false
-  enable_per_tool_approval: false
+  enable_tool_security_policies: false
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
@@ -41,7 +41,7 @@ schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_tool_search: bool?
-  enable_per_tool_approval: bool?
+  enable_tool_security_policies: bool?
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?

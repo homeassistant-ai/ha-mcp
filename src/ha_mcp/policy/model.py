@@ -1,4 +1,4 @@
-"""Pydantic models for per-tool approval policy (issue #966)."""
+"""Pydantic models for tool security policies (issue #966)."""
 
 import re
 from typing import Any, Literal
@@ -72,7 +72,7 @@ class Rule(BaseModel):
 
 
 class Policy(BaseModel):
-    """Full per-tool approval policy, persisted to tool_policy.json.
+    """Full tool security policy, persisted to tool_policy.json.
 
     The system is always "allow unless a rule matches; rule = require
     approval". There is no global deny/require-approval default — rules

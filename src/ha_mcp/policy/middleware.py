@@ -1,4 +1,4 @@
-"""FastMCP on_call_tool middleware for per-tool user-approval gating (issue #966)."""
+"""FastMCP on_call_tool middleware for tool security policies (issue #966)."""
 
 from __future__ import annotations
 

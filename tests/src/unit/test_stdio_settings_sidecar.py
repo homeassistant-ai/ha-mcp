@@ -90,7 +90,7 @@ class TestBuildSettingsHandlers:
             "delete_backups_bulk",
             "get_backup_config",
             "save_backup_config",
-            # Per-tool approval handlers (#966).
+            # Tool security policies handlers (#966).
             "policy_get_config",
             "policy_put_config",
             "policy_get_pending",

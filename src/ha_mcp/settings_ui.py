@@ -84,7 +84,7 @@ MANDATORY_TOOLS: set[str] = {
     "ha_get_skill_guide",
     # Backups are operational essentials — needed as the pre-change safety
     # net before config edits and as the recovery path after them. Added
-    # per #966 alongside the per-tool approval middleware so even users
+    # per #966 alongside the tool security policies middleware so even users
     # who aggressively disable everything keep a working backup tool.
     "ha_manage_backup",
 }
@@ -736,7 +736,7 @@ _SETTINGS_HTML = (
   <button class="tab active" data-panel="tools">Tools</button>
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
-  <button class="tab" data-panel="policies">Policies</button>
+  <button class="tab" data-panel="tool-security-policies">Tool Security Policies</button>
 </div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
@@ -795,8 +795,8 @@ _SETTINGS_HTML = (
   </div>
   <div id="backupList"></div>
 </div>
-<div class="panel" id="panel-policies">
-  <h2>Per-tool approval policies</h2>
+<div class="panel" id="panel-tool-security-policies">
+  <h2>Tool Security Policies</h2>
   <p class="features-sub">
     Opt-in gating for high-stakes tool calls (issue #966). When enabled, the
     AI must obtain your approval here before executing tools that match a
@@ -1728,7 +1728,7 @@ async function saveFeatureFlag(fieldName, value) {
   updateStatus('Saved — restart required', true);
 }
 
-// ===== Policies tab (issue #966) =====
+// ===== Tool Security Policies tab (issue #966) =====
 // Live approval routes (pending/approve/deny) are only available from
 // the main server (in-process ApprovalQueue). The sidecar serves
 // config GET/PUT but returns 503 for the live endpoints — the UI
@@ -1835,9 +1835,9 @@ async function policyDecide(token, action) {
 
 document.getElementById('policy-save-btn').addEventListener('click', policySaveConfig);
 
-// Poll for pending approvals every 3s when Policies tab is visible.
+// Poll for pending approvals every 3s when Tool Security Policies tab is visible.
 setInterval(() => {
-  const policiesTab = document.querySelector('.tab[data-panel="policies"]');
+  const policiesTab = document.querySelector('.tab[data-panel="tool-security-policies"]');
   if (policiesTab && policiesTab.classList.contains('active')) {
     policyLoadPending();
   }
@@ -1857,7 +1857,7 @@ document.querySelectorAll('.tab').forEach(tab => {
       p.classList.toggle('active', p.id === 'panel-' + target)
     );
     if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-    if (target === 'policies') { policyLoadConfig(); policyLoadPending(); }
+    if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
   });
 });
 
@@ -1871,7 +1871,7 @@ loadTools();
 
 
 def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
-    """Sidecar variant of the per-tool approval handlers (issue #966).
+    """Sidecar variant of the tool security policies handlers (issue #966).
 
     Serves policy config GET/PUT (the on-disk policy file is shared with
     the main server), but returns 503 for pending/approve/deny — those
@@ -1906,8 +1906,8 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         return JSONResponse(
             {
                 "error": (
-                    "Live approvals are only available from the main settings "
-                    "UI, not the stdio sidecar."
+                    "Live Tool Security Policies approvals are only available "
+                    "from the main settings UI, not the stdio sidecar."
                 )
             },
             status_code=503,
@@ -2846,7 +2846,7 @@ def build_settings_handlers(
         "save_backup_config": _save_backup_config,
     }
 
-    # Per-tool approval policy (issue #966). The main server attaches an
+    # Tool security policies (issue #966). The main server attaches an
     # ApprovalQueue to the server object once PolicyMiddleware is wired
     # in (Task 5.2). Only the main server can serve the live
     # pending/approve/deny endpoints because the queue is in-memory; the
@@ -2900,11 +2900,11 @@ def register_settings_routes(
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
-    # Expose the resolved prefix to the server so the per-tool approval
+    # Expose the resolved prefix to the server so the tool security policies
     # middleware can build absolute-looking approval URLs (#966). The
     # middleware reads this lazily via ``getattr(self,
     # "_settings_secret_prefix", "")`` so the closure picks up the value
-    # set here, even though ``_apply_per_tool_approval`` ran in __init__
+    # set here, even though ``_apply_tool_security_policies`` ran in __init__
     # before this function was called.
     server._settings_secret_prefix = secret_prefix  # noqa: SLF001
 
@@ -2965,7 +2965,7 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
             handlers["save_backup_config"]
         )
-        # Per-tool approval policy endpoints (#966)
+        # Tool security policies endpoints (#966)
         mcp.custom_route("/api/policy/config", methods=["GET"])(
             handlers["policy_get_config"]
         )
@@ -3033,7 +3033,7 @@ def register_settings_routes(
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
         )(handlers["save_backup_config"])
-        # Per-tool approval policy endpoints (#966)
+        # Tool security policies endpoints (#966)
         mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["GET"])(
             handlers["policy_get_config"]
         )

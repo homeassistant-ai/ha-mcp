@@ -100,10 +100,12 @@ class Settings(BaseSettings):
     # Dramatically reduces idle context token usage for LLMs.
     enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
 
-    # Per-tool approval middleware — opt-in gate that routes high-stakes tool
-    # calls through a per-tool policy with out-of-band web-UI approval
+    # Tool security policies middleware — opt-in gate that routes high-stakes
+    # tool calls through a per-tool policy with out-of-band web-UI approval
     # (issue #966). Disabled by default.
-    enable_per_tool_approval: bool = Field(False, alias="ENABLE_PER_TOOL_APPROVAL")
+    enable_tool_security_policies: bool = Field(
+        False, alias="ENABLE_TOOL_SECURITY_POLICIES"
+    )
 
     # Managed YAML config editing — allows ha_config_set_yaml to add,
     # replace, or remove top-level keys in configuration.yaml and package

@@ -272,11 +272,11 @@ Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
-### enable_per_tool_approval
+### enable_tool_security_policies
 
 **Default:** `false`
 
-Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent receives an approval URL and the call is held until the user clicks **Approve** in the **Policies** tab of the web UI. Per-tool rules — with optional argument predicates — are configured from the same Policies tab.
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent receives an approval URL and the call is held until the user clicks **Approve** in the **Tool Security Policies** tab of the web UI. Per-tool rules — with optional argument predicates — are configured from the same Tool Security Policies tab.
 
 **When to enable:**
 - Shared installations where you want a human in the loop for destructive or security-relevant operations
@@ -292,10 +292,10 @@ The policy engine is in beta. Off by default. Requires add-on restart to take ef
 **Example Configuration:**
 
 ```yaml
-enable_per_tool_approval: true
+enable_tool_security_policies: true
 ```
 
-Per-tool rules (including argument predicates like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Policies** tab in the web UI, not from `config.yaml`.
+Per-tool rules (including argument predicates like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
 
 *Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
