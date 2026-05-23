@@ -5,6 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .model import Policy
 
 POLICY_FILENAME = "tool_policy.json"
@@ -18,7 +20,10 @@ def load_policy(data_dir: Path) -> Policy:
         raw = json.loads(path.read_text())
     except json.JSONDecodeError as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
-    return Policy.model_validate(raw)
+    try:
+        return Policy.model_validate(raw)
+    except ValidationError as e:
+        raise ValueError(f"tool_policy.json failed schema validation: {e}") from e
 
 
 def save_policy(data_dir: Path, policy: Policy) -> None:

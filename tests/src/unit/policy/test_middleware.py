@@ -98,6 +98,7 @@ async def test_block_then_approve_returns_real_result(queue):
         pending = queue.list_pending()[0]
         queue.approve(pending.token)
 
+    result: object = None
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver_after_short_delay)
         result = await mw.on_call_tool(
@@ -201,6 +202,7 @@ async def test_remember_minutes_caches_for_subsequent_calls(queue):
         await anyio.sleep(0.05)
         queue.approve(queue.list_pending()[0].token)
 
+    result1: object = None
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver)
         result1 = await mw.on_call_tool(make_context("ha_call_service", args), call_next)
