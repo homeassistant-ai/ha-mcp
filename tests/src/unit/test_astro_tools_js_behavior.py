@@ -85,6 +85,7 @@ def _build_tools_dom(
         attrs = " ".join(f'data-{k}="{v}"' for k, v in c.items())
         parts.append(
             f'<div class="tool-card" {attrs}>'
+            f'<span class="tool-chevron"></span>'
             f'<div class="tool-details hidden"></div>'
             f"</div>"
         )
