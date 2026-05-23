@@ -7,6 +7,13 @@ import sys
 import pytest
 
 
+def test_per_tool_approval_disabled_by_default():
+    """enable_per_tool_approval defaults to False (opt-in for #966)."""
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_per_tool_approval is False
+
+
 @pytest.mark.slow
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""
