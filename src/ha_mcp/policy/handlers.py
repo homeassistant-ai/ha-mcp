@@ -23,7 +23,16 @@ def build_policy_handlers(
 ) -> dict[str, Callable[[Request], Any]]:
 
     async def get_config(_: Request) -> JSONResponse:
-        return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+        try:
+            return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+        except ValueError as e:
+            # Surface a corrupt or schema-invalid tool_policy.json to the
+            # UI so the user has a visible repair path; without this the
+            # tab would just spinner forever on an opaque 500.
+            return JSONResponse(
+                {"error": str(e), "policy_file_corrupt": True},
+                status_code=500,
+            )
 
     async def put_config(request: Request) -> JSONResponse:
         try:
@@ -61,11 +70,23 @@ def build_policy_handlers(
                 {"error": "body must be a JSON object"}, status_code=400
             )
         token = body.get("token")
-        if not token or queue.get(token) is None:
+        if not token:
             return JSONResponse({"error": "unknown token"}, status_code=404)
-        queue.approve(token)
-        # remember_minutes is applied by middleware on the next call,
-        # which is when the matching rule's remember_minutes is read.
+        entry = queue.get(token)
+        if entry is None:
+            return JSONResponse({"error": "unknown token"}, status_code=404)
+        if not queue.approve(token):
+            # Token exists but already decided (idempotent retry, or a
+            # second approver hitting the button after the first). 409
+            # so the UI can show "already approved/denied" rather than a
+            # generic 500.
+            return JSONResponse(
+                {"error": "already decided", "current_decision": entry.decision},
+                status_code=409,
+            )
+        # remember_minutes is applied by middleware as soon as the blocked
+        # call wakes up (event.set in approve fires the wait); later calls
+        # within the window hit the remember cache and bypass approval entirely.
         return JSONResponse({"approved": True})
 
     async def post_deny(request: Request) -> JSONResponse:
@@ -78,9 +99,16 @@ def build_policy_handlers(
                 {"error": "body must be a JSON object"}, status_code=400
             )
         token = body.get("token")
-        if not token or queue.get(token) is None:
+        if not token:
             return JSONResponse({"error": "unknown token"}, status_code=404)
-        queue.deny(token)
+        entry = queue.get(token)
+        if entry is None:
+            return JSONResponse({"error": "unknown token"}, status_code=404)
+        if not queue.deny(token):
+            return JSONResponse(
+                {"error": "already decided", "current_decision": entry.decision},
+                status_code=409,
+            )
         return JSONResponse({"denied": True})
 
     return {

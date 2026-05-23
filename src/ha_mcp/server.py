@@ -863,14 +863,16 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # roundtrip of a gated tool call.
             return load_policy(data_dir)
 
-        # TODO: Absolute URL building deferred — the server doesn't
-        # currently expose a public ``settings_url_prefix`` builder, so
-        # the approval URL is emitted relative. Browsers will resolve it
-        # against the page the user navigated to (the settings UI mounts
-        # under the same secret prefix, so the relative form lands on the
-        # right host/path). Revisit when a shared prefix accessor lands.
+        # The secret prefix (e.g. ``/private_xxx``) is wired in lazily
+        # by ``settings_ui.register_settings_routes`` after the HTTP
+        # entrypoint resolves ``MCP_SECRET_PATH``. Read at URL-build
+        # time so the closure picks up the value once it's set.
+        # Empty-string fallback (add-on mode + root-mount + stdio) keeps
+        # the existing relative-URL behavior, which already resolves
+        # correctly against the settings page the user navigates to.
         def _approval_url(token: str) -> str:
-            return f"/api/policy/approve?token={token}"
+            prefix = getattr(self, "_settings_secret_prefix", "") or ""
+            return f"{prefix}/api/policy/approve?token={token}"
 
         try:
             self.mcp.add_middleware(

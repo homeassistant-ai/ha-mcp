@@ -102,6 +102,61 @@ def test_deny_non_object_body_400(tmp_path):
     assert r.status_code == 400
 
 
+def test_approve_already_decided_returns_409(tmp_path):
+    """Second approve on the same token → 409 with current_decision.
+
+    Without the 409 the UI can't distinguish "I already clicked this"
+    from a generic transport failure, and a racing second approver
+    would silently no-op without any signal.
+    """
+    queue = ApprovalQueue()
+    entry = queue.create("ha_x", "deadbeef", {}, ttl_minutes=5)
+    c = make_app(tmp_path, queue)
+    assert c.post("/api/policy/approve", json={"token": entry.token}).status_code == 200
+    r = c.post("/api/policy/approve", json={"token": entry.token})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "already decided"
+    assert body["current_decision"] == "approved"
+
+
+def test_deny_already_decided_returns_409(tmp_path):
+    queue = ApprovalQueue()
+    entry = queue.create("ha_x", "deadbeef", {}, ttl_minutes=5)
+    c = make_app(tmp_path, queue)
+    assert c.post("/api/policy/deny", json={"token": entry.token}).status_code == 200
+    r = c.post("/api/policy/deny", json={"token": entry.token})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["current_decision"] == "denied"
+
+
+def test_approve_then_deny_returns_409(tmp_path):
+    """Cross-decision (approve then deny) must also 409, not flip the entry."""
+    queue = ApprovalQueue()
+    entry = queue.create("ha_x", "deadbeef", {}, ttl_minutes=5)
+    c = make_app(tmp_path, queue)
+    assert c.post("/api/policy/approve", json={"token": entry.token}).status_code == 200
+    r = c.post("/api/policy/deny", json={"token": entry.token})
+    assert r.status_code == 409
+    assert queue.get(entry.token).decision == "approved"
+
+
+def test_get_config_returns_500_when_policy_corrupt(tmp_path):
+    """Corrupt JSON on disk → 500 with ``policy_file_corrupt: true``.
+
+    Lets the UI render a clear repair prompt instead of spinnering
+    forever on an opaque server error.
+    """
+    (tmp_path / "tool_policy.json").write_text("{not valid json")
+    c = make_app(tmp_path, ApprovalQueue())
+    r = c.get("/api/policy/config")
+    assert r.status_code == 500
+    body = r.json()
+    assert body["policy_file_corrupt"] is True
+    assert "error" in body
+
+
 def test_get_pending_returns_full_shape(tmp_path):
     queue = ApprovalQueue()
     queue.create("ha_x", "abc", {"foo": "bar"}, ttl_minutes=5)

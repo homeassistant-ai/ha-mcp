@@ -90,6 +90,12 @@ class TestBuildSettingsHandlers:
             "delete_backups_bulk",
             "get_backup_config",
             "save_backup_config",
+            # Per-tool approval handlers (#966).
+            "policy_get_config",
+            "policy_put_config",
+            "policy_get_pending",
+            "policy_post_approve",
+            "policy_post_deny",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(

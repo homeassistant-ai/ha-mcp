@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import anyio
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
+from ..tools.helpers import safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import Verdict, evaluate, find_matching_rule
 from .model import Policy
+
+logger = logging.getLogger(__name__)
 
 # Toolsearch proxy meta-tools — always pass through; the inner real-tool
 # call re-enters the middleware via ctx.fastmcp.call_tool() and gets gated there.
@@ -48,7 +52,34 @@ class PolicyMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
-        policy = self._policy_provider()
+        try:
+            policy = self._policy_provider()
+        except ValueError as e:
+            # Fail-closed: a corrupt or invalid tool_policy.json is a
+            # security-relevant config error. Passing through would
+            # silently bypass every rule the user configured. Raise a
+            # structured ToolError so the LLM (and the user) sees what
+            # to do, instead of crashing the call with an opaque trace.
+            logger.exception("Tool security policy load failed; failing closed")
+            raise ToolError(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "POLICY_LOAD_FAILED",
+                            "message": (
+                                "Tool security policy file is corrupt or "
+                                f"invalid: {e}. Edit or delete tool_policy.json "
+                                "and reload."
+                            ),
+                            "suggestions": [
+                                "Open the Tool Security Policies tab in the "
+                                "web UI to view/repair the policy.",
+                            ],
+                        },
+                    }
+                )
+            ) from e
         name = context.message.name
         args = context.message.arguments or {}
 
@@ -111,22 +142,18 @@ class PolicyMiddleware(Middleware):
     ) -> None:
         deadline = anyio.current_time() + wait_seconds
         while anyio.current_time() < deadline and pending.decision == "pending":
-            await self._safe_report_progress(
-                context, f"Awaiting user approval — open {approval_url}"
+            ctx = getattr(context, "fastmcp_context", None)
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=0,
+                message=f"Awaiting user approval — open {approval_url}",
             )
             remaining = deadline - anyio.current_time()
             if remaining <= 0:
                 break
             with anyio.move_on_after(min(15, remaining)):
                 await pending.event.wait()
-
-    @staticmethod
-    async def _safe_report_progress(context: MiddlewareContext, message: str) -> None:
-        ctx = getattr(context, "fastmcp_context", None)
-        if ctx is None:
-            return
-        with contextlib.suppress(Exception):
-            await ctx.report_progress(0, 0, message)
 
     @staticmethod
     def _denied_error() -> ToolError:
@@ -146,7 +173,11 @@ class PolicyMiddleware(Middleware):
         )
 
     def _pending_error(self, pending: PendingApproval, approval_url: str) -> ToolError:
-        remaining = int((pending.expires_at - pending.created_at).total_seconds())
+        # Time-remaining, not total TTL: an LLM that re-calls a minute
+        # before expiry should see "~60s left", not the original 300s.
+        remaining = max(
+            0, int((pending.expires_at - datetime.now(UTC)).total_seconds())
+        )
         return ToolError(
             json.dumps(
                 {

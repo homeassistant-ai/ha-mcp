@@ -93,17 +93,27 @@ class ApprovalQueue:
         self._sweep_expired()
         return [e for e in self._by_token.values() if e.decision == "pending"]
 
-    def approve(self, token: str) -> None:
+    def approve(self, token: str) -> bool:
+        """Mark the entry approved. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
-        if entry and entry.decision == "pending":
-            entry.decision = "approved"
-            entry.event.set()
+        if entry is None:
+            return False
+        if entry.decision != "pending":
+            return False
+        entry.decision = "approved"
+        entry.event.set()
+        return True
 
-    def deny(self, token: str) -> None:
+    def deny(self, token: str) -> bool:
+        """Mark the entry denied. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
-        if entry and entry.decision == "pending":
-            entry.decision = "denied"
-            entry.event.set()
+        if entry is None:
+            return False
+        if entry.decision != "pending":
+            return False
+        entry.decision = "denied"
+        entry.event.set()
+        return True
 
     def remove(self, token: str) -> None:
         self._by_token.pop(token, None)

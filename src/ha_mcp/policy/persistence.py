@@ -17,7 +17,7 @@ def load_policy(data_dir: Path) -> Policy:
     if not path.exists():
         return Policy()
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
     try:
@@ -31,7 +31,7 @@ def save_policy(data_dir: Path, policy: Policy) -> None:
     path = data_dir / POLICY_FILENAME
     fd, tmp_path = tempfile.mkstemp(prefix=f".{POLICY_FILENAME}.", dir=data_dir)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(policy.model_dump(mode="json"), f, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except Exception:

@@ -120,14 +120,25 @@ async def test_block_then_deny_raises_denied(queue):
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock()
 
+    # anyio's task group wraps unhandled task-side exceptions in
+    # ExceptionGroup (PEP 654, Python 3.11+). Putting pytest.raises
+    # AROUND the task group misses bare ToolError. Schedule the denier
+    # in the task group, but keep the middleware call (the one that
+    # raises) OUTSIDE — directly under pytest.raises — so the
+    # exception type matches exactly.
     async def denier():
-        await anyio.sleep(0.05)
-        pending = queue.list_pending()[0]
-        queue.deny(pending.token)
+        # Poll for the pending entry instead of a fixed sleep so the
+        # test isn't sensitive to scheduling jitter on slow CI runners.
+        for _ in range(50):
+            pending = queue.list_pending()
+            if pending:
+                queue.deny(pending[0].token)
+                return
+            await anyio.sleep(0.02)
 
-    with pytest.raises(ToolError) as ei:
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(denier)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(denier)
+        with pytest.raises(ToolError) as ei:
             await mw.on_call_tool(
                 make_context("ha_call_service", {"domain": "lock"}), call_next
             )
@@ -197,6 +208,73 @@ async def test_recall_with_mutated_args_creates_new_pending(queue):
             make_context("ha_call_service", {"domain": "alarm_control_panel"}),
             call_next,
         )
+    call_next.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_pending_error_reports_remaining_not_total_ttl(queue):
+    """``expires_in_seconds`` MUST be time-remaining, not total TTL.
+
+    Before the fix this was always `(expires_at - created_at)` ==
+    the configured TTL (e.g. 300s for a 5-minute window). The LLM
+    would see a stale "you have 5 minutes" hint even on a re-call
+    issued one minute before expiry. Rewind ``created_at`` so the
+    "now" gap is unambiguously smaller than the full TTL.
+    """
+    from datetime import timedelta
+
+    pol = Policy(
+        enabled=True,
+        approval_ttl_minutes=5,
+        rules=[Rule(tool_name="ha_call_service")],
+    )
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+    pending = queue.list_pending()[0]
+    # Rewind both created_at AND expires_at by 4 minutes so only ~1
+    # minute remains until expiry. With the old (broken) logic this
+    # would still report 300s (TTL); with the fix it must report <300.
+    pending.created_at -= timedelta(minutes=4)
+    pending.expires_at -= timedelta(minutes=4)
+
+    # Force a second pass that hits the pending-error path.
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+    body = json.loads(ei.value.args[0])
+    remaining = body["error"]["context"]["expires_in_seconds"]
+    # Full TTL is 300s; remaining should be ~60s and definitely <300.
+    assert 0 <= remaining < 300, f"expected <300s remaining, got {remaining}"
+
+
+@pytest.mark.anyio
+async def test_corrupt_policy_fails_closed_with_structured_error(queue):
+    """A corrupt policy file must raise POLICY_LOAD_FAILED, not pass through.
+
+    Fail-closed posture: a corrupt or schema-invalid tool_policy.json
+    is a security-relevant config error. Silently allowing every call
+    while the user's rules sit unparsed on disk would be the wrong
+    default for a security feature.
+    """
+
+    def broken_provider() -> Policy:
+        raise ValueError("tool_policy.json failed schema validation: ...")
+
+    mw = PolicyMiddleware(policy_provider=broken_provider, queue=queue)
+    call_next = AsyncMock(return_value="should_not_run")
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "POLICY_LOAD_FAILED"
     call_next.assert_not_called()
 
 

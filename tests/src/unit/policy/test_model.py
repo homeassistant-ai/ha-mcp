@@ -20,6 +20,38 @@ class TestPredicate:
         with pytest.raises(ValidationError):
             Predicate(path="args.x", op="unknown", value=1)
 
+    def test_empty_path_rejected(self):
+        with pytest.raises(ValidationError):
+            Predicate(path="", op="eq", value="x")
+
+    def test_regex_value_must_be_string(self):
+        with pytest.raises(ValidationError, match="op='regex' requires value: str"):
+            Predicate(path="args.x", op="regex", value=123)
+
+    def test_regex_value_must_compile(self):
+        with pytest.raises(ValidationError, match="Invalid regex"):
+            Predicate(path="args.x", op="regex", value="[unclosed")
+
+    def test_regex_valid_compiles(self):
+        p = Predicate(path="args.x", op="regex", value=r"^lock\..+")
+        assert p.op == "regex"
+
+    def test_in_value_must_be_list(self):
+        with pytest.raises(ValidationError, match="op='in' requires value: list"):
+            Predicate(path="args.x", op="in", value="not_a_list")
+
+    def test_not_in_value_must_be_list(self):
+        with pytest.raises(ValidationError, match="op='not_in' requires value: list"):
+            Predicate(path="args.x", op="not_in", value="not_a_list")
+
+    def test_gt_requires_non_none_value(self):
+        with pytest.raises(ValidationError, match="op='gt' requires"):
+            Predicate(path="args.x", op="gt", value=None)
+
+    def test_lt_requires_non_none_value(self):
+        with pytest.raises(ValidationError, match="op='lt' requires"):
+            Predicate(path="args.x", op="lt", value=None)
+
 
 class TestRule:
     def test_minimal_rule(self):

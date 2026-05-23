@@ -66,7 +66,7 @@ def test_find_returns_none_for_unknown():
 def test_approve_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
-    q.approve(p.token)
+    assert q.approve(p.token) is True
     assert p.decision == "approved"
     assert p.event.is_set()
 
@@ -74,9 +74,47 @@ def test_approve_sets_decision_and_fires_event():
 def test_deny_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
-    q.deny(p.token)
+    assert q.deny(p.token) is True
     assert p.decision == "denied"
     assert p.event.is_set()
+
+
+def test_approve_unknown_token_returns_false():
+    q = ApprovalQueue()
+    assert q.approve("nope") is False
+
+
+def test_deny_unknown_token_returns_false():
+    q = ApprovalQueue()
+    assert q.deny("nope") is False
+
+
+def test_approve_already_decided_returns_false():
+    """Idempotent retries and double-clicks land on the same entry; the
+    second caller MUST observe the no-op so the handler can 409 cleanly
+    instead of silently re-firing event.set()."""
+    q = ApprovalQueue()
+    p = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    assert q.approve(p.token) is True
+    assert q.approve(p.token) is False
+    # decision unchanged
+    assert p.decision == "approved"
+
+
+def test_deny_already_decided_returns_false():
+    q = ApprovalQueue()
+    p = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    assert q.deny(p.token) is True
+    assert q.deny(p.token) is False
+    assert p.decision == "denied"
+
+
+def test_approve_then_deny_returns_false():
+    q = ApprovalQueue()
+    p = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    assert q.approve(p.token) is True
+    assert q.deny(p.token) is False
+    assert p.decision == "approved"
 
 
 def test_remove_deletes_entry():

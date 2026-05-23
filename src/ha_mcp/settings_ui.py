@@ -1848,7 +1848,15 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     from .policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
-        return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+        try:
+            return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+        except ValueError as e:
+            # Mirror the main-server handler: surface corruption rather
+            # than crash the sidecar tab on a 500.
+            return JSONResponse(
+                {"error": str(e), "policy_file_corrupt": True},
+                status_code=500,
+            )
 
     async def put_config(request: Request) -> JSONResponse:
         try:
@@ -2855,6 +2863,14 @@ def register_settings_routes(
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
+
+    # Expose the resolved prefix to the server so the per-tool approval
+    # middleware can build absolute-looking approval URLs (#966). The
+    # middleware reads this lazily via ``getattr(self,
+    # "_settings_secret_prefix", "")`` so the closure picks up the value
+    # set here, even though ``_apply_per_tool_approval`` ran in __init__
+    # before this function was called.
+    server._settings_secret_prefix = secret_prefix  # noqa: SLF001
 
     if not is_addon and not secret_prefix:
         logger.warning(
