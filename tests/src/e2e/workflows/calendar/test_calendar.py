@@ -22,6 +22,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -349,27 +350,75 @@ class TestCalendarEventLifecycle:
                 f"{create_data.get('error', 'Unknown')}"
             )
 
-        events_data = await safe_call_tool(
-            mcp_client,
-            "ha_config_get_calendar_events",
-            {
-                "entity_id": calendar_entity,
-                "start": start.isoformat(),
-                "end": (end + timedelta(hours=1)).isoformat(),
-            },
-        )
-        event_uid = next(
-            (
-                e.get("uid")
-                for e in events_data.get("events", [])
-                if e.get("summary") == summary
-            ),
-            None,
-        )
+        # Poll until the just-created event surfaces in the list endpoint —
+        # HA backends (CalDAV, Google) may not index immediately after create
+        # returns. Per AGENTS.md § "E2E tests: poll after creating entities".
+        event_uid: str | None = None
+        timed_out = False
+        try:
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                {
+                    "entity_id": calendar_entity,
+                    "start": start.isoformat(),
+                    "end": (end + timedelta(hours=1)).isoformat(),
+                },
+                predicate=lambda d: any(
+                    e.get("summary") == summary and e.get("uid")
+                    for e in d.get("events", [])
+                ),
+                timeout=15,
+                description=f"retrieval of UID for created event '{summary}'",
+            )
+            event_uid = next(
+                (
+                    e.get("uid")
+                    for e in events_data.get("events", [])
+                    if e.get("summary") == summary
+                ),
+                None,
+            )
+        except TimeoutError:
+            timed_out = True
+
         if not event_uid:
+            # Create succeeded but UID never appeared. Try a final scan-by-
+            # summary cleanup so we don't leak across CI runs (HAOS-inaddon
+            # reuses image), then fail — masking this would defeat the
+            # regression-test contract this PR establishes.
+            try:
+                final_events = await safe_call_tool(
+                    mcp_client,
+                    "ha_config_get_calendar_events",
+                    {
+                        "entity_id": calendar_entity,
+                        "start": start.isoformat(),
+                        "end": (end + timedelta(hours=1)).isoformat(),
+                    },
+                )
+                leaked_uid = next(
+                    (
+                        e.get("uid")
+                        for e in final_events.get("events", [])
+                        if e.get("summary") == summary and e.get("uid")
+                    ),
+                    None,
+                )
+                if leaked_uid:
+                    await mcp_client.call_tool(
+                        "ha_config_remove_calendar_event",
+                        {"entity_id": calendar_entity, "uid": leaked_uid},
+                    )
+            except Exception as leak_cleanup_error:
+                logger.warning(
+                    f"Could not clean up potentially-leaked event "
+                    f"'{summary}' on {calendar_entity}: {leak_cleanup_error}"
+                )
             pytest.fail(
                 f"Created event '{summary}' did not surface a uid in "
                 f"ha_config_get_calendar_events for {calendar_entity}"
+                + (" within 15s" if timed_out else "")
             )
 
         try:
@@ -381,7 +430,7 @@ class TestCalendarEventLifecycle:
                     {"entity_id": calendar_entity, "uid": event_uid},
                 )
             except Exception as cleanup_error:
-                logger.debug(
+                logger.warning(
                     f"Cleanup of test event {event_uid} on {calendar_entity}: "
                     f"{cleanup_error}"
                 )
@@ -405,7 +454,15 @@ class TestCalendarEventLifecycle:
             "ha_config_remove_calendar_event",
             {"entity_id": calendar_entity, "uid": event_uid},
         )
-        assert_mcp_success(first_delete, "first deletion of just-created event")
+        first_delete_data = assert_mcp_success(
+            first_delete, "first deletion of just-created event"
+        )
+        # Hard-require the explicit success flag — assert_mcp_success accepts
+        # several indicators, but this PR's regression test should fail loudly
+        # if a future refactor stops surfacing the flag.
+        assert first_delete_data.get("success") is True, (
+            f"First delete should return success=True; got {first_delete_data}"
+        )
         logger.info(f"Deleted event {event_uid} (positive path)")
 
         second_delete = await safe_call_tool(
@@ -416,8 +473,12 @@ class TestCalendarEventLifecycle:
         assert second_delete.get("success") is False, (
             f"Second deletion of released UID should fail: got {second_delete}"
         )
-        assert second_delete.get("error", {}).get("suggestions"), (
-            "Delete failure should provide helpful suggestions"
+        # Accept either plural ``suggestions`` (multi-item) or singular
+        # ``suggestion`` (single-item) — ``create_error_response`` writes the
+        # singular form when the suggestions list has one entry.
+        second_error = second_delete.get("error", {})
+        assert second_error.get("suggestions") or second_error.get("suggestion"), (
+            f"Delete failure should provide helpful suggestion(s); got {second_error}"
         )
         logger.info(
             f"Second delete failed as expected: {second_delete.get('error', 'Unknown')}"

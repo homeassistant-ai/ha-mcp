@@ -448,7 +448,15 @@ class CalendarTools:
                     "calendar/event/delete", **ws_kwargs
                 )
             finally:
-                await ws_client.disconnect()
+                # Guard disconnect: a transport-teardown error here would
+                # otherwise replace the original send_command exception.
+                try:
+                    await ws_client.disconnect()
+                except Exception as disconnect_error:
+                    logger.debug(
+                        f"WebSocket disconnect after delete_event for "
+                        f"{entity_id} uid={uid}: {disconnect_error}"
+                    )
 
             return {
                 "success": True,
