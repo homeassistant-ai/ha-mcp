@@ -19,6 +19,7 @@ from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
+    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -354,7 +355,10 @@ class CalendarTools:
         """
         Delete an event from a calendar.
 
-        Deletes a calendar event using the calendar.delete_event service.
+        Deletes a calendar event via the WebSocket ``calendar/event/delete``
+        command. HA's calendar component only registers ``create_event`` and
+        ``get_events`` as REST services — delete and update live on the
+        WebSocket API only.
 
         **Parameters:**
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
@@ -402,8 +406,8 @@ class CalendarTools:
                 )
 
             # entity_id format-check above does not cover the ``uid`` parameter.
-            # Empty/whitespace uid would flow through to ``calendar.delete_event``
-            # and HA returns a misleading "event not found".
+            # Empty/whitespace uid would flow through to the WS command and HA
+            # returns a misleading "event not found".
             validate_identifier_not_empty(
                 uid,
                 "uid",
@@ -413,21 +417,46 @@ class CalendarTools:
                 context={"entity_id": entity_id},
             )
 
-            # Build service data
-            service_data: dict[str, Any] = {
-                "entity_id": entity_id,
-                "uid": uid,
-            }
-
+            # ``calendar.delete_event`` is NOT a REST service — HA only
+            # registers ``calendar.create_event`` and ``calendar.get_events``.
+            # Delete is exposed exclusively via the WebSocket command
+            # ``calendar/event/delete`` (see HA Core
+            # ``homeassistant/components/calendar/__init__.py``).
+            ws_kwargs: dict[str, Any] = {"entity_id": entity_id, "uid": uid}
             if recurrence_id:
-                service_data["recurrence_id"] = recurrence_id
+                ws_kwargs["recurrence_id"] = recurrence_id
             if recurrence_range:
-                service_data["recurrence_range"] = recurrence_range
+                ws_kwargs["recurrence_range"] = recurrence_range
 
-            # Call the calendar.delete_event service
-            result = await self._client.call_service(
-                "calendar", "delete_event", service_data
+            ws_client, conn_error = await get_connected_ws_client(
+                self._client.base_url,
+                self._client.token,
+                verify_ssl=self._client.verify_ssl,
             )
+            if conn_error or ws_client is None:
+                raise_tool_error(
+                    conn_error
+                    or create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Failed to connect to Home Assistant WebSocket",
+                        context={"entity_id": entity_id, "uid": uid},
+                    )
+                )
+
+            try:
+                result = await ws_client.send_command(
+                    "calendar/event/delete", **ws_kwargs
+                )
+            finally:
+                # Guard disconnect: a transport-teardown error here would
+                # otherwise replace the original send_command exception.
+                try:
+                    await ws_client.disconnect()
+                except Exception as disconnect_error:
+                    logger.debug(
+                        f"WebSocket disconnect after delete_event for "
+                        f"{entity_id} uid={uid}: {disconnect_error}"
+                    )
 
             return {
                 "success": True,
