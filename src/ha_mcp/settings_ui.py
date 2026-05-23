@@ -14,8 +14,10 @@ import contextlib
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
@@ -63,6 +65,17 @@ class ToolStub(TypedDict):
 
 _VALID_STATES = frozenset({"enabled", "disabled", "pinned"})
 
+# Per-process identity surfaced via ``/api/settings/info`` so the
+# restart UI can tell whether the addon actually restarted (vs. the
+# poll-cycle succeeding against the still-running OLD instance because
+# the supervisor restart silently no-op'd). Generated once at module
+# import; a fresh Python process gets a fresh value, so any restart
+# that actually swaps processes flips both. ``started_at`` is Unix
+# epoch seconds for human debuggability; ``instance_id`` is the
+# load-bearing identifier the JS poll compares against.
+_PROCESS_INSTANCE_ID: str = uuid.uuid4().hex
+_PROCESS_STARTED_AT: float = time.time()
+
 logger = logging.getLogger(__name__)
 
 # Tools that are always enabled regardless of saved config — the server
@@ -98,14 +111,21 @@ TRANSFORM_GENERATED_TOOLS: dict[str, ToolStub] = {}
 # won't appear in local_provider._list_tools(), so we inject stub entries
 # into the settings UI so users discover the tool exists and how to enable
 # it. Keep this dict in sync with the ``"beta"`` tag added to each tool's
-# source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py)
-# — a future rename or removal needs to land in both places.
+# source file (tools_yaml_config.py, tools_filesystem.py, tools_mcp_component.py,
+# tools_code.py) — a future rename or removal needs to land in both places.
 FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
     "ha_config_set_yaml": {
         "title": "Set YAML Config",
         "primary_tag": "System",
         "description": "Add, replace, or remove top-level keys in configuration.yaml or package files.",
         "disabled_by": "enable_yaml_config_editing",
+        "destructiveHint": True,
+    },
+    "ha_manage_custom_tool": {
+        "title": "Custom Tool",
+        "primary_tag": "System",
+        "description": "Create and run a custom tool in a sandbox, or manage saved custom tools (code mode).",
+        "disabled_by": "enable_code_mode",
         "destructiveHint": True,
     },
     "ha_list_files": {
@@ -701,15 +721,20 @@ _SETTINGS_HTML = (
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
 </div>
+<div class="restart-notice" id="restartNotice">
+  <span class="restart-notice-text" id="restartNoticeText">
+    ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
+    tools will be fully removed from the MCP tool list on next startup.
+  </span>
+  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
+</div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
     Server-wide features (Tool Search, YAML config editing, filesystem
     tools, etc.) appear in both the <strong>Server Settings</strong>
     tab and the add-on Configuration page — they're the same settings
-    either way. Add-on users edit them on the Configuration page;
-    every other install (Claude Desktop, Docker, standalone) edits
-    them in the Server Settings tab. Changes require an MCP-host
-    restart to apply.
+    either way. Either surface stays in sync with the other after the
+    addon restart. Changes require an MCP-host restart to apply.
   </div>
   <div class="pin-notice show" id="pinNotice">
     Pin toggles only take effect when Tool Search is enabled — either
@@ -717,13 +742,6 @@ _SETTINGS_HTML = (
     Configuration page (same setting either way). Without Tool Search,
     all enabled tools are always visible and pinning has no extra
     effect.
-  </div>
-  <div class="restart-notice" id="restartNotice">
-    <span class="restart-notice-text" id="restartNoticeText">
-      ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
-      tools will be fully removed from the MCP tool list on next startup.
-    </span>
-    <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
   </div>
   <div class="summary" id="summary"></div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -916,29 +934,178 @@ async function stopSidecar() {
   }
 }
 
-async function restartAddon() {
+// Restart-readiness probe tunables. The grace period gives supervisor
+// time to actually kill the addon (so a too-eager first probe doesn't
+// hit the OLD instance and reload before the new one is up). The poll
+// interval is short enough to feel responsive on a fast restart, long
+// enough to not hammer ingress. The cap is the user-visible upper
+// bound; HAOS addon restarts are typically 15-25s but cold-start +
+// image pull can stretch further, so 60s gives genuine breathing room
+// before we tell the user the auto-reload failed.
+const RESTART_PROBE_INITIAL_GRACE_MS = 3000;
+const RESTART_PROBE_INTERVAL_MS = 2000;
+const RESTART_PROBE_MAX_TOTAL_MS = 60000;
+
+// Cross-tab restart broadcast channel. When any tab saves a setting
+// that needs a restart, it posts ``restart-required`` so the other
+// tabs surface the same banner. When any tab fires the supervisor
+// restart, it posts ``restart-initiated`` so the other tabs run the
+// same poll-then-reload cycle — that way ALL tabs come back to the
+// fresh addon instead of leaving stale ones spinning.
+const restartChannel =
+  typeof BroadcastChannel === 'function'
+    ? new BroadcastChannel('ha-mcp-settings')
+    : null;
+
+// Module-level concurrency guard. The button's ``disabled`` attribute
+// blocks normal clicks, but a second invocation via DevTools / a
+// keyboard accessibility tool / a cross-tab broadcast would otherwise
+// queue a second supervisor restart + a second auto-reload. Cleared
+// only on a 4xx genuine config error (so the user can reload and try
+// again); otherwise stays true through the restart cycle until the
+// page reloads.
+let restartInProgress = false;
+
+async function _fetchSettingsInfo() {
+  // Read ``/api/settings/info`` once; return the parsed JSON or null
+  // on any failure. ``cache: 'no-store'`` so the browser can't serve
+  // a stale 200 from before the restart.
+  try {
+    const resp = await fetch('./api/settings/info', {cache: 'no-store'});
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function _probeAddonRestarted(previousInstanceId) {
+  // Resolve true when ``/api/settings/info`` returns a different
+  // ``instance_id`` than the one captured before the restart —
+  // proves a NEW process is serving, not the same OLD one (which
+  // would happen if supervisor silently failed to restart and the
+  // probe just saw the still-running upstream answer 200). When
+  // ``previousInstanceId`` is null (couldn't capture pre-restart,
+  // or server is on an older build that doesn't expose the field)
+  // fall back to "any 200 means it's back" — same behavior as
+  // before this fix landed, so we degrade gracefully.
+  const deadline = Date.now() + RESTART_PROBE_MAX_TOTAL_MS;
+  while (Date.now() < deadline) {
+    const info = await _fetchSettingsInfo();
+    if (info) {
+      if (previousInstanceId) {
+        if (info.instance_id && info.instance_id !== previousInstanceId) {
+          return true;
+        }
+        // Same instance_id (or field missing on the response) — keep
+        // polling; do NOT reload yet because the restart hasn't
+        // actually happened yet.
+      } else {
+        // No baseline to compare against — best we can do is the
+        // old "200 = up" check.
+        return true;
+      }
+    }
+    await new Promise(r => setTimeout(r, RESTART_PROBE_INTERVAL_MS));
+  }
+  return false;
+}
+
+async function _runRestartReloadCycle(previousInstanceId) {
   const btn = document.getElementById('restartBtn');
-  if (!confirm('Restart the add-on now? The web UI will become unreachable for ~30 seconds.')) return;
+  // Initial grace lets supervisor actually kill the addon before we
+  // start probing — otherwise the first probe may hit the OLD
+  // instance and we reload before the new one is up.
+  btn.textContent = 'Restarting…';
+  await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
+  btn.textContent = 'Waiting for add-on to come back online…';
+  const restarted = await _probeAddonRestarted(previousInstanceId);
+  if (restarted) {
+    window.location.reload();
+  } else {
+    // Probe gave up after RESTART_PROBE_MAX_TOTAL_MS. Restart either
+    // never actually fired (silent supervisor failure → instance_id
+    // never flipped) OR supervisor is genuinely slower than the cap.
+    // Surface a clear next-step instead of silently doing nothing.
+    btn.textContent = 'Add-on did not come back online — reload manually';
+    btn.disabled = false;
+    restartInProgress = false;
+  }
+}
+
+async function restartAddon() {
+  if (restartInProgress) return;
+  const btn = document.getElementById('restartBtn');
+  if (!confirm('Restart the add-on now? The page will reload automatically once the add-on is back online.')) return;
+  restartInProgress = true;
   btn.disabled = true;
-  btn.textContent = 'Restarting...';
+  btn.textContent = 'Restarting…';
+  // Capture the current process's ``instance_id`` BEFORE firing the
+  // restart so the poll cycle has a baseline to compare against.
+  // null is fine — the probe degrades to the old "any 200 means up"
+  // mode rather than refusing to reload.
+  const info = await _fetchSettingsInfo();
+  const previousInstanceId = info?.instance_id ?? null;
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
-    if (resp.ok) {
-      btn.textContent = 'Restart initiated — reload page in ~30s';
-    } else {
+    if (!resp.ok && resp.status < 500) {
+      // 4xx is a genuine config error (e.g. SUPERVISOR_TOKEN unset).
+      // The restart was NOT initiated — surface the error and let the
+      // user fix the underlying cause. Keep button enabled so they
+      // can retry once the issue is resolved. Don't broadcast (other
+      // tabs would only see a misleading "restart in progress").
       let msg = 'Restart failed';
       try {
         const err = await resp.json();
-        if (err.error && err.error.message) msg = 'Failed: ' + err.error.message;
-      } catch (_e) {}
+        if (err?.error?.message) msg = 'Failed: ' + err.error.message;
+      } catch (_e) { /* leave default msg */ }
       btn.textContent = msg;
       btn.disabled = false;
+      restartInProgress = false;
       alert(msg);
+      return;
     }
+    // 200 OK → background task scheduled. 5xx → ingress upstream
+    // drop, restart IS in flight. Both fall through to the reload
+    // cycle.
   } catch (_e) {
-    // Connection lost mid-request is actually expected — the addon is restarting
-    btn.textContent = 'Restart initiated (connection dropped)';
+    // Network error mid-request — supervisor killed our upstream.
+    // Restart in flight; fall through. Log for debug, suppress the
+    // unused-binding lint.
+    console.warn('restartAddon fetch dropped (expected during self-restart):', _e);
   }
+  // Other tabs need to run the same cycle so they reload to the fresh
+  // addon, not stay on a stale view. Broadcast the baseline so each
+  // tab compares against the same pre-restart ``instance_id``.
+  if (restartChannel) {
+    restartChannel.postMessage({
+      type: 'restart-initiated',
+      previousInstanceId,
+    });
+  }
+  await _runRestartReloadCycle(previousInstanceId);
+}
+
+// Listener: when ANY tab broadcasts a save that needs a restart, all
+// open tabs surface the banner. When ANY tab fires the restart, all
+// open tabs run their own poll-then-reload cycle so none of them are
+// left holding a stale connection to a now-dead addon.
+if (restartChannel) {
+  restartChannel.addEventListener('message', (e) => {
+    const data = e.data || {};
+    if (data.type === 'restart-required') {
+      document.getElementById('restartNotice').classList.add('show');
+    } else if (data.type === 'restart-initiated' && !restartInProgress) {
+      restartInProgress = true;
+      const btn = document.getElementById('restartBtn');
+      if (btn) btn.disabled = true;
+      // Use the originating tab's baseline ``instance_id`` so every
+      // tab waits for the SAME ``instance_id`` flip before reloading.
+      // Falls back to null → "any 200 = ready" mode if the originator
+      // couldn't capture one.
+      _runRestartReloadCycle(data.previousInstanceId ?? null);
+    }
+  });
 }
 
 const DEFAULT_PINNED = """
@@ -1131,6 +1298,15 @@ function render() {
     `<span style="color:var(--success)">${enabledCount} enabled</span>` +
     `<span style="color:var(--accent)">${pinnedCount} pinned</span>` +
     `<span style="color:var(--danger)">${disabledCount} disabled</span>`;
+
+  // ``render()`` rebuilds the entire ``.tool`` DOM, so any
+  // ``hidden`` class previously applied by ``applyToolSearch`` is
+  // wiped. The search ``<input>`` is a separate element and keeps
+  // its value across the rebuild — re-apply the filter so the
+  // visible list matches what the user has typed. Otherwise
+  // toggling a setting on a filtered tool snaps the full list back
+  // even though the search box still shows the query.
+  applyToolSearch();
 }
 
 function scheduleSave() {
@@ -1149,6 +1325,10 @@ async function saveConfig() {
   if (resp.ok) {
     updateStatus('Saved — restart required', true);
     document.getElementById('restartNotice').classList.add('show');
+    // Cross-tab sync — other open settings tabs surface the same
+    // banner so the user can click Restart from whichever tab they
+    // are on.
+    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
   } else {
     updateStatus('Save failed!');
   }
@@ -1160,8 +1340,12 @@ function updateStatus(text, saved) {
   el.className = saved ? 'status saved' : 'status';
 }
 
-document.getElementById('search').addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase();
+function applyToolSearch() {
+  // Read the current search query directly from the DOM rather than
+  // taking it as a parameter — ``render()`` calls this after rebuilding
+  // the tool DOM and needs to use whatever the user currently has
+  // typed without coordinating with the input event.
+  const q = (document.getElementById('search').value || '').toLowerCase();
   document.querySelectorAll('.tool').forEach(el => {
     const match = !q || el.dataset.name.includes(q) || el.dataset.title.includes(q);
     el.classList.toggle('hidden', !match);
@@ -1175,7 +1359,9 @@ document.getElementById('search').addEventListener('input', (e) => {
       g.querySelector('.group-chevron').classList.add('open');
     }
   });
-});
+}
+
+document.getElementById('search').addEventListener('input', applyToolSearch);
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
 
@@ -1199,7 +1385,7 @@ const BACKUP_FIELD_LABELS = {
 };
 
 const BACKUP_ORIGIN_LABELS = {
-  addon: 'Synced to Supervisor — save will restart the add-on.',
+  addon: 'Synced to Supervisor — restart required after save.',
   env: null,  // banner generated dynamically with the env var name
   file: 'Persisted locally; takes effect immediately.',
   default: 'Using default; first save creates a local override file.',
@@ -1295,11 +1481,24 @@ async function saveBackupConfig() {
       statusEl.textContent = msg;
       return;
     }
-    if (data.restarting) {
-      statusEl.textContent = 'Saved — addon is restarting. Reload in ~30s.';
+    btn.disabled = false;
+    if (data.restart_required) {
+      // Unified restart flow — save persists but does NOT auto-restart.
+      // Surface the cross-tab restart-required banner; user picks the
+      // moment via the global Restart Add-on button.
+      //
+      // Don't reload the form here. In addon mode the GET reads
+      // env-derived ``get_global_settings()`` values which are still
+      // stale (Supervisor has the new options but ``start.py``
+      // doesn't re-derive env vars until the next addon boot). Reloading
+      // would snap the form back to old values, look like the save
+      // reverted, and clobber any further edits the user wanted to
+      // bundle before clicking Restart.
+      statusEl.textContent = 'Saved — restart required';
+      document.getElementById('restartNotice').classList.add('show');
+      if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
     } else {
       statusEl.textContent = 'Saved.';
-      btn.disabled = false;
       // Refresh display so origins update (default → file, etc.).
       loadBackupConfig();
       loadBackups();
@@ -1483,7 +1682,13 @@ const FEATURE_META = {
 
 const ORIGIN_LOCKED_NOTE = {
   env: 'Set via environment variable — unset it to edit here.',
-  addon: 'Managed by the add-on Configuration tab — open Settings → Add-ons → ha-mcp → Configuration to edit.',
+  // addon-origin fields are editable: save POSTs through Supervisor
+  // /addons/self/options and triggers a restart so both surfaces stay
+  // in sync. No locked note needed.
+};
+
+const ORIGIN_INFO_NOTE = {
+  addon: 'Synced to the add-on Configuration tab — restart required after save.',
 };
 
 async function loadFeatureFlags() {
@@ -1541,10 +1746,14 @@ function renderFeatureFlags(flags) {
         `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')}${envVarSuffix}` +
         `</div>`
       : '';
+    const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
+      ? `<div class="feature-locked-note">` +
+        `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
+      : '';
     info.innerHTML =
       `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
-      lockedNote;
+      lockedNote + infoNote;
 
     const control = document.createElement('div');
     control.className = 'feature-control';
@@ -1596,20 +1805,32 @@ async function saveFeatureFlag(fieldName, value) {
     updateStatus('Save failed: ' + e.message);
     return;
   }
+  let data = null;
+  try { data = await resp.json(); } catch (_e) {
+    // On a 200 OK with truncated / non-JSON body, default to the
+    // "restart needed" state so the user gets the banner — silently
+    // skipping it would let them think the change took effect live
+    // and they'd never restart. Only do this on resp.ok; for an
+    // error response we want the HTTP status to drive the message.
+    if (resp.ok) data = {restart_required: true};
+  }
   if (!resp.ok) {
     let msg = `Save failed (HTTP ${resp.status})`;
-    try {
-      const err = await resp.json();
-      if (err.error && err.error.message) msg = 'Save failed: ' + err.error.message;
-    } catch (_e) {}
+    if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
     updateStatus(msg);
     return;
   }
-  // Don't toggle the in-tab restartNotice — it lives in panel-tools
-  // and would be hidden behind a tab the user isn't on. The page-level
-  // status badge (set above) is visible across every tab and the
-  // panel sub-header up top already warns "Changes require restart".
+  // Unified restart flow — save persists the change but does NOT fire
+  // the addon restart. The user picks when to restart by clicking the
+  // global Restart Add-on button in the cross-tab restart-required
+  // banner. Same UX as the Tools tab. In standalone modes the restart
+  // button is hidden (no supervisor to drive it) but the banner still
+  // surfaces "restart required" as guidance.
   updateStatus('Saved — restart required', true);
+  if (data?.restart_required) {
+    document.getElementById('restartNotice').classList.add('show');
+    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
+  }
 }
 
 // ===== Tab switching =====
@@ -1636,6 +1857,234 @@ loadTools();
 </html>
 """
 )
+
+
+class _SupervisorOptionsError(NamedTuple):
+    """Discriminated failure shape for the supervisor options helpers.
+
+    Two distinct failure classes need different recovery paths in the UI:
+
+    - ``kind="transport"``: network / DNS / Supervisor unreachable / token
+      missing. The route maps this to :class:`ErrorCode.CONNECTION_FAILED`
+      so the UI surfaces the "is HA running, check connectivity"
+      suggestions. ``status_code`` is always ``502`` for this kind.
+    - ``kind="validation"``: Supervisor accepted the request but rejected
+      the body against the addon schema (e.g. an unknown key, a missing
+      required field). The route maps this to
+      :class:`ErrorCode.CONFIG_VALIDATION_FAILED` and forwards the
+      supervisor ``status_code`` verbatim so the UI shows a real 4xx and
+      surfaces the schema-recovery suggestions.
+
+    Collapsing both into a single string return (the previous shape)
+    sent transport failures down the wrong recovery path. See
+    PR #1420's code review for the motivation.
+    """
+
+    kind: Literal["transport", "validation"]
+    message: str
+    status_code: int
+
+
+async def _supervisor_fetch_current_options(
+    verify_ssl: bool,
+) -> tuple[dict[str, Any], _SupervisorOptionsError | None]:
+    """GET ``/addons/self/info`` and return the current options dict.
+
+    Supervisor's ``/addons/self/options`` POST is a *full* replacement
+    validated against the addon schema — every required key must be
+    present in the body. We can't ship a partial PATCH of just the
+    fields the user changed, so callers must merge their changes into
+    the full current options before posting. Mirrors the pattern in
+    ``homeassistant-addon/start.py::maybe_persist_secret_path`` which
+    spreads existing config (``{**config, "secret_path": secret_path}``)
+    before calling ``persist_addon_options``.
+
+    Returns ``(options_dict, error)`` where ``error`` is a
+    :class:`_SupervisorOptionsError` carrying ``kind="transport"`` for
+    network / token / non-JSON failures (mapped to ``CONNECTION_FAILED``
+    upstream) and ``kind="validation"`` for supervisor ``>=400``
+    responses (mapped to ``CONFIG_VALIDATION_FAILED`` with supervisor's
+    real status code preserved). On success the dict carries the
+    full options and ``error`` is ``None``.
+    """
+    try:
+        async with make_supervisor_httpx_client(
+            timeout=10.0, verify=verify_ssl
+        ) as sclient:
+            resp = await sclient.get("/addons/self/info")
+    except RuntimeError as exc:
+        # `make_supervisor_httpx_client` raises RuntimeError when
+        # SUPERVISOR_TOKEN is unset. Both current callers gate on that
+        # env var, but treat this as transport (env / setup failure) so
+        # a future third caller missing the gate gets a sane 502 rather
+        # than an uncaught 500.
+        return {}, _SupervisorOptionsError(
+            "transport", f"Supervisor client unavailable: {exc}", 502
+        )
+    except httpx.HTTPError as exc:
+        return {}, _SupervisorOptionsError(
+            "transport",
+            f"Could not reach Supervisor for current options: {exc}",
+            502,
+        )
+    if resp.status_code >= 400:
+        # Supervisor returning a 4xx/5xx for /info is itself a transport-
+        # class failure (we never sent body — there is no schema for
+        # the GET to validate). 502 with CONNECTION_FAILED is right.
+        return {}, _SupervisorOptionsError(
+            "transport",
+            (
+                f"Supervisor returned {resp.status_code} for "
+                f"/addons/self/info: {resp.text[:300]}"
+            ),
+            502,
+        )
+    try:
+        body = resp.json()
+    except ValueError:
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor returned non-JSON for /addons/self/info", 502
+        )
+    # Supervisor REST envelope is {"result": "ok", "data": {...}}. Older
+    # mocks / variants may return the data dict directly — handle both.
+    data = body.get("data") if isinstance(body, dict) and "data" in body else body
+    if not isinstance(data, dict):
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor /addons/self/info had non-object body", 502
+        )
+    options = data.get("options")
+    if not isinstance(options, dict):
+        return {}, _SupervisorOptionsError(
+            "transport", "Supervisor /addons/self/info had no options dict", 502
+        )
+    return options, None
+
+
+async def _supervisor_merge_and_post_options(
+    verify_ssl: bool, field_changes: dict[str, Any]
+) -> tuple[bool, _SupervisorOptionsError | None]:
+    """Merge ``field_changes`` into supervisor's current options and POST.
+
+    Necessary because supervisor's POST is full-replacement (see
+    :func:`_supervisor_fetch_current_options`). Without this merge, a
+    POST that only includes a handful of fields the user edited
+    drops every other key (including required ones like ``backup_hint``)
+    and supervisor rejects with a 400 ``addon_configuration_invalid_error``.
+
+    Returns ``(success, error)`` where ``error`` is a
+    :class:`_SupervisorOptionsError`. Transport failures (token missing,
+    network drop, malformed response from /info) bubble up from the
+    fetch helper unchanged. Supervisor 4xx on the actual POST is
+    classified as ``kind="validation"`` with supervisor's status code
+    preserved so the UI can show the real 4xx code and the
+    ``CONFIG_VALIDATION_FAILED`` recovery suggestions.
+    """
+    current, err = await _supervisor_fetch_current_options(verify_ssl)
+    if err is not None:
+        return False, err
+    merged = {**current, **field_changes}
+    try:
+        async with make_supervisor_httpx_client(
+            timeout=10.0, verify=verify_ssl
+        ) as sclient:
+            resp = await sclient.post("/addons/self/options", json={"options": merged})
+    except RuntimeError as exc:
+        return False, _SupervisorOptionsError(
+            "transport", f"Supervisor client unavailable: {exc}", 502
+        )
+    except httpx.HTTPError as exc:
+        return False, _SupervisorOptionsError(
+            "transport", f"Supervisor options POST failed: {exc}", 502
+        )
+    if resp.status_code >= 400:
+        return False, _SupervisorOptionsError(
+            "validation",
+            (
+                f"Supervisor rejected options update ({resp.status_code}): "
+                f"{resp.text[:400]}"
+            ),
+            resp.status_code,
+        )
+    return True, None
+
+
+# Strong references to in-flight self-restart tasks, kept here so the
+# event loop's weakref-only task table doesn't garbage-collect a still-
+# running fire-and-forget coroutine before it can POST to supervisor.
+# Tasks remove themselves via ``add_done_callback`` when they finish.
+_BACKGROUND_RESTART_TASKS: set[asyncio.Task[None]] = set()
+
+# Delay (seconds) before the background self-restart task fires the
+# supervisor POST. Picked to give Starlette + uvicorn time to serialize
+# the JSONResponse onto the socket and have HA ingress flush it to the
+# browser BEFORE supervisor kills the addon container. Too short races
+# the response flush (browser sees a 5xx Bad Gateway from ingress); too
+# long delays the visible restart noticeably. 0.3s is comfortably above
+# observed flush times in addon-mode while staying well under any
+# reasonable user attention threshold. Tests override via the ``delay``
+# kwarg of ``_schedule_supervisor_self_restart``.
+_SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S: float = 0.3
+
+
+def _schedule_supervisor_self_restart(
+    verify_ssl: bool, *, delay: float = _SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S
+) -> None:
+    """Schedule a background ``/addons/self/restart`` POST.
+
+    Fire-and-forget on the current event loop so the request handler
+    can return its JSON response *before* the supervisor kills the
+    addon. Without the gap, supervisor restarts our process mid-response
+    and the HA ingress proxy converts the dropped upstream connection
+    into a 5xx Bad Gateway, which the browser interprets as "Restart
+    failed" even though the restart actually succeeded.
+
+    The ``delay`` (default 0.3s) gives Starlette + uvicorn time to
+    serialize the JSONResponse onto the socket and have ingress flush
+    it to the browser before the background coroutine wakes up and
+    POSTs the supervisor restart. Tuned conservatively — too short
+    races the response flush; too long delays the user-visible
+    restart noticeably.
+
+    Errors are logged and swallowed: by the time this fires the
+    response has already gone out and the user has already been told
+    the restart is initiated, so there is no path to surface a late
+    failure here. The user discovers a failed restart by the addon
+    not actually restarting; the supervisor log captures the cause.
+    """
+
+    async def _do_restart() -> None:
+        await asyncio.sleep(delay)
+        try:
+            async with make_supervisor_httpx_client(
+                timeout=5.0, verify=verify_ssl
+            ) as sclient:
+                resp = await sclient.post("/addons/self/restart")
+            if resp.status_code >= 400:
+                logger.error(
+                    "Background self-restart returned %d: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+        except (httpx.ReadError, httpx.RemoteProtocolError):
+            # Supervisor killed us mid-call — expected; no action needed.
+            pass
+        except RuntimeError:
+            # ``make_supervisor_httpx_client`` raises RuntimeError when
+            # SUPERVISOR_TOKEN is unset. The route guard at handler entry
+            # already checks for this, but a race that unsets the token
+            # between request entry and the 300ms-later task wakeup
+            # would otherwise propagate uncaught and surface only as
+            # asyncio's "Task exception was never retrieved" at GC time.
+            # Log it loudly so the user can find it in the addon log.
+            # Mirrors the same RuntimeError catch in the supervisor
+            # options helpers.
+            logger.exception("Background self-restart aborted: SUPERVISOR_TOKEN unset")
+        except httpx.HTTPError:
+            logger.exception("Background self-restart failed")
+
+    task = asyncio.create_task(_do_restart())
+    _BACKGROUND_RESTART_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_RESTART_TASKS.discard)
 
 
 def build_settings_handlers(
@@ -1767,11 +2216,18 @@ def build_settings_handlers(
             pinned_count,
         )
 
+        # Same response shape as ``_save_feature_flags`` and
+        # ``_save_backup_config``: every save endpoint returns
+        # ``{success, applied, mode, restart_required}`` so the JS can
+        # branch on a single field and BroadcastChannel listeners in
+        # other tabs can react uniformly. Tool config writes only ever
+        # land in the on-disk JSON (no Supervisor round-trip), hence
+        # ``mode="file"`` regardless of addon/standalone deployment.
         return JSONResponse(
             {
                 "success": True,
-                "disabled": disabled_count,
-                "pinned": pinned_count,
+                "applied": states,
+                "mode": "file",
                 "restart_required": True,
             }
         )
@@ -1819,10 +2275,23 @@ def build_settings_handlers(
             ):
                 target_slug = requested.strip()
 
+        # Self-restart races the response flush: supervisor kills the addon
+        # mid-response, ingress sees the upstream drop, and converts it into
+        # a 5xx Bad Gateway at the browser — which the JS shows as
+        # "Restart failed" even though the restart actually succeeded.
+        # Schedule the supervisor POST from a background task so the JSON
+        # response below flushes BEFORE supervisor can kill us.
+        #
+        # Non-self slugs target a sibling addon: the inaddon E2E suite
+        # exercises that path against a non-test-critical addon, and we
+        # want the supervisor response (including 4xx) to surface
+        # synchronously so the test can assert on it. Keep the original
+        # synchronous behavior for that path.
+        if target_slug == "self":
+            _schedule_supervisor_self_restart(server.settings.verify_ssl)
+            return JSONResponse({"success": True, "message": "Restart initiated"})
+
         endpoint = f"/addons/{target_slug}/restart"
-        # Short timeout — when restarting self, the supervisor kills our
-        # process during restart so the connection will drop. A connection
-        # drop is actually success on that path.
         try:
             async with make_supervisor_httpx_client(
                 timeout=5.0, verify=server.settings.verify_ssl
@@ -1873,8 +2342,23 @@ def build_settings_handlers(
         # button (HTML show/hide); it MUST NOT leak True for HTTP modes
         # since stopping the FastMCP-mounted route would mean killing
         # the MCP server itself.
+        #
+        # ``instance_id`` + ``started_at`` are surfaced so the
+        # restart-then-reload JS cycle can prove a restart actually
+        # happened (the value flips across processes) instead of
+        # trusting that a poll returning 200 means the new instance
+        # is up — a silent restart no-op would otherwise see the OLD
+        # instance still answering and the page would reload to the
+        # same state.
         addon = False if is_sidecar else is_running_in_addon()
-        return JSONResponse({"is_addon": addon, "is_sidecar": is_sidecar})
+        return JSONResponse(
+            {
+                "is_addon": addon,
+                "is_sidecar": is_sidecar,
+                "instance_id": _PROCESS_INSTANCE_ID,
+                "started_at": _PROCESS_STARTED_AT,
+            }
+        )
 
     async def _get_feature_flags(_: Request) -> JSONResponse:
         """Return live feature-flag values + per-field origin + editable flag.
@@ -1882,15 +2366,21 @@ def build_settings_handlers(
         Per-field origin/editable matrix (see
         :func:`config.get_feature_flag_origin`):
 
-            origin = get_feature_flag_origin(env_name)
-            editable = origin in ("file", "default")
+        - ``"addon"``: editable — POST routes through Supervisor
+          ``/addons/self/options`` and triggers a restart so
+          ``start.py`` writes the new env vars at next boot. The
+          add-on Configuration tab and this web UI now share state
+          bidirectionally; changing a toggle in either surface is
+          reflected in the other after the addon restart.
+        - ``"env"``: read-only — env var explicitly set wins; user
+          must unset it to edit here.
+        - ``"file"`` / ``"default"``: editable — POST writes the
+          override file in place.
 
-        ``"addon"`` and ``"env"`` are non-editable from the web UI;
-        the user is told which env var (or addon option) to change
-        instead. The envelope shape (``flags`` dict of
+        The envelope shape (``flags`` dict of
         ``{value, origin, editable, type, env_var, min?, max?}``
-        entries) is intentionally generic so other settings
-        surfaces can render rows with the same JS code.
+        entries) is intentionally generic so other settings surfaces
+        can render rows with the same JS code.
         """
         from .config import (
             _FEATURE_FLAG_INT_BOUNDS,
@@ -1907,7 +2397,7 @@ def build_settings_handlers(
             entry: dict[str, Any] = {
                 "value": value,
                 "origin": origin,
-                "editable": origin in ("file", "default"),
+                "editable": origin in ("addon", "file", "default"),
                 "type": ftype.__name__,
                 "env_var": env_name,
             }
@@ -1921,11 +2411,25 @@ def build_settings_handlers(
     async def _save_feature_flags(request: Request) -> JSONResponse:
         """Persist UI-edited feature-flag values.
 
-        Only ``editable`` fields (origin = ``file`` or ``default``)
-        accept writes; an attempt to write an env-locked or addon-
-        locked field returns ``VALIDATION_INVALID_PARAMETER`` so the
-        client surfaces the locking source instead of silently
-        discarding the change.
+        Routing by per-field origin (see
+        :func:`config.get_feature_flag_origin`):
+
+        - **addon**: POST the merged options to Supervisor and return
+          ``restart_required=True``. ``start.py`` will re-derive env
+          vars from ``config.yaml`` on the next addon boot — but the
+          actual restart is fired by the user clicking the global
+          Restart Add-on button, NOT by this handler. Web UI edits
+          and Configuration-tab edits land in the same place, so the
+          two surfaces stay in sync after the restart.
+        - **env**: refuse — env var explicitly set wins. Returns
+          ``VALIDATION_INVALID_PARAMETER`` with the env var name so
+          the UI can surface the locking source.
+        - **file** / **default**: merge into the override file in the
+          data dir; takes effect on the next
+          ``get_global_settings()`` call (cache reset). The response
+          still carries ``restart_required=True`` because most
+          flag descriptions advertise "Requires restart to take
+          effect" — the UI shows the banner regardless of mode.
         """
         from .config import (
             _FEATURE_FLAG_INT_BOUNDS,
@@ -1964,12 +2468,24 @@ def build_settings_handlers(
             )
 
         # Build the validated override dict. Reject unknown fields and
-        # env/addon-locked fields up front so the user gets a precise
-        # error instead of a silent no-op.
+        # env-locked fields up front so the user gets a precise error
+        # instead of a silent no-op. ``addon``-origin fields are now
+        # editable — they route through Supervisor below.
         known: dict[str, tuple[str, type]] = {
             fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS
         }
         new_overrides: dict[str, Any] = {}
+        # Per ``config.get_feature_flag_origin``, addon mode (i.e.
+        # ``SUPERVISOR_TOKEN`` set) makes the helper return ``"addon"``
+        # for *every* registered flag — there is no path that yields a
+        # mixed addon + file/default batch from a single addon-mode UI
+        # session. The loop still tracks ``addon_writes`` per-field as
+        # belt-and-braces in case a future origin-resolution change
+        # breaks that invariant; the post-loop assertion below makes the
+        # invariant explicit so a regression fails loudly instead of
+        # silently routing a file-mode write through Supervisor.
+        addon_writes = False
+        file_or_default_writes = False
         for field_name, raw in raw_flags.items():
             if field_name not in known:
                 return JSONResponse(
@@ -1981,7 +2497,11 @@ def build_settings_handlers(
                 )
             env_name, ftype = known[field_name]
             origin = get_feature_flag_origin(env_name)
-            if origin not in ("file", "default"):
+            if origin == "addon":
+                addon_writes = True
+            elif origin in ("file", "default"):
+                file_or_default_writes = True
+            else:
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2033,6 +2553,90 @@ def build_settings_handlers(
                     ),
                     status_code=400,
                 )
+
+        # Addon-mode writes go to Supervisor instead of the override file:
+        # ``start.py`` reads ``config.yaml`` options on every boot and
+        # writes the env vars that Settings consumes, so the override
+        # file is ignored anyway (see config.get_feature_flag_origin).
+        # POST a merged options dict (current options + this delta) so
+        # required schema keys like ``backup_hint`` survive — see
+        # _supervisor_merge_and_post_options for the rationale, and the
+        # parallel handling in _save_backup_config.
+        #
+        # Reject mixed-origin batches loudly. The current
+        # ``get_feature_flag_origin`` implementation guarantees a single
+        # mode per request, but if a future change broke that invariant
+        # we would silently route a file/default-origin field through
+        # Supervisor (which would reject it as an unknown schema key in
+        # production addon mode) — better to fail clearly here.
+        if addon_writes and file_or_default_writes:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    (
+                        "Batch contains a mix of addon-origin and "
+                        "file/default-origin fields; route each batch "
+                        "through a single persistence path."
+                    ),
+                ),
+                status_code=500,
+            )
+        if addon_writes:
+            # ``addon_writes=True`` is equivalent to
+            # ``is_running_in_addon()`` (origin=="addon" requires
+            # SUPERVISOR_TOKEN per ``get_feature_flag_origin``), so the
+            # only guard we still need here is the sidecar-shape
+            # ``server is None``. The helpers below catch the missing-
+            # token ``RuntimeError`` from ``make_supervisor_httpx_client``
+            # as defense-in-depth.
+            if server is None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Feature-flag POST requires a live MCP server",
+                    ),
+                    status_code=500,
+                )
+            ok, err = await _supervisor_merge_and_post_options(
+                server.settings.verify_ssl, new_overrides
+            )
+            if not ok:
+                assert err is not None
+                logger.warning(
+                    "Supervisor feature-flag update failed (%s): %s",
+                    err.kind,
+                    err.message,
+                )
+                # Transport failures get CONNECTION_FAILED so the UI shows the
+                # "is HA reachable" suggestions; supervisor schema rejections
+                # get CONFIG_VALIDATION_FAILED with supervisor's real status
+                # code preserved so the UI shows the actual 4xx, not a generic
+                # 502. See _SupervisorOptionsError for the rationale.
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
+                )
+                return JSONResponse(
+                    create_error_response(code, err.message),
+                    status_code=err.status_code,
+                )
+            # Unified restart flow: every save that requires an addon
+            # restart (Tools, Server Settings, Backups) returns
+            # ``restart_required=True`` and lets the user pick when to
+            # fire the actual restart via the global Restart Add-on
+            # button. Don't auto-restart from the save handler —
+            # supervisor would kill the addon before this JSON response
+            # could flush through HA ingress, surfacing as a spurious
+            # "Restart failed" alert at the browser.
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": new_overrides,
+                    "mode": "addon",
+                    "restart_required": True,
+                }
+            )
 
         # Merge with the existing override file so a partial POST
         # only updates the keys it actually included — the front-end
@@ -2116,12 +2720,26 @@ def build_settings_handlers(
             )
 
         # Publish the change so the same process picks it up on the
-        # next ``get_global_settings()`` call (server-restart still
-        # required for many flags — the UI surfaces that — but the
-        # cached singleton must not return the stale pre-write
-        # values to subsequent /api/settings/features GETs).
+        # next ``get_global_settings()`` call. The cached singleton
+        # must not return the stale pre-write values to subsequent
+        # /api/settings/features GETs.
+        #
+        # ``restart_required=True`` because the feature flags here gate
+        # tool registration, FastMCP transforms, and other startup-time
+        # reads. File-mode persists the value, but the live process
+        # keeps the old behavior until the MCP host is restarted
+        # (Claude Desktop relaunch, Docker container restart, etc.).
+        # Surfacing the banner is the same contract Tools, Server
+        # Settings, and Backups all advertise.
         _reset_global_settings()
-        return JSONResponse({"success": True})
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": new_overrides,
+                "mode": "file",
+                "restart_required": True,
+            }
+        )
 
     # ---- Auto-backup routes (#1288) ----
 
@@ -2389,16 +3007,21 @@ def build_settings_handlers(
         """Persist auto-backup config edits and publish to the live process.
 
         Routing:
-        - Addon mode: POST ``/addons/self/options`` to update ``config.yaml``,
-          then ``/addons/self/restart`` to make the new values take effect via
-          ``start.py``'s env-var write at next boot. The HTTP response races
-          the restart-induced socket drop; the JS treats both 200 and
-          connection-drop as success and reloads the page after ~30s.
-        - Standalone (file) mode: refuse any field that's pinned by an env
-          var (process or ``.env``) — return 409 with the offending names so
-          the UI can refresh and show the read-only banner. Editable fields
-          merge into ``<data_dir>/backup_settings.json`` and a Settings
-          cache reset publishes them immediately (no restart).
+        - Addon mode: POST ``/addons/self/options`` (with the existing
+          options merged so required schema keys like ``backup_hint``
+          survive the full-replacement validation) and return
+          ``restart_required=True``. ``start.py`` will re-derive env
+          vars from ``config.yaml`` on the next addon boot, but the
+          actual restart is fired by the user clicking the global
+          Restart Add-on button — NOT by this handler. Same unified
+          flow as the Tools and Server Settings save endpoints.
+        - Standalone (file) mode: refuse any field that's pinned by an
+          env var (process or ``.env``) — return 409 with the offending
+          names so the UI can refresh and show the read-only banner.
+          Editable fields merge into
+          ``<data_dir>/backup_settings.json`` and a Settings cache
+          reset publishes them immediately, hence
+          ``restart_required=False``.
         """
         try:
             payload = await request.json()
@@ -2409,14 +3032,11 @@ def build_settings_handlers(
             return _bad_request(err)
 
         if is_running_in_addon():
-            if not os.environ.get("SUPERVISOR_TOKEN"):
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        "Supervisor token missing — cannot update add-on options",
-                    ),
-                    status_code=400,
-                )
+            # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
+            # helpers below also catch the missing-token ``RuntimeError``
+            # from ``make_supervisor_httpx_client`` as defense-in-depth,
+            # so we only still need the sidecar-shape ``server is None``
+            # guard.
             if server is None:
                 # Addon mode without a live server means we're in the
                 # stdio sidecar — but addon detection should already be
@@ -2427,71 +3047,42 @@ def build_settings_handlers(
                     code=ErrorCode.INTERNAL_ERROR,
                     status=500,
                 )
-            options_body = {"options": clean}
-            try:
-                async with make_supervisor_httpx_client(
-                    timeout=10.0, verify=server.settings.verify_ssl
-                ) as sclient:
-                    opt_resp = await sclient.post(
-                        "/addons/self/options", json=options_body
-                    )
-            except httpx.HTTPError as exc:
+            # Merge ``clean`` into the *full* current options before posting.
+            # Supervisor validates against the addon schema and rejects any
+            # body missing a required key (notably ``backup_hint`` on the
+            # production / dev manifests). A previous version of this code
+            # shipped just the auto-backup fields, producing
+            # ``addon_configuration_invalid_error: Missing option
+            # 'backup_hint' in root`` from supervisor and a confusing 400 in
+            # the UI even though the user only changed unrelated fields.
+            ok, sup_err = await _supervisor_merge_and_post_options(
+                server.settings.verify_ssl, clean
+            )
+            if not ok:
+                assert sup_err is not None
                 logger.warning(
-                    "Failed to PUT /addons/self/options: %s", exc, exc_info=True
+                    "Supervisor backup-config update failed (%s): %s",
+                    sup_err.kind,
+                    sup_err.message,
+                )
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if sup_err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
                 )
                 return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        f"Supervisor options update failed: {exc}",
-                    ),
-                    status_code=502,
+                    create_error_response(code, sup_err.message),
+                    status_code=sup_err.status_code,
                 )
-            if opt_resp.status_code >= 400:
-                body = opt_resp.text[:400]
-                logger.warning(
-                    "Supervisor rejected options update (%s): %s",
-                    opt_resp.status_code,
-                    body,
-                )
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.CONFIG_VALIDATION_FAILED,
-                        f"Supervisor rejected options update: {body}",
-                    ),
-                    status_code=opt_resp.status_code,
-                )
-            # Trigger restart so start.py rewrites env vars from config.yaml.
-            # Socket may drop mid-response (self-restart) — treat that as
-            # success, same as the existing _restart_addon handler.
-            try:
-                async with make_supervisor_httpx_client(
-                    timeout=5.0, verify=server.settings.verify_ssl
-                ) as sclient:
-                    await sclient.post("/addons/self/restart")
-            except (httpx.ReadError, httpx.RemoteProtocolError):
-                pass
-            except httpx.HTTPError as exc:
-                logger.warning(
-                    "Options updated but restart request failed: %s", exc, exc_info=True
-                )
-                return JSONResponse(
-                    {
-                        "success": True,
-                        "applied": clean,
-                        "mode": "addon",
-                        "warning": (
-                            "Options saved to config.yaml but restart request "
-                            "failed; restart the add-on manually to apply."
-                        ),
-                    },
-                    status_code=200,
-                )
+            # Unified restart flow — see _save_feature_flags for the
+            # rationale. Don't auto-restart from a save handler; the
+            # global Restart Add-on button is the single restart path.
             return JSONResponse(
                 {
                     "success": True,
                     "applied": clean,
                     "mode": "addon",
-                    "restarting": True,
+                    "restart_required": True,
                 }
             )
 
@@ -2533,13 +3124,18 @@ def build_settings_handlers(
                 status_code=500,
             )
         # Drop the cached Settings so the next read sees the merged value.
+        # File-mode auto-backup settings take effect immediately on the
+        # next ``get_global_settings()`` read — no restart needed, hence
+        # ``restart_required=False``. The JS uses the same field name on
+        # every save endpoint to decide whether to surface the
+        # restart-required banner.
         _reset_global_settings()
         return JSONResponse(
             {
                 "success": True,
                 "applied": clean,
                 "mode": "file",
-                "restarting": False,
+                "restart_required": False,
             }
         )
 

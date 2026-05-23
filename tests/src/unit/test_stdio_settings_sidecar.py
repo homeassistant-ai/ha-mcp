@@ -303,7 +303,13 @@ class TestSecurityMiddleware:
         assert resp.status_code == 200
         # is_sidecar=True because _build_app passes is_sidecar=True to
         # build_settings_handlers; covered separately in TestSidecarSettingsInfo.
-        assert resp.json() == {"is_addon": False, "is_sidecar": True}
+        # The endpoint also carries ``instance_id`` + ``started_at`` so the
+        # restart-then-reload JS cycle can prove a restart actually happened
+        # (covered by TestSettingsInfoEndpoint in test_settings_ui.py).
+        # This test pins the deployment-mode fields only.
+        body = resp.json()
+        assert body["is_addon"] is False
+        assert body["is_sidecar"] is True
 
     def test_post_origin_rejected(self, tmp_data_dir: Path) -> None:
         app = sidecar._build_app(
@@ -418,7 +424,13 @@ class TestSidecarSettingsInfo:
         assert resp.status_code == 200
         # Even with SUPERVISOR_TOKEN set, sidecar forces is_addon=False
         # AND advertises is_sidecar=True (drives the in-page Stop button).
-        assert resp.json() == {"is_addon": False, "is_sidecar": True}
+        # Per-process identity fields (``instance_id`` / ``started_at``)
+        # also land in this response — verified in
+        # TestSettingsInfoEndpoint (test_settings_ui.py); this test pins
+        # the deployment-mode override, not the full payload shape.
+        body = resp.json()
+        assert body["is_addon"] is False
+        assert body["is_sidecar"] is True
 
 
 class TestRunMainWiring:
