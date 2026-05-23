@@ -13,7 +13,7 @@ Use ha_search_entities(query='calendar', domain_filter='calendar') to find calen
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -219,7 +219,9 @@ class TestCalendarEventLifecycle:
 
         unique_id = uuid.uuid4().hex[:8]
         summary = f"E2E Deletable Test Event {unique_id}"
-        now = datetime.now()
+        # TZ-aware to keep ISO strings unambiguous when the test runner and
+        # the HA instance are in different timezones.
+        now = datetime.now(UTC)
         start = (now + timedelta(days=1)).replace(
             hour=14, minute=0, second=0, microsecond=0
         )
@@ -241,22 +243,38 @@ class TestCalendarEventLifecycle:
                 f"Calendar {calendar_entity} does not support event creation: {error_msg}"
             )
 
-        events_data = await safe_call_tool(
-            mcp_client,
-            "ha_config_get_calendar_events",
-            {
-                "entity_id": calendar_entity,
-                "start": start.isoformat(),
-                "end": (end + timedelta(hours=1)).isoformat(),
-            },
-        )
+        # Poll the list endpoint until our event appears — HA may not have
+        # indexed it immediately after the create returns. If it never appears,
+        # fail loudly rather than skip; we know the create succeeded, so this
+        # is an indexing inconsistency that should not be masked.
+        try:
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                {
+                    "entity_id": calendar_entity,
+                    "start": start.isoformat(),
+                    "end": (end + timedelta(hours=1)).isoformat(),
+                },
+                predicate=lambda d: any(
+                    e.get("summary") == summary for e in d.get("events", [])
+                ),
+                timeout=15,
+                description=f"retrieval of UID for created event '{summary}'",
+            )
+        except TimeoutError as err:
+            pytest.fail(
+                f"Could not retrieve UID for created event '{summary}' from "
+                f"{calendar_entity} after polling: {err}"
+            )
         events = events_data.get("events", [])
         event_uid = next(
             (e.get("uid") for e in events if e.get("summary") == summary), None
         )
         if not event_uid:
-            pytest.skip(
-                f"Could not retrieve UID for created event '{summary}' from {calendar_entity}"
+            pytest.fail(
+                f"Event '{summary}' visible in {calendar_entity} but missing "
+                f"a uid in the response"
             )
 
         try:
