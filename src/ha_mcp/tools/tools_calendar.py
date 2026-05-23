@@ -354,7 +354,10 @@ class CalendarTools:
         """
         Delete an event from a calendar.
 
-        Deletes a calendar event using the calendar.delete_event service.
+        Deletes a calendar event via the WebSocket ``calendar/event/delete``
+        command. HA's calendar component only registers ``create_event`` and
+        ``get_events`` as REST services — delete and update live on the
+        WebSocket API only.
 
         **Parameters:**
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
@@ -402,8 +405,8 @@ class CalendarTools:
                 )
 
             # entity_id format-check above does not cover the ``uid`` parameter.
-            # Empty/whitespace uid would flow through to ``calendar.delete_event``
-            # and HA returns a misleading "event not found".
+            # Empty/whitespace uid would flow through to the WS command and HA
+            # returns a misleading "event not found".
             validate_identifier_not_empty(
                 uid,
                 "uid",
@@ -413,21 +416,37 @@ class CalendarTools:
                 context={"entity_id": entity_id},
             )
 
-            # Build service data
-            service_data: dict[str, Any] = {
+            # ``calendar.delete_event`` is NOT a REST service — HA only
+            # registers ``calendar.create_event`` and ``calendar.get_events``.
+            # Delete is exposed exclusively via the WebSocket command
+            # ``calendar/event/delete`` (see HA Core
+            # ``homeassistant/components/calendar/__init__.py``).
+            ws_message: dict[str, Any] = {
+                "type": "calendar/event/delete",
                 "entity_id": entity_id,
                 "uid": uid,
             }
-
             if recurrence_id:
-                service_data["recurrence_id"] = recurrence_id
+                ws_message["recurrence_id"] = recurrence_id
             if recurrence_range:
-                service_data["recurrence_range"] = recurrence_range
+                ws_message["recurrence_range"] = recurrence_range
 
-            # Call the calendar.delete_event service
-            result = await self._client.call_service(
-                "calendar", "delete_event", service_data
-            )
+            result = await self._client.send_websocket_message(ws_message)
+
+            if not result.get("success"):
+                ws_error = result.get("error", "Failed to delete calendar event")
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        str(ws_error),
+                        context={"entity_id": entity_id, "uid": uid},
+                        suggestions=[
+                            f"Verify event with UID '{uid}' exists in {entity_id}",
+                            "Use ha_config_get_calendar_events() to find the correct event UID",
+                            "Some calendar integrations may not support event deletion",
+                        ],
+                    )
+                )
 
             return {
                 "success": True,

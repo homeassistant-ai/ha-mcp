@@ -12,6 +12,7 @@ Use ha_search_entities(query='calendar', domain_filter='calendar') to find calen
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta
 
 import pytest
@@ -59,9 +60,7 @@ class TestCalendarEvents:
         if not calendar_entity:
             pytest.skip("No calendar entities available for testing")
 
-        logger.info(
-            f"Testing ha_config_get_calendar_events with {calendar_entity}..."
-        )
+        logger.info(f"Testing ha_config_get_calendar_events with {calendar_entity}...")
 
         result = await mcp_client.call_tool(
             "ha_config_get_calendar_events", {"entity_id": calendar_entity}
@@ -165,9 +164,9 @@ class TestCalendarEvents:
 
         # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid format test completed")
@@ -307,43 +306,122 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity create test completed")
 
-    async def test_delete_calendar_event(self, mcp_client):
-        """
-        Test: Delete a calendar event
+    @pytest.fixture
+    async def deletable_event_uid(self, mcp_client):
+        """Create a temporary event, yield (entity_id, uid), then best-effort delete.
 
-        Tests the delete event functionality (may fail if no deletable events exist).
+        ``ha_config_set_calendar_event`` does not return the assigned UID, so
+        the fixture round-trips through ``ha_config_get_calendar_events`` to
+        retrieve it. Teardown swallows exceptions to stay idempotent regardless
+        of whether the test body already deleted the event.
         """
         calendar_entity = await self._find_writable_calendar(mcp_client)
         if not calendar_entity:
-            pytest.skip("No calendar entities available for testing")
+            pytest.skip("No writable calendar found for testing")
 
+        summary = f"E2E Deletable Test Event {uuid.uuid4().hex[:8]}"
+        now = datetime.now()
+        start = (now + timedelta(days=1)).replace(
+            hour=14, minute=0, second=0, microsecond=0
+        )
+        end = start + timedelta(hours=1)
+
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": summary,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            },
+        )
+        if not create_data.get("success"):
+            pytest.skip(
+                f"Calendar {calendar_entity} does not support event creation: "
+                f"{create_data.get('error', 'Unknown')}"
+            )
+
+        events_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            {
+                "entity_id": calendar_entity,
+                "start": start.isoformat(),
+                "end": (end + timedelta(hours=1)).isoformat(),
+            },
+        )
+        event_uid = next(
+            (
+                e.get("uid")
+                for e in events_data.get("events", [])
+                if e.get("summary") == summary
+            ),
+            None,
+        )
+        if not event_uid:
+            pytest.fail(
+                f"Created event '{summary}' did not surface a uid in "
+                f"ha_config_get_calendar_events for {calendar_entity}"
+            )
+
+        try:
+            yield calendar_entity, event_uid
+        finally:
+            try:
+                await mcp_client.call_tool(
+                    "ha_config_remove_calendar_event",
+                    {"entity_id": calendar_entity, "uid": event_uid},
+                )
+            except Exception as cleanup_error:
+                logger.debug(
+                    f"Cleanup of test event {event_uid} on {calendar_entity}: "
+                    f"{cleanup_error}"
+                )
+
+    async def test_delete_calendar_event(self, mcp_client, deletable_event_uid):
+        """
+        Test: Delete a calendar event (positive + negative paths)
+
+        Creates a fresh event, deletes it (positive: hard-assert success), then
+        re-attempts deletion of the released UID (negative: hard-assert failure
+        with suggestions). UID-collision risk is eliminated because the UID was
+        just held and released by this test.
+        """
+        calendar_entity, event_uid = deletable_event_uid
         logger.info(
-            f"Testing ha_config_remove_calendar_event for {calendar_entity}..."
+            f"Testing ha_config_remove_calendar_event for {calendar_entity} "
+            f"with uid={event_uid}..."
         )
 
-        # Try to delete with a fake UID (will likely fail, but tests the API)
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
+        first_delete = await mcp_client.call_tool(
+            "ha_config_remove_calendar_event",
+            {"entity_id": calendar_entity, "uid": event_uid},
+        )
+        assert_mcp_success(first_delete, "first deletion of just-created event")
+        logger.info(f"Deleted event {event_uid} (positive path)")
+
+        second_delete = await safe_call_tool(
             mcp_client,
             "ha_config_remove_calendar_event",
-            {"entity_id": calendar_entity, "uid": "nonexistent-event-uid-xyz"},
+            {"entity_id": calendar_entity, "uid": event_uid},
         )
-
-        # This will likely fail since the event doesn't exist
-        # We're mainly testing that the tool handles errors gracefully
-        if data.get("success"):
-            logger.info("Unexpectedly succeeded (event may have existed)")
-        else:
-            logger.info(f"Delete failed as expected: {data.get('error', 'Unknown')}")
-            assert data.get("error", {}).get("suggestions"), "Should provide helpful suggestions"
-
+        assert second_delete.get("success") is False, (
+            f"Second deletion of released UID should fail: got {second_delete}"
+        )
+        assert second_delete.get("error", {}).get("suggestions"), (
+            "Delete failure should provide helpful suggestions"
+        )
+        logger.info(
+            f"Second delete failed as expected: {second_delete.get('error', 'Unknown')}"
+        )
         logger.info("ha_config_remove_calendar_event test completed")
 
     async def test_delete_calendar_event_invalid_entity(self, mcp_client):
@@ -362,9 +440,9 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(
-            data.get("error", "")
-        ), "Error should mention correct format"
+        assert "calendar." in str(data.get("error", "")), (
+            "Error should mention correct format"
+        )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity delete test completed")
@@ -384,9 +462,9 @@ async def test_calendar_tools_overview(mcp_client):
     get_data = await safe_call_tool(
         mcp_client, "ha_config_get_calendar_events", {"entity_id": "calendar.test"}
     )
-    assert (
-        "events" in get_data or "error" in get_data
-    ), "ha_config_get_calendar_events should return events or error"
+    assert "events" in get_data or "error" in get_data, (
+        "ha_config_get_calendar_events should return events or error"
+    )
     logger.info("ha_config_get_calendar_events tool is registered and functional")
 
     # Test create event tool registration
@@ -401,9 +479,9 @@ async def test_calendar_tools_overview(mcp_client):
             "end": (now + timedelta(hours=1)).isoformat(),
         },
     )
-    assert (
-        "event" in create_data or "error" in create_data
-    ), "ha_config_set_calendar_event should return event or error"
+    assert "event" in create_data or "error" in create_data, (
+        "ha_config_set_calendar_event should return event or error"
+    )
     logger.info("ha_config_set_calendar_event tool is registered and functional")
 
     # Test delete event tool registration
@@ -412,9 +490,9 @@ async def test_calendar_tools_overview(mcp_client):
         "ha_config_remove_calendar_event",
         {"entity_id": "calendar.test", "uid": "test-uid"},
     )
-    assert (
-        "uid" in delete_data or "error" in delete_data
-    ), "ha_config_remove_calendar_event should return uid or error"
+    assert "uid" in delete_data or "error" in delete_data, (
+        "ha_config_remove_calendar_event should return uid or error"
+    )
     logger.info("ha_config_remove_calendar_event tool is registered and functional")
 
     logger.info("All calendar tools are properly registered")
