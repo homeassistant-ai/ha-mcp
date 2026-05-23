@@ -384,6 +384,14 @@ class TestCalendarEventLifecycle:
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity create test completed")
 
+    @pytest.mark.skip(
+        reason=(
+            "HA Local Calendar returns persistent 400 from calendar.delete_event "
+            "on a just-created event's UID — see #1416 for evidence + open "
+            "question. Hardening scaffold (yield-fixture + create-then-delete-twice "
+            "pattern) lands as foundation for un-skip once the root cause is known."
+        )
+    )
     async def test_delete_calendar_event(self, mcp_client, deletable_event_uid):
         """
         Test: Delete a calendar event (positive + negative paths)
