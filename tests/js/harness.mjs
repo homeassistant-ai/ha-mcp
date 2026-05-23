@@ -63,15 +63,19 @@ function readStdin() {
 }
 
 function buildFetchStub(fetchMap, fetches) {
+  // Per-pattern call counter for sequenced `responses: [...]` entries.
+  const counters = new Map();
   return async function fetch(url, init) {
     const method = (init && init.method) || "GET";
     const body = init && init.body != null ? String(init.body) : null;
     fetches.push({ url: String(url), method, body });
 
     let entry = null;
+    let matchedPattern = null;
     for (const [pattern, value] of Object.entries(fetchMap)) {
       if (String(url).includes(pattern)) {
         entry = value;
+        matchedPattern = pattern;
         break;
       }
     }
@@ -79,6 +83,14 @@ function buildFetchStub(fetchMap, fetches) {
       // Unmatched URL: 404 by default so tests that forget to register a
       // route get a loud, predictable failure mode.
       entry = { status: 404, body: "" };
+    }
+    // Sequenced responses: each call advances the index, the last entry
+    // sticks after exhaustion (matches the "addon comes back online and
+    // stays online" shape these probe loops need).
+    if (Array.isArray(entry.responses)) {
+      const idx = counters.get(matchedPattern) ?? 0;
+      counters.set(matchedPattern, idx + 1);
+      entry = entry.responses[Math.min(idx, entry.responses.length - 1)];
     }
     if (entry.throw) {
       throw new TypeError(entry.throw);

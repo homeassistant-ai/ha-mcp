@@ -192,18 +192,23 @@ class TestRestartAddonFlow:
         through to the poll-and-reload cycle, not surface the 5xx as a
         config error.
         """
-        # Pre-restart info → baseline; post-restart info → flipped.
-        # The harness's fetch_map matches by substring on first hit; we
-        # use a single entry and rely on the JS calling info() again
-        # after restart fires.
+        # The script hits /api/settings/info three times in this flow:
+        #   1. loadTools() at script init (for the is_addon / is_sidecar
+        #      branch in the restart-notice copy)
+        #   2. restartAddon() pre-POST, to capture the baseline instance_id
+        #   3. _probeAddonRestarted() after the POST, to detect the flip
+        # The first two return baseline; the third (and any further probe
+        # iterations — the last entry sticks) returns the flipped id so
+        # the probe exits with restarted=true.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/restart": {"status": 503, "body": ""},
-            # Replace the default info route so the probe sees a NEW
-            # instance_id and exits the polling loop with restarted=true.
             "/api/settings/info": {
-                "status": 200,
-                "json": {"instance_id": "new-id-after-restart"},
+                "responses": [
+                    {"status": 200, "json": {"instance_id": "baseline-id"}},
+                    {"status": 200, "json": {"instance_id": "baseline-id"}},
+                    {"status": 200, "json": {"instance_id": "flipped-id"}},
+                ],
             },
         }
         result = run_script(
