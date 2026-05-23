@@ -186,6 +186,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
+        # Wire per-tool approval middleware (#966) — opt-in via
+        # ENABLE_PER_TOOL_APPROVAL. Must come last so the middleware
+        # wraps the final tool surface (including the search proxies).
+        self._apply_per_tool_approval()
+
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -811,6 +816,73 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
         except Exception:
             logger.exception("Failed to apply tool search transform")
+
+    def _apply_per_tool_approval(self) -> None:
+        """Register the per-tool approval middleware (#966).
+
+        Opt-in via ``ENABLE_PER_TOOL_APPROVAL``. When enabled, every
+        tool call is funneled through :class:`PolicyMiddleware`, which
+        consults the persisted :class:`Policy` and gates calls matching
+        a rule until the user approves or denies via the settings UI's
+        ``/api/policy/approve`` / ``/api/policy/deny`` endpoints.
+
+        The middleware is exposed alongside an :class:`ApprovalQueue`
+        attached to ``self.approval_queue`` so the settings-UI handler
+        layer (``build_settings_handlers``) can discover the same queue
+        via ``getattr(server, "approval_queue", None)``.
+
+        Policies are reloaded from disk on every gated call (cheap; the
+        file is tens of bytes) so live updates via the UI take effect
+        immediately without restart and without a stale in-memory cache.
+        """
+        if not self.settings.enable_per_tool_approval:
+            return
+
+        try:
+            from .policy.approval_queue import ApprovalQueue
+            from .policy.middleware import PolicyMiddleware
+            from .policy.model import Policy
+            from .policy.persistence import load_policy
+            from .utils.data_paths import get_data_dir
+        except ImportError:
+            logger.exception(
+                "Per-tool approval enabled but policy package failed to import; "
+                "middleware not installed."
+            )
+            return
+
+        self.approval_queue = ApprovalQueue()
+        data_dir = get_data_dir()
+
+        def _policy_provider() -> Policy:
+            # Re-read from disk each call so UI edits via PUT
+            # /api/policy/config take effect immediately. The file is
+            # tiny; the cost is negligible relative to the network/HA
+            # roundtrip of a gated tool call.
+            return load_policy(data_dir)
+
+        # TODO: Absolute URL building deferred — the server doesn't
+        # currently expose a public ``settings_url_prefix`` builder, so
+        # the approval URL is emitted relative. Browsers will resolve it
+        # against the page the user navigated to (the settings UI mounts
+        # under the same secret prefix, so the relative form lands on the
+        # right host/path). Revisit when a shared prefix accessor lands.
+        def _approval_url(token: str) -> str:
+            return f"/api/policy/approve?token={token}"
+
+        try:
+            self.mcp.add_middleware(
+                PolicyMiddleware(
+                    policy_provider=_policy_provider,
+                    queue=self.approval_queue,
+                    approval_url_builder=_approval_url,
+                )
+            )
+            logger.info(
+                "Per-tool approval middleware registered (data_dir=%s)", data_dir
+            )
+        except Exception:
+            logger.exception("Failed to register PolicyMiddleware")
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between
