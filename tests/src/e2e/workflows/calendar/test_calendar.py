@@ -22,6 +22,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,8 @@ class TestCalendarEventLifecycle:
         )
         end = start + timedelta(hours=1)
 
-        create_result = await mcp_client.call_tool(
+        create_data = await safe_call_tool(
+            mcp_client,
             "ha_config_set_calendar_event",
             {
                 "entity_id": calendar_entity,
@@ -233,14 +235,14 @@ class TestCalendarEventLifecycle:
                 "end": end.isoformat(),
             },
         )
-        create_data = parse_mcp_result(create_result)
         if not create_data.get("success"):
             error_msg = str(create_data.get("error", "Unknown"))
             pytest.skip(
                 f"Calendar {calendar_entity} does not support event creation: {error_msg}"
             )
 
-        events_result = await mcp_client.call_tool(
+        events_data = await safe_call_tool(
+            mcp_client,
             "ha_config_get_calendar_events",
             {
                 "entity_id": calendar_entity,
@@ -248,7 +250,6 @@ class TestCalendarEventLifecycle:
                 "end": (end + timedelta(hours=1)).isoformat(),
             },
         )
-        events_data = parse_mcp_result(events_result)
         events = events_data.get("events", [])
         event_uid = next(
             (e.get("uid") for e in events if e.get("summary") == summary), None
@@ -403,15 +404,20 @@ class TestCalendarEventLifecycle:
             f"with uid={event_uid}..."
         )
 
-        # Positive path
-        first_delete = await safe_call_tool(
+        # Positive path. Poll the delete to absorb the registration window
+        # after event creation on Local Calendar — the REST endpoint behind
+        # ha_config_get_calendar_events returns the UID before the
+        # calendar.delete_event service accepts it, empirically observed as
+        # a 400 on immediate delete-after-create. wait_for_tool_result
+        # retries on success=False until the predicate holds or the
+        # timeout fires.
+        first_delete = await wait_for_tool_result(
             mcp_client,
             "ha_config_remove_calendar_event",
             {"entity_id": calendar_entity, "uid": event_uid},
-        )
-        assert first_delete.get("success") is True, (
-            f"First deletion of just-created event should succeed: "
-            f"{first_delete.get('error')}"
+            predicate=lambda d: d.get("success") is True,
+            timeout=15,
+            description=f"first deletion of just-created event {event_uid}",
         )
         logger.info(f"Deleted event {event_uid} (positive path)")
 
