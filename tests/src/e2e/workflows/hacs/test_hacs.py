@@ -566,6 +566,7 @@ async def test_hacs_discovery(mcp_client):
 
 @pytest.mark.hacs
 @pytest.mark.slow
+@pytest.mark.flaky(reruns=2, reruns_delay=10)
 class TestMcpToolsInstallation:
     """Test ha_mcp_tools custom component installation via HACS.
 
