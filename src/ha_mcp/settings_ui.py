@@ -1298,6 +1298,15 @@ function render() {
     `<span style="color:var(--success)">${enabledCount} enabled</span>` +
     `<span style="color:var(--accent)">${pinnedCount} pinned</span>` +
     `<span style="color:var(--danger)">${disabledCount} disabled</span>`;
+
+  // ``render()`` rebuilds the entire ``.tool`` DOM, so any
+  // ``hidden`` class previously applied by ``applyToolSearch`` is
+  // wiped. The search ``<input>`` is a separate element and keeps
+  // its value across the rebuild — re-apply the filter so the
+  // visible list matches what the user has typed. Otherwise
+  // toggling a setting on a filtered tool snaps the full list back
+  // even though the search box still shows the query.
+  applyToolSearch();
 }
 
 function scheduleSave() {
@@ -1331,8 +1340,12 @@ function updateStatus(text, saved) {
   el.className = saved ? 'status saved' : 'status';
 }
 
-document.getElementById('search').addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase();
+function applyToolSearch() {
+  // Read the current search query directly from the DOM rather than
+  // taking it as a parameter — ``render()`` calls this after rebuilding
+  // the tool DOM and needs to use whatever the user currently has
+  // typed without coordinating with the input event.
+  const q = (document.getElementById('search').value || '').toLowerCase();
   document.querySelectorAll('.tool').forEach(el => {
     const match = !q || el.dataset.name.includes(q) || el.dataset.title.includes(q);
     el.classList.toggle('hidden', !match);
@@ -1346,7 +1359,9 @@ document.getElementById('search').addEventListener('input', (e) => {
       g.querySelector('.group-chevron').classList.add('open');
     }
   });
-});
+}
+
+document.getElementById('search').addEventListener('input', applyToolSearch);
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
 
