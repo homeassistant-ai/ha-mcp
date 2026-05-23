@@ -337,6 +337,7 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
+    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
