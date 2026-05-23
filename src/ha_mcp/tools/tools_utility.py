@@ -81,12 +81,13 @@ class UtilityTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    @staticmethod
     def _coerce_limit(
-        self,
         limit: int | str | None,
         default: int = DEFAULT_LIMIT,
         suggestion_example: str = "50",
     ) -> int:
+        """Coerce and validate a limit parameter, raising a structured tool error on failure."""
         try:
             return coerce_int_param(
                 limit,
@@ -106,7 +107,8 @@ class UtilityTools:
                 )
             )
 
-    def _validate_log_level(self, level: str | None) -> str | None:
+    @staticmethod
+    def _validate_log_level(level: str | None) -> str | None:
         if level is None:
             return None
         level_upper = level.strip().upper()
@@ -120,8 +122,8 @@ class UtilityTools:
             )
         return level_upper
 
+    @staticmethod
     def _collect_log_warnings(
-        self,
         source: str,
         level: str | None,
         entity_id: str | None,
@@ -154,7 +156,8 @@ class UtilityTools:
             )
         return warnings
 
-    def _validate_log_slug(self, source: str, slug: str | None) -> None:
+    @staticmethod
+    def _validate_log_slug(source: str, slug: str | None) -> None:
         if source == "system_service":
             if not slug:
                 raise_tool_error(
@@ -261,8 +264,8 @@ class UtilityTools:
             result["warnings"] = warnings
         return result
 
+    @staticmethod
     def _coerce_logbook_params(
-        self,
         hours_back: int | str,
         limit: int | str | None,
         offset: int | str,
@@ -282,7 +285,7 @@ class UtilityTools:
                     suggestions=["Provide hours_back as an integer (e.g., 24)"],
                 )
             )
-        effective_limit = self._coerce_limit(limit)
+        effective_limit = UtilityTools._coerce_limit(limit)
         try:
             offset_int = coerce_int_param(
                 offset,
@@ -300,8 +303,8 @@ class UtilityTools:
             )
         return hours_back_int, effective_limit, offset_int
 
+    @staticmethod
     def _build_pagination_hint(
-        self,
         offset_int: int,
         effective_limit: int,
         total_entries: int,
@@ -312,6 +315,7 @@ class UtilityTools:
         search: str | None,
         compact_bool: bool,
     ) -> str:
+        """Build reproducible pagination hint string for logbook results."""
         next_offset = offset_int + effective_limit
         param_parts = [
             f"hours_back={hours_back_int}",
@@ -342,6 +346,7 @@ class UtilityTools:
         search: str | None = None,
         compact: bool | str = True,
     ) -> dict[str, Any]:
+        """Fetch logbook entries with search and pagination."""
         compact_bool = coerce_bool_param(compact, "compact", default=True)
         assert compact_bool is not None  # default=True guarantees non-None
         hours_back_int, effective_limit, offset_int = self._coerce_logbook_params(
@@ -382,6 +387,9 @@ class UtilityTools:
                 paginated_entries = response
                 has_more = False
 
+            # In compact mode, strip entries to essential fields only.
+            # This prevents full attribute dictionaries from exhausting
+            # the LLM context window during debugging workflows.
             if compact_bool and isinstance(paginated_entries, list):
                 paginated_entries = _compact_logbook_entries(paginated_entries)
 
@@ -452,6 +460,7 @@ class UtilityTools:
         search: str | None = None,
         level: str | None = None,
     ) -> dict[str, Any]:
+        """Fetch structured system log entries via system_log/list."""
         effective_limit = self._coerce_limit(limit)
 
         try:
@@ -529,6 +538,7 @@ class UtilityTools:
         search: str | None = None,
         level: str | None = None,
     ) -> dict[str, Any]:
+        """Fetch raw error log text from home-assistant.log."""
         effective_limit = self._coerce_limit(
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
@@ -554,6 +564,7 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
+            # Return the LAST N lines (most recent)
             lines = lines[-effective_limit:]
 
             data: dict[str, Any] = {
@@ -609,6 +620,7 @@ class UtilityTools:
         limit: int | str | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
+        """Fetch per-integration log levels via the ``logger/log_info`` WS command."""
         effective_limit = self._coerce_limit(limit)
 
         try:
@@ -715,6 +727,7 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
+            # Return the LAST N lines (most recent)
             lines = lines[-effective_limit:]
 
             data: dict[str, Any] = {
@@ -846,6 +859,7 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
+            # Return the LAST N lines (most recent)
             lines = lines[-effective_limit:]
 
             data: dict[str, Any] = {
@@ -940,6 +954,7 @@ class UtilityTools:
     async def eval_template(
         self, template: str, timeout: int, report_errors: bool | str
     ) -> dict[str, Any]:
+        # Coerce boolean parameter that may come as string from XML-style calls
         report_errors_bool = coerce_bool_param(
             report_errors, "report_errors", default=True
         )
@@ -1062,7 +1077,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         compact: bool | str = True,
         # System/error_log-specific
         level: str | None = None,
-        # Supervisor + system_service-specific (different namespaces — see below)
+        # Supervisor + system_service-specific (different namespaces)
         slug: str | None = None,
     ) -> dict[str, Any]:
         """
