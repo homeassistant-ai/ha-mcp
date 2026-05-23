@@ -602,6 +602,35 @@ def _build_app(
             handlers["save_feature_flags"],
             methods=["POST"],
         ),
+        # Per-tool approval policy endpoints (#966). Pending/approve/deny
+        # are wired as stubs that return 503 in sidecar mode — the
+        # in-memory ApprovalQueue lives in the main server process, so
+        # only config GET/PUT are usefully reachable here.
+        Route(
+            f"{secret_prefix}/api/policy/config",
+            handlers["policy_get_config"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/config",
+            handlers["policy_put_config"],
+            methods=["PUT"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/pending",
+            handlers["policy_get_pending"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/approve",
+            handlers["policy_post_approve"],
+            methods=["POST"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/deny",
+            handlers["policy_post_deny"],
+            methods=["POST"],
+        ),
     ]
 
     # /shutdown — POST endpoint that drops the disable sentinel and

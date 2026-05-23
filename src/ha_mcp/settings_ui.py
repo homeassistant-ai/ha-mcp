@@ -700,6 +700,7 @@ _SETTINGS_HTML = (
   <button class="tab active" data-panel="tools">Tools</button>
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
+  <button class="tab" data-panel="policies">Policies</button>
 </div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
@@ -757,6 +758,85 @@ _SETTINGS_HTML = (
     <button id="backupBulkDelete" class="danger">Bulk delete matching…</button>
   </div>
   <div id="backupList"></div>
+</div>
+<div class="panel" id="panel-policies">
+  <h2>Per-tool approval policies</h2>
+  <p class="features-sub">
+    Opt-in gating for high-stakes tool calls (issue #966). When enabled, the
+    AI must obtain your approval here before executing tools that match a
+    rule. See the DOCS for predicate operators
+    (eq, neq, in, not_in, regex, contains, exists, gt, lt).
+  </p>
+  <section id="policy-settings" style="margin-bottom:16px">
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Enabled</div>
+        <div class="feature-help">Master switch — when off, every tool runs without policy checks.</div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-enabled">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Default action</div>
+        <div class="feature-help">
+          <strong>Allow</strong> — only matched rules gate.
+          <strong>Require approval</strong> — every tool needs approval unless
+          a rule matches and overrides.
+        </div>
+      </div>
+      <div class="feature-control">
+        <select id="policy-default-action">
+          <option value="allow">Allow</option>
+          <option value="require_approval">Require approval</option>
+        </select>
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Wait seconds (5-600)</div>
+        <div class="feature-help">How long the middleware waits for an approval before timing out.</div>
+      </div>
+      <div class="feature-control">
+        <input type="number" id="policy-wait-seconds" min="5" max="600">
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Approval TTL minutes (1-60)</div>
+        <div class="feature-help">How long a pending approval stays in the queue before expiring.</div>
+      </div>
+      <div class="feature-control">
+        <input type="number" id="policy-ttl-minutes" min="1" max="60">
+      </div>
+    </div>
+  </section>
+
+  <section id="policy-pending" style="margin-bottom:16px">
+    <h3 style="font-size:1rem;margin-bottom:8px">Pending approvals</h3>
+    <div id="policy-pending-list" class="backup-empty">No pending approvals.</div>
+  </section>
+
+  <section id="policy-rules">
+    <h3 style="font-size:1rem;margin-bottom:8px">Rules (JSON)</h3>
+    <p class="features-sub">
+      Edit the <code>rules</code> array as JSON. Each rule has
+      <code>tool_name</code>, optional <code>when</code> predicates, and
+      optional <code>remember_minutes</code>.
+    </p>
+    <textarea id="policy-rules-json" rows="14"
+              style="width:100%; font-family:monospace; background:var(--surface);
+                     color:var(--text); border:1px solid var(--border);
+                     border-radius:8px; padding:10px; font-size:0.85rem"></textarea>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
+      <button id="policy-save-btn" class="restart-btn" style="display:inline-block">Save policy</button>
+      <span id="policy-save-status" class="status"></span>
+    </div>
+  </section>
 </div>
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
@@ -1612,6 +1692,121 @@ async function saveFeatureFlag(fieldName, value) {
   updateStatus('Saved — restart required', true);
 }
 
+// ===== Policies tab (issue #966) =====
+// Live approval routes (pending/approve/deny) are only available from
+// the main server (in-process ApprovalQueue). The sidecar serves
+// config GET/PUT but returns 503 for the live endpoints — the UI
+// degrades to "Live approvals unavailable in this mode."
+async function policyLoadConfig() {
+  let resp;
+  try {
+    resp = await fetch('./api/policy/config');
+  } catch (_e) { return; }
+  if (!resp.ok) return;
+  const p = await resp.json();
+  document.getElementById('policy-enabled').checked = !!p.enabled;
+  document.getElementById('policy-default-action').value = p.default_action || 'allow';
+  document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
+  document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
+  document.getElementById('policy-rules-json').value =
+    JSON.stringify(p.rules || [], null, 2);
+}
+
+async function policySaveConfig() {
+  const statusEl = document.getElementById('policy-save-status');
+  let rules;
+  try {
+    rules = JSON.parse(document.getElementById('policy-rules-json').value || '[]');
+  } catch (e) {
+    statusEl.textContent = 'Invalid JSON in rules: ' + e.message;
+    return;
+  }
+  const body = {
+    enabled: document.getElementById('policy-enabled').checked,
+    default_action: document.getElementById('policy-default-action').value,
+    wait_seconds: parseInt(document.getElementById('policy-wait-seconds').value, 10),
+    approval_ttl_minutes: parseInt(document.getElementById('policy-ttl-minutes').value, 10),
+    rules: rules,
+  };
+  let resp;
+  try {
+    resp = await fetch('./api/policy/config', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    statusEl.textContent = 'Network error: ' + e.message;
+    return;
+  }
+  if (resp.ok) {
+    statusEl.textContent = 'Saved.';
+  } else {
+    let detail;
+    try { detail = (await resp.json()).error || resp.statusText; }
+    catch (_e) { detail = resp.statusText; }
+    statusEl.textContent = 'Save failed: ' + detail;
+  }
+}
+
+async function policyLoadPending() {
+  const list = document.getElementById('policy-pending-list');
+  let resp;
+  try {
+    resp = await fetch('./api/policy/pending');
+  } catch (_e) { return; }
+  if (resp.status === 503) {
+    list.innerHTML = '<em>Live approvals unavailable in this mode (sidecar). Use the main settings UI.</em>';
+    return;
+  }
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const pending = data.pending || [];
+  if (pending.length === 0) {
+    list.textContent = 'No pending approvals.';
+    return;
+  }
+  list.innerHTML = pending.map(p => (
+    '<div style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
+    '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
+    '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
+    escapeHtml(JSON.stringify(p.args_preview, null, 2)) + '</pre>' +
+    '<small style="color:var(--text-secondary)">Expires: ' + escapeHtml(p.expires_at) + '</small><br>' +
+    '<div style="margin-top:8px; display:flex; gap:8px">' +
+    '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">Approve</button>' +
+    '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">Deny</button>' +
+    '</div></div>'
+  )).join('');
+  // Re-bind decision buttons each render (no event delegation needed —
+  // pending list is small and re-rendered on every poll).
+  list.querySelectorAll('button[data-policy-token]').forEach(btn => {
+    btn.addEventListener('click', () =>
+      policyDecide(btn.dataset.policyToken, btn.dataset.policyAction)
+    );
+  });
+}
+
+async function policyDecide(token, action) {
+  try {
+    await fetch('./api/policy/' + action, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token}),
+    });
+  } catch (_e) {}
+  policyLoadPending();
+}
+
+document.getElementById('policy-save-btn').addEventListener('click', policySaveConfig);
+
+// Poll for pending approvals every 3s when Policies tab is visible.
+setInterval(() => {
+  const policiesTab = document.querySelector('.tab[data-panel="policies"]');
+  if (policiesTab && policiesTab.classList.contains('active')) {
+    policyLoadPending();
+  }
+}, 3000);
+
 // ===== Tab switching =====
 // Generic dispatcher — every .tab button names its target panel via
 // data-panel, every .panel has matching id="panel-<name>". Adding a
@@ -1626,6 +1821,7 @@ document.querySelectorAll('.tab').forEach(tab => {
       p.classList.toggle('active', p.id === 'panel-' + target)
     );
     if (target === 'backups') { loadBackupConfig(); loadBackups(); }
+    if (target === 'policies') { policyLoadConfig(); policyLoadPending(); }
   });
 });
 
@@ -1636,6 +1832,50 @@ loadTools();
 </html>
 """
 )
+
+
+def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
+    """Sidecar variant of the per-tool approval handlers (issue #966).
+
+    Serves policy config GET/PUT (the on-disk policy file is shared with
+    the main server), but returns 503 for pending/approve/deny — those
+    routes touch the in-memory ``ApprovalQueue`` which only exists in
+    the main server process.
+    """
+    from pydantic import ValidationError
+
+    from .policy.model import Policy
+    from .policy.persistence import load_policy, save_policy
+
+    async def get_config(_: Request) -> JSONResponse:
+        return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+
+    async def put_config(request: Request) -> JSONResponse:
+        try:
+            policy = Policy.model_validate(await request.json())
+        except (ValidationError, ValueError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        save_policy(data_dir, policy)
+        return JSONResponse({"saved": True})
+
+    async def unavailable(_: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "error": (
+                    "Live approvals are only available from the main settings "
+                    "UI, not the stdio sidecar."
+                )
+            },
+            status_code=503,
+        )
+
+    return {
+        "policy_get_config": get_config,
+        "policy_put_config": put_config,
+        "policy_get_pending": unavailable,
+        "policy_post_approve": unavailable,
+        "policy_post_deny": unavailable,
+    }
 
 
 def build_settings_handlers(
@@ -2543,7 +2783,7 @@ def build_settings_handlers(
             }
         )
 
-    return {
+    handlers: dict[str, Any] = {
         "root_page": _root_page,
         "settings_page": _settings_page,
         "get_tools": _get_tools,
@@ -2561,6 +2801,30 @@ def build_settings_handlers(
         "get_backup_config": _get_backup_config,
         "save_backup_config": _save_backup_config,
     }
+
+    # Per-tool approval policy (issue #966). The main server attaches an
+    # ApprovalQueue to the server object once PolicyMiddleware is wired
+    # in (Task 5.2). Only the main server can serve the live
+    # pending/approve/deny endpoints because the queue is in-memory; the
+    # sidecar (or a main server without the queue attribute yet) falls
+    # back to stub handlers that serve config GET/PUT and return 503 for
+    # live approval routes.
+    approval_queue = (
+        getattr(server, "approval_queue", None) if server is not None else None
+    )
+    if not is_sidecar and approval_queue is not None:
+        from .policy.handlers import build_policy_handlers
+
+        handlers.update(
+            build_policy_handlers(
+                data_dir=get_data_dir(),
+                queue=approval_queue,
+            )
+        )
+    else:
+        handlers.update(_build_stub_policy_handlers(data_dir=get_data_dir()))
+
+    return handlers
 
 
 def register_settings_routes(
@@ -2649,6 +2913,22 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
             handlers["save_backup_config"]
         )
+        # Per-tool approval policy endpoints (#966)
+        mcp.custom_route("/api/policy/config", methods=["GET"])(
+            handlers["policy_get_config"]
+        )
+        mcp.custom_route("/api/policy/config", methods=["PUT"])(
+            handlers["policy_put_config"]
+        )
+        mcp.custom_route("/api/policy/pending", methods=["GET"])(
+            handlers["policy_get_pending"]
+        )
+        mcp.custom_route("/api/policy/approve", methods=["POST"])(
+            handlers["policy_post_approve"]
+        )
+        mcp.custom_route("/api/policy/deny", methods=["POST"])(
+            handlers["policy_post_deny"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -2701,3 +2981,19 @@ def register_settings_routes(
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
         )(handlers["save_backup_config"])
+        # Per-tool approval policy endpoints (#966)
+        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["GET"])(
+            handlers["policy_get_config"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["PUT"])(
+            handlers["policy_put_config"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/pending", methods=["GET"])(
+            handlers["policy_get_pending"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/approve", methods=["POST"])(
+            handlers["policy_post_approve"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/deny", methods=["POST"])(
+            handlers["policy_post_deny"]
+        )
