@@ -19,6 +19,7 @@ from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
+    get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
@@ -421,32 +422,33 @@ class CalendarTools:
             # Delete is exposed exclusively via the WebSocket command
             # ``calendar/event/delete`` (see HA Core
             # ``homeassistant/components/calendar/__init__.py``).
-            ws_message: dict[str, Any] = {
-                "type": "calendar/event/delete",
-                "entity_id": entity_id,
-                "uid": uid,
-            }
+            ws_kwargs: dict[str, Any] = {"entity_id": entity_id, "uid": uid}
             if recurrence_id:
-                ws_message["recurrence_id"] = recurrence_id
+                ws_kwargs["recurrence_id"] = recurrence_id
             if recurrence_range:
-                ws_message["recurrence_range"] = recurrence_range
+                ws_kwargs["recurrence_range"] = recurrence_range
 
-            result = await self._client.send_websocket_message(ws_message)
-
-            if not result.get("success"):
-                ws_error = result.get("error", "Failed to delete calendar event")
+            ws_client, conn_error = await get_connected_ws_client(
+                self._client.base_url,
+                self._client.token,
+                verify_ssl=self._client.verify_ssl,
+            )
+            if conn_error or ws_client is None:
                 raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        str(ws_error),
+                    conn_error
+                    or create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Failed to connect to Home Assistant WebSocket",
                         context={"entity_id": entity_id, "uid": uid},
-                        suggestions=[
-                            f"Verify event with UID '{uid}' exists in {entity_id}",
-                            "Use ha_config_get_calendar_events() to find the correct event UID",
-                            "Some calendar integrations may not support event deletion",
-                        ],
                     )
                 )
+
+            try:
+                result = await ws_client.send_command(
+                    "calendar/event/delete", **ws_kwargs
+                )
+            finally:
+                await ws_client.disconnect()
 
             return {
                 "success": True,
