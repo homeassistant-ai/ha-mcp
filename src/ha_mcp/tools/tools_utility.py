@@ -808,8 +808,7 @@ class UtilityTools:
                 "Reinstall the add-on if the token may have rotated",
             ]
         return [
-            "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived "
-            "Access Token (Settings → Profile → Long-Lived Access Tokens)",
+            "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived Access Token (Settings → Profile → Long-Lived Access Tokens)",
             "Re-create the LLAT if it has expired or been revoked",
         ]
 
