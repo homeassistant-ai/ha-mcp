@@ -272,6 +272,23 @@ Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### enable_per_tool_approval
+
+**Default:** `false`
+
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent receives an approval URL and the call is held until the user clicks **Approve** in the **Policies** tab of the web UI. Per-tool rules — with optional argument predicates — are configured from the same Policies tab.
+
+**When to enable:**
+- Shared installations where you want a human in the loop for destructive or security-relevant operations
+- Locks, alarms, and other entities where an LLM mistake has real-world consequences
+- Whenever you want a hard audit trail of which tool calls were explicitly allowed
+
+**When to leave disabled (default):**
+- Single-user setups where you're comfortable with the LLM acting autonomously
+- You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
+
+The policy engine is in beta. Off by default. Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml

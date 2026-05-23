@@ -28,6 +28,15 @@ configuration:
       OpenAI-compatible models) or with smaller context windows. Tools
       are found via ha_search_tools and executed via categorized proxies
       (read/write/delete). Requires restart to take effect.
+  enable_per_tool_approval:
+    name: Enable per-tool approval (advanced, beta)
+    description: >-
+      Gate high-stakes tool calls (lock/alarm control, automation writes,
+      etc.) behind user approval. When a guarded tool is called, the agent
+      receives an approval URL; the user must click Approve in the
+      Policies tab of the web UI before the call proceeds. Per-tool rules
+      with optional argument predicates are configured in the Policies
+      tab. Off by default. Requires restart to take effect.
   enable_yaml_config_editing:
     name: Enable YAML config editing (beta)
     description: >-

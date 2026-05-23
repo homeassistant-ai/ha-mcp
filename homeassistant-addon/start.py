@@ -219,6 +219,7 @@ def main() -> int:
     backup_hint = "normal"  # default
     custom_secret_path = ""  # default
     enable_tool_search = False  # default
+    enable_per_tool_approval = False  # default
     enable_yaml_config_editing = False  # default
     enable_filesystem_tools = False  # default
     enable_custom_component_integration = False  # default
@@ -244,6 +245,12 @@ def main() -> int:
             raw_tool_search = config.get("enable_tool_search", False)
             enable_tool_search = (
                 raw_tool_search if isinstance(raw_tool_search, bool) else False
+            )
+            raw_per_tool_approval = config.get("enable_per_tool_approval", False)
+            enable_per_tool_approval = (
+                raw_per_tool_approval
+                if isinstance(raw_per_tool_approval, bool)
+                else False
             )
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = (
@@ -322,6 +329,7 @@ def main() -> int:
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
     os.environ["BACKUP_HINT"] = backup_hint
     os.environ["ENABLE_TOOL_SEARCH"] = str(enable_tool_search).lower()
+    os.environ["ENABLE_PER_TOOL_APPROVAL"] = str(enable_per_tool_approval).lower()
     os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
     os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
     os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
