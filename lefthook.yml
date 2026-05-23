@@ -7,6 +7,10 @@ pre-commit:
             glob: "**/*.py"
             run: uv run ruff check {staged_files} --fix
             stage_fixed: true
+          - name: ruff-format
+            glob: "**/*.py"
+            run: uv run ruff format {staged_files}
+            stage_fixed: true
           - name: ast-grep
             glob: "src/ha_mcp/tools/**/*.py"
             run: uv run ast-grep scan

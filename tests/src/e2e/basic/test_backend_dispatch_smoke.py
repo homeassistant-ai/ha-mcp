@@ -58,14 +58,16 @@ _COLLECTION_FLOOR = 850
 
 # Per-lane ceilings for the count of skip-marked tests. Set 5-9 above
 # current per-lane skip counts (as of 2026-05-22: container=46,
-# haos=14, haos_inaddon=22). A buffer of 5-9 absorbs PRs that
-# legitimately add a few new marker-gated tests, but catches a
-# mass-skip incident like PR #1375 (14 tests started skipping silently
-# because a marker was applied too broadly).
+# haos=14, haos_inaddon=39 — the latter bumped by #1403's 17 new
+# auto-backup tests that skip on haos_inaddon via @external_only).
+# A buffer of 5-9 absorbs PRs that legitimately add a few new
+# marker-gated tests, but catches a mass-skip incident like PR #1375
+# (14 tests started skipping silently because a marker was applied
+# too broadly).
 _SKIP_CEILING_PER_LANE = {
     "container": 55,
     "haos": 20,
-    "haos_inaddon": 30,
+    "haos_inaddon": 45,
 }
 
 

@@ -1,23 +1,20 @@
 ---
 configuration:
   backup_hint:
-    name: Backup hint
-    description: Controls when backup reminders are shown before risky operations.
+    name: Full-HA snapshot suggestion level (LLM-facing)
+    description: |-
+      Tunes the wording of the hint the LLM sees in the
+      `ha_manage_backup(scope='snapshot')` tool description for when to
+      suggest a full Home Assistant tarball backup before risky operations
+      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
+      sentence.
+
+      For per-edit automatic snapshots of automations / scripts / helpers /
+      etc., use the separate **Enable auto-backup of edits** toggle below.
   secret_path:
     name: Secret path override
     description: |
       Optional custom HTTP path for the MCP server. Leave empty to use the auto-generated secure path.
-  enable_skills:
-    name: Enable skills
-    description: >-
-      Serve bundled Home Assistant best-practice skills as MCP resources.
-      Skills provide automation patterns, helper selection guides, and device
-      control best practices. Clients must explicitly request them.
-  enable_skills_as_tools:
-    name: Enable skills as tools
-    description: >-
-      Expose skills via list_resources/read_resource tools for MCP clients
-      that don't support resources natively. Adds 3 extra tools.
   enable_tool_search:
     name: Enable tool search
     description: >-
@@ -31,6 +28,30 @@ configuration:
       OpenAI-compatible models) or with smaller context windows. Tools
       are found via ha_search_tools and executed via categorized proxies
       (read/write/delete). Requires restart to take effect.
+  enable_auto_backup:
+    name: Enable auto-backup of edits
+    description: >-
+      Captures a per-entity snapshot before every wrapped write/destructive
+      MCP tool call (automation, script, scene, helper, dashboard, label,
+      category, group, zone, area, calendar, todo, entity, integration, and
+      sibling remove/delete tools). Snapshots are saved as YAML files under
+      /data/ha_mcp_backups/ (override via HAMCP_BACKUP_DIR) and listed,
+      restored, or deleted via the Backups tab in the web settings UI or
+      via ha_manage_backup(scope='edits', ...). Best-effort — failures log
+      a WARNING but never block the underlying write. On by default;
+      uncheck to opt out. Requires restart to take effect.
+  auto_backup_throttle_minutes:
+    name: Auto-backup throttle (minutes)
+    description: >-
+      Per-entity throttle window. 0 (default) captures a snapshot on every
+      wrapped write. N>0 captures at most one snapshot per N minutes per
+      entity. Range 0–1440.
+  auto_backup_retain_per_entity:
+    name: Auto-backup retention (per entity)
+    description: >-
+      Maximum number of snapshots kept per entity. Older snapshots beyond
+      this cap are rotated out on each successful capture. Default 100,
+      range 1–10000.
   verify_ssl:
     name: Verify TLS certificate
     description: >-

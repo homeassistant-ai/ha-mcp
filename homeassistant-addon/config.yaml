@@ -32,11 +32,17 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   backup_hint: "normal"
   enable_tool_search: false
+  enable_auto_backup: true
+  auto_backup_throttle_minutes: 0
+  auto_backup_retain_per_entity: 100
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_tool_search: bool?
+  enable_auto_backup: bool?
+  auto_backup_throttle_minutes: int(0,1440)?
+  auto_backup_retain_per_entity: int(1,10000)?
   verify_ssl: bool?
   advanced_debug_logging: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)

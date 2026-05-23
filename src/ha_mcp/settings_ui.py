@@ -9,6 +9,7 @@ Works across all installation methods (add-on, Docker, standalone).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -21,7 +22,14 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 from ._version import is_running_in_addon
+from .backup_manager import get_backup_manager
 from .client.supervisor_client import make_supervisor_httpx_client
+from .config import (
+    BACKUP_OVERRIDE_FIELDS,
+    _reset_global_settings,
+    get_backup_setting_origin,
+    get_global_settings,
+)
 from .errors import ErrorCode, create_error_response
 from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.data_paths import get_data_dir
@@ -256,6 +264,33 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {}
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` to ``path`` atomically.
+
+    Writes to ``<path>.tmp`` first and ``os.replace``s into place so a
+    crash or out-of-space mid-write cannot leave a partial/empty file —
+    callers that read the file back (``load_tool_config`` /
+    ``_load_backup_settings_override``) would otherwise treat a
+    half-written file as "no config" and silently fall back to defaults
+    (e.g. re-enabling auto-backup or re-enabling tools the user
+    disabled). Mirrors the pattern ``BackupManager._write_snapshot``
+    already uses for snapshot files.
+
+    Raises OSError on filesystem failure — same surface as the previous
+    ``path.write_text`` so caller try/except shapes don't need updating.
+    On failure, the ``.tmp`` file is cleaned up so a previous partial
+    write does not accumulate next to the real file.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(str(tmp), str(path))
+    except OSError:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            tmp.unlink()
+        raise
+
+
 def save_tool_config(config: dict[str, Any]) -> bool:
     """Persist tool config to disk.
 
@@ -267,11 +302,66 @@ def save_tool_config(config: dict[str, Any]) -> bool:
     """
     path = _get_config_path()
     try:
-        path.write_text(json.dumps(config, indent=2))
+        _atomic_write_json(path, config)
     except OSError:
         logger.exception("Failed to save tool config to %s", path)
         return False
     logger.info("Saved tool config to %s", path)
+    return True
+
+
+def _get_backup_settings_override_path() -> Path:
+    """Return path to the auto-backup settings override file.
+
+    Sits next to ``tool_config.json`` in the same data dir. Web UI edits
+    in standalone (non-addon) mode persist here; ``get_global_settings``
+    reads the file on the next call after ``_reset_global_settings``.
+    """
+    return get_data_dir() / "backup_settings.json"
+
+
+def _load_backup_settings_override() -> dict[str, Any]:
+    """Read the auto-backup override file, returning {} when absent/corrupt.
+
+    Best-effort by design: a corrupt file logs a warning and is treated
+    as empty so the Settings code path never breaks because of a
+    malformed UI write.
+    """
+    path = _get_backup_settings_override_path()
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        logger.warning(
+            "Cannot read backup settings override at %s", path, exc_info=True
+        )
+        return {}
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Backup settings override at %s is not valid JSON; ignoring.", path
+        )
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_backup_settings_override(data: dict[str, Any]) -> bool:
+    """Persist the auto-backup override file. Returns True on success.
+
+    Uses ``_atomic_write_json`` so a crash mid-write leaves the previous
+    file (or no file) intact rather than a half-written one — the latter
+    would parse as JSON-decode-fail in ``_load_backup_settings_override``
+    and silently restore defaults (re-enabling auto-backup when the user
+    had opted out).
+    """
+    path = _get_backup_settings_override_path()
+    try:
+        _atomic_write_json(path, data)
+    except OSError:
+        logger.exception("Failed to save backup settings override to %s", path)
+        return False
     return True
 
 
@@ -517,6 +607,66 @@ _SETTINGS_HTML = (
   .tab.active { color: var(--text); border-bottom-color: var(--accent); }
   .panel { display: none; }
   .panel.active { display: block; }
+  /* Backups */
+  .backup-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .backup-filters input { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.85rem; }
+  .backup-filters input:focus { border-color: var(--accent); outline: none; }
+  .backup-filters button { padding: 8px 12px; border-radius: 8px; border: none;
+    background: var(--surface); color: var(--text); font-size: 0.85rem; cursor: pointer; }
+  .backup-filters button:hover { background: var(--surface-hover); }
+  .backup-filters button.danger { background: #3a1a1a; color: #ff6b6b; }
+  .backup-state { background: var(--surface); border-radius: 10px; padding: 10px 16px; margin-bottom: 12px;
+    font-size: 0.85rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
+  .backup-state span { display: inline-block; }
+  .backup-state strong { color: var(--text); }
+  .backup-row { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
+  .backup-row-info { flex: 1; min-width: 0; }
+  .backup-row-name { font-size: 0.9rem; font-weight: 500; word-break: break-all; }
+  .backup-row-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+  .backup-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .backup-row-actions button { padding: 6px 10px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.8rem; cursor: pointer; }
+  .backup-row-actions button:hover { background: var(--accent-hover); }
+  .backup-row-actions button.danger { background: var(--danger); }
+  .backup-row-actions button.secondary { background: var(--surface-hover); color: var(--text); }
+  .backup-empty { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 0.9rem;
+    background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; }
+  .backup-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px; }
+  .backup-config-form { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .backup-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .backup-field-label { min-width: 200px; font-size: 0.9rem; font-weight: 500; }
+  .backup-field-control input[type="number"] { width: 120px; padding: 6px 10px;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .backup-field-control input[type="number"]:disabled { opacity: 0.55; cursor: not-allowed; }
+  .backup-field-locked { background: #2a2520; color: #f4b860; font-size: 0.78rem;
+    padding: 2px 8px; border-radius: 999px; }
+  .backup-field-help { font-size: 0.75rem; color: var(--text-secondary); flex-basis: 100%; margin-left: 200px; }
+  .backup-config-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid var(--border); }
+  .backup-config-actions button { padding: 8px 16px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
+  .backup-config-actions button:hover { background: var(--accent-hover); }
+  .backup-config-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .modal-backdrop.show { display: flex; }
+  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; }
+  .modal-header { padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .modal-title { font-size: 1.05rem; font-weight: 600; word-break: break-all; }
+  .modal-close { background: transparent; border: none; color: var(--text-secondary);
+    font-size: 1.4rem; cursor: pointer; padding: 0 8px; }
+  .modal-body { flex: 1; overflow: auto; padding: 16px; }
+  .modal-body pre { background: var(--surface); padding: 12px; border-radius: 8px;
+    font-size: 0.8rem; overflow: auto; line-height: 1.4; }
+  .diff-add { color: #6bff6b; }
+  .diff-rem { color: #ff6b6b; }
+  .diff-hdr { color: #6cb4ff; }
   /* Server-settings rows (#863). One row per FEATURE_FLAG_FIELDS
      entry. Locked rows (env / addon origin) get the dim treatment +
      a small inline note pointing at the env var to adjust. */
@@ -549,6 +699,7 @@ _SETTINGS_HTML = (
 <div class="tabs">
   <button class="tab active" data-panel="tools">Tools</button>
   <button class="tab" data-panel="server">Server Settings</button>
+  <button class="tab" data-panel="backups">Backups</button>
 </div>
 <div class="panel active" id="panel-tools">
   <div class="readonly-notice">
@@ -588,6 +739,32 @@ _SETTINGS_HTML = (
     <button class="danger-btn" id="stopSidecarBtn"
             title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
     >Permanently disable settings server</button>
+  </div>
+</div>
+<div class="panel" id="panel-backups">
+  <div class="backup-state" id="backupState">Loading backup state…</div>
+  <div class="backup-config" id="backupConfig">
+    <div class="backup-config-form" id="backupConfigForm"></div>
+    <div class="backup-config-actions" id="backupConfigActions" style="display:none">
+      <button id="backupConfigSave">Save settings</button>
+      <span id="backupConfigStatus" class="status"></span>
+    </div>
+  </div>
+  <div class="backup-filters">
+    <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)">
+    <input type="text" id="backupEntity" placeholder="Entity ID">
+    <button id="backupRefresh">Refresh</button>
+    <button id="backupBulkDelete" class="danger">Bulk delete matching…</button>
+  </div>
+  <div id="backupList"></div>
+</div>
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle"></span>
+      <button class="modal-close" id="modalClose">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
   </div>
 </div>
 <script>
@@ -1001,6 +1178,273 @@ document.getElementById('search').addEventListener('input', (e) => {
 });
 
 document.getElementById('restartBtn').addEventListener('click', restartAddon);
+
+// ===== Backups tab =====
+let backupEntries = [];
+let backupConfigFields = [];
+
+const BACKUP_FIELD_LABELS = {
+  enable_auto_backup: {
+    label: 'Auto-backup edits',
+    help: 'Capture a snapshot before every wrapped write/destructive tool call.',
+  },
+  auto_backup_throttle_minutes: {
+    label: 'Throttle (minutes)',
+    help: 'Per-entity throttle. 0 = backup every write; N>0 = at most one per N minutes per entity. Range 0–1440.',
+  },
+  auto_backup_retain_per_entity: {
+    label: 'Retain per entity',
+    help: 'Maximum snapshots kept per entity (1–10000). Older ones rotate out.',
+  },
+};
+
+const BACKUP_ORIGIN_LABELS = {
+  addon: 'Synced to Supervisor — save will restart the add-on.',
+  env: null,  // banner generated dynamically with the env var name
+  file: 'Persisted locally; takes effect immediately.',
+  default: 'Using default; first save creates a local override file.',
+};
+
+async function loadBackupConfig() {
+  const formEl = document.getElementById('backupConfigForm');
+  const actionsEl = document.getElementById('backupConfigActions');
+  try {
+    const resp = await fetch('./api/settings/backup-config');
+    if (!resp.ok) {
+      formEl.innerHTML = '<div class="backup-empty">Could not load backup settings.</div>';
+      actionsEl.style.display = 'none';
+      return;
+    }
+    const data = await resp.json();
+    backupConfigFields = data.fields || [];
+  } catch (_e) {
+    formEl.innerHTML = '<div class="backup-empty">Backup settings unavailable.</div>';
+    actionsEl.style.display = 'none';
+    return;
+  }
+  renderBackupConfig();
+  actionsEl.style.display = backupConfigFields.some(f => f.editable) ? '' : 'none';
+}
+
+function renderBackupConfig() {
+  const formEl = document.getElementById('backupConfigForm');
+  formEl.innerHTML = '';
+  backupConfigFields.forEach(f => {
+    const meta = BACKUP_FIELD_LABELS[f.field] || { label: f.field, help: '' };
+    const row = document.createElement('div');
+    row.className = 'backup-field';
+    let controlHtml;
+    if (typeof f.value === 'boolean') {
+      controlHtml = `<input type="checkbox" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else {
+      const min = f.field === 'auto_backup_throttle_minutes' ? 0 : 1;
+      const max = f.field === 'auto_backup_throttle_minutes' ? 1440 : 10000;
+      controlHtml = `<input type="number" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+    }
+    let originMsg;
+    if (f.origin === 'env') {
+      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+    } else {
+      originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
+    }
+    const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">env-locked</span>`;
+    row.innerHTML =
+      `<span class="backup-field-label">${escapeHtml(meta.label)}</span>` +
+      `<span class="backup-field-control">${controlHtml}</span>` +
+      lockedBadge +
+      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? ' — ' + originMsg : ''}</span>`;
+    formEl.appendChild(row);
+  });
+}
+
+async function saveBackupConfig() {
+  const btn = document.getElementById('backupConfigSave');
+  const statusEl = document.getElementById('backupConfigStatus');
+  const payload = {};
+  backupConfigFields.forEach(f => {
+    if (!f.editable) return;
+    const input = document.querySelector(`#backupConfigForm input[data-field="${f.field}"]`);
+    if (!input) return;
+    if (input.type === 'checkbox') {
+      payload[f.field] = input.checked;
+    } else {
+      const n = parseInt(input.value, 10);
+      if (!isNaN(n)) payload[f.field] = n;
+    }
+  });
+  if (Object.keys(payload).length === 0) {
+    statusEl.textContent = 'Nothing editable.';
+    return;
+  }
+  btn.disabled = true;
+  statusEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch('./api/settings/backup-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      btn.disabled = false;
+      let msg = 'Save failed';
+      if (data && data.error) {
+        if (typeof data.error === 'string') msg = data.error;
+        else if (data.error.message) msg = data.error.message;
+      }
+      statusEl.textContent = msg;
+      return;
+    }
+    if (data.restarting) {
+      statusEl.textContent = 'Saved — addon is restarting. Reload in ~30s.';
+    } else {
+      statusEl.textContent = 'Saved.';
+      btn.disabled = false;
+      // Refresh display so origins update (default → file, etc.).
+      loadBackupConfig();
+      loadBackups();
+    }
+  } catch (err) {
+    btn.disabled = false;
+    statusEl.textContent = 'Network error: ' + String(err);
+  }
+}
+
+async function loadBackups() {
+  const params = new URLSearchParams();
+  const d = document.getElementById('backupDomain').value.trim();
+  const e = document.getElementById('backupEntity').value.trim();
+  if (d) params.set('domain', d);
+  if (e) params.set('entity_id', e);
+  const stateEl = document.getElementById('backupState');
+  const listEl = document.getElementById('backupList');
+  try {
+    const resp = await fetch('./api/settings/backups?' + params.toString());
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      stateEl.innerHTML = '<span class="diff-rem">Error loading backups</span>';
+      listEl.innerHTML = '';
+      return;
+    }
+    backupEntries = data.backups || [];
+    stateEl.innerHTML =
+      `<span>Status: <strong>${data.enabled ? 'enabled' : 'disabled'}</strong></span>` +
+      `<span>Throttle: <strong>${data.throttle_minutes} min</strong></span>` +
+      `<span>Retain per entity: <strong>${data.retain_per_entity}</strong></span>` +
+      `<span>Directory: <strong>${escapeHtml(data.backup_dir)}</strong></span>` +
+      `<span>Total: <strong>${data.count}</strong></span>`;
+    renderBackups();
+  } catch (err) {
+    stateEl.innerHTML = '<span class="diff-rem">Network error: ' + escapeHtml(String(err)) + '</span>';
+    listEl.innerHTML = '';
+  }
+}
+
+function renderBackups() {
+  const listEl = document.getElementById('backupList');
+  if (!backupEntries.length) {
+    listEl.innerHTML = '<div class="backup-empty">No backups yet. Enable auto-backup in the add-on config and edit an entity to create one.</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  backupEntries.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'backup-row';
+    const ts = b.timestamp || '';
+    const tsFmt = ts.length === 15
+      ? ts.slice(0,4)+'-'+ts.slice(4,6)+'-'+ts.slice(6,8)+' '+ts.slice(9,11)+':'+ts.slice(11,13)+':'+ts.slice(13,15)
+      : ts;
+    row.innerHTML =
+      `<div class="backup-row-info">` +
+        `<div class="backup-row-name">${escapeHtml(b.name)}</div>` +
+        `<div class="backup-row-meta">` +
+          `<strong>${escapeHtml(b.domain)}</strong> · ` +
+          `${escapeHtml(b.entity_id)} · ${tsFmt} · ${b.size} bytes` +
+        `</div>` +
+      `</div>` +
+      `<div class="backup-row-actions">` +
+        `<button data-act="view">View</button>` +
+        `<button data-act="diff" class="secondary">Diff</button>` +
+        `<button data-act="restore">Restore</button>` +
+        `<button data-act="delete" class="danger">Delete</button>` +
+      `</div>`;
+    row.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => backupAction(btn.dataset.act, b.name));
+    });
+    listEl.appendChild(row);
+  });
+}
+
+async function backupAction(act, name) {
+  if (act === 'view') {
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name));
+    const data = await resp.json();
+    if (!resp.ok) { alert(JSON.stringify(data)); return; }
+    showModal('View: ' + name, '<pre>' + escapeHtml(yamlStringify(data.data)) + '</pre>');
+  } else if (act === 'diff') {
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/diff');
+    const data = await resp.json();
+    if (!resp.ok) { alert(JSON.stringify(data)); return; }
+    const html = (data.diff || '(identical)').split('\\n').map(line => {
+      let cls = '';
+      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) cls = 'diff-hdr';
+      else if (line.startsWith('+')) cls = 'diff-add';
+      else if (line.startsWith('-')) cls = 'diff-rem';
+      return `<span class="${cls}">${escapeHtml(line)}</span>`;
+    }).join('\\n');
+    showModal('Diff: ' + name, '<pre>' + html + '</pre>');
+  } else if (act === 'restore') {
+    if (!confirm('Restore ' + name + '?\\n\\nThis will overwrite the current entity state. A safety backup of the current state is taken first.')) return;
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) { alert('Restore failed: ' + JSON.stringify(data)); return; }
+    alert('Restored. Safety backup: ' + (data.data && data.data.safety_backup ? data.data.safety_backup : '(none)'));
+    loadBackups();
+  } else if (act === 'delete') {
+    if (!confirm('Delete ' + name + '? This cannot be undone.')) return;
+    const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name), {method: 'DELETE'});
+    if (!resp.ok) { const d = await resp.json(); alert('Delete failed: ' + JSON.stringify(d)); return; }
+    loadBackups();
+  }
+}
+
+async function bulkDeleteBackups() {
+  const d = document.getElementById('backupDomain').value.trim();
+  const e = document.getElementById('backupEntity').value.trim();
+  const days = prompt('Delete backups older than N days (leave blank to use current filters only):', '');
+  const params = new URLSearchParams();
+  if (d) params.set('domain', d);
+  if (e) params.set('entity_id', e);
+  if (days) params.set('older_than_days', days);
+  if (!params.toString()) { alert('Set at least one filter (Domain, Entity, or age in days).'); return; }
+  if (!confirm('Delete all backups matching: ' + params.toString() + '?')) return;
+  const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
+  const data = await resp.json();
+  if (!resp.ok) { alert('Bulk delete failed: ' + JSON.stringify(data)); return; }
+  alert('Deleted ' + (data.count || 0) + ' backup(s)');
+  loadBackups();
+}
+
+function showModal(title, html) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalBackdrop').classList.add('show');
+}
+function closeModal() { document.getElementById('modalBackdrop').classList.remove('show'); }
+
+// Pretty-print the snapshot envelope for the view modal. The server
+// returns the parsed YAML as JSON; indented JSON is the simplest
+// readable form for the modal without pulling in a JS YAML library.
+function yamlStringify(obj) { return JSON.stringify(obj, null, 2); }
+
+document.getElementById('backupRefresh').addEventListener('click', loadBackups);
+document.getElementById('backupBulkDelete').addEventListener('click', bulkDeleteBackups);
+document.getElementById('backupConfigSave').addEventListener('click', saveBackupConfig);
+document.getElementById('modalClose').addEventListener('click', closeModal);
+document.getElementById('modalBackdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'modalBackdrop') closeModal();
+});
+
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
 
 // Feature-flag metadata (display labels + help text). Keyed by the
@@ -1181,6 +1625,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.panel').forEach(p =>
       p.classList.toggle('active', p.id === 'panel-' + target)
     );
+    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
   });
 });
 
@@ -1486,7 +1931,6 @@ def build_settings_handlers(
             _FEATURE_FLAG_INT_BOUNDS,
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
             get_feature_flag_origin,
         )
         from .utils.data_paths import get_data_dir
@@ -1679,6 +2123,426 @@ def build_settings_handlers(
         _reset_global_settings()
         return JSONResponse({"success": True})
 
+    # ---- Auto-backup routes (#1288) ----
+
+    def _backup_mgr() -> Any:
+        settings = get_global_settings()
+        client = getattr(server, "client", None) or getattr(server, "_client", None)
+        return get_backup_manager(client, settings) if client is not None else None
+
+    def _bad_request(
+        message: str,
+        *,
+        code: ErrorCode = ErrorCode.VALIDATION_INVALID_PARAMETER,
+        status: int = 400,
+    ) -> JSONResponse:
+        return JSONResponse(create_error_response(code, message), status_code=status)
+
+    def _not_found(name: str) -> JSONResponse:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND, f"Backup {name!r} not found"
+            ),
+            status_code=404,
+        )
+
+    async def _list_backups(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        params = request.query_params
+        try:
+            limit = int(params.get("limit", "500"))
+        except ValueError:
+            return _bad_request("'limit' must be an integer")
+        # Offload sync directory I/O to keep the request handler async-clean.
+        entries = await asyncio.to_thread(
+            mgr.list_snapshots,
+            domain=params.get("domain") or None,
+            entity_id=params.get("entity_id") or None,
+            limit=max(1, min(10_000, limit)),
+        )
+        settings = get_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "backups": entries,
+                "count": len(entries),
+                "backup_dir": str(mgr.backup_dir),
+                "enabled": mgr.enabled,
+                "throttle_minutes": settings.auto_backup_throttle_minutes,
+                "retain_per_entity": settings.auto_backup_retain_per_entity,
+            }
+        )
+
+    async def _view_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            data = await asyncio.to_thread(mgr.read_snapshot, name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "data": data})
+
+    async def _diff_backup(request: Request) -> JSONResponse:
+        import difflib
+
+        import yaml  # type: ignore[import-untyped]
+
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            snapshot = await asyncio.to_thread(mgr.read_snapshot, name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        handler = mgr.handler_for(snapshot["domain"])
+        if handler is None:
+            return _bad_request(
+                f"No handler for domain {snapshot['domain']!r}; cannot diff",
+                code=ErrorCode.RESOURCE_NOT_FOUND,
+                status=404,
+            )
+        client = getattr(server, "client", None) or getattr(server, "_client", None)
+        # Narrow to transport / HA-API / FS errors so programming bugs
+        # propagate to the request handler instead of decorating the diff
+        # output with a "_error" sentinel masquerading as entity state.
+        from .backup_manager import _CAPTURE_TRANSIENT_ERRORS
+
+        try:
+            current = await handler.fetch(client, snapshot["entity_id"])
+        except _CAPTURE_TRANSIENT_ERRORS as err:
+            current = {"_error": f"{type(err).__name__}: {err}"}
+        backup_yaml = yaml.safe_dump(
+            snapshot.get("config"), default_flow_style=False, sort_keys=True
+        ).splitlines()
+        current_yaml = yaml.safe_dump(
+            current, default_flow_style=False, sort_keys=True
+        ).splitlines()
+        diff = list(
+            difflib.unified_diff(
+                backup_yaml,
+                current_yaml,
+                fromfile=f"backup:{name}",
+                tofile=f"current:{snapshot['entity_id']}",
+                lineterm="",
+            )
+        )
+        return JSONResponse(
+            {
+                "success": True,
+                "diff": "\n".join(diff),
+                "backup_present": current is not None
+                and not (isinstance(current, dict) and "_error" in current),
+            }
+        )
+
+    async def _restore_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            result = await mgr.restore_snapshot(name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except (ValueError, LookupError) as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "data": result})
+
+    async def _delete_backup(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        name = request.path_params.get("name", "")
+        try:
+            await asyncio.to_thread(mgr.delete_snapshot, name)
+        except FileNotFoundError:
+            return _not_found(name)
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse({"success": True, "deleted": [name]})
+
+    async def _delete_backups_bulk(request: Request) -> JSONResponse:
+        mgr = _backup_mgr()
+        if mgr is None:
+            return _bad_request("Backup manager unavailable")
+        params = request.query_params
+        older = params.get("older_than_days")
+        try:
+            older_int = int(older) if older is not None else None
+        except ValueError:
+            return _bad_request("'older_than_days' must be an integer")
+        if (
+            params.get("domain") is None
+            and params.get("entity_id") is None
+            and older_int is None
+        ):
+            return _bad_request(
+                "Bulk delete requires at least one filter "
+                "(domain, entity_id, older_than_days)"
+            )
+        try:
+            bulk = await asyncio.to_thread(
+                mgr.delete_bulk,
+                domain=params.get("domain") or None,
+                entity_id=params.get("entity_id") or None,
+                older_than_days=older_int,
+            )
+        except ValueError as err:
+            return _bad_request(str(err))
+        return JSONResponse(
+            {
+                "success": True,
+                "deleted": bulk["deleted"],
+                "failed": bulk["failed"],
+                "count": len(bulk["deleted"]),
+                "failed_count": len(bulk["failed"]),
+            }
+        )
+
+    async def _get_backup_config(_: Request) -> JSONResponse:
+        """Return live auto-backup config + per-field origin + editable flag.
+
+        Per-field origin/editable matrix (see ``config.get_backup_setting_origin``):
+        - ``addon``: editable — POST routes through Supervisor.
+        - ``env``: read-only — env var wins; user must unset to edit.
+        - ``file``/``default``: editable — POST writes the override file.
+        """
+        settings = get_global_settings()
+        addon_mode = is_running_in_addon()
+        fields = []
+        for field_name, env_name, _ftype in BACKUP_OVERRIDE_FIELDS:
+            origin = get_backup_setting_origin(env_name)
+            editable = origin in ("addon", "file", "default")
+            fields.append(
+                {
+                    "field": field_name,
+                    "env_var": env_name,
+                    "value": getattr(settings, field_name),
+                    "origin": origin,
+                    "editable": editable,
+                }
+            )
+        return JSONResponse(
+            {
+                "success": True,
+                "is_addon": addon_mode,
+                "fields": fields,
+            }
+        )
+
+    def _validate_backup_payload(payload: Any) -> tuple[dict[str, Any], str | None]:
+        """Coerce and bounds-check the POST body. Returns (clean, error_msg)."""
+        if not isinstance(payload, dict):
+            return {}, "Body must be a JSON object"
+        clean: dict[str, Any] = {}
+        for field_name, _env_name, ftype in BACKUP_OVERRIDE_FIELDS:
+            if field_name not in payload:
+                continue
+            raw = payload[field_name]
+            if ftype is bool:
+                if isinstance(raw, bool):
+                    value: Any = raw
+                elif isinstance(raw, int):
+                    value = bool(raw)
+                elif isinstance(raw, str):
+                    s = raw.strip().lower()
+                    if s in ("true", "1", "yes", "on"):
+                        value = True
+                    elif s in ("false", "0", "no", "off"):
+                        value = False
+                    else:
+                        return {}, f"Invalid boolean for {field_name}: {raw!r}"
+                else:
+                    return {}, f"Invalid value for {field_name}: {raw!r}"
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int | str):
+                    return {}, f"Invalid integer for {field_name}: {raw!r}"
+                try:
+                    value = int(raw)
+                except (ValueError, TypeError):
+                    return {}, f"Invalid integer for {field_name}: {raw!r}"
+                if field_name == "auto_backup_throttle_minutes" and not (
+                    0 <= value <= 1440
+                ):
+                    return {}, "auto_backup_throttle_minutes must be 0..1440"
+                if field_name == "auto_backup_retain_per_entity" and not (
+                    1 <= value <= 10_000
+                ):
+                    return {}, "auto_backup_retain_per_entity must be 1..10000"
+            else:
+                continue
+            clean[field_name] = value
+        if not clean:
+            return {}, "No editable auto-backup fields in body"
+        return clean, None
+
+    async def _save_backup_config(request: Request) -> JSONResponse:
+        """Persist auto-backup config edits and publish to the live process.
+
+        Routing:
+        - Addon mode: POST ``/addons/self/options`` to update ``config.yaml``,
+          then ``/addons/self/restart`` to make the new values take effect via
+          ``start.py``'s env-var write at next boot. The HTTP response races
+          the restart-induced socket drop; the JS treats both 200 and
+          connection-drop as success and reloads the page after ~30s.
+        - Standalone (file) mode: refuse any field that's pinned by an env
+          var (process or ``.env``) — return 409 with the offending names so
+          the UI can refresh and show the read-only banner. Editable fields
+          merge into ``<data_dir>/backup_settings.json`` and a Settings
+          cache reset publishes them immediately (no restart).
+        """
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            return _bad_request("Invalid JSON body")
+        clean, err = _validate_backup_payload(payload)
+        if err is not None:
+            return _bad_request(err)
+
+        if is_running_in_addon():
+            if not os.environ.get("SUPERVISOR_TOKEN"):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONFIG_VALIDATION_FAILED,
+                        "Supervisor token missing — cannot update add-on options",
+                    ),
+                    status_code=400,
+                )
+            if server is None:
+                # Addon mode without a live server means we're in the
+                # stdio sidecar — but addon detection should already be
+                # False there. Defensive guard for type-checker + future
+                # refactors.
+                return _bad_request(
+                    "Backup settings POST requires a live MCP server",
+                    code=ErrorCode.INTERNAL_ERROR,
+                    status=500,
+                )
+            options_body = {"options": clean}
+            try:
+                async with make_supervisor_httpx_client(
+                    timeout=10.0, verify=server.settings.verify_ssl
+                ) as sclient:
+                    opt_resp = await sclient.post(
+                        "/addons/self/options", json=options_body
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Failed to PUT /addons/self/options: %s", exc, exc_info=True
+                )
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        f"Supervisor options update failed: {exc}",
+                    ),
+                    status_code=502,
+                )
+            if opt_resp.status_code >= 400:
+                body = opt_resp.text[:400]
+                logger.warning(
+                    "Supervisor rejected options update (%s): %s",
+                    opt_resp.status_code,
+                    body,
+                )
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONFIG_VALIDATION_FAILED,
+                        f"Supervisor rejected options update: {body}",
+                    ),
+                    status_code=opt_resp.status_code,
+                )
+            # Trigger restart so start.py rewrites env vars from config.yaml.
+            # Socket may drop mid-response (self-restart) — treat that as
+            # success, same as the existing _restart_addon handler.
+            try:
+                async with make_supervisor_httpx_client(
+                    timeout=5.0, verify=server.settings.verify_ssl
+                ) as sclient:
+                    await sclient.post("/addons/self/restart")
+            except (httpx.ReadError, httpx.RemoteProtocolError):
+                pass
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Options updated but restart request failed: %s", exc, exc_info=True
+                )
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "applied": clean,
+                        "mode": "addon",
+                        "warning": (
+                            "Options saved to config.yaml but restart request "
+                            "failed; restart the add-on manually to apply."
+                        ),
+                    },
+                    status_code=200,
+                )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": clean,
+                    "mode": "addon",
+                    "restarting": True,
+                }
+            )
+
+        # Standalone (file) mode — refuse to override env-pinned fields.
+        rejected: list[dict[str, str]] = []
+        for field_name in list(clean.keys()):
+            env_name = next(
+                en for fn, en, _ in BACKUP_OVERRIDE_FIELDS if fn == field_name
+            )
+            if os.environ.get(env_name) is not None:
+                rejected.append({"field": field_name, "env_var": env_name})
+                del clean[field_name]
+        if rejected:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "env_var_pinned",
+                        "message": (
+                            "Some fields are set via environment variable and "
+                            "cannot be changed from the web UI. Unset the "
+                            "env var(s) and reload."
+                        ),
+                        "rejected": rejected,
+                    },
+                },
+                status_code=409,
+            )
+        if not clean:
+            return _bad_request("No editable auto-backup fields after env-var filter")
+        current = _load_backup_settings_override()
+        current.update(clean)
+        if not _save_backup_settings_override(current):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Failed to persist override file",
+                ),
+                status_code=500,
+            )
+        # Drop the cached Settings so the next read sees the merged value.
+        _reset_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": clean,
+                "mode": "file",
+                "restarting": False,
+            }
+        )
+
     return {
         "root_page": _root_page,
         "settings_page": _settings_page,
@@ -1688,6 +2552,14 @@ def build_settings_handlers(
         "settings_info": _settings_info,
         "get_feature_flags": _get_feature_flags,
         "save_feature_flags": _save_feature_flags,
+        "list_backups": _list_backups,
+        "view_backup": _view_backup,
+        "diff_backup": _diff_backup,
+        "restore_backup": _restore_backup,
+        "delete_backup": _delete_backup,
+        "delete_backups_bulk": _delete_backups_bulk,
+        "get_backup_config": _get_backup_config,
+        "save_backup_config": _save_backup_config,
     }
 
 
@@ -1752,6 +2624,31 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
+        # Auto-backup endpoints (#1288)
+        mcp.custom_route("/api/settings/backups", methods=["GET"])(
+            handlers["list_backups"]
+        )
+        mcp.custom_route("/api/settings/backups", methods=["DELETE"])(
+            handlers["delete_backups_bulk"]
+        )
+        mcp.custom_route("/api/settings/backups/{name}", methods=["GET"])(
+            handlers["view_backup"]
+        )
+        mcp.custom_route("/api/settings/backups/{name}/diff", methods=["GET"])(
+            handlers["diff_backup"]
+        )
+        mcp.custom_route("/api/settings/backups/{name}/restore", methods=["POST"])(
+            handlers["restore_backup"]
+        )
+        mcp.custom_route("/api/settings/backups/{name}", methods=["DELETE"])(
+            handlers["delete_backup"]
+        )
+        mcp.custom_route("/api/settings/backup-config", methods=["GET"])(
+            handlers["get_backup_config"]
+        )
+        mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
+            handlers["save_backup_config"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -1779,3 +2676,28 @@ def register_settings_routes(
         mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
+        # Auto-backup endpoints (#1288)
+        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(
+            handlers["list_backups"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["DELETE"])(
+            handlers["delete_backups_bulk"]
+        )
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["GET"]
+        )(handlers["view_backup"])
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/diff", methods=["GET"]
+        )(handlers["diff_backup"])
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/restore", methods=["POST"]
+        )(handlers["restore_backup"])
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["DELETE"]
+        )(handlers["delete_backup"])
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backup-config", methods=["GET"]
+        )(handlers["get_backup_config"])
+        mcp.custom_route(
+            f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
+        )(handlers["save_backup_config"])

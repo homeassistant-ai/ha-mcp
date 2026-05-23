@@ -81,6 +81,15 @@ class TestBuildSettingsHandlers:
             "settings_info",
             "get_feature_flags",
             "save_feature_flags",
+            # Auto-backup handlers (#1288).
+            "list_backups",
+            "view_backup",
+            "diff_backup",
+            "restore_backup",
+            "delete_backup",
+            "delete_backups_bulk",
+            "get_backup_config",
+            "save_backup_config",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(

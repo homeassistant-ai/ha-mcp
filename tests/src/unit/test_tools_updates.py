@@ -1,5 +1,9 @@
 """Unit tests for tools_updates module."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
 
 from ha_mcp.tools.tools_updates import (
     _categorize_update,
@@ -10,6 +14,7 @@ from ha_mcp.tools.tools_updates import (
     _parse_version,
     _strip_html,
     _supports_release_notes,
+    _try_raw_cdn,
 )
 
 
@@ -101,9 +106,7 @@ class TestSupportsReleaseNotes:
     def test_feature_flag_set(self):
         """Returns True when release notes feature flag (16) is set."""
         # Feature flag 16 = 0x10 = release notes support
-        result = _supports_release_notes(
-            "update.test", {"supported_features": 16}
-        )
+        result = _supports_release_notes("update.test", {"supported_features": 16})
         assert result is True
 
     def test_release_url_present(self):
@@ -134,7 +137,8 @@ class TestSupportsReleaseNotes:
         """Returns False when only other feature flags are set (not 16)."""
         # Features 1=install, 2=specific_version, 4=progress, 8=backup
         result = _supports_release_notes(
-            "update.test", {"supported_features": 15}  # 1+2+4+8
+            "update.test",
+            {"supported_features": 15},  # 1+2+4+8
         )
         assert result is False
 
@@ -166,11 +170,17 @@ class TestGetMonthlyVersionsBetween:
 
     def test_multi_month_gap(self):
         assert _get_monthly_versions_between("2025.10.3", "2026.2.1") == [
-            "2025.11.0", "2025.12.0", "2026.1.0", "2026.2.0",
+            "2025.11.0",
+            "2025.12.0",
+            "2026.1.0",
+            "2026.2.0",
         ]
 
     def test_year_boundary(self):
-        assert _get_monthly_versions_between("2025.11.0", "2026.1.0") == ["2025.12.0", "2026.1.0"]
+        assert _get_monthly_versions_between("2025.11.0", "2026.1.0") == [
+            "2025.12.0",
+            "2026.1.0",
+        ]
 
     def test_same_month_returns_empty(self):
         assert _get_monthly_versions_between("2025.11.0", "2025.11.3") == []
@@ -206,7 +216,9 @@ class TestExtractBlogContent:
         assert "Great stuff" in result and "Nav" not in result
 
     def test_fallback_to_heading(self):
-        html = '<div>Nav</div><h1>Release</h1><p>Content</p><footer class="f">F</footer>'
+        html = (
+            '<div>Nav</div><h1>Release</h1><p>Content</p><footer class="f">F</footer>'
+        )
         assert "Content" in _extract_blog_content(html)
 
     def test_strips_html_tags(self):
@@ -249,7 +261,9 @@ class TestParsePatchBreakingChanges:
     """Test _parse_patch_breaking_changes function."""
 
     def test_parses_tagged_items(self):
-        body = "- Normal fix\n- Tuya fix ([tuya docs]) (breaking-change)\n- Another fix\n"
+        body = (
+            "- Normal fix\n- Tuya fix ([tuya docs]) (breaking-change)\n- Another fix\n"
+        )
         result = _parse_patch_breaking_changes(body, "2025.11.1")
         assert result is not None
         assert result["count"] == 1
@@ -275,3 +289,55 @@ class TestParsePatchBreakingChanges:
         assert result is not None and result["count"] == 1
 
 
+class TestTryRawCdn:
+    """Unit tests for _try_raw_cdn loop behavior."""
+
+    def _make_http_client(self, responses: list) -> MagicMock:
+        """Build a fake httpx client whose .get() returns responses in order."""
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=responses)
+        return client
+
+    def _ok(self, text: str) -> MagicMock:
+        r = MagicMock()
+        r.status_code = 200
+        r.text = text
+        return r
+
+    def _not_found(self) -> MagicMock:
+        r = MagicMock()
+        r.status_code = 404
+        r.text = ""
+        return r
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_all_paths_404(self):
+        client = self._make_http_client([self._not_found()] * 5)
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is None
+        assert client.get.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_skips_short_content_and_returns_none(self):
+        short = self._ok("too short")
+        client = self._make_http_client([short] * 5)
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_exception_on_one_path_continues_to_next(self):
+        good = self._ok("x" * 100)
+        client = self._make_http_client([httpx.ConnectError("boom"), good])
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is not None
+        assert result["source"] == "github_raw"
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_first_path_with_sufficient_content(self):
+        good = self._ok("y" * 100)
+        client = self._make_http_client([self._not_found(), good])
+        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
+        assert result is not None
+        assert result["notes"] == "y" * 100
+        assert client.get.await_count == 2

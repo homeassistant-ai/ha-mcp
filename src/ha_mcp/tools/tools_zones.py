@@ -13,6 +13,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -162,6 +163,10 @@ class ZoneTools:
         name="ha_set_zone",
         tags={"Zones"},
         annotations={"destructiveHint": True, "title": "Set Zone"},
+    )
+    @with_auto_backup(
+        domain="zone",
+        id_fn=lambda kw: str(kw.get("zone_id") or kw.get("name") or ""),
     )
     @log_tool_usage
     async def ha_set_zone(
@@ -359,6 +364,7 @@ class ZoneTools:
             "title": "Remove Zone",
         },
     )
+    @with_auto_backup(domain="zone", id_param="zone_id")
     @log_tool_usage
     async def ha_remove_zone(
         self,

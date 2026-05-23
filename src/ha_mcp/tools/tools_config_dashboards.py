@@ -21,6 +21,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -834,6 +835,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         tags={"Dashboards"},
         annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
     )
+    @with_auto_backup(domain="dashboard", id_param="url_path", client=client)
     @log_tool_usage
     async def ha_config_set_dashboard(
         url_path: Annotated[
@@ -1490,6 +1492,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         tags={"Dashboards"},
         annotations={"destructiveHint": True, "title": "Delete Dashboard"},
     )
+    @with_auto_backup(domain="dashboard", id_param="url_path", client=client)
     @log_tool_usage
     async def ha_config_delete_dashboard(
         url_path: Annotated[

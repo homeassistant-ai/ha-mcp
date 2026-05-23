@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -554,6 +555,19 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "idempotentHint": True,
             "title": "Set Entity",
         },
+    )
+    @with_auto_backup(
+        domain="entity",
+        # Bulk calls (entity_id is a list) intentionally skip the
+        # decorator path: we'd otherwise snapshot only the first entity
+        # and silently leave the rest of the list un-protected. The
+        # capture pipeline treats "" as "no entity" and no-ops.
+        id_fn=lambda kw: (
+            ""
+            if isinstance(kw.get("entity_id"), list)
+            else str(kw.get("entity_id") or "")
+        ),
+        client=client,
     )
     @log_tool_usage
     async def ha_set_entity(

@@ -72,6 +72,7 @@ class TestCategorizeTool:
 
     def test_no_annotations(self):
         """Tool without annotations defaults to write."""
+
         async def noop() -> str:
             return "ok"
 
@@ -112,14 +113,20 @@ class TestRenderResults:
 
     @pytest.mark.anyio
     async def test_write_tool_execute_via(self, transform):
-        tools = [_make_tool("ha_config_set_automation", destructive=True, description="Set")]
+        tools = [
+            _make_tool("ha_config_set_automation", destructive=True, description="Set")
+        ]
         results = await transform._render_results(tools)
         assert "ha_call_write_tool" in results[0]["execute_via"]
         assert "ha_config_set_automation" in results[0]["execute_via"]
 
     @pytest.mark.anyio
     async def test_delete_tool_execute_via(self, transform):
-        tools = [_make_tool("ha_remove_area_or_floor", destructive=True, description="Remove")]
+        tools = [
+            _make_tool(
+                "ha_remove_area_or_floor", destructive=True, description="Remove"
+            )
+        ]
         results = await transform._render_results(tools)
         assert "ha_call_delete_tool" in results[0]["execute_via"]
         assert "ha_remove_area_or_floor" in results[0]["execute_via"]
@@ -168,8 +175,12 @@ class TestTransformTools:
             _make_tool("ha_get_overview", read_only=True, description="Overview"),
             _make_tool("ha_restart", destructive=True, description="Restart"),
             _make_tool("ha_get_state", read_only=True, description="Get state"),
-            _make_tool("ha_config_set_automation", destructive=True, description="Set auto"),
-            _make_tool("ha_remove_area_or_floor", destructive=True, description="Remove area"),
+            _make_tool(
+                "ha_config_set_automation", destructive=True, description="Set auto"
+            ),
+            _make_tool(
+                "ha_remove_area_or_floor", destructive=True, description="Remove area"
+            ),
         ]
 
     @pytest.mark.anyio
@@ -290,8 +301,7 @@ class TestDefaultPinnedTools:
     def test_contains_critical_tools(self):
         assert "ha_restart" in DEFAULT_PINNED_TOOLS
         assert "ha_get_overview" in DEFAULT_PINNED_TOOLS
-        assert "ha_backup_create" in DEFAULT_PINNED_TOOLS
-        assert "ha_backup_restore" in DEFAULT_PINNED_TOOLS
+        assert "ha_manage_backup" in DEFAULT_PINNED_TOOLS
         assert "ha_report_issue" in DEFAULT_PINNED_TOOLS
         assert "ha_reload_core" in DEFAULT_PINNED_TOOLS
 
@@ -332,13 +342,16 @@ class TestCategorizedCallDispatch:
     @pytest.fixture
     def transform(self):
         t = CategorizedSearchTransform(max_results=5)
-        _prepopulate_cache(t, [
-            _make_tool("ha_get_state", read_only=True),
-            _make_tool("ha_search_entities", read_only=True),
-            _make_tool("ha_config_set_automation", destructive=True),
-            _make_tool("ha_call_service", destructive=True),
-            _make_tool("ha_remove_area_or_floor", destructive=True),
-        ])
+        _prepopulate_cache(
+            t,
+            [
+                _make_tool("ha_get_state", read_only=True),
+                _make_tool("ha_search_entities", read_only=True),
+                _make_tool("ha_config_set_automation", destructive=True),
+                _make_tool("ha_call_service", destructive=True),
+                _make_tool("ha_remove_area_or_floor", destructive=True),
+            ],
+        )
         return t
 
     def _get_proxy_fn(self, transform, category):
@@ -383,7 +396,9 @@ class TestCategorizedCallDispatch:
         """Correct delete tool via delete proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
         fn = self._get_proxy_fn(transform, "delete")
-        result = await fn("ha_remove_area_or_floor", {"kind": "area", "id": "garage"}, ctx)
+        result = await fn(
+            "ha_remove_area_or_floor", {"kind": "area", "id": "garage"}, ctx
+        )
         assert result == {"success": True}
 
     @pytest.mark.anyio
@@ -451,11 +466,14 @@ class TestDoubleUnwrap:
     @pytest.fixture
     def transform(self):
         t = CategorizedSearchTransform(max_results=5)
-        _prepopulate_cache(t, [
-            _make_tool("ha_get_state", read_only=True),
-            _make_tool("ha_config_set_automation", destructive=True),
-            _make_tool("ha_remove_area_or_floor", destructive=True),
-        ])
+        _prepopulate_cache(
+            t,
+            [
+                _make_tool("ha_get_state", read_only=True),
+                _make_tool("ha_config_set_automation", destructive=True),
+                _make_tool("ha_remove_area_or_floor", destructive=True),
+            ],
+        )
         return t
 
     def _get_proxy_fn(self, transform, category):
@@ -541,9 +559,12 @@ class TestArgumentsAsString:
     @pytest.fixture
     def transform(self):
         t = CategorizedSearchTransform(max_results=5)
-        _prepopulate_cache(t, [
-            _make_tool("ha_get_state", read_only=True),
-        ])
+        _prepopulate_cache(
+            t,
+            [
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
         return t
 
     def _get_proxy_fn(self, transform, category):
@@ -565,9 +586,7 @@ class TestArgumentsAsString:
         """A JSON-object string is parsed to a dict and forwarded."""
         ctx = _make_ctx(call_tool_return={"state": "on"})
         fn = self._get_proxy_fn(transform, "read")
-        result = await fn(
-            "ha_get_state", '{"entity_id": "light.kitchen"}', ctx
-        )
+        result = await fn("ha_get_state", '{"entity_id": "light.kitchen"}', ctx)
         assert result == {"state": "on"}
         ctx.fastmcp.call_tool.assert_called_once_with(
             "ha_get_state", {"entity_id": "light.kitchen"}
@@ -614,7 +633,9 @@ class TestRebuildCategoryCache:
             _make_tool("ha_config_set_automation", destructive=True),
             _make_tool("ha_remove_area_or_floor", destructive=True),
         ]
-        with patch.object(transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools):
+        with patch.object(
+            transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools
+        ):
             await transform._rebuild_category_cache(None)
 
         assert "ha_get_state" in transform._read_tools
@@ -631,11 +652,15 @@ class TestRebuildCategoryCache:
             _make_tool("ha_get_state", read_only=True),
             _make_tool("ha_new_write", destructive=True),
         ]
-        with patch.object(transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools_v1):
+        with patch.object(
+            transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools_v1
+        ):
             await transform._rebuild_category_cache(None)
         assert "ha_new_write" not in transform._write_tools
 
-        with patch.object(transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools_v2):
+        with patch.object(
+            transform, "get_tool_catalog", new_callable=AsyncMock, return_value=tools_v2
+        ):
             await transform._rebuild_category_cache(None)
         assert "ha_new_write" in transform._write_tools
 
@@ -667,7 +692,9 @@ class TestSearchKeywordsTransform:
         transform = SearchKeywordsTransform(
             keywords={"ha_search_entities": "find lookup discover"}
         )
-        tool = _make_tool("ha_search_entities", read_only=True, description="Search entities.")
+        tool = _make_tool(
+            "ha_search_entities", read_only=True, description="Search entities."
+        )
         result = await transform.list_tools([tool])
         assert len(result) == 1
         assert result[0].description.startswith("Search entities.")
@@ -679,7 +706,9 @@ class TestSearchKeywordsTransform:
         transform = SearchKeywordsTransform(
             overrides={"ha_deep_search": "Narrowed description."}
         )
-        tool = _make_tool("ha_deep_search", read_only=True, description="Original broad description.")
+        tool = _make_tool(
+            "ha_deep_search", read_only=True, description="Original broad description."
+        )
         result = await transform.list_tools([tool])
         assert result[0].description == "Narrowed description."
 
@@ -698,9 +727,7 @@ class TestSearchKeywordsTransform:
     @pytest.mark.anyio
     async def test_no_match_leaves_description_unchanged(self):
         """Tools not in keywords or overrides are unchanged."""
-        transform = SearchKeywordsTransform(
-            keywords={"ha_other_tool": "some keywords"}
-        )
+        transform = SearchKeywordsTransform(keywords={"ha_other_tool": "some keywords"})
         tool = _make_tool("ha_get_state", read_only=True, description="Get state.")
         result = await transform.list_tools([tool])
         assert result[0].description == "Get state."
@@ -708,9 +735,7 @@ class TestSearchKeywordsTransform:
     @pytest.mark.anyio
     async def test_get_tool_enriches(self):
         """get_tool also applies enrichment."""
-        transform = SearchKeywordsTransform(
-            keywords={"ha_get_state": "status check"}
-        )
+        transform = SearchKeywordsTransform(keywords={"ha_get_state": "status check"})
         tool = _make_tool("ha_get_state", read_only=True, description="Get state.")
         call_next = AsyncMock(return_value=tool)
         result = await transform.get_tool("ha_get_state", call_next)
@@ -787,9 +812,7 @@ class TestApplySearchKeywordEnrichment:
         stub.mcp.add_transform.side_effect = RuntimeError("boom")
         with caplog.at_level("ERROR"):
             HomeAssistantSmartMCPServer._apply_search_keyword_enrichment(stub)
-        assert any(
-            "SearchKeywordsTransform" in rec.message for rec in caplog.records
-        )
+        assert any("SearchKeywordsTransform" in rec.message for rec in caplog.records)
 
     @pytest.mark.anyio
     async def test_canonical_keywords_end_to_end_for_940_tools(self):

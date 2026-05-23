@@ -16,6 +16,7 @@ from urllib.parse import quote_plus
 
 import httpx
 from fastmcp import Context
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ha_mcp import __version__
@@ -28,7 +29,7 @@ from ..utils.usage_logger import (
     get_recent_logs,
     get_startup_logs,
 )
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, register_tool_methods
 from .util_helpers import ANSI_ESCAPE_RE
 
 logger = logging.getLogger(__name__)
@@ -388,10 +389,66 @@ async def _fetch_addon_logs() -> str:
     return ""
 
 
-def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register bug report tools with the MCP server."""
+def _build_formatted_report(
+    diagnostic_info: dict[str, Any],
+    mcp_transport: str,
+    client_info: dict[str, str],
+    platform_info: dict[str, str],
+    config_toggles: dict[str, Any],
+    startup_logs: list[dict[str, Any]],
+    startup_log_summary: str,
+    recent_logs: list[dict[str, Any]],
+    log_summary: str,
+    addon_logs: str,
+) -> str:
+    report_lines = [
+        "=== ha-mcp Bug Report Info ===",
+        "",
+        f"ha-mcp Version: {diagnostic_info['ha_mcp_version']}",
+        f"Installation Method: {diagnostic_info['installation_method']}",
+        f"MCP Transport: {mcp_transport}",
+        f"MCP Client: {_format_client_info_for_template(client_info)}",
+        f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
+        f"Python Version: {platform_info['python_version']}",
+        f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
+        f"Connection Status: {diagnostic_info['connection_status']}",
+        f"Entity Count: {diagnostic_info['entity_count']}",
+    ]
+    if "location_name" in diagnostic_info:
+        report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
+    if "time_zone" in diagnostic_info:
+        report_lines.append(f"Time Zone: {diagnostic_info['time_zone']}")
+    if config_toggles:
+        report_lines.extend(["", "=== ha-mcp Config Toggles ==="])
+        for key, value in config_toggles.items():
+            report_lines.append(f"  {key}: {value}")
+    if startup_logs:
+        report_lines.extend(
+            [
+                "",
+                f"=== Startup Logs ({len(startup_logs)} entries) ===",
+                startup_log_summary,
+            ]
+        )
+    if recent_logs:
+        report_lines.extend(
+            [
+                "",
+                f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
+                log_summary,
+            ]
+        )
+    if addon_logs:
+        report_lines.extend(["", "=== Add-on Container Logs ===", addon_logs])
+    return "\n".join(report_lines)
 
-    @mcp.tool(
+
+class BugReportTools:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    @tool(
+        name="ha_report_issue",
         tags={"Utilities"},
         annotations={
             "idempotentHint": True,
@@ -401,6 +458,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_report_issue(
+        self,
         tool_call_count: Annotated[
             int,
             Field(
@@ -476,7 +534,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Try to get Home Assistant config and connection status
         try:
-            config = await client.get_config()
+            config = await self._client.get_config()
             diagnostic_info["connection_status"] = "Connected"
             diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
             diagnostic_info["location_name"] = config.get("location_name", "Unknown")
@@ -487,7 +545,7 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         # Try to get entity count
         try:
-            states = await client.get_states()
+            states = await self._client.get_states()
             if states:
                 diagnostic_info["entity_count"] = len(states)
         except Exception as e:
@@ -511,59 +569,18 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         startup_log_summary = _format_startup_logs(startup_logs)
 
         # Build the formatted report
-        report_lines = [
-            "=== ha-mcp Bug Report Info ===",
-            "",
-            f"ha-mcp Version: {diagnostic_info['ha_mcp_version']}",
-            f"Installation Method: {diagnostic_info['installation_method']}",
-            f"MCP Transport: {mcp_transport}",
-            f"MCP Client: {_format_client_info_for_template(client_info)}",
-            f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
-            f"Python Version: {platform_info['python_version']}",
-            f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
-            f"Connection Status: {diagnostic_info['connection_status']}",
-            f"Entity Count: {diagnostic_info['entity_count']}",
-        ]
-
-        # Add optional fields if available
-        if "location_name" in diagnostic_info:
-            report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
-        if "time_zone" in diagnostic_info:
-            report_lines.append(f"Time Zone: {diagnostic_info['time_zone']}")
-
-        if config_toggles:
-            report_lines.extend(["", "=== ha-mcp Config Toggles ==="])
-            for key, value in config_toggles.items():
-                report_lines.append(f"  {key}: {value}")
-
-        if startup_logs:
-            report_lines.extend(
-                [
-                    "",
-                    f"=== Startup Logs ({len(startup_logs)} entries) ===",
-                    startup_log_summary,
-                ]
-            )
-
-        if recent_logs:
-            report_lines.extend(
-                [
-                    "",
-                    f"=== Recent Tool Calls ({len(recent_logs)} entries) ===",
-                    log_summary,
-                ]
-            )
-
-        if addon_logs:
-            report_lines.extend(
-                [
-                    "",
-                    "=== Add-on Container Logs ===",
-                    addon_logs,
-                ]
-            )
-
-        formatted_report = "\n".join(report_lines)
+        formatted_report = _build_formatted_report(
+            diagnostic_info,
+            mcp_transport,
+            client_info,
+            platform_info,
+            config_toggles,
+            startup_logs,
+            startup_log_summary,
+            recent_logs,
+            log_summary,
+            addon_logs,
+        )
 
         # Generate suggested title up-front so it can be folded into the
         # submission URLs as a `&title=` query param. This auto-fills the
@@ -671,6 +688,11 @@ def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
+
+
+def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register bug report tools with the MCP server."""
+    register_tool_methods(mcp, BugReportTools(client))
 
 
 def _format_config_toggles_for_template(toggles: dict[str, Any]) -> str:

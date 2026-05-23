@@ -17,6 +17,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -49,12 +50,14 @@ class GroupTools:
         """Validate group parameters: object_id format, mutual exclusivity, and non-empty lists."""
         # Validate object_id doesn't contain invalid characters
         if "." in object_id:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix or dots.",
-                context={"object_id": object_id},
-                suggestions=["Provide object_id without 'group.' prefix or dots"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix or dots.",
+                    context={"object_id": object_id},
+                    suggestions=["Provide object_id without 'group.' prefix or dots"],
+                )
+            )
 
         # Check mutual exclusivity of entity operations
         entity_ops = [
@@ -68,28 +71,38 @@ class GroupTools:
 
         if len(provided_ops) > 1:
             op_names = [op_name for op_name, _ in provided_ops]
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Only one of entities, add_entities, or remove_entities can be provided. Got: {op_names}",
-                context={"object_id": object_id, "provided_ops": op_names},
-                suggestions=["Use only one of: entities, add_entities, or remove_entities"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Only one of entities, add_entities, or remove_entities can be provided. Got: {op_names}",
+                    context={"object_id": object_id, "provided_ops": op_names},
+                    suggestions=[
+                        "Use only one of: entities, add_entities, or remove_entities"
+                    ],
+                )
+            )
 
         # Validate non-empty lists
         if entities is not None and not entities:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Entities list cannot be empty",
-                context={"object_id": object_id},
-                suggestions=["Provide at least one entity ID in the entities list"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Entities list cannot be empty",
+                    context={"object_id": object_id},
+                    suggestions=["Provide at least one entity ID in the entities list"],
+                )
+            )
         if add_entities is not None and not add_entities:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "add_entities list cannot be empty",
-                context={"object_id": object_id},
-                suggestions=["Provide at least one entity ID in the add_entities list"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "add_entities list cannot be empty",
+                    context={"object_id": object_id},
+                    suggestions=[
+                        "Provide at least one entity ID in the add_entities list"
+                    ],
+                )
+            )
 
     @staticmethod
     def _build_group_service_data(
@@ -122,7 +135,11 @@ class GroupTools:
     @tool(
         name="ha_config_list_groups",
         tags={"Groups"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "List Groups"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "List Groups",
+        },
     )
     @log_tool_usage
     async def ha_config_list_groups(self) -> dict[str, Any]:
@@ -180,16 +197,21 @@ class GroupTools:
 
         except Exception as e:
             logger.error(f"Error listing groups: {e}")
-            exception_to_structured_error(e, context={"operation": "list_groups"}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify REST API is accessible",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"operation": "list_groups"},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify REST API is accessible",
+                ],
+            )
 
     @tool(
         name="ha_config_set_group",
         tags={"Groups"},
         annotations={"destructiveHint": True, "title": "Create or Update Group"},
     )
+    @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
     async def ha_config_set_group(
         self,
@@ -290,10 +312,18 @@ class GroupTools:
                 ],
                 context={"operation": "set_group"},
             )
-            self._validate_group_params(object_id, entities, add_entities, remove_entities)
+            self._validate_group_params(
+                object_id, entities, add_entities, remove_entities
+            )
 
             service_data = self._build_group_service_data(
-                object_id, name, icon, all_on, entities, add_entities, remove_entities,
+                object_id,
+                name,
+                icon,
+                all_on,
+                entities,
+                add_entities,
+                remove_entities,
             )
 
             # Call group.set service
@@ -303,7 +333,12 @@ class GroupTools:
             updated_fields = [k for k in service_data if k != "object_id"]
 
             # Determine if this was a create or update based on fields provided
-            is_create = entities is not None and name is None and add_entities is None and remove_entities is None
+            is_create = (
+                entities is not None
+                and name is None
+                and add_entities is None
+                and remove_entities is None
+            )
 
             # Verify entity is queryable after creation/update
             wait_bool = coerce_bool_param(wait, "wait", default=True)
@@ -311,7 +346,9 @@ class GroupTools:
             if wait_bool:
                 action_word = "created" if is_create else "updated"
                 try:
-                    registered = await wait_for_entity_registered(self._client, entity_id)
+                    registered = await wait_for_entity_registered(
+                        self._client, entity_id
+                    )
                     if not registered:
                         result.setdefault("warnings", []).append(
                             f"Group {action_word} but {entity_id} not yet queryable. "
@@ -335,18 +372,27 @@ class GroupTools:
             raise
         except Exception as e:
             logger.error(f"Error setting group {object_id!r}: {e}")
-            exception_to_structured_error(e, context={"object_id": object_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify all entity IDs in the entities list exist",
-                "Ensure object_id is valid (no dots, no 'group.' prefix)",
-                "Use ha_config_list_groups() to see existing groups",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"object_id": object_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify all entity IDs in the entities list exist",
+                    "Ensure object_id is valid (no dots, no 'group.' prefix)",
+                    "Use ha_config_list_groups() to see existing groups",
+                ],
+            )
 
     @tool(
         name="ha_config_remove_group",
         tags={"Groups"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Group"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Group",
+        },
     )
+    @with_auto_backup(domain="group", id_param="object_id")
     @log_tool_usage
     async def ha_config_remove_group(
         self,
@@ -399,12 +445,16 @@ class GroupTools:
             )
             # Validate object_id format
             if "." in object_id:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix.",
-                    context={"object_id": object_id},
-                    suggestions=["Provide object_id without 'group.' prefix or dots"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid object_id: '{object_id}'. Do not include 'group.' prefix.",
+                        context={"object_id": object_id},
+                        suggestions=[
+                            "Provide object_id without 'group.' prefix or dots"
+                        ],
+                    )
+                )
 
             # Call group.remove service
             service_data = {"object_id": object_id}
@@ -439,11 +489,15 @@ class GroupTools:
             raise
         except Exception as e:
             logger.error(f"Error removing group {object_id!r}: {e}")
-            exception_to_structured_error(e, context={"object_id": object_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify the group exists using ha_config_list_groups()",
-                "Groups defined in YAML cannot be permanently removed",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"object_id": object_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify the group exists using ha_config_list_groups()",
+                    "Groups defined in YAML cannot be permanently removed",
+                ],
+            )
 
 
 def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

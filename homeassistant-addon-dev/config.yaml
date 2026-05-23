@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "7.5.0.dev344"
+version: "7.5.0.dev346"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -27,6 +27,9 @@ options:
   enable_yaml_config_editing: false
   enable_code_mode: false
   enable_lite_docstrings: false
+  enable_auto_backup: true
+  auto_backup_throttle_minutes: 0
+  auto_backup_retain_per_entity: 100
   tool_search_max_results: 5
   disabled_tools: ""
   pinned_tools: ""
@@ -40,6 +43,9 @@ schema:
   enable_lite_docstrings: bool?
   enable_filesystem_tools: bool?
   enable_custom_component_integration: bool?
+  enable_auto_backup: bool?
+  auto_backup_throttle_minutes: int(0,1440)?
+  auto_backup_retain_per_entity: int(1,10000)?
   tool_search_max_results: int(2,10)?
   disabled_tools: str?
   pinned_tools: str?

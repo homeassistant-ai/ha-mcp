@@ -28,6 +28,7 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -415,6 +416,7 @@ class ConfigSceneTools:
             "title": "Create or Update Scene",
         },
     )
+    @with_auto_backup(domain="scene", id_param="scene_id")
     @log_tool_usage
     async def ha_config_set_scene(
         self,
@@ -904,6 +906,7 @@ class ConfigSceneTools:
             "title": "Remove Scene",
         },
     )
+    @with_auto_backup(domain="scene", id_param="scene_id")
     @log_tool_usage
     async def ha_config_remove_scene(
         self,

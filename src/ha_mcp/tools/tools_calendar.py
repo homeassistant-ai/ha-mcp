@@ -16,6 +16,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -36,7 +37,11 @@ class CalendarTools:
     @tool(
         name="ha_config_get_calendar_events",
         tags={"Calendar"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Calendar Events"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Calendar Events",
+        },
     )
     @log_tool_usage
     async def ha_config_get_calendar_events(
@@ -94,15 +99,17 @@ class CalendarTools:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    context={"entity_id": entity_id},
-                    suggestions=[
-                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
-                        "Calendar entity IDs start with 'calendar.' prefix",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
+                            "Calendar entity IDs start with 'calendar.' prefix",
+                        ],
+                    )
+                )
 
             # Set default time range if not provided
             now = datetime.now()
@@ -157,12 +164,27 @@ class CalendarTools:
             if "404" in error_str or "not found" in error_str.lower():
                 suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
 
-            exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
+            exception_to_structured_error(
+                error, context={"entity_id": entity_id}, suggestions=suggestions
+            )
 
     @tool(
         name="ha_config_set_calendar_event",
         tags={"Calendar"},
-        annotations={"destructiveHint": True, "title": "Create or Update Calendar Event"},
+        annotations={
+            "destructiveHint": True,
+            "title": "Create or Update Calendar Event",
+        },
+    )
+    @with_auto_backup(
+        domain="calendar_event",
+        # Skip on missing entity_id or uid; falsy "" beats the truthy
+        # "::" shape that would hit the fetch with no record to find.
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['uid']}"
+            if kw.get("entity_id") and kw.get("uid")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_set_calendar_event(
@@ -171,9 +193,7 @@ class CalendarTools:
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
         summary: Annotated[str, Field(description="Event title/summary")],
-        start: Annotated[
-            str, Field(description="Event start datetime in ISO format")
-        ],
+        start: Annotated[str, Field(description="Event start datetime in ISO format")],
         end: Annotated[str, Field(description="Event end datetime in ISO format")],
         description: Annotated[
             str | None,
@@ -223,15 +243,17 @@ class CalendarTools:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    context={"entity_id": entity_id},
-                    suggestions=[
-                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
-                        "Calendar entity IDs start with 'calendar.' prefix",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
+                            "Calendar entity IDs start with 'calendar.' prefix",
+                        ],
+                    )
+                )
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -247,7 +269,9 @@ class CalendarTools:
                 service_data["location"] = location
 
             # Call the calendar.create_event service
-            result = await self._client.call_service("calendar", "create_event", service_data)
+            result = await self._client.call_service(
+                "calendar", "create_event", service_data
+            )
 
             return {
                 "success": True,
@@ -281,12 +305,28 @@ class CalendarTools:
             if "not supported" in error_str.lower():
                 suggestions.insert(0, "This calendar does not support event creation")
 
-            exception_to_structured_error(error, context={"entity_id": entity_id}, suggestions=suggestions)
+            exception_to_structured_error(
+                error, context={"entity_id": entity_id}, suggestions=suggestions
+            )
 
     @tool(
         name="ha_config_remove_calendar_event",
         tags={"Calendar"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Calendar Event"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Calendar Event",
+        },
+    )
+    @with_auto_backup(
+        domain="calendar_event",
+        # Skip on missing entity_id or uid; falsy "" beats the truthy
+        # "::" shape that would hit the fetch with no record to find.
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['uid']}"
+            if kw.get("entity_id") and kw.get("uid")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_remove_calendar_event(
@@ -294,10 +334,14 @@ class CalendarTools:
         entity_id: Annotated[
             str, Field(description="Calendar entity ID (e.g., 'calendar.family')")
         ],
-        uid: Annotated[str, Field(description="Unique identifier of the event to delete")],
+        uid: Annotated[
+            str, Field(description="Unique identifier of the event to delete")
+        ],
         recurrence_id: Annotated[
             str | None,
-            Field(description="Optional recurrence ID for recurring events", default=None),
+            Field(
+                description="Optional recurrence ID for recurring events", default=None
+            ),
         ] = None,
         recurrence_range: Annotated[
             str | None,
@@ -345,15 +389,17 @@ class CalendarTools:
         try:
             # Validate entity_id
             if not entity_id.startswith("calendar."):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
-                    context={"entity_id": entity_id},
-                    suggestions=[
-                        "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
-                        "Calendar entity IDs start with 'calendar.' prefix",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid calendar entity ID: {entity_id}. Must start with 'calendar.'",
+                        context={"entity_id": entity_id},
+                        suggestions=[
+                            "Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities",
+                            "Calendar entity IDs start with 'calendar.' prefix",
+                        ],
+                    )
+                )
 
             # entity_id format-check above does not cover the ``uid`` parameter.
             # Empty/whitespace uid would flow through to ``calendar.delete_event``
@@ -379,7 +425,9 @@ class CalendarTools:
                 service_data["recurrence_range"] = recurrence_range
 
             # Call the calendar.delete_event service
-            result = await self._client.call_service("calendar", "delete_event", service_data)
+            result = await self._client.call_service(
+                "calendar", "delete_event", service_data
+            )
 
             return {
                 "success": True,
@@ -411,7 +459,11 @@ class CalendarTools:
             if "not supported" in error_str.lower():
                 suggestions.insert(0, "This calendar does not support event deletion")
 
-            exception_to_structured_error(error, context={"entity_id": entity_id, "uid": uid}, suggestions=suggestions)
+            exception_to_structured_error(
+                error,
+                context={"entity_id": entity_id, "uid": uid},
+                suggestions=suggestions,
+            )
 
 
 def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
