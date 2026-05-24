@@ -3,6 +3,7 @@
 import functools
 import importlib.util
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -547,17 +548,66 @@ class TestBetaMasterAutoEnableInDevAddon:
         "enable_lite_docstrings",
     )
 
-    def test_start_py_auto_enables_master_when_dev_beta_key_present(self):
-        """Static source check: start.py contains the
-        ``ENABLE_BETA_FEATURES=true`` write conditional on any beta
-        sub-flag key being in the options dict."""
-        start_py_text = (
-            Path(__file__).parents[2] / "homeassistant-addon" / "start.py"
-        ).read_text()
-        assert "ENABLE_BETA_FEATURES" in start_py_text, (
-            "start.py must auto-write ENABLE_BETA_FEATURES in dev addon "
-            "mode so the runtime master gate doesn't fight Supervisor "
-            "options (#1164)"
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_auto_enable_writes_true_when_any_beta_key_present(self, monkeypatch):
+        """Dev-addon options carrying ANY beta sub-flag key →
+        ENABLE_BETA_FEATURES=true written to env."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_yaml_config_editing": True}
+        )
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_writes_true_even_when_sub_flag_value_is_false(
+        self, monkeypatch
+    ):
+        """Presence of the key (regardless of value) is the signal.
+        A dev-addon user who has the toggle in their schema but set
+        to false still gets the master on, so other future beta
+        sub-flags they might enable later work without re-saving."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": False})
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_does_not_set_var_when_no_beta_key(self, monkeypatch):
+        """Stable-addon options never carry any beta key → no auto-
+        enable. Master stays at the pydantic default (False) so the
+        UI master toggle remains the gate."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_tool_search": True}
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_does_not_set_var_for_empty_config(self, monkeypatch):
+        """Missing/corrupt options.json yields an empty config → no
+        auto-enable. Defensive: silent feature regression is the
+        worst possible outcome of a bad options.json."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
+        """The 5 keys checked by start.py must exactly match the
+        runtime registry — drift would silently break the auto-enable
+        signal for dev-addon users."""
+        # Import lazily because ha_mcp isn't importable until the
+        # repo's package is on the path. Acceptable here because
+        # this test only asserts a structural invariant.
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(
+            0,
+            str(Path(__file__).parents[2] / "src"),
+        )
+        from ha_mcp.config import BETA_FEATURE_FIELDS
+
+        assert set(self.addon._DEV_ADDON_BETA_KEYS) == set(BETA_FEATURE_FIELDS), (
+            "start.py's _DEV_ADDON_BETA_KEYS drifted from config.BETA_FEATURE_FIELDS"
         )
 
     def test_stable_addon_still_does_not_carry_beta_keys(self):
