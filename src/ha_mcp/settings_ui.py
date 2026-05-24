@@ -793,13 +793,6 @@ _SETTINGS_HTML = (
   .policy-rule-lifetime input { width: 64px; padding: 4px 8px;
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text); font-size: 0.85rem; margin: 0 6px; }
-  .policy-save-rule { padding: 7px 14px; border-radius: 6px; border: none;
-    background: var(--surface-hover); color: var(--text-secondary);
-    font-weight: 600; cursor: pointer; font-size: 0.85rem; }
-  .policy-save-rule:not(:disabled) { background: var(--accent); color: white;
-    cursor: pointer; }
-  .policy-save-rule:not(:disabled):hover { background: var(--accent-hover); }
-  .policy-save-rule:disabled { cursor: not-allowed; opacity: 0.6; }
   .policy-save-status { margin-left: 10px; font-size: 0.8rem;
     color: var(--text-secondary); }
 </style>
@@ -2212,20 +2205,31 @@ function renderPolicyCard(toolName, rule) {
         'minutes (0 = single-shot)' +
       '</label>' +
     '</div>' +
-    '<button class="policy-save-rule" disabled>Save changes</button>' +
-    '<span class="policy-save-status"></span>';
+    '<span class="policy-save-status" style="font-size:0.78rem;color:var(--text-secondary)"></span>';
 
-  const markDirty = () => {
-    card.querySelector('.policy-save-rule').disabled = false;
-    card.querySelector('.policy-save-status').textContent = '';
+  // Auto-save: every condition add/edit/remove and every remember-minutes
+  // change immediately PUTs the rule to disk. No manual "Save changes"
+  // button — the only signal is the small status text below the card.
+  let autoSaveSeq = 0;
+  const autoSave = async () => {
+    const status = card.querySelector('.policy-save-status');
+    const mySeq = ++autoSaveSeq;
+    status.textContent = 'Saving…';
+    try {
+      await savePolicyRule(toolName, rule);
+      // Skip the success label if a newer save started (rapid edits)
+      if (mySeq === autoSaveSeq) status.textContent = 'Saved.';
+    } catch (err) {
+      if (mySeq === autoSaveSeq) {
+        status.textContent = 'Save failed: ' + err.message;
+      }
+    }
   };
 
   // Re-render the card in place after a predicate-list mutation so the
   // rows reflect the new in-memory rule object.
   const rerenderCard = () => {
     const replacement = renderPolicyCard(toolName, rule);
-    // Preserve "dirty" indicator across re-render.
-    replacement.querySelector('.policy-save-rule').disabled = false;
     card.replaceWith(replacement);
   };
 
@@ -2243,9 +2247,13 @@ function renderPolicyCard(toolName, rule) {
     }
   });
 
+  // remember-minutes is a number input; debounce so typing "30" doesn't
+  // fire three saves (3, 30 — or rapid arrow-key presses).
+  let rmDebounce = null;
   card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
     rule.remember_minutes = parseInt(e.target.value, 10) || 0;
-    markDirty();
+    if (rmDebounce) clearTimeout(rmDebounce);
+    rmDebounce = setTimeout(autoSave, 500);
   });
 
   const formEl = card.querySelector('.policy-predicate-form');
@@ -2563,10 +2571,10 @@ function renderPolicyCard(toolName, rule) {
   });
 
   card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx, 10);
       rule.when.splice(idx, 1);
-      markDirty();
+      await autoSave();
       rerenderCard();
     });
   });
@@ -2576,7 +2584,7 @@ function renderPolicyCard(toolName, rule) {
     editingIdx = -1;
   });
 
-  formEl.querySelector('.policy-predicate-form-save').addEventListener('click', () => {
+  formEl.querySelector('.policy-predicate-form-save').addEventListener('click', async () => {
     const op = opEl.value;
     const path = currentPath();
     if (!path) {
@@ -2607,22 +2615,8 @@ function renderPolicyCard(toolName, rule) {
     } else {
       rule.when.push(predicate);
     }
-    markDirty();
+    await autoSave();
     rerenderCard();
-  });
-
-  card.querySelector('.policy-save-rule').addEventListener('click', async () => {
-    const btn = card.querySelector('.policy-save-rule');
-    const status = card.querySelector('.policy-save-status');
-    btn.disabled = true;
-    status.textContent = 'Saving...';
-    try {
-      await savePolicyRule(toolName, rule);
-      status.textContent = 'Saved.';
-    } catch (err) {
-      status.textContent = 'Save failed: ' + err.message;
-      btn.disabled = false;
-    }
   });
 
   return card;

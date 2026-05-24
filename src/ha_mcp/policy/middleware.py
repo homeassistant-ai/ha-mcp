@@ -15,7 +15,7 @@ from fastmcp.server.middleware.middleware import CallNext, Middleware, Middlewar
 from ..tools.helpers import safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import Verdict, evaluate, find_matching_rule
-from .model import Policy
+from .model import Policy, Rule
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             raise self._denied_error()
 
-        raise self._pending_error(pending)
+        raise self._pending_error(pending, rule)
 
     async def _wait_for_decision(
         self,
@@ -175,12 +175,26 @@ class PolicyMiddleware(Middleware):
             )
         )
 
-    def _pending_error(self, pending: PendingApproval) -> ToolError:
+    def _pending_error(
+        self, pending: PendingApproval, rule: Rule | None = None
+    ) -> ToolError:
         # Time-remaining, not total TTL: an LLM that re-calls a minute
         # before expiry should see "~60s left", not the original 300s.
         remaining = max(
             0, int((pending.expires_at - datetime.now(UTC)).total_seconds())
         )
+        context: dict[str, Any] = {
+            "token": pending.token,
+            "expires_in_seconds": remaining,
+        }
+        # Surface the matched rule so users (and the LLM) can tell at a
+        # glance WHY the call was gated. Critical for "I added a
+        # specific condition but every call is still gated" diagnostics.
+        if rule is not None:
+            context["matched_rule"] = {
+                "tool_name": rule.tool_name,
+                "when": [p.model_dump() for p in rule.when],
+            }
         return ToolError(
             json.dumps(
                 {
@@ -193,10 +207,7 @@ class PolicyMiddleware(Middleware):
                             "tab, and approve or deny the pending request. Re-call "
                             "this tool with the same arguments after the user approves."
                         ),
-                        "context": {
-                            "token": pending.token,
-                            "expires_in_seconds": remaining,
-                        },
+                        "context": context,
                         "suggestions": [
                             "Tell the user to open the Tool Security Policies tab in the ha-mcp settings UI and approve the pending request.",
                             "Re-call this tool with the same arguments after the user approves.",
