@@ -272,12 +272,32 @@ Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### enable_tool_security_policies
+
+**Default:** `false`
+
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent is told to ask the user to open the Tool Security Policies tab in the web UI, and the call is held until the user clicks **Approve** there. Per-tool rules — with optional argument conditions — are configured from the same Tool Security Policies tab.
+
+**When to enable:**
+- Shared installations where you want a human in the loop for destructive or security-relevant operations
+- Locks, alarms, and other entities where an LLM mistake has real-world consequences
+- Whenever you want a per-call user-approval prompt before high-stakes operations run (locks, automations, etc.)
+
+**When to leave disabled (default):**
+- Single-user setups where you're comfortable with the LLM acting autonomously
+- You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
+
+Off by default. Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml
-backup_hint: normal
-secret_path: ""  # Leave empty for auto-generation
+enable_tool_security_policies: true
 ```
+
+Per-tool rules (including argument conditions like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
+
+*Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
 ---
 

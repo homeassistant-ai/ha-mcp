@@ -7,6 +7,13 @@ import sys
 import pytest
 
 
+def test_tool_security_policies_disabled_by_default():
+    """enable_tool_security_policies defaults to False (opt-in for #966)."""
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_tool_security_policies is False
+
+
 @pytest.mark.slow
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""

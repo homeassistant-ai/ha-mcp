@@ -35,17 +35,35 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default HA tools to pin (always visible, bypass search transform)
+# Default HA tools to pin (always visible, bypass search transform).
+#
+# These are DEFAULTS, not mandatory — users can unpin any of them via the
+# Tools tab in the settings UI by explicitly setting the tool's state to
+# ``"enabled"`` in ``tool_config.json``. Server-side, the effective pinned
+# set is computed as ``DEFAULT_PINNED_TOOLS`` minus any tool whose saved
+# state is ``"enabled"``, plus any user-pinned tools. Tools with no entry
+# in ``tool_config.json`` stay pinned by default.
+#
+# Removed in #966 (operational recovery actions, low frequency, low value
+# in the default LLM tool surface — still discoverable via tool search):
+#   - ``ha_restart``
+#   - ``ha_reload_core``
+#
+# ``ha_config_set_yaml`` and ``ha_manage_custom_tool`` were previously
+# pinned here (the latter conditionally in server.py when code mode was
+# enabled) so users could gate them via per-tool MCP permission prompts
+# even when toolsearch hid the rest of the catalog. The tool security
+# policies middleware shipped in #966 now gates those tools at call time
+# regardless of catalog visibility, so they no longer need to be pinned
+# just to be reachable for gating — keeping them behind the search proxy
+# reduces the LLM's tool surface without sacrificing the safety check.
 DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
-    "ha_restart",
-    "ha_reload_core",
     "ha_manage_backup",
     "ha_get_overview",
     "ha_report_issue",
     "ha_search_entities",
     "ha_config_get_automation",
     "ha_config_set_automation",
-    "ha_config_set_yaml",
     # Skill guide must stay visible when tool search hides the catalog —
     # its description carries the bundled best-practices trigger
     # conditions that the LLM needs to see before writing config.

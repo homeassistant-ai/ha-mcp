@@ -299,14 +299,44 @@ class TestDefaultPinnedTools:
     """Verify the shared pinned tools constant."""
 
     def test_contains_critical_tools(self):
-        assert "ha_restart" in DEFAULT_PINNED_TOOLS
         assert "ha_get_overview" in DEFAULT_PINNED_TOOLS
         assert "ha_manage_backup" in DEFAULT_PINNED_TOOLS
         assert "ha_report_issue" in DEFAULT_PINNED_TOOLS
-        assert "ha_reload_core" in DEFAULT_PINNED_TOOLS
+        assert "ha_search_entities" in DEFAULT_PINNED_TOOLS
+        assert "ha_get_skill_guide" in DEFAULT_PINNED_TOOLS
 
     def test_is_immutable_tuple(self):
         assert isinstance(DEFAULT_PINNED_TOOLS, tuple)
+
+    def test_recovery_tools_removed_from_defaults(self):
+        """Regression guard for #966.
+
+        ``ha_restart`` and ``ha_reload_core`` are operational recovery
+        actions invoked at low frequency. Keeping them pinned by default
+        wasted always-visible budget that the LLM rarely needed — they
+        moved behind the search proxy, still reachable via
+        ``ha_search_tools`` for the rare case where the user asks for
+        them, and still available as an explicit user pin via the
+        settings UI for installs that want them up-front.
+        """
+        assert "ha_restart" not in DEFAULT_PINNED_TOOLS
+        assert "ha_reload_core" not in DEFAULT_PINNED_TOOLS
+
+    def test_dangerous_tools_not_pinned(self):
+        """Regression guard for #966.
+
+        ``ha_config_set_yaml`` (arbitrary YAML config rewrite) and
+        ``ha_manage_custom_tool`` (arbitrary sandboxed Python execution)
+        were previously pinned so users could gate them via per-tool MCP
+        permission prompts even when toolsearch hid the rest of the
+        catalog. The tool security policies middleware now gates them at
+        call time regardless of catalog visibility, so they should NOT be
+        in the default pinned set — keeping them out of the always-visible
+        list reduces the LLM's tool surface without losing the safety
+        check.
+        """
+        assert "ha_config_set_yaml" not in DEFAULT_PINNED_TOOLS
+        assert "ha_manage_custom_tool" not in DEFAULT_PINNED_TOOLS
 
 
 # ---------------------------------------------------------------------------

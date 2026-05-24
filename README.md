@@ -312,6 +312,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
+- **[PolicyLayer](https://policylayer.com/)**: Argument-path predicate DSL shape (`args.domain in [...]` with `eq`/`in`/`regex`/`contains`/`exists`/...) inspired the per-tool approval rule schema (#966).
 
 ## 👥 Contributors
 
@@ -360,6 +361,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@drseanwing](https://github.com/drseanwing)** — Progress emission via FastMCP `Context` in long-running tools (#1124); tool-discovery / categorized-search docs (#1123).
 - **[@fnordpig](https://github.com/fnordpig)** — Config subentry support (#1393) and Assist pipeline management tool (#1392).
 - **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_addon` for atomic GET-modify-POST (#1063).
+- **[@L1AD](https://github.com/L1AD)** — Filed #966 proposing tool security policies; pointed to PolicyLayer's MCP-security work as prior art that inspired the predicate DSL shape.
 
 ---
 

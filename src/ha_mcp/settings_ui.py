@@ -95,6 +95,11 @@ MANDATORY_TOOLS: set[str] = {
     # seeing it in the catalog. Disabling it would silently break the
     # "consult skill before writing config" workflow.
     "ha_get_skill_guide",
+    # Backups are operational essentials — needed as the pre-change safety
+    # net before config edits and as the recovery path after them. Kept
+    # always-on so users who aggressively disable everything keep a
+    # working backup tool.
+    "ha_manage_backup",
 }
 
 # Tools created by FastMCP transforms (not registered through
@@ -477,20 +482,43 @@ async def _get_tool_metadata(
     return tools
 
 
+class UserToolStateOverrides(NamedTuple):
+    """User-explicit per-tool state overrides loaded from tool_config.json.
+
+    Both sets are immutable frozensets so callers can't pollute the
+    return value. They are disjoint by construction (a tool_config entry
+    has one state per tool).
+
+    - ``pinned_names``: tools the user explicitly set to "pinned"
+    - ``enabled_names``: tools the user explicitly set to "enabled"
+      (used by _apply_tool_search to unpin defaults the user re-enabled)
+    """
+
+    pinned_names: frozenset[str]
+    enabled_names: frozenset[str]
+
+
 def apply_tool_visibility(
     mcp: FastMCP,
     config: dict[str, Any],
     settings: Settings,
-) -> set[str]:
+) -> UserToolStateOverrides:
     """Apply tool visibility from config, respecting safety toggles.
 
     Args:
         mcp: The FastMCP instance to enable/disable tools on.
         config: The tool_config.json contents (per-tool states).
         settings: The server Settings (for enable_yaml_config_editing etc.).
+
+    Returns:
+        A :class:`UserToolStateOverrides` carrying the user-pinned tools
+        and the user-explicitly-enabled tools. The caller (server.py)
+        uses ``enabled_names`` to filter ``DEFAULT_PINNED_TOOLS`` so a
+        user can unpin a default by flipping it to "enabled" in the UI.
     """
     disabled_names: set[str] = set()
     pinned_names: set[str] = set()
+    enabled_names: set[str] = set()
 
     tool_states = config.get("tools", {})
     for name, state in tool_states.items():
@@ -498,6 +526,8 @@ def apply_tool_visibility(
             disabled_names.add(name)
         elif state == "pinned":
             pinned_names.add(name)
+        elif state == "enabled":
+            enabled_names.add(name)
 
     # AND semantics for the YAML safety toggle: the tool is disabled if
     # *either* the safety toggle is off *or* the user disabled it in the UI.
@@ -516,7 +546,14 @@ def apply_tool_visibility(
 
     mcp.enable(names=MANDATORY_TOOLS)
 
-    return pinned_names
+    assert pinned_names.isdisjoint(enabled_names), (
+        "pinned and enabled overrides must be disjoint by construction"
+    )
+
+    return UserToolStateOverrides(
+        pinned_names=frozenset(pinned_names),
+        enabled_names=frozenset(enabled_names),
+    )
 
 
 _SETTINGS_HTML = (
@@ -709,6 +746,55 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Tool Security Policies — per-tool card layout.
+     Cards reuse the surface/border variables already in use elsewhere
+     so they read consistently with backup-row / group blocks. */
+  .policy-rule-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; margin: 8px 0; }
+  .policy-rule-header { display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 8px; }
+  .policy-rule-header strong { font-size: 0.95rem; }
+  .policy-rule-remove { background: transparent; border: none;
+    color: var(--text-secondary); cursor: pointer; font-size: 1.1rem;
+    padding: 0 6px; }
+  .policy-rule-remove:hover { color: var(--danger); }
+  .policy-predicate-list { list-style: none; padding: 0; margin: 6px 0; }
+  .policy-predicate-row { padding: 4px 0; display: flex; align-items: center;
+    gap: 8px; flex-wrap: wrap; }
+  .policy-predicate-row code { background: var(--bg); padding: 3px 8px;
+    border-radius: 4px; font-size: 0.8rem; color: var(--text); }
+  .policy-predicate-row button { background: transparent; border: none;
+    color: var(--accent); cursor: pointer; font-size: 0.8rem; padding: 2px 4px; }
+  .policy-predicate-row button:hover { text-decoration: underline; }
+  .policy-add-predicate { background: transparent; border: 1px dashed var(--border);
+    color: var(--accent); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 0.85rem; margin-top: 4px; }
+  .policy-add-predicate:hover { background: var(--surface-hover); }
+  .policy-predicate-form { background: var(--bg); padding: 10px;
+    margin: 6px 0; border: 1px dashed var(--border); border-radius: 6px;
+    display: flex; flex-direction: column; gap: 8px; }
+  .policy-predicate-form .policy-form-row { display: flex; flex-wrap: wrap;
+    gap: 6px; align-items: center; }
+  .policy-predicate-form .policy-form-label { min-width: 90px;
+    color: var(--text-secondary); font-size: 0.82rem; }
+  .policy-predicate-form select,
+  .policy-predicate-form input { padding: 5px 8px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font-size: 0.85rem; }
+  .policy-predicate-form input.policy-predicate-path-custom { min-width: 200px; }
+  .policy-predicate-form input.policy-predicate-value { min-width: 220px;
+    font-family: monospace; }
+  .policy-predicate-form .policy-form-hint { font-size: 0.75rem;
+    color: var(--text-secondary); padding-left: 96px; margin-top: -4px; }
+  .policy-predicate-form-error { color: var(--danger); font-size: 0.78rem;
+    width: 100%; margin-top: 4px; }
+  .policy-rule-lifetime { margin: 10px 0; font-size: 0.85rem;
+    color: var(--text-secondary); }
+  .policy-rule-lifetime input { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; margin: 0 6px; }
+  .policy-save-status { margin-left: 10px; font-size: 0.8rem;
+    color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -720,6 +806,7 @@ _SETTINGS_HTML = (
   <button class="tab active" data-panel="tools">Tools</button>
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
+  <button class="tab" data-panel="tool-security-policies">Tool Security Policies</button>
 </div>
 <div class="restart-notice" id="restartNotice">
   <span class="restart-notice-text" id="restartNoticeText">
@@ -776,6 +863,73 @@ _SETTINGS_HTML = (
   </div>
   <div id="backupList"></div>
 </div>
+<div class="panel" id="panel-tool-security-policies">
+  <h2>Tool Security Policies</h2>
+  <p class="features-sub">
+    Per-tool approval gating for high-stakes calls. Use the
+    <strong>Tools</strong> tab to enable gating for a tool, then refine
+    the matching conditions and approval lifetime here. Condition operators:
+    equals, is one of, regex, contains, is present, greater than, less than.
+  </p>
+
+  <section id="policy-global-settings" style="margin-bottom:16px">
+    <h3 style="font-size:1rem;margin-bottom:8px">Global settings</h3>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Enable Tool Security Policies</div>
+        <div class="feature-help">
+          Master switch. Mirrors the toggle in Server Settings. Off by
+          default — toggle on and restart the addon to activate the
+          gating middleware. While off, the rules below persist but
+          aren't enforced.
+        </div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-master-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Wait seconds (5-600)</div>
+        <div class="feature-help">How long the middleware waits for an approval before timing out.</div>
+      </div>
+      <div class="feature-control">
+        <input type="number" id="policy-wait-seconds" min="5" max="600">
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name">Approval TTL minutes (1-60)</div>
+        <div class="feature-help">How long a pending approval stays in the queue before expiring.</div>
+      </div>
+      <div class="feature-control">
+        <input type="number" id="policy-ttl-minutes" min="1" max="60">
+      </div>
+    </div>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
+      <button id="policy-save-global-btn" class="restart-btn">Save global settings</button>
+      <span id="policy-global-save-status" class="status"></span>
+    </div>
+  </section>
+
+  <section id="policy-pending" style="margin-bottom:16px">
+    <h3 style="font-size:1rem;margin-bottom:8px">Pending approvals</h3>
+    <div id="policy-pending-list" class="backup-empty">No pending approvals.</div>
+  </section>
+
+  <section id="policy-rules">
+    <h3 style="font-size:1rem;margin-bottom:8px">Gated tools</h3>
+    <div id="policy-load-error" style="display:none;background:var(--danger);color:white;padding:8px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85rem;"></div>
+    <div id="policy-rules-empty" class="backup-empty" style="display:none;">
+      No tools currently security-gated. Enable per-tool gating from the
+      <a href="#" data-panel-link="tools">Tools</a> tab.
+    </div>
+    <div id="policy-rules-list"></div>
+  </section>
+</div>
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
     <div class="modal-header">
@@ -809,6 +963,86 @@ let toolStates = {};
 let saveTimer = null;
 let openGroups = new Set();
 
+// Per-tool "security gated" toggle state mirrors policy.rules from
+// /api/policy/config. A tool is gated iff there's any rule with a
+// matching tool_name (with or without conditions). The Tools tab
+// uses this set to render the third toggle alongside enabled/pinned.
+// `enabled` is tri-state: true/false from the addon-config flag, or
+// null when the features fetch failed — downstream branches need to
+// distinguish "definitively off" from "couldn't determine" so they
+// don't false-confidently tell the user the feature is off.
+const policyState = {
+  enabled: false,
+  enabledKnown: false,
+  gatedTools: new Set(),
+};
+
+async function loadPolicyState() {
+  // policyState.enabled mirrors the addon-config flag
+  // (enable_tool_security_policies) — the single source of truth for
+  // whether the middleware is active. Read it from /api/settings/features
+  // where it appears via FEATURE_FLAG_FIELDS.
+  try {
+    const fresp = await fetch('./api/settings/features');
+    if (fresp.ok) {
+      const fdata = await fresp.json();
+      const flag = (fdata.flags || {})['enable_tool_security_policies'];
+      policyState.enabled = !!(flag && flag.value);
+      policyState.enabledKnown = true;
+    } else {
+      policyState.enabled = false;
+      policyState.enabledKnown = false;
+    }
+  } catch (_e) {
+    policyState.enabled = false;
+    policyState.enabledKnown = false;
+  }
+  try {
+    const r = await fetch('./api/policy/config');
+    if (!r.ok) {
+      policyState.gatedTools = new Set();
+      return;
+    }
+    const p = await r.json();
+    policyState.gatedTools = new Set((p.rules || []).map(rule => rule.tool_name));
+  } catch (_e) {
+    // Policy endpoint unavailable (sidecar stub) — leave gatedTools empty.
+    policyState.gatedTools = new Set();
+  }
+}
+
+// Wrap PUT /api/policy/config so every caller gets identical handling of
+// the 409 (optimistic-concurrency) and other failure paths. The full
+// policy round-trips through every caller, so the version GET'd here
+// goes back out in the PUT body and the server can reject stale writes.
+async function policyPut(policy, opLabel) {
+  const w = await fetch('./api/policy/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(policy),
+  });
+  if (w.status === 409) {
+    throw new Error(opLabel + ' failed: policy was modified in another tab/session. Reload the page, then re-apply your changes.');
+  }
+  if (!w.ok) throw new Error(opLabel + ' failed: ' + w.status + ' ' + await w.text());
+  return await w.json();
+}
+
+async function syncPolicyRule(toolName, gated) {
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  const policy = await r.json();
+  policy.rules = policy.rules || [];
+  if (gated) {
+    if (!policy.rules.some(rule => rule.tool_name === toolName)) {
+      policy.rules.push({tool_name: toolName, when: [], remember_minutes: 0});
+    }
+  } else {
+    policy.rules = policy.rules.filter(rule => rule.tool_name !== toolName);
+  }
+  await policyPut(policy, 'Sync gated toggle');
+}
+
 async function loadTools() {
   let resp;
   try {
@@ -830,6 +1064,10 @@ async function loadTools() {
   }
   toolData = data.tools || [];
   toolStates = data.states || {};
+  // Load policy state before the first render so the "security gated"
+  // toggle reflects current policy.rules. loadPolicyState() never throws
+  // — it leaves gatedTools empty on failure.
+  await loadPolicyState();
   if (toolData.length === 0) {
     // Empty tool list is a sidecar misconfiguration — usually the
     // parent stdio process couldn't dump the metadata cache. Tell
@@ -1265,13 +1503,39 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>pinned</span>` +
           `</div>` +
+          `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
+               `title="${policyState.enabled ? '' : 'Enable Tool Security Policies in addon config first.'}">` +
+            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
+              `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
+              `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
+              `<span class="slider"></span></label>` +
+            `<span>security gated</span>` +
+          `</div>` +
         `</div>`;
 
       const inputs = div.querySelectorAll('input[type="checkbox"]');
       inputs.forEach(input => {
         if (input.disabled) return;
-        input.addEventListener('change', (e) => {
+        input.addEventListener('change', async (e) => {
           const field = e.target.dataset.field;
+          if (field === 'gated') {
+            // Optimistic UI: flip local state, sync to server, rollback on failure.
+            // Gated lives in policy.rules (not tool_config), so we skip scheduleSave().
+            const wasGated = policyState.gatedTools.has(t.name);
+            const nowGated = e.target.checked;
+            if (nowGated) policyState.gatedTools.add(t.name);
+            else policyState.gatedTools.delete(t.name);
+            try {
+              await syncPolicyRule(t.name, nowGated);
+            } catch (err) {
+              if (wasGated) policyState.gatedTools.add(t.name);
+              else policyState.gatedTools.delete(t.name);
+              e.target.checked = wasGated;
+              alert('Failed to update tool security policy: ' + err.message);
+            }
+            render();
+            return;
+          }
           const currentState = getState(t.name);
           let newState = currentState;
           if (field === 'enabled') {
@@ -1678,6 +1942,10 @@ const FEATURE_META = {
     label: "Enable custom component integration (beta)",
     help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
   },
+  enable_tool_security_policies: {
+    label: "Enable Tool Security Policies",
+    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  },
 };
 
 const ORIGIN_LOCKED_NOTE = {
@@ -1833,30 +2101,957 @@ async function saveFeatureFlag(fieldName, value) {
   }
 }
 
+// ===== Tool Security Policies tab =====
+// Live approval routes (pending/approve/deny) are only available from
+// the main server (in-process ApprovalQueue). The sidecar serves
+// config GET/PUT but returns 503 for the live endpoints — the UI
+// degrades to "Live approvals unavailable in this mode."
+//
+// The card UI keeps an in-memory mutable copy of each rule
+// (policyRuleEdits[tool_name]) so the user can edit conditions /
+// remember_minutes locally before pressing "Save changes" on a card,
+// which then GETs current policy, replaces the rule entry, and PUTs.
+// This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
+let policyRuleEdits = {};
+
+async function syncPolicyMasterToggle() {
+  // The master toggle on this tab is just a UI mirror of the same
+  // `enable_tool_security_policies` feature flag the Server Settings
+  // tab exposes — the addon-config flag is the single source of truth.
+  // We rely on loadPolicyState() to have populated policyState.enabled
+  // (it fetches /api/settings/features) so the only work here is to
+  // reflect that bit into the checkbox.
+  await loadPolicyState();
+  const cb = document.getElementById('policy-master-toggle');
+  if (cb) cb.checked = !!policyState.enabled;
+}
+
+async function policyLoadConfig() {
+  await syncPolicyMasterToggle();
+  const errEl = document.getElementById('policy-load-error');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  let resp;
+  try {
+    resp = await fetch('./api/policy/config');
+  } catch (e) {
+    showPolicyLoadError('Could not reach the server: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    // 500 with policy_file_corrupt:true is the explicit "your
+    // tool_policy.json is broken, here's how to repair" message from
+    // the handler — surface it instead of silently rendering empty.
+    let detail = 'HTTP ' + resp.status;
+    let bodyParsed = false;
+    try {
+      const body = await resp.json();
+      bodyParsed = true;
+      if (body && body.error) detail = body.error;
+      if (body && body.policy_file_corrupt) {
+        detail += ' (tool_policy.json appears corrupt; edit or delete it on the addon /data volume)';
+      }
+    } catch (_e) { /* keep the HTTP-status fallback */ }
+    if (!bodyParsed) {
+      // E.g. an HTML error page from a misrouted sidecar — give the
+      // operator a hint that the body itself was unparseable, not
+      // just the status code.
+      detail += ' (response body unparseable)';
+    }
+    showPolicyLoadError('Failed to load policy: ' + detail);
+    return;
+  }
+  const p = await resp.json();
+  document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
+  document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
+  renderPolicyCards(p);
+}
+
+function showPolicyLoadError(msg) {
+  const errEl = document.getElementById('policy-load-error');
+  if (!errEl) return;
+  errEl.style.display = '';
+  errEl.textContent = msg;
+}
+
+function renderPolicyCards(policy) {
+  const listEl = document.getElementById('policy-rules-list');
+  const emptyEl = document.getElementById('policy-rules-empty');
+  listEl.innerHTML = '';
+  policyRuleEdits = {};
+  const rules = (policy && policy.rules) || [];
+  if (rules.length === 0) {
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  // Group rules by tool_name. The Tools-tab toggle creates exactly one
+  // rule per tool; defensively handle the case where a hand-edited file
+  // has multiple entries: each becomes its own card so the user can
+  // see/edit them all.
+  const byTool = {};
+  rules.forEach((r, idx) => {
+    const key = r.tool_name + '\u0000' + idx;
+    byTool[key] = {tool_name: r.tool_name, rule: r, originalIndex: idx};
+  });
+  Object.keys(byTool).forEach(key => {
+    const entry = byTool[key];
+    // Deep clone the rule into the edit buffer so card-local changes
+    // don't mutate the server response until "Save changes".
+    const editKey = entry.tool_name;
+    policyRuleEdits[editKey] = JSON.parse(JSON.stringify(entry.rule));
+    listEl.appendChild(renderPolicyCard(entry.tool_name, policyRuleEdits[editKey]));
+  });
+}
+
+function displayPredicate(p) {
+  if (!p || !p.path) return '(invalid)';
+  if (p.op === 'exists') return p.path + ' exists';
+  const val = (p.value === undefined) ? 'null' : JSON.stringify(p.value);
+  return p.path + ' ' + p.op + ' ' + val;
+}
+
+function renderPolicyCard(toolName, rule) {
+  const card = document.createElement('div');
+  card.className = 'policy-rule-card';
+  card.dataset.tool = toolName;
+  rule.when = rule.when || [];
+  const predicateRows = rule.when.map((p, i) => (
+    '<li class="policy-predicate-row" data-idx="' + i + '">' +
+      '<code>' + escapeHtml(displayPredicate(p)) + '</code>' +
+      '<button class="policy-edit-predicate" data-idx="' + i + '">edit</button>' +
+      '<button class="policy-remove-predicate" data-idx="' + i + '">×</button>' +
+    '</li>'
+  )).join('');
+  const emptyHint = rule.when.length === 0
+    ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
+      '(no conditions — rule matches every call to this tool)</em></li>'
+    : '';
+  card.innerHTML =
+    '<div class="policy-rule-header">' +
+      '<strong>' + escapeHtml(toolName) + '</strong>' +
+      '<button class="policy-rule-remove" title="Remove from policy">×</button>' +
+    '</div>' +
+    '<div class="policy-rule-predicates">' +
+      '<label class="features-sub" style="display:block;margin-bottom:4px">' +
+        'Require approval when ALL of these conditions match (no conditions = always require approval):' +
+      '</label>' +
+      '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
+      '<button class="policy-add-predicate">+ Add condition</button>' +
+      '<div class="policy-predicate-form" style="display:none;">' +
+        '<div class="policy-form-row">' +
+          '<label class="policy-form-label">Argument:</label>' +
+          '<select class="policy-predicate-path-select">' +
+            '<option value="">(loading...)</option>' +
+          '</select>' +
+          '<input type="text" class="policy-predicate-path-custom" ' +
+            'placeholder="e.g. args.color_temp" style="display:none">' +
+        '</div>' +
+        '<div class="policy-form-row">' +
+          '<label class="policy-form-label">Match when:</label>' +
+          '<select class="policy-predicate-op">' +
+            '<option value="exists">is present (any value)</option>' +
+            '<option value="eq">equals</option>' +
+            '<option value="neq">does NOT equal</option>' +
+            '<option value="in">is one of</option>' +
+            '<option value="not_in">is NOT one of</option>' +
+            '<option value="contains">contains</option>' +
+            '<option value="regex">matches regex</option>' +
+            '<option value="gt">is greater than</option>' +
+            '<option value="lt">is less than</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="policy-form-row policy-value-row">' +
+          '<label class="policy-form-label">Value:</label>' +
+          '<span class="policy-predicate-value-slot"></span>' +
+        '</div>' +
+        '<div class="policy-form-row">' +
+          '<button class="policy-predicate-form-save">Save condition</button>' +
+          '<button class="policy-predicate-form-cancel">Cancel</button>' +
+        '</div>' +
+        '<div class="policy-predicate-form-error" style="display:none;"></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="policy-rule-lifetime">' +
+      '<label>Remember approval for:' +
+        '<input type="number" min="0" max="1440" class="policy-remember-minutes" ' +
+          'value="' + (rule.remember_minutes || 0) + '">' +
+        'minutes (0 = single-shot)' +
+      '</label>' +
+    '</div>' +
+    '<span class="policy-save-status" style="font-size:0.78rem;color:var(--text-secondary)"></span>';
+
+  // Auto-save: every condition add/edit/remove and every remember-minutes
+  // change immediately PUTs the rule to disk. No manual "Save changes"
+  // button — the only signal is the small status text below the card.
+  let autoSaveSeq = 0;
+  const autoSave = async () => {
+    const status = card.querySelector('.policy-save-status');
+    const mySeq = ++autoSaveSeq;
+    status.textContent = 'Saving…';
+    try {
+      await savePolicyRule(toolName, rule);
+      // Skip the success label if a newer save started (rapid edits)
+      if (mySeq === autoSaveSeq) status.textContent = 'Saved.';
+    } catch (err) {
+      if (mySeq === autoSaveSeq) {
+        status.textContent = 'Save failed: ' + err.message;
+      }
+    }
+  };
+
+  // Re-render the card in place after a condition-list mutation so the
+  // rows reflect the new in-memory rule object.
+  const rerenderCard = () => {
+    const replacement = renderPolicyCard(toolName, rule);
+    card.replaceWith(replacement);
+  };
+
+  card.querySelector('.policy-rule-remove').addEventListener('click', async () => {
+    if (!confirm('Remove "' + toolName + '" from the security policy?')) return;
+    try {
+      await removePolicyRule(toolName);
+      delete policyRuleEdits[toolName];
+      card.remove();
+      // Refresh card list + empty state from server (also refreshes
+      // Tools-tab gated state on next visit via loadPolicyState).
+      await policyLoadConfig();
+    } catch (err) {
+      alert('Failed to remove rule: ' + err.message);
+    }
+  });
+
+  // remember-minutes is a number input; debounce so typing "30" doesn't
+  // fire three saves (3, 30 — or rapid arrow-key presses).
+  let rmDebounce = null;
+  card.querySelector('.policy-remember-minutes').addEventListener('input', (e) => {
+    rule.remember_minutes = parseInt(e.target.value, 10) || 0;
+    if (rmDebounce) clearTimeout(rmDebounce);
+    rmDebounce = setTimeout(autoSave, 500);
+  });
+
+  const formEl = card.querySelector('.policy-predicate-form');
+  const opEl = formEl.querySelector('.policy-predicate-op');
+  const pathSelectEl = formEl.querySelector('.policy-predicate-path-select');
+  const pathCustomEl = formEl.querySelector('.policy-predicate-path-custom');
+  const valueSlotEl = formEl.querySelector('.policy-predicate-value-slot');
+  const errorEl = formEl.querySelector('.policy-predicate-form-error');
+  let editingIdx = -1;
+  // Tool schema is fetched lazily on first form-open and cached on
+  // the card so reopening the form doesn't refetch.
+  let toolSchema = null;
+  // value-source choice cache: { source_key: [values] }
+  const valueChoiceCache = {};
+
+  const FREE_TEXT_OPT = '__custom__';
+
+  const currentPath = () => (
+    pathSelectEl.value === FREE_TEXT_OPT
+      ? pathCustomEl.value.trim()
+      : pathSelectEl.value
+  );
+
+  const populatePathSelect = (selectedPath) => {
+    const paths = (toolSchema && toolSchema.paths) || [];
+    let html = '';
+    // Wildcard: match the condition against EVERY argument of the call.
+    // Always first AND default, so the form has a sensible value out of
+    // the box and users never hit "argument is required" by saving an
+    // empty placeholder.
+    html += '<option value="args.*" ' +
+      'title="Match against every argument of the call. Combine with op=equals/is one of to gate on any arg having a given value.">' +
+      '(any argument)</option>';
+    for (const p of paths) {
+      const tip = p.description ? ' title="' + escapeHtml(p.description) + '"' : '';
+      html += '<option value="' + escapeHtml(p.path) + '"' + tip + '>' +
+        escapeHtml(p.label) +
+        (p.required ? ' *' : '') +
+        (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
+        '</option>';
+    }
+    html += '<option value="' + FREE_TEXT_OPT + '">(other — type a path)</option>';
+    pathSelectEl.innerHTML = html;
+
+    // If the existing condition uses a path the schema doesn't know
+    // about (read-only tool, free-text from earlier, removed arg),
+    // drop into custom mode automatically so we don't silently clobber
+    // the existing value.
+    if (selectedPath) {
+      const isWildcard = selectedPath === 'args.*';
+      const match = paths.find(p => p.path === selectedPath);
+      if (isWildcard || match) {
+        pathSelectEl.value = selectedPath;
+        pathCustomEl.style.display = 'none';
+        pathCustomEl.value = '';
+      } else {
+        pathSelectEl.value = FREE_TEXT_OPT;
+        pathCustomEl.style.display = '';
+        pathCustomEl.value = selectedPath;
+      }
+    } else {
+      // New condition: default to "(any argument)" so the form is
+      // immediately submittable once the user fills in a value.
+      pathSelectEl.value = 'args.*';
+      pathCustomEl.style.display = 'none';
+      pathCustomEl.value = '';
+    }
+  };
+
+  // Latest value-source fetch error, surfaced as a hint under the value
+  // row so the user notices when the dropdown fell back to free-text
+  // because of a real failure (vs because no source is registered).
+  let lastValueSourceError = null;
+
+  const loadValueChoices = async (sourceKey) => {
+    if (valueChoiceCache[sourceKey]) {
+      lastValueSourceError = null;
+      return valueChoiceCache[sourceKey];
+    }
+    try {
+      const r = await fetch('./api/policy/value-source?source=' +
+        encodeURIComponent(sourceKey));
+      if (!r.ok) {
+        lastValueSourceError = 'value-source fetch failed (HTTP ' + r.status + ') — falling back to free-text';
+        return null;
+      }
+      const data = await r.json();
+      const values = Array.isArray(data.values) ? data.values : [];
+      valueChoiceCache[sourceKey] = values;
+      lastValueSourceError = null;
+      return values;
+    } catch (e) {
+      lastValueSourceError = 'value-source fetch failed (' + e.message + ') — falling back to free-text';
+      return null;
+    }
+  };
+
+  // Ops where leaving the value blank is meaningful UX shorthand for
+  // "gate any call where this argument is present, regardless of
+  // value". On save, those blank-value entries are coerced to
+  // op=exists (see readValueControl + the form-save handler). Ops
+  // that genuinely require a value (regex / gt / lt) stay strict.
+  const VALUE_OPTIONAL_OPS = new Set(['exists', 'eq', 'neq', 'in', 'not_in', 'contains']);
+
+  const hintForOp = (op) => {
+    if (op === 'exists') {
+      return 'Leave blank — this op gates on the argument being present at all, regardless of value.';
+    }
+    if (op === 'in' || op === 'not_in') {
+      return 'Pick one or more values, or type a JSON list. Leave blank to gate on any value.';
+    }
+    if (op === 'regex') {
+      return 'A regular expression to match the argument against.';
+    }
+    if (op === 'contains') {
+      return 'A substring (for strings) or item (for lists). Leave blank to gate on any value.';
+    }
+    if (op === 'gt' || op === 'lt') {
+      return 'A number to compare against.';
+    }
+    return 'The value the argument must equal. Leave blank to gate on any value.';
+  };
+
+  // Sequence number for renderValueControl — rapid path/op edits can
+  // start several overlapping fetches; only the latest one is allowed
+  // to mutate the DOM. Without this, an earlier slow fetch can land
+  // after a later fast one and clobber the user's chosen control.
+  let renderSeq = 0;
+
+  // Render the value control inside valueSlotEl based on current op +
+  // path. The control is always visible (even for op=exists) so users
+  // can refine the rule later without re-discovering where the input
+  // went.
+  const renderValueControl = async (existingValue) => {
+    const mySeq = ++renderSeq;
+    const op = opEl.value;
+    const path = currentPath();
+    const pathMeta = ((toolSchema && toolSchema.paths) || [])
+      .find(p => p.path === path);
+    const sourceKey = (toolSchema && toolSchema.value_sources)
+      ? toolSchema.value_sources[path]
+      : null;
+    const isMulti = (op === 'in' || op === 'not_in');
+    const isSingleChoice = (op === 'eq' || op === 'neq');
+    const choosable = isMulti || isSingleChoice;
+
+    // 1) Live value source (e.g. ha_entities) wins — most useful.
+    if (sourceKey && choosable) {
+      if (mySeq !== renderSeq) return;
+      valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
+        'Loading choices…</em>';
+      const choices = await loadValueChoices(sourceKey);
+      if (mySeq !== renderSeq) return;  // newer render in flight; discard.
+      if (choices) {
+        renderChoiceSelect(choices, existingValue, isMulti);
+        renderHint(op);
+        return;
+      }
+      // fetch failed → fall through to free-text (renderHint will
+      // surface the error via lastValueSourceError below).
+    }
+
+    // 2) Schema-declared enum — render as choice list too.
+    if (choosable && pathMeta && Array.isArray(pathMeta.enum) && pathMeta.enum.length) {
+      if (mySeq !== renderSeq) return;
+      renderChoiceSelect(pathMeta.enum, existingValue, isMulti);
+      renderHint(op);
+      return;
+    }
+
+    // 3) Free-text JSON fallback (or op=exists, where blank is the norm).
+    if (mySeq !== renderSeq) return;
+    renderFreeTextValue(existingValue);
+    renderHint(op);
+  };
+
+  const renderChoiceSelect = (choices, existingValue, isMulti) => {
+    const existingArr = Array.isArray(existingValue)
+      ? existingValue
+      : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
+    let html = '<select class="policy-predicate-value-control"' +
+      (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
+      '>';
+    if (!isMulti) {
+      html += '<option value="">(pick a value)</option>';
+    }
+    for (const c of choices) {
+      const selected = existingArr.includes(c) ? ' selected' : '';
+      html += '<option value="' + escapeHtml(String(c)) + '"' + selected + '>' +
+        escapeHtml(String(c)) + '</option>';
+    }
+    html += '</select>';
+    valueSlotEl.innerHTML = html;
+  };
+
+  const renderFreeTextValue = (existingValue) => {
+    const op = opEl.value;
+    let placeholder;
+    if (op === 'exists') {
+      placeholder = 'usually left blank';
+    } else if (op === 'in' || op === 'not_in') {
+      placeholder = '["lock","alarm_control_panel"]';
+    } else if (op === 'regex') {
+      placeholder = '^light\\..+';
+    } else {
+      placeholder = '"lock"  or  42  or  true';
+    }
+    const initial = (existingValue === undefined || existingValue === null)
+      ? ''
+      : JSON.stringify(existingValue);
+    valueSlotEl.innerHTML = '<input type="text" ' +
+      'class="policy-predicate-value-control policy-predicate-value" ' +
+      'placeholder="' + escapeHtml(placeholder) + '" ' +
+      'value="' + escapeHtml(initial) + '">';
+  };
+
+  const renderHint = (op) => {
+    // Remove any previous hint then add a fresh one below the value row.
+    const oldHint = formEl.querySelector('.policy-form-hint');
+    if (oldHint) oldHint.remove();
+    const hint = document.createElement('div');
+    hint.className = 'policy-form-hint';
+    let text = hintForOp(op);
+    // If a value-source fetch failed (HA outage, sidecar 503, …) the
+    // dropdown silently downgraded to free-text — surface that so the
+    // user knows the typo'd rule they're about to author isn't picking
+    // from a populated list.
+    if (lastValueSourceError) {
+      text = lastValueSourceError + ' — ' + text;
+      hint.style.color = 'var(--danger)';
+    }
+    hint.textContent = text;
+    formEl.querySelector('.policy-value-row').after(hint);
+  };
+
+  const readValueControl = () => {
+    const op = opEl.value;
+    const ctrl = valueSlotEl.querySelector('.policy-predicate-value-control');
+    if (!ctrl) return {ok: true, value: undefined};
+    if (ctrl.tagName === 'SELECT') {
+      if (ctrl.multiple) {
+        const picked = Array.from(ctrl.selectedOptions).map(o => o.value);
+        if (picked.length === 0) {
+          if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
+          return {ok: false, error: 'pick at least one value'};
+        }
+        return {ok: true, value: picked};
+      }
+      if (!ctrl.value) {
+        if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
+        return {ok: false, error: 'pick a value'};
+      }
+      return {ok: true, value: ctrl.value};
+    }
+    const raw = ctrl.value.trim();
+    if (!raw) {
+      if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
+      return {ok: false, error: 'value is required for op=' + op};
+    }
+    // First try raw JSON. If that fails, fall back to smart-coercion
+    // so users can type "lock" or "lock,alarm" without remembering the
+    // quoting rules.
+    try {
+      return {ok: true, value: JSON.parse(raw)};
+    } catch (_e) {
+      const coerced = coerceBarewords(raw, op);
+      if (coerced.ok) return coerced;
+      return {ok: false, error: coerced.error};
+    }
+  };
+
+  // Coerce common bareword inputs into the JSON the backend expects.
+  // "lock"               (op=eq)        → "lock"
+  // "lock"               (op=in)        → ["lock"]
+  // "lock,alarm_control" (op=in/not_in) → ["lock","alarm_control"]
+  // "42"                 → 42  (numeric autodetect for any op)
+  // "true" / "false"     → boolean
+  const coerceBarewords = (raw, op) => {
+    const wrap = (v) => (op === 'in' || op === 'not_in') ? [v] : v;
+    if (op === 'in' || op === 'not_in') {
+      // Try comma-split first — if any chunk is comma-separated, build list
+      if (raw.indexOf(',') !== -1) {
+        const items = raw.split(',').map(s => s.trim()).filter(Boolean);
+        if (items.length === 0) {
+          return {ok: false, error: 'empty list for op=' + op};
+        }
+        return {ok: true, value: items.map(coerceScalar)};
+      }
+    }
+    const scalar = coerceScalar(raw);
+    return {ok: true, value: wrap(scalar)};
+  };
+
+  const coerceScalar = (s) => {
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    if (s === 'null') return null;
+    if (/^-?\\d+$/.test(s)) return parseInt(s, 10);
+    if (/^-?\\d+\\.\\d+$/.test(s)) return parseFloat(s);
+    return s; // plain string
+  };
+
+  const fetchToolSchema = async () => {
+    if (toolSchema !== null) return toolSchema;
+    try {
+      const r = await fetch('./api/policy/tool-schema?name=' +
+        encodeURIComponent(toolName));
+      if (r.ok) {
+        toolSchema = await r.json();
+      } else {
+        // 503/404/etc: server can't introspect (sidecar / tool not
+        // found). Use an empty schema so the UI still works via free
+        // text. Surface the failure through lastValueSourceError so
+        // renderHint shows the user why their dropdown is gone.
+        toolSchema = {paths: [], value_sources: {}};
+        lastValueSourceError = 'tool-schema fetch failed (HTTP ' + r.status +
+          ') — falling back to free-text';
+      }
+    } catch (e) {
+      toolSchema = {paths: [], value_sources: {}};
+      lastValueSourceError = 'tool-schema fetch failed (' + e.message +
+        ') — falling back to free-text';
+    }
+    return toolSchema;
+  };
+
+  opEl.addEventListener('change', () => renderValueControl(undefined));
+  pathSelectEl.addEventListener('change', () => {
+    pathCustomEl.style.display = (pathSelectEl.value === FREE_TEXT_OPT) ? '' : 'none';
+    renderValueControl(undefined);
+  });
+  pathCustomEl.addEventListener('input', () => renderValueControl(undefined));
+
+  const openForm = async (idx) => {
+    editingIdx = idx;
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+    formEl.style.display = '';
+    await fetchToolSchema();
+    if (idx >= 0) {
+      const p = rule.when[idx];
+      opEl.value = p.op || 'eq';
+      populatePathSelect(p.path || '');
+      await renderValueControl(p.value);
+    } else {
+      opEl.value = 'eq';
+      populatePathSelect('');
+      await renderValueControl(undefined);
+    }
+  };
+
+  card.querySelector('.policy-add-predicate').addEventListener('click', () => openForm(-1));
+
+  card.querySelectorAll('.policy-edit-predicate').forEach(btn => {
+    btn.addEventListener('click', () => openForm(parseInt(btn.dataset.idx, 10)));
+  });
+
+  card.querySelectorAll('.policy-remove-predicate').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      rule.when.splice(idx, 1);
+      await autoSave();
+      rerenderCard();
+    });
+  });
+
+  formEl.querySelector('.policy-predicate-form-cancel').addEventListener('click', () => {
+    formEl.style.display = 'none';
+    editingIdx = -1;
+  });
+
+  formEl.querySelector('.policy-predicate-form-save').addEventListener('click', async () => {
+    let op = opEl.value;
+    const path = currentPath();
+    if (!path) {
+      errorEl.textContent = 'argument is required';
+      errorEl.style.display = '';
+      return;
+    }
+    const predicate = {path: path, op: op};
+    // op=exists is presence-only — backend rejects any value field,
+    // so ignore whatever's in the value box even if the user typed
+    // something. Other ops read normally.
+    if (op !== 'exists') {
+      const parsed = readValueControl();
+      if (!parsed.ok) {
+        errorEl.textContent = parsed.error;
+        errorEl.style.display = '';
+        return;
+      }
+      if (parsed.value === undefined) {
+        // User left value blank on an op where "any value matches"
+        // is meaningful UX shorthand (eq/neq/in/not_in/contains).
+        // Silently coerce to op=exists so the row reads as
+        // "args.* exists" and the rule actually gates on presence
+        // rather than storing a useless null-match.
+        op = 'exists';
+        predicate.op = 'exists';
+      } else {
+        predicate.value = parsed.value;
+      }
+    }
+    if (editingIdx >= 0) {
+      rule.when[editingIdx] = predicate;
+    } else {
+      rule.when.push(predicate);
+    }
+    await autoSave();
+    rerenderCard();
+  });
+
+  return card;
+}
+
+async function savePolicyRule(toolName, ruleObj) {
+  const r = await fetch('./api/policy/config');
+  if (!r.ok) throw new Error('Could not load policy: ' + r.status);
+  const policy = await r.json();
+  policy.rules = policy.rules || [];
+  const idx = policy.rules.findIndex(rule => rule.tool_name === toolName);
+  if (idx >= 0) {
+    policy.rules[idx] = ruleObj;
+  } else {
+    // Defensive: a card exists for a tool with no server-side rule
+    // (e.g. the user removed the rule from another tab between load
+    // and save). Append rather than silently drop the edit.
+    policy.rules.push(ruleObj);
+  }
+  await policyPut(policy, 'Save rule');
+}
+
+async function removePolicyRule(toolName) {
+  // Mirror syncPolicyRule(toolName, false) — kept as a separate helper
+  // so the card's remove button stays self-contained, but the on-wire
+  // shape is identical.
+  await syncPolicyRule(toolName, false);
+}
+
+async function saveGlobalSettings() {
+  const statusEl = document.getElementById('policy-global-save-status');
+  statusEl.textContent = 'Saving...';
+  let resp;
+  try {
+    resp = await fetch('./api/policy/config');
+  } catch (e) {
+    statusEl.textContent = 'Network error: ' + e.message;
+    return;
+  }
+  if (!resp.ok) {
+    statusEl.textContent = 'Load failed: ' + resp.status;
+    return;
+  }
+  const policy = await resp.json();
+  policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
+  policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
+  try {
+    await policyPut(policy, 'Save global settings');
+    statusEl.textContent = 'Saved.';
+  } catch (e) {
+    statusEl.textContent = e.message;
+  }
+}
+
+async function policyLoadPending() {
+  const list = document.getElementById('policy-pending-list');
+  let resp;
+  try {
+    resp = await fetch('./api/policy/pending');
+  } catch (e) {
+    // Surface the failure inline — silent return leaves the pending
+    // list visibly frozen with no signal that polling broke.
+    list.innerHTML = '<em style="color:var(--text-secondary)">Lost contact with server (' + escapeHtml(e.message) + ') — retrying.</em>';
+    return;
+  }
+  if (resp.status === 503) {
+    // 503 has three causes. Only confidently say "feature is off"
+    // when /api/settings/features actually told us so; if we couldn't
+    // determine the flag (network drop, server down), fall back to
+    // the server's 503 message rather than misleadingly claiming the
+    // user disabled the feature.
+    if (policyState.enabledKnown && !policyState.enabled) {
+      list.innerHTML = '<em>Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the addon to enable gating.</em>';
+    } else {
+      // Feature is on (or unknown) but the queue isn't reachable —
+      // sidecar mode, startup ImportError, or transient outage.
+      let msg = 'Live approvals unavailable. Check the addon log for ImportError / RuntimeError details.';
+      try {
+        const body = await resp.json();
+        if (body && body.error) msg = body.error;
+      } catch (_e) { /* keep default */ }
+      list.innerHTML = '<em>' + escapeHtml(msg) + '</em>';
+    }
+    return;
+  }
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const pending = data.pending || [];
+  if (pending.length === 0) {
+    list.textContent = 'No pending approvals.';
+    return;
+  }
+  list.innerHTML = pending.map(p => (
+    '<div data-pending-token="' + escapeHtml(p.token) + '" style="border:1px solid var(--border); padding:10px; margin:6px 0; border-radius:8px; background:var(--surface)">' +
+    '<strong>' + escapeHtml(p.tool_name) + '</strong>' +
+    '<pre style="white-space:pre-wrap; background:var(--bg); padding:8px; margin:6px 0; border-radius:6px; font-size:0.8rem">' +
+    escapeHtml(JSON.stringify(p.args, null, 2)) + '</pre>' +
+    '<small style="color:var(--text-secondary)">Expires: ' + escapeHtml(p.expires_at) + '</small><br>' +
+    '<div style="margin-top:8px; display:flex; gap:8px">' +
+    '<button class="restart-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="approve">Approve</button>' +
+    '<button class="danger-btn" data-policy-token="' + escapeHtml(p.token) + '" data-policy-action="deny">Deny</button>' +
+    '</div></div>'
+  )).join('');
+  // Re-bind decision buttons each render (no event delegation needed —
+  // pending list is small and re-rendered on every poll).
+  list.querySelectorAll('button[data-policy-token]').forEach(btn => {
+    btn.addEventListener('click', () =>
+      policyDecide(btn.dataset.policyToken, btn.dataset.policyAction)
+    );
+  });
+}
+
+async function policyDecide(token, action) {
+  let resp;
+  try {
+    resp = await fetch('./api/policy/' + action, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token}),
+    });
+  } catch (e) {
+    alert('Network error: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    let body;
+    try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
+    if (resp.status === 409 && body.current_decision) {
+      alert("This approval was already " + body.current_decision +
+            " — possibly by another tab or session.");
+    } else if (resp.status === 404) {
+      alert("This approval token is no longer valid (already consumed or expired).");
+    } else {
+      alert('Approval action failed: ' + (body.error || resp.statusText));
+    }
+  }
+  policyLoadPending();
+}
+
+document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
+
+// Master toggle on this tab mirrors the Server Settings checkbox.
+// Persist via the same /api/settings/features endpoint so a save here
+// shows up in Server Settings (and the addon's config.yaml) on reload.
+document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
+  await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  // Re-read the truth from the server and sync the checkbox back to
+  // it. If saveFeatureFlag silently failed (network drop / 5xx) the
+  // server still has the old value and we need to revert the
+  // checkbox so the UI doesn't lie about persisted state.
+  await loadPolicyState();
+  if (policyState.enabledKnown) {
+    e.target.checked = !!policyState.enabled;
+  } else {
+    // Can't confirm what the server has — revert to the pre-flip
+    // value and let the status message tell the user save failed.
+    e.target.checked = previous;
+  }
+});
+
+// Poll for pending approvals every 3s when Tool Security Policies tab is visible.
+setInterval(() => {
+  const policiesTab = document.querySelector('.tab[data-panel="tool-security-policies"]');
+  if (policiesTab && policiesTab.classList.contains('active')) {
+    policyLoadPending();
+  }
+}, 3000);
+
 // ===== Tab switching =====
 // Generic dispatcher — every .tab button names its target panel via
 // data-panel, every .panel has matching id="panel-<name>". Adding a
 // new tab is one button + one panel div; no JS change needed.
+function activateTab(target) {
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.panel === target)
+  );
+  document.querySelectorAll('.panel').forEach(p =>
+    p.classList.toggle('active', p.id === 'panel-' + target)
+  );
+  if (target === 'backups') { loadBackupConfig(); loadBackups(); }
+  if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+  if (target === 'tools') {
+    // Refresh gated-toggle state in case the user changed rules from
+    // the Tool Security Policies tab while it was active.
+    loadPolicyState().then(render).catch(() => {});
+  }
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t =>
-      t.classList.toggle('active', t === tab)
-    );
-    const target = tab.dataset.panel;
-    document.querySelectorAll('.panel').forEach(p =>
-      p.classList.toggle('active', p.id === 'panel-' + target)
-    );
-    if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-  });
+  tab.addEventListener('click', () => activateTab(tab.dataset.panel));
+});
+
+// Cross-tab links — any <a data-panel-link="<name>"> switches tabs
+// in-page rather than following the href (used by the "no gated
+// tools" empty state to point users at the Tools tab).
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('[data-panel-link]');
+  if (!link) return;
+  e.preventDefault();
+  activateTab(link.dataset.panelLink);
 });
 
 loadFeatureFlags();
 loadTools();
+
+// Auto-activate tab from ?tab=<name> query string (used by approval URLs
+// generated by the policy middleware: /settings?tab=tool-security-policies&token=...).
+// If a &token=X is present and the target is the policy tab, scroll to
+// the matching pending entry once policyLoadPending() resolves.
+(function activateTabFromQuery() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get('tab');
+    if (!target) return;
+    const tabBtn = document.querySelector('.tab[data-panel="' + target + '"]');
+    if (!tabBtn) return;
+    activateTab(target);
+    const token = params.get('token');
+    if (token && target === 'tool-security-policies') {
+      // policyLoadPending() runs inside activateTab; wait a tick then
+      // scroll to the matching pending entry if it exists.
+      setTimeout(() => {
+        const row = document.querySelector('[data-pending-token="' + token + '"]');
+        if (row && row.scrollIntoView) {
+          row.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+      }, 500);
+    }
+  } catch (_) { /* best-effort */ }
+})();
 </script>
 </body>
 </html>
 """
 )
+
+
+def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
+    """Sidecar variant of the tool security policies handlers.
+
+    Serves policy config GET/PUT (the on-disk policy file is shared with
+    the main server), but returns 503 for pending/approve/deny — those
+    routes touch the in-memory ``ApprovalQueue`` which only exists in
+    the main server process.
+    """
+    from pydantic import ValidationError
+
+    from .policy.model import Policy
+    from .policy.persistence import load_policy, save_policy
+
+    async def get_config(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
+        except ValueError as e:
+            # Mirror the main-server handler: surface corruption rather
+            # than crash the sidecar tab on a 500.
+            return JSONResponse(
+                {"error": str(e), "policy_file_corrupt": True},
+                status_code=500,
+            )
+
+    async def put_config(request: Request) -> JSONResponse:
+        try:
+            new_policy = Policy.model_validate(await request.json())
+        except (ValidationError, ValueError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        # Mirror main-server optimistic concurrency: reject if on-disk
+        # version moved between this caller's GET and PUT.
+        current = load_policy(data_dir)
+        if new_policy.version != current.version:
+            return JSONResponse(
+                {
+                    "error": "policy version mismatch — reload before saving",
+                    "current_version": current.version,
+                    "current_policy": current.model_dump(mode="json"),
+                },
+                status_code=409,
+            )
+        save_policy(data_dir, new_policy)
+        return JSONResponse({"saved": True, "version": new_policy.version + 1})
+
+    async def unavailable(_: Request) -> JSONResponse:
+        # 503 fires in two distinct situations:
+        #   1. The Tool Security Policies feature is turned off in
+        #      addon config — the middleware never registered, so no
+        #      approval queue exists.
+        #   2. The settings UI is running via the stdio sidecar — the
+        #      in-memory queue lives in the main server process which
+        #      isn't reachable from the sidecar.
+        # Either way, point users at the addon log for the real reason
+        # (a startup ImportError on the policy package surfaces here as
+        # the same 503 with a "ModuleNotFoundError" in the log).
+        return JSONResponse(
+            {
+                "error": (
+                    "Tool security policies live approvals are not active. "
+                    "Either the feature is turned off in addon config, the "
+                    "settings UI is running in stdio-sidecar mode, or the "
+                    "policy package failed to import at startup. Check the "
+                    "addon log for ImportError / RuntimeError details if you "
+                    "expected gating to be on."
+                )
+            },
+            status_code=503,
+        )
+
+    return {
+        "policy_get_config": get_config,
+        "policy_put_config": put_config,
+        "policy_get_pending": unavailable,
+        "policy_post_approve": unavailable,
+        "policy_post_deny": unavailable,
+        "policy_get_tool_schema": unavailable,
+        "policy_get_value_source": unavailable,
+    }
 
 
 class _SupervisorOptionsError(NamedTuple):
@@ -1883,6 +3078,16 @@ class _SupervisorOptionsError(NamedTuple):
     kind: Literal["transport", "validation"]
     message: str
     status_code: int
+
+    @classmethod
+    def transport(cls, message: str) -> _SupervisorOptionsError:
+        """Build a transport-class error (always HTTP 502 upstream)."""
+        return cls(kind="transport", message=message, status_code=502)
+
+    @classmethod
+    def validation(cls, message: str, status_code: int) -> _SupervisorOptionsError:
+        """Build a validation-class error preserving supervisor's status code."""
+        return cls(kind="validation", message=message, status_code=status_code)
 
 
 async def _supervisor_fetch_current_options(
@@ -1918,44 +3123,38 @@ async def _supervisor_fetch_current_options(
         # env var, but treat this as transport (env / setup failure) so
         # a future third caller missing the gate gets a sane 502 rather
         # than an uncaught 500.
-        return {}, _SupervisorOptionsError(
-            "transport", f"Supervisor client unavailable: {exc}", 502
+        return {}, _SupervisorOptionsError.transport(
+            f"Supervisor client unavailable: {exc}"
         )
     except httpx.HTTPError as exc:
-        return {}, _SupervisorOptionsError(
-            "transport",
-            f"Could not reach Supervisor for current options: {exc}",
-            502,
+        return {}, _SupervisorOptionsError.transport(
+            f"Could not reach Supervisor for current options: {exc}"
         )
     if resp.status_code >= 400:
         # Supervisor returning a 4xx/5xx for /info is itself a transport-
         # class failure (we never sent body — there is no schema for
         # the GET to validate). 502 with CONNECTION_FAILED is right.
-        return {}, _SupervisorOptionsError(
-            "transport",
-            (
-                f"Supervisor returned {resp.status_code} for "
-                f"/addons/self/info: {resp.text[:300]}"
-            ),
-            502,
+        return {}, _SupervisorOptionsError.transport(
+            f"Supervisor returned {resp.status_code} for "
+            f"/addons/self/info: {resp.text[:300]}"
         )
     try:
         body = resp.json()
     except ValueError:
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor returned non-JSON for /addons/self/info", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor returned non-JSON for /addons/self/info"
         )
     # Supervisor REST envelope is {"result": "ok", "data": {...}}. Older
     # mocks / variants may return the data dict directly — handle both.
     data = body.get("data") if isinstance(body, dict) and "data" in body else body
     if not isinstance(data, dict):
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor /addons/self/info had non-object body", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor /addons/self/info had non-object body"
         )
     options = data.get("options")
     if not isinstance(options, dict):
-        return {}, _SupervisorOptionsError(
-            "transport", "Supervisor /addons/self/info had no options dict", 502
+        return {}, _SupervisorOptionsError.transport(
+            "Supervisor /addons/self/info had no options dict"
         )
     return options, None
 
@@ -1989,16 +3188,15 @@ async def _supervisor_merge_and_post_options(
         ) as sclient:
             resp = await sclient.post("/addons/self/options", json={"options": merged})
     except RuntimeError as exc:
-        return False, _SupervisorOptionsError(
-            "transport", f"Supervisor client unavailable: {exc}", 502
+        return False, _SupervisorOptionsError.transport(
+            f"Supervisor client unavailable: {exc}"
         )
     except httpx.HTTPError as exc:
-        return False, _SupervisorOptionsError(
-            "transport", f"Supervisor options POST failed: {exc}", 502
+        return False, _SupervisorOptionsError.transport(
+            f"Supervisor options POST failed: {exc}"
         )
     if resp.status_code >= 400:
-        return False, _SupervisorOptionsError(
-            "validation",
+        return False, _SupervisorOptionsError.validation(
             (
                 f"Supervisor rejected options update ({resp.status_code}): "
                 f"{resp.text[:400]}"
@@ -3139,7 +4337,7 @@ def build_settings_handlers(
             }
         )
 
-    return {
+    handlers: dict[str, Any] = {
         "root_page": _root_page,
         "settings_page": _settings_page,
         "get_tools": _get_tools,
@@ -3157,6 +4355,30 @@ def build_settings_handlers(
         "get_backup_config": _get_backup_config,
         "save_backup_config": _save_backup_config,
     }
+
+    # Tool security policies. The main server attaches an
+    # ApprovalQueue to the server object once PolicyMiddleware is wired
+    # in. Only the main server can serve the live pending/approve/deny
+    # endpoints because the queue is in-memory; the sidecar (or a main
+    # server without the queue attribute yet) falls back to stub handlers
+    # that serve config GET/PUT and return 503 for live approval routes.
+    approval_queue = (
+        getattr(server, "approval_queue", None) if server is not None else None
+    )
+    if not is_sidecar and approval_queue is not None:
+        from .policy.handlers import build_policy_handlers
+
+        handlers.update(
+            build_policy_handlers(
+                data_dir=get_data_dir(),
+                queue=approval_queue,
+                server=server,
+            )
+        )
+    else:
+        handlers.update(_build_stub_policy_handlers(data_dir=get_data_dir()))
+
+    return handlers
 
 
 def register_settings_routes(
@@ -3245,6 +4467,28 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
             handlers["save_backup_config"]
         )
+        # Tool security policies endpoints
+        mcp.custom_route("/api/policy/config", methods=["GET"])(
+            handlers["policy_get_config"]
+        )
+        mcp.custom_route("/api/policy/config", methods=["PUT"])(
+            handlers["policy_put_config"]
+        )
+        mcp.custom_route("/api/policy/pending", methods=["GET"])(
+            handlers["policy_get_pending"]
+        )
+        mcp.custom_route("/api/policy/approve", methods=["POST"])(
+            handlers["policy_post_approve"]
+        )
+        mcp.custom_route("/api/policy/deny", methods=["POST"])(
+            handlers["policy_post_deny"]
+        )
+        mcp.custom_route("/api/policy/tool-schema", methods=["GET"])(
+            handlers["policy_get_tool_schema"]
+        )
+        mcp.custom_route("/api/policy/value-source", methods=["GET"])(
+            handlers["policy_get_value_source"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -3297,3 +4541,25 @@ def register_settings_routes(
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
         )(handlers["save_backup_config"])
+        # Tool security policies endpoints
+        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["GET"])(
+            handlers["policy_get_config"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["PUT"])(
+            handlers["policy_put_config"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/pending", methods=["GET"])(
+            handlers["policy_get_pending"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/approve", methods=["POST"])(
+            handlers["policy_post_approve"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/deny", methods=["POST"])(
+            handlers["policy_post_deny"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/tool-schema", methods=["GET"])(
+            handlers["policy_get_tool_schema"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/value-source", methods=["GET"])(
+            handlers["policy_get_value_source"]
+        )
