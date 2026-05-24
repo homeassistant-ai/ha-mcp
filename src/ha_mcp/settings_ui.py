@@ -2424,29 +2424,30 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
-  // Only op=exists treats blank value as the legitimate "match anything"
-  // shape. For every other op, blank means "match against null", which
-  // is almost never what the user wants — point them at op=exists in
-  // the error rather than save a useless rule.
-  const VALUE_OPTIONAL_OPS = new Set(['exists']);
+  // Ops where leaving the value blank is meaningful UX shorthand for
+  // "gate any call where this argument is present, regardless of
+  // value". On save, those blank-value entries are coerced to
+  // op=exists (see readValueControl + the form-save handler). Ops
+  // that genuinely require a value (regex / gt / lt) stay strict.
+  const VALUE_OPTIONAL_OPS = new Set(['exists', 'eq', 'neq', 'in', 'not_in', 'contains']);
 
   const hintForOp = (op) => {
     if (op === 'exists') {
       return 'Leave blank — this op gates on the argument being present at all, regardless of value.';
     }
     if (op === 'in' || op === 'not_in') {
-      return 'Pick one or more values, or type a JSON list.';
+      return 'Pick one or more values, or type a JSON list. Leave blank to gate on any value.';
     }
     if (op === 'regex') {
       return 'A regular expression to match the argument against.';
     }
     if (op === 'contains') {
-      return 'A substring (for strings) or item (for lists). To gate on any value at all, use "is present" instead.';
+      return 'A substring (for strings) or item (for lists). Leave blank to gate on any value.';
     }
     if (op === 'gt' || op === 'lt') {
       return 'A number to compare against.';
     }
-    return 'The value the argument must equal. To gate on any value at all, switch op to "is present" instead.';
+    return 'The value the argument must equal. Leave blank to gate on any value.';
   };
 
   // Sequence number for renderValueControl — rapid path/op edits can
@@ -2698,7 +2699,7 @@ function renderPolicyCard(toolName, rule) {
   });
 
   formEl.querySelector('.policy-predicate-form-save').addEventListener('click', async () => {
-    const op = opEl.value;
+    let op = opEl.value;
     const path = currentPath();
     if (!path) {
       errorEl.textContent = 'argument is required';
@@ -2716,10 +2717,15 @@ function renderPolicyCard(toolName, rule) {
         errorEl.style.display = '';
         return;
       }
-      // Only attach `value` when the user actually entered one — backend
-      // accepts a missing field for eq/neq/contains and treats it as
-      // a null-match.
-      if (parsed.value !== undefined) {
+      if (parsed.value === undefined) {
+        // User left value blank on an op where "any value matches"
+        // is meaningful UX shorthand (eq/neq/in/not_in/contains).
+        // Silently coerce to op=exists so the row reads as
+        // "args.* exists" and the rule actually gates on presence
+        // rather than storing a useless null-match.
+        op = 'exists';
+        predicate.op = 'exists';
+      } else {
         predicate.value = parsed.value;
       }
     }
