@@ -785,6 +785,20 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Beta master toggle + nested sub-rows (#1164). The master row
+     ``.beta-master-row`` is visually distinguished as a section
+     header. The 5 sub-rows ``.beta-sub`` are indented with a vertical
+     connector line on the left; when master is off they get
+     ``.dimmed`` (reduced opacity + disabled inputs) to make the
+     gated state visible without removing rows from the DOM. */
+  .feature-row.beta-master-row { font-weight: 600; padding-top: 16px;
+    border-top: 2px solid var(--border); margin-top: 8px; }
+  .feature-row.beta-master-row .feature-help { font-weight: 400; }
+  .feature-row.beta-sub { padding-left: 32px; position: relative; }
+  .feature-row.beta-sub::before { content: ""; position: absolute;
+    left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.beta-sub.dimmed { opacity: 0.55; }
+  .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
   /* Advanced settings sections (#1164) — one row per
      ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
      matches the .feature-row treatment so the Server Settings tab
@@ -2036,13 +2050,20 @@ const FEATURE_META = {
     label: "Tool search max results",
     help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
+  enable_tool_security_policies: {
+    label: "Enable Tool Security Policies",
+    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  },
+  // Master beta toggle — gates the 5 sub-flags below at runtime
+  // (see config.py:_apply_feature_flag_overrides master gate). UI
+  // dims sub-rows when this is off and re-renders live on flip.
+  enable_beta_features: {
+    label: "Enable beta features",
+    help: "Master toggle for the experimental tools below (YAML editing, filesystem, custom-component install, code mode, lite docstrings). Off by default. Sub-toggles are dimmed and ignored at runtime while this is off — even a sub-flag set via env var is forced off until this master is enabled. Requires restart to take effect.",
+  },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",
     help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
-  },
-  enable_lite_docstrings: {
-    label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
@@ -2052,11 +2073,26 @@ const FEATURE_META = {
     label: "Enable custom component integration (beta)",
     help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
   },
-  enable_tool_security_policies: {
-    label: "Enable Tool Security Policies",
-    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  enable_code_mode: {
+    label: "Enable code-mode sandbox (beta)",
+    help: "Beta feature — disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands — effectively 'do whatever existing tools allow you to do, in any combination'. See docs/beta.md for known limitations. Requires restart to take effect.",
+  },
+  enable_lite_docstrings: {
+    label: "Enable lite tool docstrings (beta)",
+    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
 };
+
+// The 5 beta sub-flag fields gated by the master beta toggle. Mirrors
+// config.py:BETA_FEATURE_FIELDS. Used by renderFeatureFlags to apply
+// nesting + dimming, and by saveFeatureFlag to short-circuit on master-off.
+const BETA_SUB_FLAGS = new Set([
+  "enable_yaml_config_editing",
+  "enable_filesystem_tools",
+  "enable_custom_component_integration",
+  "enable_code_mode",
+  "enable_lite_docstrings",
+]);
 
 const ORIGIN_LOCKED_NOTE = {
   env: 'Set via environment variable — unset it to edit here.',
@@ -2101,18 +2137,34 @@ async function loadFeatureFlags() {
   renderFeatureFlags(data.flags || {});
 }
 
+// Cache of last-fetched flags so we can re-render synchronously when
+// the user flips the master beta toggle (without round-tripping to the
+// server). Server-side master-off rejection still applies on save.
+let _lastFeatureFlags = {};
+
 function renderFeatureFlags(flags) {
+  _lastFeatureFlags = flags;
   const body = document.getElementById('featuresBody');
   body.innerHTML = '';
+  // Master beta state — drives the .dimmed class on sub-rows. Read
+  // from the live cache so we get the post-flip value if the user
+  // just toggled the master.
+  const masterOn = !!(flags.enable_beta_features && flags.enable_beta_features.value);
   // Render in the order FEATURE_META declares — gives consistent
-  // grouping (Tool Search rows together, beta toggles together)
-  // regardless of dict iteration order returned by the server.
+  // grouping (Tool Search rows together, master then beta sub-rows
+  // together) regardless of dict iteration order returned by the
+  // server.
   Object.keys(FEATURE_META).forEach(fieldName => {
     const f = flags[fieldName];
     if (!f) return;
     const meta = FEATURE_META[fieldName];
+    const isMaster = fieldName === 'enable_beta_features';
+    const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
     const row = document.createElement('div');
-    row.className = 'feature-row' + (f.editable ? '' : ' locked');
+    let cls = 'feature-row' + (f.editable ? '' : ' locked');
+    if (isMaster) cls += ' beta-master-row';
+    if (isBetaSub) cls += ' beta-sub' + (masterOn ? '' : ' dimmed');
+    row.className = cls;
 
     const info = document.createElement('div');
     info.className = 'feature-info';
@@ -2135,16 +2187,33 @@ function renderFeatureFlags(flags) {
 
     const control = document.createElement('div');
     control.className = 'feature-control';
+    // Beta sub-flags are disabled at the input level when the master
+    // is off, in addition to the .dimmed class on the row. Server-
+    // side rejection (409 in _save_feature_flags) is the
+    // authoritative guard; this is UX feedback.
+    const lockedByMaster = isBetaSub && !masterOn;
     if (f.type === 'bool') {
       const label = document.createElement('label');
       label.className = 'switch';
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = !!f.value;
-      input.disabled = !f.editable;
-      input.addEventListener('change', () =>
-        saveFeatureFlag(fieldName, input.checked)
-      );
+      input.disabled = !f.editable || lockedByMaster;
+      input.addEventListener('change', () => {
+        // Master flip → re-render the panel synchronously so the
+        // sub-row dimming reflects the new state immediately. The
+        // save POST still proceeds in the background.
+        if (isMaster) {
+          if (_lastFeatureFlags[fieldName]) {
+            _lastFeatureFlags[fieldName] = {
+              ..._lastFeatureFlags[fieldName],
+              value: input.checked,
+            };
+            renderFeatureFlags(_lastFeatureFlags);
+          }
+        }
+        saveFeatureFlag(fieldName, input.checked);
+      });
       const slider = document.createElement('span');
       slider.className = 'slider';
       label.appendChild(input);
@@ -3084,6 +3153,10 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   "enabled_tool_modules", "enable_websocket",
   "log_level", "debug",
   "mcp_server_name", "mcp_server_version", "environment",
+  // fuzzy_threshold is read once by SmartSearchTools at the
+  // lazy-init singleton (tools/smart_search.py) — changes
+  // need restart to rebuild the searcher.
+  "fuzzy_threshold",
   "code_mode_max_duration", "code_mode_max_memory",
   "code_mode_max_recursion", "code_mode_max_invocations",
   "code_mode_saved_tools_path",
@@ -3968,6 +4041,41 @@ def build_settings_handlers(
                     "'flags' must be an object mapping field names to values",
                 ),
                 status_code=400,
+            )
+
+        # Master beta-gate check (#1164): a sub-flag write is only valid
+        # when the master ``enable_beta_features`` is on AFTER the merge.
+        # Derive the post-merge master from the payload (if present),
+        # otherwise fall back to the live ``Settings`` value. Reject
+        # sub-flag writes that try to enable a beta when the resulting
+        # master state would still be off — the runtime gate would force
+        # them False anyway and the user should know the save was a
+        # no-op rather than learning at next startup.
+        from .config import BETA_FEATURE_FIELDS as _BETA_SUB
+
+        effective_master = bool(
+            raw_flags.get(
+                "enable_beta_features",
+                getattr(get_global_settings(), "enable_beta_features", False),
+            )
+        )
+        beta_sub_writes = [
+            k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
+        ]
+        if beta_sub_writes and not effective_master:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        "Cannot enable beta sub-flag(s) "
+                        f"{', '.join(beta_sub_writes)} while the master "
+                        "'Enable beta features' toggle is off. Include "
+                        "enable_beta_features=true in the same save, or "
+                        "flip the master on first."
+                    ),
+                    context={"rejected": beta_sub_writes},
+                ),
+                status_code=409,
             )
 
         # Build the validated override dict. Reject unknown fields and

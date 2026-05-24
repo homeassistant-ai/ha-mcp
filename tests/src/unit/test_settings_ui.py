@@ -2362,3 +2362,90 @@ class TestAdvancedSettingsEndpoints:
         req.json = AsyncMock(return_value={"mcp_server_name": "evil\x00name"})
         resp = await handlers["save_advanced_settings"](req)
         assert resp.status_code == 400
+
+
+class TestBetaMasterGateInSave:
+    """Server-side rejection of beta sub-flag writes when master is off (#1164 Chunk 3a)."""
+
+    @pytest.mark.asyncio
+    async def test_save_features_rejects_beta_subflag_when_master_off(
+        self, monkeypatch
+    ):
+        """POST {enable_yaml_config_editing: true} while master is off → 409."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={"flags": {"enable_yaml_config_editing": True}}
+        )
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "enable_yaml_config_editing" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_features_accepts_master_and_subflag_in_same_batch(
+        self, monkeypatch, tmp_path
+    ):
+        """POST {enable_beta_features: true, enable_yaml_config_editing: true}
+        in one batch succeeds — effective master state is derived AFTER merge."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={
+                "flags": {
+                    "enable_beta_features": True,
+                    "enable_yaml_config_editing": True,
+                }
+            }
+        )
+        resp = await handlers["save_feature_flags"](req)
+        # Must NOT be 409 — both arrive in one batch so effective master = True.
+        assert resp.status_code == 200
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_allows_subflag_when_master_already_on(
+        self, monkeypatch, tmp_path
+    ):
+        """If feature_flags.json already has master=True, a sub-flag save
+        with no master in the payload succeeds (no 409)."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps({"enable_beta_features": True})
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_filesystem_tools": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200
+        get_data_dir.cache_clear()
+        _reset_global_settings()
