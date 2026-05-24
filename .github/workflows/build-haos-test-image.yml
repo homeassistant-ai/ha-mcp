@@ -21,6 +21,17 @@ name: Build HAOS Test Image (Publish to GHCR)
 
 on:
   workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: >-
+          Moving-tag suffix (default: ``latest``). Override to publish
+          to ``:HAOS_VERSION-<suffix>`` instead of ``:HAOS_VERSION-latest``
+          — used by perf-iteration branches that need a non-latest tag
+          they can point the e2e test workflows at without touching the
+          master-served image.
+        type: string
+        required: false
+        default: 'latest'
   push:
     branches: [master]
     paths:
@@ -146,9 +157,42 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Compress qcow2 in-format (qemu-img convert -c)
+        # Re-pack the qcow2 with in-format zlib compression before upload.
+        # The HAOS image is ~12 GB on disk after the bake, almost all of
+        # which is sparse-zeroed space from the ``qemu-img resize 32G``
+        # in ``fetch_haos_qcow2`` plus addon Docker layers. ``-c`` is the
+        # qcow2-native compression flag — the resulting file stays a
+        # standard qcow2 (same media type, same consumer code path), and
+        # qemu decompresses sectors lazily during VM I/O when the e2e
+        # workflow boots it. No upfront decompress step on the pull side.
+        #
+        # Wins:
+        #   - ``oras push``/``oras pull`` wire bytes scale with the file
+        #     size; a ~3–5 GB compressed qcow2 cuts the 6-minute single-
+        #     stream GHCR pull on cache-miss runs to ~2 min.
+        #   - actions/cache also benefits: the existing zstdmt over a
+        #     compressed qcow2 still wins on the addon Docker layer bytes
+        #     that zstd hasn't already squashed.
+        #
+        # Cost: one extra ``qemu-img convert`` pass on the publish runner
+        # (~1–2 min on a 12 GB sparse qcow2), which only runs on
+        # master push / weekly cron / manual dispatch — not on PR runs.
+        run: |
+          orig_bytes=$(stat -c%s haos-test-image.qcow2)
+          qemu-img convert -p -c -O qcow2 \
+            haos-test-image.qcow2 haos-test-image.qcow2.compressed
+          mv haos-test-image.qcow2.compressed haos-test-image.qcow2
+          new_bytes=$(stat -c%s haos-test-image.qcow2)
+          ratio=$(awk -v o="$orig_bytes" -v n="$new_bytes" 'BEGIN{printf "%.1f", o/n}')
+          echo "qcow2 size before: $(numfmt --to=iec "$orig_bytes")"
+          echo "qcow2 size after : $(numfmt --to=iec "$new_bytes")"
+          echo "compression ratio: ${ratio}x"
+
       - name: Upload built image as workflow artifact
         # Always upload — even on PRs that don't push to GHCR — so reviewers
-        # can pull the artifact and verify locally.
+        # can pull the artifact and verify locally. (Now also smaller thanks
+        # to the in-format compression step above.)
         uses: actions/upload-artifact@v7
         with:
           name: haos-test-image-${{ steps.haos_version.outputs.version }}-${{ github.sha }}
@@ -166,13 +210,19 @@ jobs:
         env:
           HAOS_VERSION: ${{ steps.haos_version.outputs.version }}
           SHORT_SHA: ${{ github.sha }}
+          # workflow_dispatch lets perf-iteration branches publish to a
+          # non-``latest`` moving tag (e.g. ``:17.3-haose2eefficiency``)
+          # so they can point the e2e test workflows at a candidate image
+          # without disturbing the master-served ``:HAOS_VERSION-latest``
+          # that every other PR pulls from.
+          TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || 'latest' }}
         run: |
           short_sha="${SHORT_SHA:0:7}"
           versioned="${IMAGE_REPO}:${HAOS_VERSION}-${short_sha}"
-          moving="${IMAGE_REPO}:${HAOS_VERSION}-latest"
+          moving="${IMAGE_REPO}:${HAOS_VERSION}-${TAG_SUFFIX}"
           oras push "$versioned" \
             --artifact-type application/vnd.homeassistant-ai.haos-test-image.v1 \
             haos-test-image.qcow2:application/octet-stream
-          oras tag "$versioned" "${HAOS_VERSION}-latest"
+          oras tag "$versioned" "${HAOS_VERSION}-${TAG_SUFFIX}"
           echo "Pushed $versioned"
           echo "Pushed $moving"
