@@ -63,9 +63,9 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
     """
     match op:
         case "eq":
-            return _ci(val) == _ci(pv)
+            return bool(_ci(val) == _ci(pv))
         case "neq":
-            return _ci(val) != _ci(pv)
+            return bool(_ci(val) != _ci(pv))
         case "in":
             return _ci(val) in [_ci(x) for x in (pv or [])]
         case "not_in":

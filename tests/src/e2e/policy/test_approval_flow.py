@@ -182,3 +182,136 @@ async def test_blocked_call_then_approve_then_recall(policy_enabled_mcp):
         "entity_id": "light.bed_light",
     }
     await _expect_blocked(client, other_args)
+
+
+async def _install_rule(handlers, rule: dict[str, Any]) -> None:
+    current_resp = await handlers["policy_get_config"](_make_request())
+    current = json.loads(current_resp.body)
+    body = {
+        "wait_seconds": 5,
+        "approval_ttl_minutes": 5,
+        "rules": [rule],
+        "version": current["version"],
+    }
+    put_resp = await handlers["policy_put_config"](_make_request(body))
+    assert put_resp.status_code == 200, put_resp.body
+
+
+@pytest.mark.asyncio
+async def test_wildcard_path_gates_when_any_arg_matches(policy_enabled_mcp):
+    """`args.*` fans out: blocks when ANY arg equals the gated value."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.*", "op": "eq", "value": "light"}],
+            "remember_minutes": 0,
+        },
+    )
+    # domain="light" → matches via wildcard
+    await _expect_blocked(
+        client,
+        {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"},
+    )
+    assert server.approval_queue.list_pending()
+
+
+@pytest.mark.asyncio
+async def test_wildcard_path_passes_when_no_arg_matches(policy_enabled_mcp):
+    """`args.*` does NOT gate when no arg satisfies the condition."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.*", "op": "eq", "value": "lock"}],
+            "remember_minutes": 0,
+        },
+    )
+    # No arg equals "lock" → call must pass through to the real tool.
+    result = await client.call_tool(
+        "ha_call_service",
+        {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"},
+    )
+    assert not result.is_error, result
+    assert server.approval_queue.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_case_insensitive_match_gates_regardless_of_caller_casing(
+    policy_enabled_mcp,
+):
+    """Rule value 'lock' should gate calls with 'LOCK', 'Lock', etc."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.domain", "op": "eq", "value": "lock"}],
+            "remember_minutes": 0,
+        },
+    )
+    # Caller capitalises — CI matching must still gate.
+    await _expect_blocked(
+        client, {"domain": "LOCK", "service": "unlock", "entity_id": "lock.front"}
+    )
+    pending = server.approval_queue.list_pending()
+    assert len(pending) == 1
+
+
+@pytest.mark.asyncio
+async def test_deny_raises_user_denied(policy_enabled_mcp):
+    """POST /deny → middleware raises USER_DENIED, never calls the tool."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+            "remember_minutes": 0,
+        },
+    )
+    args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
+    await _expect_blocked(client, args)
+    token = server.approval_queue.list_pending()[0].token
+    deny_resp = await handlers["policy_post_deny"](_make_request({"token": token}))
+    assert deny_resp.status_code == 200, deny_resp.body
+    # Re-call with same args: middleware sees the denied entry → USER_DENIED.
+    try:
+        result = await client.call_tool("ha_call_service", args)
+    except ToolError as exc:
+        body = tool_error_to_result(exc)
+    else:
+        body = parse_mcp_result(result)
+    assert body.get("error", {}).get("code") == "USER_DENIED", body
+
+
+@pytest.mark.asyncio
+async def test_remember_minutes_skips_approval_within_window(policy_enabled_mcp):
+    """remember_minutes>0: a second call within the window bypasses gating."""
+    client, server, handlers = policy_enabled_mcp
+    await _install_rule(
+        handlers,
+        {
+            "tool_name": "ha_call_service",
+            "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+            "remember_minutes": 5,
+        },
+    )
+    args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
+    await _expect_blocked(client, args)
+    token = server.approval_queue.list_pending()[0].token
+    approve_resp = await handlers["policy_post_approve"](
+        _make_request({"token": token})
+    )
+    assert approve_resp.status_code == 200
+    # First post-approval call consumes the pending entry AND seeds the
+    # remember-cache. Second call within the 5-minute window should skip
+    # the queue entirely.
+    result_a = await client.call_tool("ha_call_service", args)
+    assert not result_a.is_error
+    result_b = await client.call_tool("ha_call_service", args)
+    assert not result_b.is_error
+    # Pending must be empty — neither call left an entry behind.
+    assert server.approval_queue.list_pending() == []
