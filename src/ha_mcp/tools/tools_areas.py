@@ -216,8 +216,10 @@ class AreaTools:
             # tool-side latency. Use return_exceptions=True so a failure on
             # one side doesn't cancel the other — the post-fetch guard
             # below reports both registries' state in the error context for
-            # diagnosis.
-            areas_result, floors_result = await asyncio.gather(
+            # diagnosis. Indexed access + explicit annotations rather than
+            # tuple-unpack — gather returns list[Any] which mypy can't
+            # statically narrow to a 2-tuple.
+            results = await asyncio.gather(
                 self._client.send_websocket_message(
                     {"type": "config/area_registry/list"}
                 ),
@@ -230,12 +232,12 @@ class AreaTools:
 
             # Re-raise transport-level exceptions from either fetch so the
             # outer except handler classifies them via exception_to_structured_error.
-            # Per-variable isinstance checks (rather than a loop) so mypy can
-            # narrow each name's type from `dict | BaseException` to `dict`.
-            if isinstance(areas_result, BaseException):
-                raise areas_result
-            if isinstance(floors_result, BaseException):
-                raise floors_result
+            if isinstance(results[0], BaseException):
+                raise results[0]
+            if isinstance(results[1], BaseException):
+                raise results[1]
+            areas_result: dict[str, Any] = results[0]
+            floors_result: dict[str, Any] = results[1]
 
             # A response with success=True but no "result" key is malformed —
             # treat it as a service call failure rather than silently returning
