@@ -13,10 +13,17 @@ def enable_flag(monkeypatch):
     If anything in the test process imported the module before this fixture ran,
     the cached settings have ENABLE_YAML_CONFIG_EDITING=False and our env var is
     ignored. Reset the cache before AND after to keep tests hermetic.
+
+    The master beta gate (#1164) also force-sets every beta sub-flag
+    False at runtime when ``ENABLE_BETA_FEATURES`` is unset, so set
+    both env vars together — otherwise the cached settings would land
+    with ``enable_yaml_config_editing=False`` regardless of the
+    sub-flag env var.
     """
     from ha_mcp import config as ha_mcp_config
 
     monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "true")
+    monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
     yield
     # Reset the cache so other tests don't see our enabled flag.

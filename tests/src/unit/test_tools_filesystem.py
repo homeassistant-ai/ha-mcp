@@ -45,7 +45,13 @@ def test_filesystem_constants_include_dashboards():
 
 
 class TestFeatureFlag:
-    """Test feature flag functionality."""
+    """Test feature flag functionality.
+
+    ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` is a beta sub-flag (#1164). The
+    master ``ENABLE_BETA_FEATURES`` gate force-sets it False at runtime
+    when the master is off, so every enabling test must set both env
+    vars to exercise the sub-flag's bool parsing in isolation.
+    """
 
     def test_disabled_by_default(self):
         """Feature should be disabled by default."""
@@ -56,22 +62,30 @@ class TestFeatureFlag:
 
     def test_enabled_with_true(self):
         """Feature should be enabled when set to 'true'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_1(self):
         """Feature should be enabled when set to '1'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "1"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "1", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_yes(self):
         """Feature should be enabled when set to 'yes'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "yes"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "yes", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_on(self):
         """Feature should be enabled when set to 'on'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "on"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "on", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_disabled_with_false(self):
@@ -86,10 +100,24 @@ class TestFeatureFlag:
 
     def test_case_insensitive(self):
         """Feature flag should be case insensitive."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "TRUE"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "TRUE", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
-        with patch.dict(os.environ, {FEATURE_FLAG: "True"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "True", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
+
+    def test_master_off_forces_sub_flag_off(self):
+        """Master beta gate (#1164) forces this sub-flag False even when
+        the sub-flag env var is true. Lock the behavior so a future
+        regression in ``_apply_feature_flag_overrides`` would surface
+        in the filesystem-tools tests, not just the config tests.
+        """
+        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+            os.environ.pop("ENABLE_BETA_FEATURES", None)
+            assert is_filesystem_tools_enabled() is False
 
 
 class TestIsMcpToolsAvailable:
