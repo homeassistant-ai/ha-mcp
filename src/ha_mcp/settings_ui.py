@@ -799,6 +799,15 @@ _SETTINGS_HTML = (
     left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
   .feature-row.beta-sub.dimmed { opacity: 0.55; }
   .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
+  /* Code-mode sub-numerics — second-level nesting under the
+     enable_code_mode beta sub-row (#1164 Chunk 3b). Same dimming
+     logic as beta-sub but deeper-indented and gated by
+     enable_code_mode rather than the master. */
+  .feature-row.codemode-sub { padding-left: 56px; position: relative; }
+  .feature-row.codemode-sub::before { content: ""; position: absolute;
+    left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.codemode-sub.dimmed { opacity: 0.55; }
+  .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
   /* Advanced settings sections (#1164) — one row per
      ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
      matches the .feature-row treatment so the Server Settings tab
@@ -2236,6 +2245,76 @@ function renderFeatureFlags(flags) {
     row.appendChild(info);
     row.appendChild(control);
     body.appendChild(row);
+
+    // Chunk 3b — after rendering the enable_code_mode row, inject the
+    // 5 code_mode_* sub-numeric rows from the advanced cache. These
+    // are second-level-nested (under enable_code_mode, which is itself
+    // beta-sub-nested under the master), dimmed when either the master
+    // is off or code_mode itself is off.
+    if (fieldName === 'enable_code_mode') {
+      const codeModeOn = !!f.value;
+      renderCodeModeSubRows(body, masterOn, codeModeOn);
+    }
+  });
+}
+
+function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
+  const cmRows = (_advancedFields || []).filter(x => x.section === 'beta_codemode');
+  cmRows.forEach(f => {
+    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    const row = document.createElement('div');
+    const lockedByGate = !masterOn || !codeModeOn;
+    const dimmed = lockedByGate;
+    row.className = 'feature-row codemode-sub' + (dimmed ? ' dimmed' : '');
+
+    const info = document.createElement('div');
+    info.className = 'feature-info';
+    const lockedNote = f.origin === 'env'
+      ? `<div class="feature-locked-note">Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.</div>`
+      : '';
+    info.innerHTML =
+      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      lockedNote;
+
+    const control = document.createElement('div');
+    control.className = 'feature-control';
+    const disabled = !f.editable || lockedByGate;
+    let inputEl;
+    if (f.type === 'int' || f.type === 'float') {
+      inputEl = document.createElement('input');
+      inputEl.type = 'number';
+      inputEl.value = f.value;
+      if (typeof f.min === 'number') inputEl.min = f.min;
+      if (typeof f.max === 'number') inputEl.max = f.max;
+      if (f.type === 'float') inputEl.step = '0.1';
+    } else {
+      inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.value = String(f.value ?? '');
+    }
+    inputEl.disabled = disabled;
+    inputEl.dataset.advField = f.field;
+    inputEl.addEventListener('change', () => {
+      let v;
+      if (f.type === 'int') v = parseInt(inputEl.value, 10);
+      else if (f.type === 'float') v = parseFloat(inputEl.value);
+      else v = inputEl.value;
+      if (typeof v === 'number' && Number.isNaN(v)) return;
+      _advancedDirty[f.field] = v;
+      // Surface a hint that there are unsaved code-mode-numeric
+      // changes — they share the advSaveBtn under the Advanced
+      // sections.
+      const status = document.getElementById('advSaveStatus');
+      if (status) status.textContent = 'Unsaved changes — click "Save advanced settings".';
+      const saveRow = document.getElementById('advSaveRow');
+      if (saveRow) saveRow.style.display = '';
+    });
+    control.appendChild(inputEl);
+
+    row.appendChild(info);
+    row.appendChild(control);
+    parentEl.appendChild(row);
   });
 }
 
@@ -3194,6 +3273,13 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
   document.getElementById('advSaveRow').style.display = '';
   document.getElementById('advSaveStatus').textContent = '';
+  // Re-render feature flags so the code_mode sub-numerics show up
+  // beneath enable_code_mode (race: loadFeatureFlags may have run
+  // before _advancedFields was populated). Cheap no-op if feature
+  // flags haven't loaded yet.
+  if (Object.keys(_lastFeatureFlags).length > 0) {
+    renderFeatureFlags(_lastFeatureFlags);
+  }
 }
 
 function renderAdvancedSection(containerId, fields) {
