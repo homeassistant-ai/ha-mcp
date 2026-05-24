@@ -129,6 +129,18 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             self._raise_denied_error()
 
+        # The wait may have lasted long enough for the queue's sweeper to
+        # evict this entry (TTL elapsed during the block). In that case
+        # the pending row no longer exists in the UI so the LLM is being
+        # told to re-call with a dead token. Issue a fresh entry so the
+        # next re-call wakes a real pending row.
+        if self._queue.get(pending.token) is None:
+            pending = self._queue.create(
+                pending.tool_name,
+                pending.args_hash,
+                pending.args,
+                ttl_minutes=policy.approval_ttl_minutes,
+            )
         self._raise_pending_error(pending, rule)
 
     async def _wait_for_decision(

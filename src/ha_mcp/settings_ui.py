@@ -905,6 +905,7 @@ _SETTINGS_HTML = (
 
   <section id="policy-rules">
     <h3 style="font-size:1rem;margin-bottom:8px">Gated tools</h3>
+    <div id="policy-load-error" style="display:none;background:var(--danger);color:white;padding:8px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85rem;"></div>
     <div id="policy-rules-empty" class="backup-empty" style="display:none;">
       No tools currently security-gated. Enable per-tool gating from the
       <a href="#" data-panel-link="tools">Tools</a> tab.
@@ -2089,15 +2090,41 @@ async function saveFeatureFlag(fieldName, value) {
 let policyRuleEdits = {};
 
 async function policyLoadConfig() {
+  const errEl = document.getElementById('policy-load-error');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   let resp;
   try {
     resp = await fetch('./api/policy/config');
-  } catch (_e) { return; }
-  if (!resp.ok) return;
+  } catch (e) {
+    showPolicyLoadError('Could not reach the server: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    // 500 with policy_file_corrupt:true is the explicit "your
+    // tool_policy.json is broken, here's how to repair" message from
+    // the handler — surface it instead of silently rendering empty.
+    let detail = 'HTTP ' + resp.status;
+    try {
+      const body = await resp.json();
+      if (body && body.error) detail = body.error;
+      if (body && body.policy_file_corrupt) {
+        detail += ' (tool_policy.json appears corrupt; edit or delete it on the addon /data volume)';
+      }
+    } catch (_e) { /* keep the HTTP-status fallback */ }
+    showPolicyLoadError('Failed to load policy: ' + detail);
+    return;
+  }
   const p = await resp.json();
   document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
   document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
   renderPolicyCards(p);
+}
+
+function showPolicyLoadError(msg) {
+  const errEl = document.getElementById('policy-load-error');
+  if (!errEl) return;
+  errEl.style.display = '';
+  errEl.textContent = msg;
 }
 
 function renderPolicyCards(policy) {
@@ -2323,17 +2350,30 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
+  // Latest value-source fetch error, surfaced as a hint under the value
+  // row so the user notices when the dropdown fell back to free-text
+  // because of a real failure (vs because no source is registered).
+  let lastValueSourceError = null;
+
   const loadValueChoices = async (sourceKey) => {
-    if (valueChoiceCache[sourceKey]) return valueChoiceCache[sourceKey];
+    if (valueChoiceCache[sourceKey]) {
+      lastValueSourceError = null;
+      return valueChoiceCache[sourceKey];
+    }
     try {
       const r = await fetch('./api/policy/value-source?source=' +
         encodeURIComponent(sourceKey));
-      if (!r.ok) return null;
+      if (!r.ok) {
+        lastValueSourceError = 'value-source fetch failed (HTTP ' + r.status + ') — falling back to free-text';
+        return null;
+      }
       const data = await r.json();
       const values = Array.isArray(data.values) ? data.values : [];
       valueChoiceCache[sourceKey] = values;
+      lastValueSourceError = null;
       return values;
-    } catch (_e) {
+    } catch (e) {
+      lastValueSourceError = 'value-source fetch failed (' + e.message + ') — falling back to free-text';
       return null;
     }
   };
@@ -2363,11 +2403,18 @@ function renderPolicyCard(toolName, rule) {
     return 'The value the argument must equal. To gate on any value at all, switch op to "is present" instead.';
   };
 
+  // Sequence number for renderValueControl — rapid path/op edits can
+  // start several overlapping fetches; only the latest one is allowed
+  // to mutate the DOM. Without this, an earlier slow fetch can land
+  // after a later fast one and clobber the user's chosen control.
+  let renderSeq = 0;
+
   // Render the value control inside valueSlotEl based on current op +
   // path. The control is always visible (even for op=exists) so users
   // can refine the rule later without re-discovering where the input
   // went.
   const renderValueControl = async (existingValue) => {
+    const mySeq = ++renderSeq;
     const op = opEl.value;
     const path = currentPath();
     const pathMeta = ((toolSchema && toolSchema.paths) || [])
@@ -2381,25 +2428,30 @@ function renderPolicyCard(toolName, rule) {
 
     // 1) Live value source (e.g. ha_entities) wins — most useful.
     if (sourceKey && choosable) {
+      if (mySeq !== renderSeq) return;
       valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
         'Loading choices…</em>';
       const choices = await loadValueChoices(sourceKey);
+      if (mySeq !== renderSeq) return;  // newer render in flight; discard.
       if (choices) {
         renderChoiceSelect(choices, existingValue, isMulti);
         renderHint(op);
         return;
       }
-      // fetch failed → fall through to free-text
+      // fetch failed → fall through to free-text (renderHint will
+      // surface the error via lastValueSourceError below).
     }
 
     // 2) Schema-declared enum — render as choice list too.
     if (choosable && pathMeta && Array.isArray(pathMeta.enum) && pathMeta.enum.length) {
+      if (mySeq !== renderSeq) return;
       renderChoiceSelect(pathMeta.enum, existingValue, isMulti);
       renderHint(op);
       return;
     }
 
     // 3) Free-text JSON fallback (or op=exists, where blank is the norm).
+    if (mySeq !== renderSeq) return;
     renderFreeTextValue(existingValue);
     renderHint(op);
   };
@@ -2450,7 +2502,16 @@ function renderPolicyCard(toolName, rule) {
     if (oldHint) oldHint.remove();
     const hint = document.createElement('div');
     hint.className = 'policy-form-hint';
-    hint.textContent = hintForOp(op);
+    let text = hintForOp(op);
+    // If a value-source fetch failed (HA outage, sidecar 503, …) the
+    // dropdown silently downgraded to free-text — surface that so the
+    // user knows the typo'd rule they're about to author isn't picking
+    // from a populated list.
+    if (lastValueSourceError) {
+      text = lastValueSourceError + ' — ' + text;
+      hint.style.color = 'var(--danger)';
+    }
+    hint.textContent = text;
     formEl.querySelector('.policy-value-row').after(hint);
   };
 
