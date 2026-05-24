@@ -1165,65 +1165,6 @@ class TestSaveBackupConfigEndpoint:
         assert sui_mod is not None
 
 
-class TestRenderedHTMLJsSyntax:
-    """The settings page HTML is built from a Python triple-quoted string.
-
-    Python consumes ``\\n`` inside that string as a real newline. If the
-    author writes ``'foo\\n\\nbar'`` intending the JavaScript escape
-    sequence, the rendered ``<script>`` contains a raw newline inside a
-    single-quoted JS string literal — an unrecoverable SyntaxError that
-    aborts the *entire* script before any handler runs, leaving the
-    page stuck on its initial ``Loading...`` indicator forever. The
-    page-level ``window.addEventListener('error', ...)`` cannot catch
-    parse-time SyntaxErrors, so the user sees no diagnostic at all.
-    """
-
-    def _extract_script(self) -> str:
-        from ha_mcp.settings_ui import _SETTINGS_HTML
-
-        start = _SETTINGS_HTML.find("<script>")
-        end = _SETTINGS_HTML.find("</script>")
-        assert start != -1 and end != -1 and end > start
-        return _SETTINGS_HTML[start + len("<script>") : end]
-
-    def test_rendered_script_parses_as_javascript(self, tmp_path: Path):
-        """The rendered ``<script>`` body must parse as valid JavaScript.
-
-        A parse-time SyntaxError aborts the entire script before any
-        handler runs, leaving the page stuck on its initial
-        ``Loading...`` indicator with no in-page diagnostic (the
-        page-level ``window.addEventListener('error', ...)`` cannot
-        catch parse-time errors). The canonical trigger is a
-        Python-consumed ``\\n`` escape leaving a raw newline inside a
-        single-quoted JS string — but any other ill-formed JS would
-        be just as fatal.
-
-        Shells out to ``node --check`` for a faithful parse. Skipped
-        when node isn't available so a missing dev dependency doesn't
-        block local runs; CI installs node (see ``test.yml``).
-        """
-        import shutil
-        import subprocess
-
-        if shutil.which("node") is None:
-            pytest.skip("node not installed — install Node.js to run this test")
-
-        script = self._extract_script()
-        js_file = tmp_path / "settings_ui_script.js"
-        js_file.write_text(script, encoding="utf-8")
-        result = subprocess.run(
-            ["node", "--check", str(js_file)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                "Settings UI <script> body failed node --check:\n"
-                f"stdout: {result.stdout}\nstderr: {result.stderr}"
-            )
-
-
 class TestSupervisorOptionsHelpers:
     """Module-level helpers for the addon-mode Supervisor options flow.
 

@@ -128,15 +128,52 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - name: Install git for submodule checkout
-      run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+    - name: Restore apt download cache
+      # Cache /var/cache/apt/archives so the nodejs .deb (~30 MB) and its
+      # deps don't re-download on every PR — the bulk of "Install git and
+      # Node.js" was the network download, not the extract. apt-get
+      # install still runs (unpack is fast); we're just skipping the
+      # download leg on cache hit.
+      uses: actions/cache@v5
+      with:
+        path: /var/cache/apt/archives
+        key: apt-trixie-git-nodejs-npm-v1
+
+    - name: Install git and Node.js
+      # Node + npm power the JS behaviour tests under tests/src/unit/
+      # (harness in tests/js/) — they spawn `node tests/js/harness.mjs`
+      # to drive rendered <script> bodies through JSDOM. Without node
+      # the tests skip; install here so coverage actually runs.
+      run: |
+        # Keep cached .debs after install so the cache stays warm for
+        # future runs (default Debian behaviour deletes them).
+        rm -f /etc/apt/apt.conf.d/docker-clean
+        echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+          > /etc/apt/apt.conf.d/keep-downloaded
+        apt-get update -qq
+        apt-get install -y -qq git nodejs npm >/dev/null 2>&1
 
     - uses: actions/checkout@v6
       with:
         submodules: true
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: uv sync --all-extras --dev
+
+    - name: Restore JS test node_modules cache
+      # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
+      # is still safe to run on cache hit (it short-circuits when the
+      # tree already matches the lockfile).
+      uses: actions/cache@v5
+      with:
+        path: tests/js/node_modules
+        key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
+
+    - name: Install JS test dependencies (jsdom, esbuild)
+      # `npm ci` enforces package-lock.json — same reproducibility
+      # discipline as uv.lock on the Python side. No-op on cache hit
+      # if node_modules matches the lockfile.
+      run: npm ci --prefix tests/js
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
