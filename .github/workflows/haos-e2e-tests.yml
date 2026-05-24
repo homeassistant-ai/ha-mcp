@@ -146,7 +146,12 @@ jobs:
         continue-on-error: true
         run: |
           version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
-          tag="${IMAGE_REPO}:${version}-latest"
+          # TEMPORARY (perf/haos-e2e-improvements PR #1428 only): pulling
+          # from the perf-iteration tag so we measure the in-format
+          # compressed qcow2 published from this branch via the publish
+          # workflow's tag_suffix dispatch input. Final cleanup commit
+          # reverts to ``-latest`` before merge.
+          tag="${IMAGE_REPO}:${version}-haose2eefficiency"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
             -u ${{ github.actor }} --password-stdin
           curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
