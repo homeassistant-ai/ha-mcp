@@ -152,16 +152,16 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      - name: Save image to cache (cache miss only)
-        # Save whenever the runtime cache missed — covers both the
-        # local-build path AND a successful GHCR pull. Without saving on
-        # the GHCR-served branch, the actions/cache entry stays empty
-        # forever and every future run pays the GHCR pull cost again.
-        if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: /tmp/haos-test-image.qcow2
-          key: ${{ steps.key.outputs.cache-key }}
+      # No cache-save step here on purpose. The external lane
+      # (haos-e2e-tests.yml) computes the same cache key (#1407) and
+      # always tries to save the same qcow2; both lanes start in
+      # parallel on the same PR push, so whichever lost the save race
+      # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
+      # the actions/cache service then refused with
+      # "another job may be creating this cache." Letting only the
+      # external lane save eliminates the wasted work without
+      # changing what gets cached — both lanes still restore from the
+      # shared key on the next run.
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
