@@ -25,7 +25,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ..backup_manager import get_backup_manager
-from ..client.rest_client import HomeAssistantClient
+from ..client.rest_client import HomeAssistantClient, HomeAssistantError
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -186,7 +186,7 @@ def _build_success_response_if_found(
     in-loop branch (when state=idle+completed is observed) and from the
     post-timeout final check (#1433).
     """
-    backups = info_result.get("result", {}).get("backups", [])
+    backups = info_result.get("result", {}).get("backups") or []
     created_backup = next((b for b in backups if b.get("name") == name), None)
     if created_backup is None:
         return None
@@ -196,7 +196,9 @@ def _build_success_response_if_found(
         "backup_job_id": backup_job_id,
         "name": name,
         "date": created_backup.get("date"),
-        "size_bytes": created_backup.get("agents", {}).get(agent_id, {}).get("size"),
+        "size_bytes": (created_backup.get("agents") or {})
+        .get(agent_id, {})
+        .get("size"),
         "status": "Backup completed successfully",
         "duration_seconds": duration_seconds,
         "note": "Backup uses your Home Assistant's default backup password",
@@ -276,12 +278,13 @@ async def _poll_backup_completion(
         "performing final backup-list lookup before raising timeout"
     )
     # send_command raises on failure rather than returning success=false; treat
-    # any exception during this best-effort verification as "couldn't verify"
-    # and fall through to the original timeout signal rather than letting an
-    # unrelated WebSocket error mask it.
+    # any HA-side error during this best-effort verification as "couldn't
+    # verify" and fall through to the original timeout signal rather than
+    # letting an unrelated WebSocket error mask it. Programming errors
+    # (AttributeError, TypeError, KeyError) intentionally propagate.
     try:
         final_info = await ws_client.send_command("backup/info")
-    except Exception as e:
+    except HomeAssistantError as e:
         logger.warning(
             f"Post-timeout backup/info lookup failed ({e!r}); "
             "falling through to TIMEOUT_OPERATION"
