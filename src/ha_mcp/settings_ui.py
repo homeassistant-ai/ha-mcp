@@ -772,14 +772,20 @@ _SETTINGS_HTML = (
   .policy-add-predicate:hover { background: var(--surface-hover); }
   .policy-predicate-form { background: var(--bg); padding: 10px;
     margin: 6px 0; border: 1px dashed var(--border); border-radius: 6px;
-    display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    display: flex; flex-direction: column; gap: 8px; }
+  .policy-predicate-form .policy-form-row { display: flex; flex-wrap: wrap;
+    gap: 6px; align-items: center; }
+  .policy-predicate-form .policy-form-label { min-width: 90px;
+    color: var(--text-secondary); font-size: 0.82rem; }
   .policy-predicate-form select,
   .policy-predicate-form input { padding: 5px 8px; border-radius: 4px;
     border: 1px solid var(--border); background: var(--surface);
     color: var(--text); font-size: 0.85rem; }
-  .policy-predicate-form input.policy-predicate-path { min-width: 140px; }
-  .policy-predicate-form input.policy-predicate-value { min-width: 200px;
+  .policy-predicate-form input.policy-predicate-path-custom { min-width: 200px; }
+  .policy-predicate-form input.policy-predicate-value { min-width: 220px;
     font-family: monospace; }
+  .policy-predicate-form .policy-form-hint { font-size: 0.75rem;
+    color: var(--text-secondary); padding-left: 96px; margin-top: -4px; }
   .policy-predicate-form-error { color: var(--danger); font-size: 0.78rem;
     width: 100%; margin-top: 4px; }
   .policy-rule-lifetime { margin: 10px 0; font-size: 0.85rem;
@@ -2166,25 +2172,36 @@ function renderPolicyCard(toolName, rule) {
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
       '<button class="policy-add-predicate">+ Add condition</button>' +
       '<div class="policy-predicate-form" style="display:none;">' +
-        '<select class="policy-predicate-op">' +
-          '<option value="eq">eq</option>' +
-          '<option value="neq">neq</option>' +
-          '<option value="in">in</option>' +
-          '<option value="not_in">not_in</option>' +
-          '<option value="regex">regex</option>' +
-          '<option value="contains">contains</option>' +
-          '<option value="exists">exists</option>' +
-          '<option value="gt">gt</option>' +
-          '<option value="lt">lt</option>' +
-        '</select>' +
-        '<select class="policy-predicate-path-select">' +
-          '<option value="">(loading paths...)</option>' +
-        '</select>' +
-        '<input type="text" class="policy-predicate-path-custom" ' +
-          'placeholder="args.foo" style="display:none">' +
-        '<span class="policy-predicate-value-slot"></span>' +
-        '<button class="policy-predicate-form-save">Save condition</button>' +
-        '<button class="policy-predicate-form-cancel">Cancel</button>' +
+        '<div class="policy-form-row">' +
+          '<label class="policy-form-label">Argument:</label>' +
+          '<select class="policy-predicate-path-select">' +
+            '<option value="">(loading...)</option>' +
+          '</select>' +
+          '<input type="text" class="policy-predicate-path-custom" ' +
+            'placeholder="e.g. args.color_temp" style="display:none">' +
+        '</div>' +
+        '<div class="policy-form-row">' +
+          '<label class="policy-form-label">Match when:</label>' +
+          '<select class="policy-predicate-op">' +
+            '<option value="exists">is present (any value)</option>' +
+            '<option value="eq">equals</option>' +
+            '<option value="neq">does NOT equal</option>' +
+            '<option value="in">is one of</option>' +
+            '<option value="not_in">is NOT one of</option>' +
+            '<option value="contains">contains</option>' +
+            '<option value="regex">matches regex</option>' +
+            '<option value="gt">is greater than</option>' +
+            '<option value="lt">is less than</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="policy-form-row policy-value-row">' +
+          '<label class="policy-form-label">Value:</label>' +
+          '<span class="policy-predicate-value-slot"></span>' +
+        '</div>' +
+        '<div class="policy-form-row">' +
+          '<button class="policy-predicate-form-save">Save condition</button>' +
+          '<button class="policy-predicate-form-cancel">Cancel</button>' +
+        '</div>' +
         '<div class="policy-predicate-form-error" style="display:none;"></div>' +
       '</div>' +
     '</div>' +
@@ -2260,7 +2277,8 @@ function renderPolicyCard(toolName, rule) {
     } else {
       html += '<option value="">(pick an argument)</option>';
       for (const p of paths) {
-        html += '<option value="' + escapeHtml(p.path) + '">' +
+        const tip = p.description ? ' title="' + escapeHtml(p.description) + '"' : '';
+        html += '<option value="' + escapeHtml(p.path) + '"' + tip + '>' +
           escapeHtml(p.label) +
           (p.required ? ' *' : '') +
           (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
@@ -2307,92 +2325,187 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
+  // Ops where backend accepts a missing value entirely. For these,
+  // leaving the value box blank is fine and the rule still works
+  // (exists: arg just has to be present; eq/neq/contains: matches the
+  // null/missing case explicitly).
+  const VALUE_OPTIONAL_OPS = new Set(['exists', 'eq', 'neq', 'contains']);
+
+  const hintForOp = (op) => {
+    if (op === 'exists') {
+      return 'Optional. Leave blank to gate on the argument being present at all.';
+    }
+    if (op === 'in' || op === 'not_in') {
+      return 'Required. Pick one or more values, or type a JSON list.';
+    }
+    if (op === 'regex') {
+      return 'Required. A regular expression to match the argument against.';
+    }
+    if (op === 'contains') {
+      return 'Optional. A substring (for strings) or item (for lists).';
+    }
+    if (op === 'gt' || op === 'lt') {
+      return 'Required. A number to compare against.';
+    }
+    return 'Optional. The value the argument must equal. Leave blank to gate on null.';
+  };
+
   // Render the value control inside valueSlotEl based on current op +
-  // path. Calls back with the populated control so the save handler
-  // can read it via valueSlotEl.querySelector(...).
+  // path. The control is always visible (even for op=exists) so users
+  // can refine the rule later without re-discovering where the input
+  // went.
   const renderValueControl = async (existingValue) => {
     const op = opEl.value;
     const path = currentPath();
-    if (op === 'exists') {
-      valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
-        '(no value needed for op=exists)</em>';
-      return;
-    }
+    const pathMeta = ((toolSchema && toolSchema.paths) || [])
+      .find(p => p.path === path);
     const sourceKey = (toolSchema && toolSchema.value_sources)
       ? toolSchema.value_sources[path]
       : null;
     const isMulti = (op === 'in' || op === 'not_in');
     const isSingleChoice = (op === 'eq' || op === 'neq');
-    if (sourceKey && (isMulti || isSingleChoice)) {
+    const choosable = isMulti || isSingleChoice;
+
+    // 1) Live value source (e.g. ha_entities) wins — most useful.
+    if (sourceKey && choosable) {
       valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
         'Loading choices…</em>';
       const choices = await loadValueChoices(sourceKey);
-      if (!choices) {
-        // Fall back to free text if the fetch failed — the user can
-        // still author the rule by hand.
-        renderFreeTextValue(existingValue);
+      if (choices) {
+        renderChoiceSelect(choices, existingValue, isMulti);
+        renderHint(op);
         return;
       }
-      const existingArr = Array.isArray(existingValue)
-        ? existingValue
-        : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
-      let html = '<select class="policy-predicate-value-control"' +
-        (isMulti ? ' multiple size="6" style="min-width:200px"' : '') +
-        '>';
-      if (!isMulti) {
-        html += '<option value="">(pick a value)</option>';
-      }
-      for (const c of choices) {
-        const selected = existingArr.includes(c) ? ' selected' : '';
-        html += '<option value="' + escapeHtml(String(c)) + '"' + selected + '>' +
-          escapeHtml(String(c)) + '</option>';
-      }
-      html += '</select>';
-      valueSlotEl.innerHTML = html;
+      // fetch failed → fall through to free-text
+    }
+
+    // 2) Schema-declared enum — render as choice list too.
+    if (choosable && pathMeta && Array.isArray(pathMeta.enum) && pathMeta.enum.length) {
+      renderChoiceSelect(pathMeta.enum, existingValue, isMulti);
+      renderHint(op);
       return;
     }
+
+    // 3) Free-text JSON fallback (or op=exists, where blank is the norm).
     renderFreeTextValue(existingValue);
+    renderHint(op);
+  };
+
+  const renderChoiceSelect = (choices, existingValue, isMulti) => {
+    const existingArr = Array.isArray(existingValue)
+      ? existingValue
+      : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
+    let html = '<select class="policy-predicate-value-control"' +
+      (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
+      '>';
+    if (!isMulti) {
+      html += '<option value="">(leave blank or pick a value)</option>';
+    }
+    for (const c of choices) {
+      const selected = existingArr.includes(c) ? ' selected' : '';
+      html += '<option value="' + escapeHtml(String(c)) + '"' + selected + '>' +
+        escapeHtml(String(c)) + '</option>';
+    }
+    html += '</select>';
+    valueSlotEl.innerHTML = html;
   };
 
   const renderFreeTextValue = (existingValue) => {
     const op = opEl.value;
-    const placeholder = (op === 'in' || op === 'not_in')
-      ? 'JSON list: [&quot;lock&quot;,&quot;alarm&quot;]'
-      : 'JSON: &quot;lock&quot; or 100 or true';
+    let placeholder;
+    if (op === 'exists') {
+      placeholder = 'usually left blank';
+    } else if (op === 'in' || op === 'not_in') {
+      placeholder = '["lock","alarm_control_panel"]';
+    } else if (op === 'regex') {
+      placeholder = '^light\\..+';
+    } else {
+      placeholder = '"lock"  or  42  or  true';
+    }
     const initial = (existingValue === undefined || existingValue === null)
       ? ''
       : JSON.stringify(existingValue);
     valueSlotEl.innerHTML = '<input type="text" ' +
       'class="policy-predicate-value-control policy-predicate-value" ' +
-      'placeholder="' + placeholder + '" ' +
+      'placeholder="' + escapeHtml(placeholder) + '" ' +
       'value="' + escapeHtml(initial) + '">';
   };
 
+  const renderHint = (op) => {
+    // Remove any previous hint then add a fresh one below the value row.
+    const oldHint = formEl.querySelector('.policy-form-hint');
+    if (oldHint) oldHint.remove();
+    const hint = document.createElement('div');
+    hint.className = 'policy-form-hint';
+    hint.textContent = hintForOp(op);
+    formEl.querySelector('.policy-value-row').after(hint);
+  };
+
   const readValueControl = () => {
+    const op = opEl.value;
     const ctrl = valueSlotEl.querySelector('.policy-predicate-value-control');
     if (!ctrl) return {ok: true, value: undefined};
     if (ctrl.tagName === 'SELECT') {
       if (ctrl.multiple) {
         const picked = Array.from(ctrl.selectedOptions).map(o => o.value);
         if (picked.length === 0) {
+          if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
           return {ok: false, error: 'pick at least one value'};
         }
         return {ok: true, value: picked};
       }
       if (!ctrl.value) {
+        if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
         return {ok: false, error: 'pick a value'};
       }
       return {ok: true, value: ctrl.value};
     }
     const raw = ctrl.value.trim();
     if (!raw) {
-      return {ok: false, error: 'value is required (use JSON: "lock", ["a","b"], 100, true)'};
+      if (VALUE_OPTIONAL_OPS.has(op)) return {ok: true, value: undefined};
+      return {ok: false, error: 'value is required for op=' + op};
     }
+    // First try raw JSON. If that fails, fall back to smart-coercion
+    // so users can type "lock" or "lock,alarm" without remembering the
+    // quoting rules.
     try {
       return {ok: true, value: JSON.parse(raw)};
-    } catch (e) {
-      return {ok: false, error: 'Invalid JSON: ' + e.message};
+    } catch (_e) {
+      const coerced = coerceBarewords(raw, op);
+      if (coerced.ok) return coerced;
+      return {ok: false, error: coerced.error};
     }
+  };
+
+  // Coerce common bareword inputs into the JSON the backend expects.
+  // "lock"               (op=eq)        → "lock"
+  // "lock"               (op=in)        → ["lock"]
+  // "lock,alarm_control" (op=in/not_in) → ["lock","alarm_control"]
+  // "42"                 → 42  (numeric autodetect for any op)
+  // "true" / "false"     → boolean
+  const coerceBarewords = (raw, op) => {
+    const wrap = (v) => (op === 'in' || op === 'not_in') ? [v] : v;
+    if (op === 'in' || op === 'not_in') {
+      // Try comma-split first — if any chunk is comma-separated, build list
+      if (raw.indexOf(',') !== -1) {
+        const items = raw.split(',').map(s => s.trim()).filter(Boolean);
+        if (items.length === 0) {
+          return {ok: false, error: 'empty list for op=' + op};
+        }
+        return {ok: true, value: items.map(coerceScalar)};
+      }
+    }
+    const scalar = coerceScalar(raw);
+    return {ok: true, value: wrap(scalar)};
+  };
+
+  const coerceScalar = (s) => {
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    if (s === 'null') return null;
+    if (/^-?\\d+$/.test(s)) return parseInt(s, 10);
+    if (/^-?\\d+\\.\\d+$/.test(s)) return parseFloat(s);
+    return s; // plain string
   };
 
   const fetchToolSchema = async () => {
@@ -2467,6 +2580,9 @@ function renderPolicyCard(toolName, rule) {
       return;
     }
     const predicate = {path: path, op: op};
+    // op=exists is presence-only — backend rejects any value field,
+    // so ignore whatever's in the value box even if the user typed
+    // something. Other ops read normally.
     if (op !== 'exists') {
       const parsed = readValueControl();
       if (!parsed.ok) {
@@ -2474,7 +2590,12 @@ function renderPolicyCard(toolName, rule) {
         errorEl.style.display = '';
         return;
       }
-      predicate.value = parsed.value;
+      // Only attach `value` when the user actually entered one — backend
+      // accepts a missing field for eq/neq/contains and treats it as
+      // a null-match.
+      if (parsed.value !== undefined) {
+        predicate.value = parsed.value;
+      }
     }
     if (editingIdx >= 0) {
       rule.when[editingIdx] = predicate;
