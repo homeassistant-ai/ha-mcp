@@ -169,11 +169,19 @@ async def test_event_wakes_waiter():
         await anyio.sleep(0.05)
         q.approve(p.token)
 
+    elapsed: float = 0.0
     async with anyio.create_task_group() as tg:
         tg.start_soon(approver)
+        start = anyio.current_time()
         decision = await p.wait()
+        elapsed = anyio.current_time() - start
     assert decision == "approved"
     assert p.decision == "approved"
+    # Event-driven wake should land within ~50ms of the approver firing
+    # (plus scheduler jitter). A polling impl with a 1s tick would
+    # easily exceed 200ms here, so this asserts the event path actually
+    # runs and isn't a hidden poll loop.
+    assert elapsed < 0.2, f"wait() took {elapsed:.3f}s; expected event wake"
 
 
 # --- find_or_create + concurrency ---

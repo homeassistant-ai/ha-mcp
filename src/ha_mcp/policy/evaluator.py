@@ -1,11 +1,14 @@
 """Evaluate a tool call against a Policy. Pure functions — no I/O, no state."""
 
+import logging
 import re
 from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any
 
 from .model import Policy, Predicate, Rule
+
+logger = logging.getLogger(__name__)
 
 
 class Verdict(StrEnum):
@@ -86,11 +89,20 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
             try:
                 return bool(val > pv)
             except TypeError:
+                # Numeric rule against a non-numeric arg value — log so
+                # users can tell their "battery_level < 20" rule isn't
+                # silently never firing because the arg is a string.
+                logger.debug(
+                    "policy: gt type-mismatch (val=%r pv=%r) — predicate skipped", val, pv
+                )
                 return False
         case "lt":
             try:
                 return bool(val < pv)
             except TypeError:
+                logger.debug(
+                    "policy: lt type-mismatch (val=%r pv=%r) — predicate skipped", val, pv
+                )
                 return False
     return False
 

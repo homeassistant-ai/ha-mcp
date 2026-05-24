@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import anyio
+
+logger = logging.getLogger(__name__)
 
 Decision = Literal["pending", "approved", "denied"]
 
@@ -175,15 +178,31 @@ class ApprovalQueue:
         """Mark the entry approved. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
         if entry is None:
+            logger.info("approval_queue.approve: unknown token %s", token)
             return False
-        return entry.decide("approved")
+        ok = entry.decide("approved")
+        if not ok:
+            logger.info(
+                "approval_queue.approve: token %s already decided as %s",
+                token,
+                entry.decision,
+            )
+        return ok
 
     def deny(self, token: str) -> bool:
         """Mark the entry denied. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
         if entry is None:
+            logger.info("approval_queue.deny: unknown token %s", token)
             return False
-        return entry.decide("denied")
+        ok = entry.decide("denied")
+        if not ok:
+            logger.info(
+                "approval_queue.deny: token %s already decided as %s",
+                token,
+                entry.decision,
+            )
+        return ok
 
     def remove(self, token: str) -> None:
         self._by_token.pop(token, None)
