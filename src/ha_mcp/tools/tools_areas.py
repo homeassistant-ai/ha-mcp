@@ -230,9 +230,12 @@ class AreaTools:
 
             # Re-raise transport-level exceptions from either fetch so the
             # outer except handler classifies them via exception_to_structured_error.
-            for r in (areas_result, floors_result):
-                if isinstance(r, BaseException):
-                    raise r
+            # Per-variable isinstance checks (rather than a loop) so mypy can
+            # narrow each name's type from `dict | BaseException` to `dict`.
+            if isinstance(areas_result, BaseException):
+                raise areas_result
+            if isinstance(floors_result, BaseException):
+                raise floors_result
 
             # A response with success=True but no "result" key is malformed —
             # treat it as a service call failure rather than silently returning
