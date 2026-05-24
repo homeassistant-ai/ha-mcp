@@ -761,36 +761,33 @@ async def _collect_ws_messages_loop(
     """Collect messages from an open WebSocket until a stop condition is met."""
     collected: list[str] = []
     total_size = 0
-    close_reason = "unknown"
     while True:
         remaining = timeout - (time.monotonic() - start_time)
         if remaining <= 0:
-            close_reason = "timeout"
-            break
+            return collected, total_size, "timeout"
         if len(collected) >= collection_cap:
             # Distinguish caller-set cap from the global safety ceiling so an
             # agent reading the response can tell "I capped this" from
             # "ha-mcp's hard ceiling kicked in".
-            close_reason = "message_limit" if caller_capped else "safety_ceiling"
-            break
+            return (
+                collected,
+                total_size,
+                "message_limit" if caller_capped else "safety_ceiling",
+            )
         if total_size >= _MAX_RESPONSE_SIZE:
-            close_reason = "size_limit"
-            break
+            return collected, total_size, "size_limit"
         recv_timeout = remaining if wait_for_close else min(remaining, 2.0)
         try:
             message = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
         except TimeoutError:
-            close_reason = "silence" if not wait_for_close else "timeout"
-            break
+            return collected, total_size, "silence" if not wait_for_close else "timeout"
         except websockets.exceptions.ConnectionClosed:
-            close_reason = "server_closed"
-            break
+            return collected, total_size, "server_closed"
         if isinstance(message, bytes):
             continue
         clean = ANSI_ESCAPE_RE.sub("", message)
         collected.append(clean)
         total_size += len(clean)
-    return collected, total_size, close_reason
 
 
 async def _run_ws_session(
