@@ -642,6 +642,7 @@ _SETTINGS_HTML = (
     padding: 10px 16px; border-bottom: 1px solid var(--border); }
   .tool:last-child { border-bottom: none; }
   .tool.hidden { display: none; }
+  .tool.env-pinned .tool-name { color: var(--text-secondary); }
   .tool-info { flex: 1; min-width: 0; }
   .tool-name { font-size: 0.9rem; font-weight: 500; }
   .tool-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
@@ -862,11 +863,10 @@ _SETTINGS_HTML = (
     addon restart. Changes require an MCP-host restart to apply.
   </div>
   <div class="pin-notice show" id="pinNotice">
-    Pin toggles only take effect when Tool Search is enabled — either
-    in the Server Settings tab or, for add-on users, the add-on
-    Configuration page (same setting either way). Without Tool Search,
-    all enabled tools are always visible and pinning has no extra
-    effect.
+    Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>
+    env vars are locked read-only — unset the env var to edit them here.
+    Pin toggles only take effect when Tool Search is enabled (Server Settings tab
+    or add-on Configuration page).
   </div>
   <div class="summary" id="summary"></div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -998,6 +998,10 @@ window.addEventListener('unhandledrejection', (e) => {
 
 let toolData = [];
 let toolStates = {};
+// Map of tool name → "disabled" | "pinned" for env-var-pinned tools.
+// Populated from data.env_pinned in loadTools(); read by render() to
+// lock rows and show the env-var name banner.
+let toolEnvPinned = {};
 let saveTimer = null;
 let openGroups = new Set();
 
@@ -1102,6 +1106,7 @@ async function loadTools() {
   }
   toolData = data.tools || [];
   toolStates = data.states || {};
+  toolEnvPinned = data.env_pinned || {};
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
   // — it leaves gatedTools empty on failure.
@@ -1429,10 +1434,12 @@ function render() {
     const group = document.createElement('div');
     group.className = 'group';
 
-    // Per-group toggle state: enabled if ANY non-mandatory/non-gated tool is enabled
-    const toggleable = tools.filter(t => !MANDATORY.includes(t.name) && !t.disabled_by);
+    // Per-group toggle state: enabled if ANY non-mandatory/non-gated/non-env-pinned tool is enabled
+    const toggleable = tools.filter(t =>
+      !MANDATORY.includes(t.name) && !t.disabled_by && !toolEnvPinned[t.name]);
     const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
     const groupEnabled = tools.filter(t => {
+      if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
       return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
     }).length;
@@ -1491,23 +1498,38 @@ function render() {
       const isMandatory = MANDATORY.includes(t.name);
       const disabledBy = t.disabled_by || null;
       const isFeatureGated = disabledBy !== null;
+      // env_pinned: "disabled" | "pinned" | undefined — operator-level lock
+      // via DISABLED_TOOLS / PINNED_TOOLS env vars. When set, all inputs are
+      // disabled and a banner names the env var. Takes precedence over
+      // isMandatory / isFeatureGated for the lock calculation.
+      const envPinKind = toolEnvPinned[t.name]; // "disabled" | "pinned" | undefined
+      const isEnvPinned = !!envPinKind;
+      const envPinVar = envPinKind === 'disabled' ? 'DISABLED_TOOLS' :
+                        envPinKind === 'pinned'   ? 'PINNED_TOOLS'   : '';
       const ann = t.annotations || {};
       const isReadOnly = ann.readOnlyHint === true;
       const isDestructive = ann.destructiveHint === true;
 
       total++;
-      if (isFeatureGated) disabledCount++;
+      if (isEnvPinned) {
+        if (envPinKind === 'disabled') disabledCount++;
+        else { enabledCount++; pinnedCount++; }
+      } else if (isFeatureGated) disabledCount++;
       else if (state === 'disabled') disabledCount++;
       else if (state === 'pinned') { enabledCount++; pinnedCount++; }
       else enabledCount++;
 
-      const isEnabled = isFeatureGated ? false : (isMandatory || state !== 'disabled');
-      const isPinned = isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name));
-      const lockEnabled = isMandatory || isFeatureGated;
-      const lockPinned = isMandatory || isFeatureGated || !isEnabled;
+      const isEnabled = isEnvPinned
+        ? (envPinKind !== 'disabled')
+        : (isFeatureGated ? false : (isMandatory || state !== 'disabled'));
+      const isPinned = isEnvPinned
+        ? (envPinKind === 'pinned')
+        : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name)));
+      const lockEnabled = isEnvPinned || isMandatory || isFeatureGated;
+      const lockPinned = isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
 
       const div = document.createElement('div');
-      div.className = 'tool';
+      div.className = isEnvPinned ? 'tool env-pinned' : 'tool';
       div.dataset.name = t.name.toLowerCase();
       div.dataset.title = (t.title || '').toLowerCase();
 
@@ -1521,12 +1543,16 @@ function render() {
       const gatedNote = disabledBy
         ? `<div class="disabled-by-note">Beta — set <code>${escapeHtml(disabledBy)}</code> in the dev add-on config or the matching env var (see docs/beta.md).</div>`
         : '';
+      const envPinnedNote = isEnvPinned
+        ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code> — unset the env var to edit here.</div>`
+        : '';
 
       div.innerHTML = `<div class="tool-info">` +
         `<div class="tool-name">${escapeHtml(title)}${badges}</div>` +
         `<div class="tool-meta">${escapeHtml(t.name)}</div>` +
         (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
+        envPinnedNote +
         `</div>` +
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +

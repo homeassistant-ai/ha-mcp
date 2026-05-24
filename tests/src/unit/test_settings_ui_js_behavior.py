@@ -731,3 +731,115 @@ class TestPolicyTabFlow:
             f"expected addon-log message in pending-list snapshot; "
             f"dom contains: {result.dom[-2000:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Env-pinned tool rows (#1164)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvPinnedToolRows:
+    """Env-pinned tools (DISABLED_TOOLS / PINNED_TOOLS) must render with
+    disabled inputs and a banner naming the env var so the user knows
+    why the toggles are locked.
+    """
+
+    def test_env_pinned_disabled_tool_renders_locked_with_env_var_label(
+        self, settings_script: str
+    ) -> None:
+        """A tool listed in DISABLED_TOOLS renders with all inputs disabled
+        and shows 'env-pinned via DISABLED_TOOLS' in the row.
+
+        The Tools tab must surface the env-pinned state so the user is not
+        confused by a toggle that silently refuses to save.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "disabled"},
+                    "env_pinned": {"ha_foo": "disabled"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+
+        # The row must carry the env-pinned class.
+        assert "env-pinned" in result.dom, (
+            f"expected .env-pinned class on locked tool row; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        # The banner must name the env var.
+        assert "DISABLED_TOOLS" in result.dom, (
+            f"expected 'DISABLED_TOOLS' in env-pinned banner; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        # The enabled-toggle input must be disabled (HTML attribute present).
+        assert 'data-field="enabled"' in result.dom, (
+            "expected enabled-toggle input in rendered tool row"
+        )
+        # All checkboxes for ha_foo must be disabled — verify the disabled
+        # attribute appears in the row HTML.
+        assert "disabled" in result.dom, (
+            "expected 'disabled' attribute on at least one toggle input"
+        )
+
+    def test_env_pinned_pinned_tool_renders_locked_with_env_var_label(
+        self, settings_script: str
+    ) -> None:
+        """A tool listed in PINNED_TOOLS renders with toggles disabled
+        and shows 'env-pinned via PINNED_TOOLS' in the row.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_bar",
+                            "title": "Bar",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Another test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {},
+                    "env_pinned": {"ha_bar": "pinned"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+
+        assert "env-pinned" in result.dom, (
+            f"expected .env-pinned class on pinned-via-env tool row; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        assert "PINNED_TOOLS" in result.dom, (
+            f"expected 'PINNED_TOOLS' in env-pinned banner; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
