@@ -422,9 +422,7 @@ class TestCallAddonApiErrors:
             )
             mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await _call_addon_api(
-                client, "test_addon", "/flows", port=1880
-            )
+            result = await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
         assert result["success"] is True
         assert captured["url"] == "http://172.30.33.99:1880/flows"
@@ -458,9 +456,7 @@ class TestCallAddonApiErrors:
             mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with pytest.raises(ToolError) as exc_info:
-                await _call_addon_api(
-                    client, "test_addon", "/flows", port=1880
-                )
+                await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
@@ -676,9 +672,7 @@ class TestCallAddonApiErrors:
         mock_ingress_session.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_http_addon_variant_missing_ingress_port_errors(
-        self, monkeypatch
-    ):
+    async def test_http_addon_variant_missing_ingress_port_errors(self, monkeypatch):
         """Addon variant requires both ip_address and ingress_port."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
         client = _make_mock_client()
@@ -789,9 +783,9 @@ class TestCallAddonApiErrors:
         assert result["status_code"] == 401
         suggestion = result["suggestion"].lower()
         # Auth-flavored hint expected.
-        assert any(token in suggestion for token in ("auth", "token", "scope", "session")), (
-            result["suggestion"]
-        )
+        assert any(
+            token in suggestion for token in ("auth", "token", "scope", "session")
+        ), result["suggestion"]
         # IP-restriction hint must NOT fire on 401 — it would misdirect.
         assert "nginx" not in suggestion, result["suggestion"]
         assert "ip restriction" not in suggestion, result["suggestion"]
@@ -837,9 +831,9 @@ class TestCallAddonApiErrors:
         assert result["status_code"] == 403
         suggestion = result["suggestion"].lower()
         # Existing IP-restriction wording preserved on 403.
-        assert "nginx" in suggestion or "ip restriction" in suggestion, (
-            result["suggestion"]
-        )
+        assert "nginx" in suggestion or "ip restriction" in suggestion, result[
+            "suggestion"
+        ]
         # addon_config attached so the LLM can spot relevant settings.
         assert "addon_config" in result, result
         for key in ("options", "ports", "host_network", "ingress_port"):
@@ -1377,9 +1371,9 @@ class TestCallAddonWsErrors:
 
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
-        assert any("path" in s.lower() or "endpoints" in s.lower() for s in suggestions), (
-            suggestions
-        )
+        assert any(
+            "path" in s.lower() or "endpoints" in s.lower() for s in suggestions
+        ), suggestions
 
     @pytest.mark.asyncio
     async def test_ws_handshake_failure(self, mock_ingress_session):
@@ -1478,9 +1472,7 @@ class TestCallAddonWsErrors:
                 side_effect=capture_connect,
             ),
         ):
-            result = await _call_addon_ws(
-                client, "test_addon", "/validate", port=6052
-            )
+            result = await _call_addon_ws(client, "test_addon", "/validate", port=6052)
 
         assert result["success"] is True
         assert captured["url"] == "ws://172.30.33.99:6052/validate"
@@ -1585,9 +1577,7 @@ class TestCallAddonWsErrors:
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with pytest.raises(ToolError) as exc_info:
-                await _call_addon_ws(
-                    client, "test_addon", "/validate", port=6052
-                )
+                await _call_addon_ws(client, "test_addon", "/validate", port=6052)
 
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
@@ -1995,9 +1985,7 @@ class TestCallAddonWsErrors:
         assert not captured["url"].startswith("wss://"), captured["url"]
 
     @pytest.mark.asyncio
-    async def test_ws_addon_variant_missing_ingress_port_errors(
-        self, monkeypatch
-    ):
+    async def test_ws_addon_variant_missing_ingress_port_errors(self, monkeypatch):
         """Addon variant requires both ip_address and ingress_port for WS."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-test-token")
         client = _make_mock_client()
@@ -2261,9 +2249,7 @@ class TestApplyResponseTransform:
         """Runtime execution errors surface as ToolError with the
         runtime-error message (distinct from validation failures)."""
         with pytest.raises(ToolError) as exc_info:
-            _apply_response_transform(
-                {}, "response['missing']['key'] = 1"
-            )
+            _apply_response_transform({}, "response['missing']['key'] = 1")
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "Expression raised at runtime" in result["error"]["message"]
@@ -2537,6 +2523,180 @@ class TestCallAddonWsNewParams:
         result = _parse_tool_error(exc_info)
         assert result["success"] is False
         assert "Expression validation failed" in result["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_size_limit_stops_collection(self, mock_ingress_session):
+        """Accumulating bytes ≥ _MAX_RESPONSE_SIZE closes with closed_by='size_limit'."""
+        client = _make_mock_client()
+
+        # Each message is ~1KB; patch the cap to 3KB so we hit it quickly.
+        big_msg = "x" * 1024
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._MAX_RESPONSE_SIZE",
+                3 * 1024,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [big_msg] * 10 + [
+                websockets.exceptions.ConnectionClosed(None, None)
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client, "test_addon", "/logs", summarize=False
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "size_limit"
+        # Stopped after 3 messages (3 × 1024 bytes ≥ 3072-byte cap)
+        assert result["message_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_wait_for_close_timeout_reports_timeout(self, mock_ingress_session):
+        """When wait_for_close=True and recv times out, closed_by should be 'timeout', not 'silence'."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            # Raise TimeoutError from recv so asyncio.wait_for propagates it
+            # without leaving an uncollected coroutine.
+            mock_ws.recv.side_effect = TimeoutError
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/logs",
+                wait_for_close=True,
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_close_false_timeout_reports_silence(
+        self, mock_ingress_session
+    ):
+        """When wait_for_close=False and recv times out, closed_by should be 'silence'."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = TimeoutError
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client,
+                "test_addon",
+                "/logs",
+                wait_for_close=False,
+                summarize=False,
+            )
+
+        assert result["success"] is True
+        assert result["closed_by"] == "silence"
+
+    @pytest.mark.asyncio
+    async def test_ws_response_too_large_returns_truncated_envelope(
+        self, mock_ingress_session
+    ):
+        """When the assembled result dict exceeds _MAX_RESPONSE_SIZE, return a RESPONSE_TOO_LARGE envelope."""
+        client = _make_mock_client()
+
+        # Patch the size cap to something tiny so a single message triggers it.
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._MAX_RESPONSE_SIZE",
+                10,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = [
+                "some message",
+                websockets.exceptions.ConnectionClosed(None, None),
+            ]
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(
+                client, "test_addon", "/logs", summarize=False
+            )
+
+        assert result["success"] is True
+        assert result["error"] == "RESPONSE_TOO_LARGE"
+        assert result["truncated"] is True
+        assert "hint" in result
+
+
+class TestValidateAddonAccessWithPort:
+    """Tests for _validate_addon_access port-override + stopped-addon interaction."""
+
+    @pytest.mark.asyncio
+    async def test_port_override_stopped_addon_raises(self):
+        """Port override bypasses the Ingress check but the state check still fires."""
+        client = _make_mock_client()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "addon": {
+                        "name": "Test Addon",
+                        "slug": "test_addon",
+                        "ingress": False,
+                        "state": "stopped",
+                        "ip_address": "172.30.33.99",
+                    },
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _call_addon_ws(client, "test_addon", "/compile", port=6052)
+
+        result = _parse_tool_error(exc_info)
+        assert result["success"] is False
+        assert "not running" in result["error"]["message"].lower()
 
 
 class TestCallAddonApiPythonTransform:
@@ -2826,6 +2986,7 @@ class TestManageAddon:
             def wrapper(func):
                 self.registered_tools[func.__name__] = func
                 return func
+
             return wrapper
 
         mcp.tool = tool_decorator
@@ -2840,6 +3001,7 @@ class TestManageAddon:
     def manage_addon_tool(self, mock_mcp, mock_client):
         """Register tools and return the ha_manage_addon function."""
         from ha_mcp.tools.tools_addons import register_addon_tools
+
         register_addon_tools(mock_mcp, mock_client)
         return self.registered_tools["ha_manage_addon"]
 
@@ -2854,7 +3016,10 @@ class TestManageAddon:
                 return {
                     "success": True,
                     "result": {
-                        "options": {"FF_KIOSK": False, "FF_OPEN_URL": "https://old.example.com"},
+                        "options": {
+                            "FF_KIOSK": False,
+                            "FF_OPEN_URL": "https://old.example.com",
+                        },
                         "schema": [
                             {"name": "FF_KIOSK", "required": False, "type": "bool"},
                             {"name": "FF_OPEN_URL", "required": False, "type": "str"},
@@ -2879,7 +3044,9 @@ class TestManageAddon:
         assert "ignored_fields" not in result
 
     @pytest.mark.asyncio
-    async def test_config_mode_options_merge_preserves_required_fields(self, manage_addon_tool):
+    async def test_config_mode_options_merge_preserves_required_fields(
+        self, manage_addon_tool
+    ):
         """Merge ensures required fields are present even when caller omits them (Bug A fix)."""
 
         async def mock_supervisor_api(client, endpoint, **kwargs):
@@ -2887,7 +3054,10 @@ class TestManageAddon:
                 return {
                     "success": True,
                     "result": {
-                        "options": {"required_key": "existing_value", "log_level": "info"},
+                        "options": {
+                            "required_key": "existing_value",
+                            "log_level": "info",
+                        },
                         "schema": [
                             {"name": "required_key", "required": True, "type": "str"},
                             {"name": "log_level", "required": False, "type": "str"},
@@ -2900,7 +3070,9 @@ class TestManageAddon:
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             side_effect=mock_supervisor_api,
         ) as mock_sup:
-            result = await manage_addon_tool(slug="test_addon", options={"log_level": "debug"})
+            result = await manage_addon_tool(
+                slug="test_addon", options={"log_level": "debug"}
+            )
 
         assert result["status"] == "pending_restart"
         # POST call should have included required_key from current options
@@ -2933,7 +3105,9 @@ class TestManageAddon:
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             side_effect=mock_supervisor_api,
         ) as mock_sup:
-            result = await manage_addon_tool(slug="test_addon", options={"ssh": {"sftp": True}})
+            result = await manage_addon_tool(
+                slug="test_addon", options={"ssh": {"sftp": True}}
+            )
 
         assert result["status"] == "pending_restart"
         post_call = [c for c in mock_sup.call_args_list if "method" in c[1]][-1]
@@ -2953,7 +3127,9 @@ class TestManageAddon:
                     "success": True,
                     "result": {
                         "options": {"log_level": "info"},
-                        "schema": [{"name": "log_level", "required": False, "type": "str"}],
+                        "schema": [
+                            {"name": "log_level", "required": False, "type": "str"}
+                        ],
                     },
                 }
             return {"success": True, "result": {}}
@@ -3060,10 +3236,13 @@ class TestManageAddon:
                 )
             )
 
-        with patch(
-            "ha_mcp.tools.tools_addons._supervisor_api_call",
-            side_effect=mock_supervisor_api,
-        ), pytest.raises(ToolError) as exc_info:
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                side_effect=mock_supervisor_api,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await manage_addon_tool(
                 slug="test_addon",
                 options={"ssh": {"sftp": True}},
@@ -3087,7 +3266,9 @@ class TestManageAddon:
                     "success": True,
                     "result": {
                         "options": {},
-                        "schema": [{"name": "log_level", "required": False, "type": "str"}],
+                        "schema": [
+                            {"name": "log_level", "required": False, "type": "str"}
+                        ],
                     },
                 }
             return {"success": True, "result": {}}
@@ -3109,8 +3290,20 @@ class TestManageAddon:
         assert call_count == 2
         post_call = calls[-1]
         data = post_call[1]["data"]
-        assert set(data.keys()) == {"options", "boot", "auto_update", "watchdog", "network"}
-        assert set(result["submitted_fields"]) == {"options", "boot", "auto_update", "watchdog", "network"}
+        assert set(data.keys()) == {
+            "options",
+            "boot",
+            "auto_update",
+            "watchdog",
+            "network",
+        }
+        assert set(result["submitted_fields"]) == {
+            "options",
+            "boot",
+            "auto_update",
+            "watchdog",
+            "network",
+        }
 
     # --- Validation: mutual exclusion ---
 
@@ -3134,7 +3327,9 @@ class TestManageAddon:
             await manage_addon_tool(slug="test_addon")
         error = _parse_tool_error(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
-        assert "path" in error["error"]["message"] or "config" in error["error"]["message"]
+        assert (
+            "path" in error["error"]["message"] or "config" in error["error"]["message"]
+        )
 
     @pytest.mark.asyncio
     async def test_path_empty_string_raises(self, manage_addon_tool):
@@ -3172,7 +3367,9 @@ class TestManageAddon:
         assert "websocket" in error["error"]["message"]
 
     @pytest.mark.asyncio
-    async def test_proxy_params_wait_for_close_in_config_mode_raise(self, manage_addon_tool):
+    async def test_proxy_params_wait_for_close_in_config_mode_raise(
+        self, manage_addon_tool
+    ):
         """wait_for_close=False combined with config params raises ToolError."""
         with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(
@@ -3200,7 +3397,9 @@ class TestManageAddon:
         assert mock_api.call_args[1]["path"] == "/flows"
 
     @pytest.mark.asyncio
-    async def test_proxy_mode_websocket_delegates_to_call_addon_ws(self, manage_addon_tool):
+    async def test_proxy_mode_websocket_delegates_to_call_addon_ws(
+        self, manage_addon_tool
+    ):
         """Proxy mode: WebSocket request is forwarded to _call_addon_ws."""
         with patch(
             "ha_mcp.tools.tools_addons._call_addon_ws",
@@ -3219,16 +3418,20 @@ class TestManageAddon:
     @pytest.mark.asyncio
     async def test_proxy_mode_invalid_http_method_raises(self, manage_addon_tool):
         """Proxy mode: invalid HTTP method raises ToolError."""
-        with patch(
-            "ha_mcp.tools.tools_addons.get_addon_info",
-            return_value=_RUNNING_ADDON_INFO,
-        ), pytest.raises(ToolError) as exc_info:
-            await manage_addon_tool(
-                slug="test_addon", path="/flows", method="INVALID"
-            )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await manage_addon_tool(slug="test_addon", path="/flows", method="INVALID")
         error = _parse_tool_error(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
-        assert "method" in error["error"]["message"] or "INVALID" in error["error"]["message"]
+        assert (
+            "method" in error["error"]["message"]
+            or "INVALID" in error["error"]["message"]
+        )
 
     # --- New WS response-control params (issue #992) ---
 
@@ -3338,8 +3541,7 @@ class TestExtractAddonLogLevel:
     def test_no_log_level_returns_none(self):
         """Add-on with no log_level anywhere returns None (field omitted in response)."""
         assert (
-            _extract_addon_log_level({"options": {"port": 8080}, "schema": []})
-            is None
+            _extract_addon_log_level({"options": {"port": 8080}, "schema": []}) is None
         )
 
     def test_schema_without_log_level_returns_none(self):
@@ -3444,7 +3646,9 @@ class TestSupervisorApiCall:
     """
 
     @pytest.mark.asyncio
-    async def test_schema_error_on_options_endpoint_classified_as_validation_failed(self):
+    async def test_schema_error_on_options_endpoint_classified_as_validation_failed(
+        self,
+    ):
         """POST /addons/*/options schema reject => VALIDATION_FAILED via classifier."""
         from ha_mcp.client.rest_client import HomeAssistantCommandError
         from ha_mcp.tools.tools_addons import _supervisor_api_call
@@ -3458,10 +3662,13 @@ class TestSupervisorApiCall:
             )
         )
 
-        with patch(
-            "ha_mcp.tools.tools_addons.get_connected_ws_client",
-            return_value=(mock_ws, None),
-        ), pytest.raises(ToolError) as exc_info:
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_connected_ws_client",
+                return_value=(mock_ws, None),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await _supervisor_api_call(
                 _make_mock_client(),
                 "/addons/core_ssh/options",
@@ -3492,10 +3699,13 @@ class TestSupervisorApiCall:
             )
         )
 
-        with patch(
-            "ha_mcp.tools.tools_addons.get_connected_ws_client",
-            return_value=(mock_ws, None),
-        ), pytest.raises(ToolError) as exc_info:
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_connected_ws_client",
+                return_value=(mock_ws, None),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await _supervisor_api_call(
                 _make_mock_client(),
                 "/addons/core_ssh/info",

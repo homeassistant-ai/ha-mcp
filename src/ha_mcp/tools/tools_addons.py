@@ -12,13 +12,14 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import unquote, urlsplit
 
 import httpx
 import websockets
 from fastmcp.exceptions import ToolError
 from pydantic import Field
+from websockets.asyncio.client import ClientConnection
 
 from .._version import is_running_in_addon
 from ..client.rest_client import HomeAssistantClient
@@ -726,7 +727,7 @@ def _validate_addon_access(
     port: int | None,
     ingress_suggestions: list[str],
 ) -> None:
-    """Raise a structured error if the add-on lacks Ingress support or is not running."""
+    """Raise a structured error if the add-on is not running, or (when port is None) if it does not support Ingress."""
     if not port and not addon.get("ingress"):
         raise_tool_error(
             create_error_response(
@@ -750,7 +751,7 @@ def _validate_addon_access(
 
 
 async def _collect_ws_messages_loop(
-    ws: Any,
+    ws: ClientConnection,
     collection_cap: int,
     timeout: int | float,
     wait_for_close: bool,
@@ -767,6 +768,9 @@ async def _collect_ws_messages_loop(
             close_reason = "timeout"
             break
         if len(collected) >= collection_cap:
+            # Distinguish caller-set cap from the global safety ceiling so an
+            # agent reading the response can tell "I capped this" from
+            # "ha-mcp's hard ceiling kicked in".
             close_reason = "message_limit" if caller_capped else "safety_ceiling"
             break
         if total_size >= _MAX_RESPONSE_SIZE:
@@ -1209,6 +1213,10 @@ def _op_add(
             )
         )
     new_id = new_item[id_field]
+    # None and blank strings are rejected because dict.get(id_field) == None by
+    # default, so allowing them would let later patch/delete ops match unrelated
+    # items. Non-string ids (e.g. integer 0) stay valid by design —
+    # see test_add_with_integer_zero_id_is_accepted.
     if new_id is None or (isinstance(new_id, str) and not new_id.strip()):
         raise_tool_error(
             create_validation_error(
@@ -1255,6 +1263,11 @@ def _op_delete_where(
     ]
     removed = len(working) - len(new_working)
     entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
+    # Distinguish "value not present" from "field name unknown to any item" —
+    # the latter is almost always a typo and would otherwise silently give
+    # count=0. Only warn when there are dict items to inspect; an empty or
+    # all-non-dict array would trivially satisfy `not any(...)` and produce
+    # a misleading typo suggestion.
     inspectable = [it for it in new_working if isinstance(it, dict)]
     if removed == 0 and inspectable and not any(field in it for it in inspectable):
         entry.setdefault("warnings", []).append(
@@ -1329,7 +1342,6 @@ def _apply_array_ops(
             working, entry = _op_delete(working, op_spec, index, id_field)
             summary["deleted"].append(entry)
         elif op == "add":
-            # _op_add mutates working in place via append
             summary["added"].append(_op_add(working, op_spec, index, id_field))
         else:  # delete_where
             working, entry = _op_delete_where(working, op_spec, index)
@@ -1338,7 +1350,7 @@ def _apply_array_ops(
     return working, summary
 
 
-def _parse_response_body(response: Any) -> Any:
+def _parse_response_body(response: httpx.Response) -> Any:
     """Parse HTTP response body: JSON if content-type matches, else raw text."""
     content_type = response.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -1391,7 +1403,7 @@ def _truncate_http_response(response_data: Any, raw: bool) -> tuple[Any, bool]:
 
 
 def _build_http_result(
-    response: Any,
+    response: httpx.Response,
     response_data: Any,
     addon_name: str,
     slug: str,
@@ -1431,11 +1443,11 @@ def _build_http_result(
 
 def _add_http_error_hints(
     result: dict[str, Any],
-    response: Any,
+    response: httpx.Response,
     addon: dict[str, Any],
     slug: str,
 ) -> None:
-    """Mutate result to add error hints for 4xx HTTP responses."""
+    """Mutate result to add an error key and tailored suggestions for HTTP error responses (4xx and 5xx)."""
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
         if response.status_code == 401:
@@ -1658,62 +1670,6 @@ async def _call_addon_api(
     return result
 
 
-def _proxy_overrides_basic(
-    method: str,
-    body: Any,
-    debug: bool,
-    port: int | None,
-    offset: int,
-    limit: int | None,
-    websocket: bool,
-) -> list[tuple[str, str]]:
-    """Collect (param_name, display) pairs for basic proxy params set in config mode."""
-    result: list[tuple[str, str]] = []
-    if method != "GET":
-        result.append(("method", f"method={method!r}"))
-    if body is not None:
-        result.append(("body", "body"))
-    if debug:
-        result.append(("debug", "debug=True"))
-    if port is not None:
-        result.append(("port", f"port={port}"))
-    if offset != 0:
-        result.append(("offset", f"offset={offset}"))
-    if limit is not None:
-        result.append(("limit", f"limit={limit}"))
-    if websocket:
-        result.append(("websocket", "websocket=True"))
-    return result
-
-
-def _proxy_overrides_ws_and_extra(
-    wait_for_close: bool,
-    message_limit: int | None,
-    message_offset: int,
-    summarize: bool,
-    python_transform: str | None,
-    array_patch: dict[str, Any] | None,
-    request_headers: dict[str, str] | None,
-) -> list[tuple[str, str]]:
-    """Collect (param_name, display) pairs for WS and transform params set in config mode."""
-    result: list[tuple[str, str]] = []
-    if not wait_for_close:
-        result.append(("wait_for_close", "wait_for_close=False"))
-    if message_limit is not None:
-        result.append(("message_limit", f"message_limit={message_limit}"))
-    if message_offset != 0:
-        result.append(("message_offset", f"message_offset={message_offset}"))
-    if not summarize:
-        result.append(("summarize", "summarize=False"))
-    if python_transform is not None:
-        result.append(("python_transform", "python_transform"))
-    if array_patch is not None:
-        result.append(("array_patch", "array_patch"))
-    if request_headers is not None:
-        result.append(("request_headers", "request_headers"))
-    return result
-
-
 class AddOnTools:
     """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon."""
 
@@ -1722,7 +1678,7 @@ class AddOnTools:
 
     async def get_addon(
         self,
-        source: str | None,
+        source: Literal["installed", "available"] | None,
         slug: str | None,
         include_stats: bool,
         repository: str | None,
@@ -1821,11 +1777,16 @@ class AddOnTools:
                 )
             addon_info = info_result.get("result", {})
 
-            # Merge caller's options into current options (fixes partial-update rejection).
+            # Merge caller's options into current options (fixes partial-update
+            # rejection). Supervisor validates the full options dict against the
+            # add-on schema, so callers must always submit all required fields —
+            # merging makes that transparent.
             current_options: dict = addon_info.get("options") or {}
             merged_options = _merge_options(current_options, config_data["options"])
 
             # Pre-write schema check: identify fields not in the add-on's schema.
+            # Supervisor silently drops unknown fields on write; surfacing them
+            # here lets the caller correct mistakes before any state is changed.
             schema_ui: list | None = addon_info.get("schema")
             if schema_ui is not None:
                 allowed_keys = {item["name"] for item in schema_ui if "name" in item}
@@ -1933,7 +1894,6 @@ class AddOnTools:
                     parameter="array_patch.operations",
                 )
             )
-        assert isinstance(ops, list)
         return id_field, ops
 
     async def _execute_array_patch(
@@ -2008,6 +1968,62 @@ class AddOnTools:
             }
         return response_payload
 
+    @staticmethod
+    def _proxy_overrides_basic(
+        method: str,
+        body: Any,
+        debug: bool,
+        port: int | None,
+        offset: int,
+        limit: int | None,
+        websocket: bool,
+    ) -> list[tuple[str, str]]:
+        """Collect (param_name, display) pairs for proxy-mode params that are non-default and invalid when config mode is active."""
+        result: list[tuple[str, str]] = []
+        if method != "GET":
+            result.append(("method", f"method={method!r}"))
+        if body is not None:
+            result.append(("body", "body"))
+        if debug:
+            result.append(("debug", "debug=True"))
+        if port is not None:
+            result.append(("port", f"port={port}"))
+        if offset != 0:
+            result.append(("offset", f"offset={offset}"))
+        if limit is not None:
+            result.append(("limit", f"limit={limit}"))
+        if websocket:
+            result.append(("websocket", "websocket=True"))
+        return result
+
+    @staticmethod
+    def _proxy_overrides_ws_and_extra(
+        wait_for_close: bool,
+        message_limit: int | None,
+        message_offset: int,
+        summarize: bool,
+        python_transform: str | None,
+        array_patch: dict[str, Any] | None,
+        request_headers: dict[str, str] | None,
+    ) -> list[tuple[str, str]]:
+        """Collect (param_name, display) pairs for WS/transform params that are non-default and invalid when config mode is active."""
+        result: list[tuple[str, str]] = []
+        if not wait_for_close:
+            result.append(("wait_for_close", "wait_for_close=False"))
+        if message_limit is not None:
+            result.append(("message_limit", f"message_limit={message_limit}"))
+        if message_offset != 0:
+            result.append(("message_offset", f"message_offset={message_offset}"))
+        if not summarize:
+            result.append(("summarize", "summarize=False"))
+        if python_transform is not None:
+            result.append(("python_transform", "python_transform"))
+        if array_patch is not None:
+            result.append(("array_patch", "array_patch"))
+        if request_headers is not None:
+            result.append(("request_headers", "request_headers"))
+        return result
+
     async def manage_addon(
         self,
         slug: str,
@@ -2043,9 +2059,9 @@ class AddOnTools:
         self._validate_manage_mode(path, config_data)
 
         if config_data:
-            proxy_overrides = _proxy_overrides_basic(
+            proxy_overrides = self._proxy_overrides_basic(
                 method, body, debug, port, offset, limit, websocket
-            ) + _proxy_overrides_ws_and_extra(
+            ) + self._proxy_overrides_ws_and_extra(
                 wait_for_close,
                 message_limit,
                 message_offset,
@@ -2064,7 +2080,9 @@ class AddOnTools:
                 )
             return await self._execute_config_mode(slug, config_data)
 
-        # request_headers applies only to HTTP / array_patch mode.
+        # _call_addon_ws does not accept caller headers — reject the combo rather
+        # than silently dropping them (matches the fail-loud-on-misroute pattern
+        # used for message_limit / message_offset / summarize on HTTP).
         if request_headers is not None and websocket:
             raise_tool_error(
                 create_validation_error(
@@ -2074,7 +2092,10 @@ class AddOnTools:
                 )
             )
 
-        assert path is not None
+        if path is None:
+            raise RuntimeError(
+                "path is None — should be unreachable after _validate_manage_mode"
+            )
 
         if array_patch is not None:
             return await self._execute_array_patch(
@@ -2167,7 +2188,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     @log_tool_usage
     async def ha_get_addon(
         source: Annotated[
-            str | None,
+            Literal["installed", "available"] | None,
             Field(
                 description="Add-on source: 'installed' (default) for currently installed add-ons, "
                 "'available' for add-ons in the store that can be installed.",
