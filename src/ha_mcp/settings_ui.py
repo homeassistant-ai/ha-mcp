@@ -956,19 +956,34 @@ const policyState = {
 };
 
 async function loadPolicyState() {
+  // policyState.enabled mirrors the addon-config flag
+  // (enable_tool_security_policies) — the single source of truth for
+  // whether the middleware is active. Read it from /api/settings/features
+  // (where it appears via FEATURE_FLAG_FIELDS) rather than Policy.enabled
+  // in tool_policy.json, which has no UI surface and would always look
+  // false even when the addon-config flag is on.
+  try {
+    const fresp = await fetch('./api/settings/features');
+    if (fresp.ok) {
+      const fdata = await fresp.json();
+      const flag = (fdata.flags || {})['enable_tool_security_policies'];
+      policyState.enabled = !!(flag && flag.value);
+    } else {
+      policyState.enabled = false;
+    }
+  } catch (_e) {
+    policyState.enabled = false;
+  }
   try {
     const r = await fetch('./api/policy/config');
     if (!r.ok) {
-      policyState.enabled = false;
       policyState.gatedTools = new Set();
       return;
     }
     const p = await r.json();
-    policyState.enabled = !!p.enabled;
     policyState.gatedTools = new Set((p.rules || []).map(rule => rule.tool_name));
   } catch (_e) {
     // Policy endpoint unavailable (sidecar stub) — leave gatedTools empty.
-    policyState.enabled = false;
     policyState.gatedTools = new Set();
   }
 }
