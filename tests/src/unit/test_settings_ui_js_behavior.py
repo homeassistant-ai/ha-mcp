@@ -72,6 +72,11 @@ _TOP_LEVEL_ELEMENT_IDS = [
     "panel-tools",
     "panel-server",
     "panel-backups",
+    # Tool Security Policies tab (#966): the master-toggle checkbox
+    # mirrors the Server-Settings flag and posts to /api/settings/features;
+    # the global-settings save button writes wait_seconds / TTL.
+    "policy-master-toggle",
+    "policy-save-global-btn",
 ]
 
 
@@ -109,6 +114,10 @@ def _build_min_dom() -> str:
             continue  # rendered as a child of restartNotice above
         elif el_id == "search":
             rows.append('<input id="search" />')
+        elif el_id == "policy-master-toggle":
+            rows.append('<input id="policy-master-toggle" type="checkbox" />')
+        elif el_id == "policy-save-global-btn":
+            rows.append('<button id="policy-save-global-btn"></button>')
         else:
             rows.append(f'<div id="{el_id}"></div>')
     body = "\n  ".join(rows)
@@ -534,4 +543,170 @@ class TestSaveFeatureFlagJsonParseFallback:
         assert not result.broadcasts_of_type("restart-required"), (
             f"failed save must not broadcast restart-required; "
             f"got broadcasts={result.broadcasts}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tool Security Policies tab (#966)
+# ---------------------------------------------------------------------------
+
+
+def _policy_panel_dom() -> str:
+    """MIN_DOM stub plus the elements the policy tab queries.
+
+    The script binds top-level handlers on policy-master-toggle /
+    policy-save-global-btn (covered by MIN_DOM), but the bodies of
+    policyLoadConfig / policyLoadPending fetch and write into
+    policy-* sub-elements that don't appear in MIN_DOM. Add the
+    minimum set so the policy-tab invocations don't throw on missing
+    elements when we exercise them directly.
+    """
+    extras = """
+      <div id="policy-pending-list"></div>
+      <div id="policy-load-error" style="display:none"></div>
+      <div id="policy-rules-empty" style="display:none"></div>
+      <div id="policy-rules-list"></div>
+      <input id="policy-wait-seconds" />
+      <input id="policy-ttl-minutes" />
+    """
+    return MIN_DOM.replace("</body>", extras + "</body>")
+
+
+class TestPolicyTabFlow:
+    """Locks in the new condition-builder UX wiring: master toggle
+    posts to the same feature-flag endpoint the Server-Settings tab
+    uses, and the pending-list shows the right copy depending on
+    whether the feature is on or off."""
+
+    def test_master_toggle_change_posts_to_features_endpoint(
+        self, settings_script: str
+    ) -> None:
+        """Clicking the master toggle on the Policies tab must POST
+        ``{flags: {enable_tool_security_policies: true}}`` to
+        ``/api/settings/features`` — same endpoint as the Server
+        Settings checkbox. Without this the two surfaces would drift
+        and the user couldn't trust the on-tab toggle to actually
+        flip addon config."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {"restart_required": True},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              const cb = document.getElementById('policy-master-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 50));
+            """,
+        )
+        _assert_clean_init(result)
+        flag_posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/features" in f["url"]
+        ]
+        assert len(flag_posts) >= 1, (
+            f"expected POST to /api/settings/features; got {result.fetches}"
+        )
+        # The body is JSON-serialised; assert the right flag landed in it.
+        bodies = [f.get("body", "") for f in flag_posts]
+        assert any(
+            "enable_tool_security_policies" in str(b) and "true" in str(b).lower()
+            for b in bodies
+        ), f"expected enable_tool_security_policies:true in body; got {bodies}"
+
+    def test_pending_list_shows_off_message_when_feature_disabled(
+        self, settings_script: str
+    ) -> None:
+        """When the addon flag is off, /api/policy/pending 503s. The
+        UI should tell the user the feature is just turned off — NOT
+        the misleading "sidecar / unavailable" text the earlier code
+        showed. This catches regressions where the new copy gets
+        clobbered back to the generic message."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            # Feature flag explicitly disabled
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {"value": False},
+                    },
+                },
+            },
+            # Stub policy config endpoints so policyLoadConfig doesn't 500
+            "/api/policy/config": {
+                "status": 200,
+                "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {"error": "irrelevant when flag is off"},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.policyLoadConfig();
+              await window.policyLoadPending();
+            """,
+        )
+        _assert_clean_init(result)
+        # `dom` is the full final-state document snapshot; grep the
+        # pending-list region for the new off-state copy.
+        assert "turned off" in result.dom.lower(), (
+            f"expected 'turned off' in pending-list snapshot; "
+            f"dom contains: {result.dom[-2000:]}"
+        )
+
+    def test_pending_list_shows_server_message_when_feature_on_but_503(
+        self, settings_script: str
+    ) -> None:
+        """Feature is on but the queue is unreachable (sidecar mode or
+        ImportError at startup). The server's 503 message should
+        propagate verbatim so the user knows to check the addon log,
+        instead of the generic "feature off" text."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {"value": True},
+                    },
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": []},
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {
+                    "error": "Tool security policies live approvals are not active. "
+                    "Check the addon log for ImportError / RuntimeError details."
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await window.policyLoadConfig();
+              await window.policyLoadPending();
+            """,
+        )
+        _assert_clean_init(result)
+        assert "addon log" in result.dom.lower(), (
+            f"expected addon-log message in pending-list snapshot; "
+            f"dom contains: {result.dom[-2000:]}"
         )
