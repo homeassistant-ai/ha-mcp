@@ -294,6 +294,29 @@ def test_value_source_cache_keys_separate_per_params(tmp_path):
     assert r_lock.json()["values"] == ["lock.front"]
 
 
+def test_value_source_empty_result_not_cached(tmp_path):
+    """A transient HA glitch returning [] once must NOT be cached for
+    the full TTL window; the next call must re-fetch and reflect real
+    state."""
+    call_count = {"n": 0}
+
+    async def get_services():
+        call_count["n"] += 1
+        # First call: empty (glitch); second: real values.
+        return {} if call_count["n"] == 1 else {"light": {}, "lock": {}}
+
+    client = MagicMock()
+    client.get_services = AsyncMock(side_effect=get_services)
+    c = _make_app(tmp_path, _make_server(tools=[], client=client))
+    first = c.get("/api/policy/value-source?source=ha_domains").json()
+    second = c.get("/api/policy/value-source?source=ha_domains").json()
+    assert first["values"] == []
+    assert sorted(second["values"]) == ["light", "lock"], (
+        "empty result must not be cached; second call should re-fetch real values"
+    )
+    assert call_count["n"] == 2, "second call must hit the fetcher, not the cache"
+
+
 def test_tool_schema_handles_malformed_properties(tmp_path):
     """A tool with a non-dict property schema entry (quirky FastMCP
     schema) should be skipped, not crash the endpoint."""

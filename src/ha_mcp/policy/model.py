@@ -3,7 +3,14 @@
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 PredicateOp = Literal[
     "eq", "neq", "in", "not_in", "regex", "contains", "exists", "gt", "lt"
@@ -96,3 +103,20 @@ class Policy(BaseModel):
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)
     version: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _wait_must_be_less_than_ttl(self) -> "Policy":
+        # If the middleware's wait window can outlast the entry's TTL
+        # the queue's sweeper evicts the entry mid-wait and the
+        # reissue-pending path fires on every call — burning one
+        # PENDING_CAP slot per retry. Force wait_seconds strictly less
+        # than the TTL so a single approval window covers the wait.
+        ttl_seconds = self.approval_ttl_minutes * 60
+        if self.wait_seconds >= ttl_seconds:
+            raise ValueError(
+                f"wait_seconds ({self.wait_seconds}) must be less than "
+                f"approval_ttl_minutes * 60 ({ttl_seconds}); otherwise the "
+                "approval entry expires during the wait and every call "
+                "issues a fresh pending row."
+            )
+        return self

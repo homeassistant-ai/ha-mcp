@@ -965,10 +965,15 @@ let openGroups = new Set();
 
 // Per-tool "security gated" toggle state mirrors policy.rules from
 // /api/policy/config. A tool is gated iff there's any rule with a
-// matching tool_name (with or without predicates). The Tools tab
+// matching tool_name (with or without conditions). The Tools tab
 // uses this set to render the third toggle alongside enabled/pinned.
+// `enabled` is tri-state: true/false from the addon-config flag, or
+// null when the features fetch failed — downstream branches need to
+// distinguish "definitively off" from "couldn't determine" so they
+// don't false-confidently tell the user the feature is off.
 const policyState = {
   enabled: false,
+  enabledKnown: false,
   gatedTools: new Set(),
 };
 
@@ -983,11 +988,14 @@ async function loadPolicyState() {
       const fdata = await fresp.json();
       const flag = (fdata.flags || {})['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
+      policyState.enabledKnown = true;
     } else {
       policyState.enabled = false;
+      policyState.enabledKnown = false;
     }
   } catch (_e) {
     policyState.enabled = false;
+    policyState.enabledKnown = false;
   }
   try {
     const r = await fetch('./api/policy/config');
@@ -2100,7 +2108,7 @@ async function saveFeatureFlag(fieldName, value) {
 // degrades to "Live approvals unavailable in this mode."
 //
 // The card UI keeps an in-memory mutable copy of each rule
-// (policyRuleEdits[tool_name]) so the user can edit predicates /
+// (policyRuleEdits[tool_name]) so the user can edit conditions /
 // remember_minutes locally before pressing "Save changes" on a card,
 // which then GETs current policy, replaces the rule entry, and PUTs.
 // This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
@@ -2134,13 +2142,21 @@ async function policyLoadConfig() {
     // tool_policy.json is broken, here's how to repair" message from
     // the handler — surface it instead of silently rendering empty.
     let detail = 'HTTP ' + resp.status;
+    let bodyParsed = false;
     try {
       const body = await resp.json();
+      bodyParsed = true;
       if (body && body.error) detail = body.error;
       if (body && body.policy_file_corrupt) {
         detail += ' (tool_policy.json appears corrupt; edit or delete it on the addon /data volume)';
       }
     } catch (_e) { /* keep the HTTP-status fallback */ }
+    if (!bodyParsed) {
+      // E.g. an HTML error page from a misrouted sidecar — give the
+      // operator a hint that the body itself was unparseable, not
+      // just the status code.
+      detail += ' (response body unparseable)';
+    }
     showPolicyLoadError('Failed to load policy: ' + detail);
     return;
   }
@@ -2283,7 +2299,7 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
-  // Re-render the card in place after a predicate-list mutation so the
+  // Re-render the card in place after a condition-list mutation so the
   // rows reflect the new in-memory rule object.
   const rerenderCard = () => {
     const replacement = renderPolicyCard(toolName, rule);
@@ -2337,7 +2353,7 @@ function renderPolicyCard(toolName, rule) {
   const populatePathSelect = (selectedPath) => {
     const paths = (toolSchema && toolSchema.paths) || [];
     let html = '';
-    // Wildcard: match the predicate against EVERY argument of the call.
+    // Wildcard: match the condition against EVERY argument of the call.
     // Always first AND default, so the form has a sensible value out of
     // the box and users never hit "argument is required" by saving an
     // empty placeholder.
@@ -2355,7 +2371,7 @@ function renderPolicyCard(toolName, rule) {
     html += '<option value="' + FREE_TEXT_OPT + '">(other — type a path)</option>';
     pathSelectEl.innerHTML = html;
 
-    // If the existing predicate uses a path the schema doesn't know
+    // If the existing condition uses a path the schema doesn't know
     // about (read-only tool, free-text from earlier, removed arg),
     // drop into custom mode automatically so we don't silently clobber
     // the existing value.
@@ -2621,11 +2637,17 @@ function renderPolicyCard(toolName, rule) {
         toolSchema = await r.json();
       } else {
         // 503/404/etc: server can't introspect (sidecar / tool not
-        // found). Use an empty schema so the UI still works via free text.
+        // found). Use an empty schema so the UI still works via free
+        // text. Surface the failure through lastValueSourceError so
+        // renderHint shows the user why their dropdown is gone.
         toolSchema = {paths: [], value_sources: {}};
+        lastValueSourceError = 'tool-schema fetch failed (HTTP ' + r.status +
+          ') — falling back to free-text';
       }
-    } catch (_e) {
+    } catch (e) {
       toolSchema = {paths: [], value_sources: {}};
+      lastValueSourceError = 'tool-schema fetch failed (' + e.message +
+        ') — falling back to free-text';
     }
     return toolSchema;
   };
@@ -2767,15 +2789,23 @@ async function policyLoadPending() {
   let resp;
   try {
     resp = await fetch('./api/policy/pending');
-  } catch (_e) { return; }
+  } catch (e) {
+    // Surface the failure inline — silent return leaves the pending
+    // list visibly frozen with no signal that polling broke.
+    list.innerHTML = '<em style="color:var(--text-secondary)">Lost contact with server (' + escapeHtml(e.message) + ') — retrying.</em>';
+    return;
+  }
   if (resp.status === 503) {
-    // 503 has three causes — give the right message based on what we
-    // already know from /api/settings/features.
-    if (!policyState.enabled) {
+    // 503 has three causes. Only confidently say "feature is off"
+    // when /api/settings/features actually told us so; if we couldn't
+    // determine the flag (network drop, server down), fall back to
+    // the server's 503 message rather than misleadingly claiming the
+    // user disabled the feature.
+    if (policyState.enabledKnown && !policyState.enabled) {
       list.innerHTML = '<em>Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the addon to enable gating.</em>';
     } else {
-      // Feature is on but the queue isn't reachable — sidecar mode, or
-      // a startup ImportError on the policy package.
+      // Feature is on (or unknown) but the queue isn't reachable —
+      // sidecar mode, startup ImportError, or transient outage.
       let msg = 'Live approvals unavailable. Check the addon log for ImportError / RuntimeError details.';
       try {
         const body = await resp.json();
@@ -2845,11 +2875,20 @@ document.getElementById('policy-save-global-btn').addEventListener('click', save
 // Persist via the same /api/settings/features endpoint so a save here
 // shows up in Server Settings (and the addon's config.yaml) on reload.
 document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
-  // Refresh the mirror so the local cache (policyState.enabled) tracks
-  // what we just wrote — restart still required for the middleware to
-  // pick it up, which the saveFeatureFlag status message already says.
+  // Re-read the truth from the server and sync the checkbox back to
+  // it. If saveFeatureFlag silently failed (network drop / 5xx) the
+  // server still has the old value and we need to revert the
+  // checkbox so the UI doesn't lie about persisted state.
   await loadPolicyState();
+  if (policyState.enabledKnown) {
+    e.target.checked = !!policyState.enabled;
+  } else {
+    // Can't confirm what the server has — revert to the pre-flip
+    // value and let the status message tell the user save failed.
+    e.target.checked = previous;
+  }
 });
 
 // Poll for pending approvals every 3s when Tool Security Policies tab is visible.

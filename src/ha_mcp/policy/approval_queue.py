@@ -77,9 +77,15 @@ class ApprovalQueue:
 
     # Hard cap on pending entries to prevent memory exhaustion if an LLM
     # in a retry loop with mutated args creates a new entry every call.
-    # Hit = oldest non-resolved entries are evicted FIFO. 1000 is well
-    # above any realistic interactive use (the UI shows them all at once);
-    # an attacker probing past the cap just churns the queue.
+    # When the cap is hit, eviction runs in this order:
+    #   1. _sweep_expired() — drop TTL-elapsed entries first
+    #   2. then evict already-resolved (approved/denied) entries by age
+    #   3. only if still over the cap, evict oldest pending entries —
+    #      and fire their _event so any waiter wakes up immediately
+    #      rather than blocking the full wait_seconds against a row
+    #      that no longer exists.
+    # 1000 is well above any realistic interactive use; an attacker
+    # probing past the cap just churns the queue.
     PENDING_CAP = 1000
 
     def __init__(self) -> None:
@@ -125,17 +131,11 @@ class ApprovalQueue:
         *,
         ttl_minutes: int,
     ) -> PendingApproval:
-        # Enforce PENDING_CAP — evict oldest already-resolved entries
-        # first (the middleware should have removed them but the UI may
-        # not have called approve/deny). If still over cap, evict oldest
-        # pending too.
+        # Enforce PENDING_CAP. Order matters — see class docstring.
         if len(self._by_token) >= self.PENDING_CAP:
             self._sweep_expired()
             if len(self._by_token) >= self.PENDING_CAP:
-                overflow = len(self._by_token) - self.PENDING_CAP + 1
-                ordered = sorted(self._by_token.values(), key=lambda e: e.created_at)
-                for stale in ordered[:overflow]:
-                    self._by_token.pop(stale.token, None)
+                self._evict_to_make_room()
         now = datetime.now(UTC)
         entry = PendingApproval(
             token=secrets.token_urlsafe(24),
@@ -185,10 +185,15 @@ class ApprovalQueue:
         """Mark the entry approved. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
         if entry is None:
-            logger.info("approval_queue.approve: unknown token %s", token)
+            # WARNING because on a security-gating endpoint this means
+            # either a UI bug, a stale tab racing the sweeper, or an
+            # attacker probing tokens — operator should see it.
+            logger.warning("approval_queue.approve: unknown token %s", token)
             return False
         ok = entry.decide("approved")
         if not ok:
+            # INFO — could be a legitimate race (two approvers, or
+            # quick double-click) rather than a security signal.
             logger.info(
                 "approval_queue.approve: token %s already decided as %s",
                 token,
@@ -200,7 +205,7 @@ class ApprovalQueue:
         """Mark the entry denied. Returns False if unknown or already decided."""
         entry = self._by_token.get(token)
         if entry is None:
-            logger.info("approval_queue.deny: unknown token %s", token)
+            logger.warning("approval_queue.deny: unknown token %s", token)
             return False
         ok = entry.decide("denied")
         if not ok:
@@ -226,3 +231,34 @@ class ApprovalQueue:
         stale = [t for t, e in self._by_token.items() if e.expires_at <= now]
         for t in stale:
             self._by_token.pop(t, None)
+
+    def _evict_to_make_room(self) -> None:
+        """Evict one entry to bring us back under PENDING_CAP.
+
+        Resolved entries (approved/denied) go first — they're already
+        decided and only sitting in the queue because the UI hasn't
+        picked them up yet. If none exist, fall back to the oldest
+        pending entry AND fire its event so any waiter in
+        _wait_for_decision wakes up immediately and observes the
+        eviction instead of blocking the full wait_seconds against a
+        row that no longer exists.
+        """
+        overflow = len(self._by_token) - self.PENDING_CAP + 1
+        # Sort by (still-pending? then by age) so resolved entries are
+        # at the front of the evict list.
+        ordered = sorted(
+            self._by_token.values(),
+            key=lambda e: (e.decision == "pending", e.created_at),
+        )
+        for stale in ordered[:overflow]:
+            if stale.decision == "pending":
+                logger.warning(
+                    "approval_queue: PENDING_CAP hit — evicting pending token %s "
+                    "(no resolved entries to drop); waiter will be notified",
+                    stale.token,
+                )
+                # Best-effort wake — _event.set() is idempotent and safe
+                # on any state. Without this the waiter blocks until its
+                # wait_seconds deadline.
+                stale._event.set()
+            self._by_token.pop(stale.token, None)

@@ -17,6 +17,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +95,17 @@ async def fetch_value_source(
     fetcher = _FETCHERS.get(source)
     if fetcher is None:
         raise ValueError(f"Unknown value source: {source!r}")
-    cache_key = source + "|" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    # urlencode escapes `=`/`&`/etc. inside values so a future param
+    # whose value contains those chars can't collide with a different
+    # (source, params) tuple.
+    cache_key = source + "|" + urlencode(sorted(params.items()))
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     values = sorted(await fetcher(client, params))
-    # Don't cache an empty result — a transient HA glitch (WebSocket
-    # reconnect window, auth lapse, etc.) can return [] briefly; caching
-    # that for 30s would degrade the dropdown UX for the whole window.
-    # Genuine "this source legitimately has no values" callers re-fetch
-    # cheap enough.
+    # Don't cache an empty result — a transient HA glitch can return []
+    # briefly; caching that for 30s would degrade the dropdown UX for
+    # the whole window. Genuine "no values" callers re-fetch cheap enough.
     if values:
         _cache_set(cache_key, values)
     return values

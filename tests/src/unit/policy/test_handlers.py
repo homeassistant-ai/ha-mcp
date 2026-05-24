@@ -183,6 +183,44 @@ def test_put_with_stale_version_returns_409(tmp_path):
     assert payload["current_policy"]["rules"][0]["tool_name"] == "ha_first"
 
 
+def test_put_config_clears_remember_cache_when_rules_change(tmp_path):
+    """A tightened rule must take effect immediately. Without
+    invalidation, an approval remembered before the save would still
+    grant pass-through until the remember window expires."""
+    queue = ApprovalQueue()
+    queue.remember("ha_call_service", "abc123", minutes=10)
+    assert queue.is_remembered("ha_call_service", "abc123") is True
+
+    c = make_app(tmp_path, queue)
+    current = c.get("/api/policy/config").json()
+    body = Policy(
+        rules=[Rule(tool_name="ha_new_rule")], version=current["version"]
+    ).model_dump(mode="json")
+    assert c.put("/api/policy/config", json=body).status_code == 200
+
+    assert queue.is_remembered("ha_call_service", "abc123") is False, (
+        "rule change must invalidate the remember-cache"
+    )
+
+
+def test_put_config_preserves_remember_cache_when_only_timing_changes(tmp_path):
+    """Editing wait_seconds / approval_ttl_minutes alone shouldn't
+    blow away in-flight remembered approvals — only a rule change
+    could meaningfully alter outcomes for those calls."""
+    queue = ApprovalQueue()
+    queue.remember("ha_call_service", "abc123", minutes=10)
+
+    c = make_app(tmp_path, queue)
+    current = c.get("/api/policy/config").json()
+    # Same rules (empty), different wait_seconds
+    body = Policy(wait_seconds=30, version=current["version"]).model_dump(mode="json")
+    assert c.put("/api/policy/config", json=body).status_code == 200
+
+    assert queue.is_remembered("ha_call_service", "abc123") is True, (
+        "timing-only edit must not invalidate the remember-cache"
+    )
+
+
 def test_get_pending_returns_full_shape(tmp_path):
     queue = ApprovalQueue()
     queue.create("ha_x", "abc", {"foo": "bar"}, ttl_minutes=5)

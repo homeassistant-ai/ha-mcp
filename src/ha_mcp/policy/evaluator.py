@@ -90,7 +90,7 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
                 return bool(val > pv)
             except TypeError:
                 # Numeric rule against a non-numeric arg value — log so
-                # users can tell their "battery_level < 20" rule isn't
+                # users can tell their "temperature > 30" rule isn't
                 # silently never firing because the arg is a string.
                 logger.debug(
                     "policy: gt type-mismatch (val=%r pv=%r) — predicate skipped",

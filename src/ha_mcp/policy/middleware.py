@@ -54,9 +54,8 @@ class PolicyMiddleware(Middleware):
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
         try:
-            # Hoist sync file read off the event loop (fastmcp request
-            # handler runs in the async task). load_policy() is fast on
-            # warm disk but a corrupt/slow FS shouldn't pause the loop.
+            # Hoist sync file read off the event loop — a slow FS shouldn't
+            # pause the fastmcp request handler's task.
             policy = await run_in_thread(self._policy_provider)
         except ValueError as e:
             # Fail-closed: a corrupt or invalid tool_policy.json is a
@@ -135,11 +134,19 @@ class PolicyMiddleware(Middleware):
         # told to re-call with a dead token. Issue a fresh entry so the
         # next re-call wakes a real pending row.
         if self._queue.get(pending.token) is None:
+            old_token = pending.token
             pending = self._queue.create(
                 pending.tool_name,
                 pending.args_hash,
                 pending.args,
                 ttl_minutes=policy.approval_ttl_minutes,
+            )
+            logger.info(
+                "policy middleware: pending token %s evicted during wait, "
+                "reissued as %s for tool=%s",
+                old_token,
+                pending.token,
+                name,
             )
         self._raise_pending_error(pending, rule)
 

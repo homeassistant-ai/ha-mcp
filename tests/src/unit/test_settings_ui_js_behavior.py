@@ -614,12 +614,33 @@ class TestPolicyTabFlow:
         assert len(flag_posts) >= 1, (
             f"expected POST to /api/settings/features; got {result.fetches}"
         )
-        # The body is JSON-serialised; assert the right flag landed in it.
-        bodies = [f.get("body", "") for f in flag_posts]
-        assert any(
-            "enable_tool_security_policies" in str(b) and "true" in str(b).lower()
-            for b in bodies
-        ), f"expected enable_tool_security_policies:true in body; got {bodies}"
+        # The body is JSON-serialised — parse and assert structurally
+        # rather than substring-matching, so a body like
+        # ``{"flags":{"x":"enable_tool_security_policies"}}`` (which
+        # would pass the loose match) doesn't false-positive.
+        import json
+
+        matched = False
+        for f in flag_posts:
+            raw = f.get("body", "")
+            if not raw:
+                continue
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            flags = body.get("flags") if isinstance(body, dict) else None
+            if (
+                isinstance(flags, dict)
+                and flags.get("enable_tool_security_policies") is True
+            ):
+                matched = True
+                break
+        assert matched, (
+            "expected POST body containing "
+            f"{{'flags': {{'enable_tool_security_policies': True}}}}; "
+            f"got {[f.get('body') for f in flag_posts]}"
+        )
 
     def test_pending_list_shows_off_message_when_feature_disabled(
         self, settings_script: str

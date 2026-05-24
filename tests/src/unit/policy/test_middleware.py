@@ -383,3 +383,37 @@ async def test_multi_rule_first_match_wins_for_remember_minutes(queue):
     assert delta < timedelta(minutes=20), (
         f"remember window was {delta}; expected ~10min (first rule), not 999min (second rule)"
     )
+
+
+@pytest.mark.anyio
+async def test_swept_pending_during_wait_is_reissued_with_fresh_token(queue):
+    """If the queue sweeper evicts the pending entry while the
+    middleware is in _wait_for_decision, the post-wait reissue branch
+    must create a new entry so the LLM's next re-call has a real
+    token to land on. Without this, the user would be told to
+    re-call with a dead token."""
+    from datetime import UTC, datetime, timedelta
+
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+    call_next = AsyncMock()
+
+    # Pre-create the entry so we can rewind its expiry — then the
+    # wait-loop's exit will run _sweep_expired() via queue.find() and
+    # remove the row, exercising the reissue branch.
+    args = {"domain": "lock"}
+    pre = queue.create("ha_call_service", compute_args_hash(args), args, ttl_minutes=5)
+    original_token = pre.token
+    pre.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(make_context("ha_call_service", args), call_next)
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    # New token issued — the old one is gone and the body carries the
+    # fresh one so the LLM's re-call won't hit a dead row.
+    assert body["token"] != original_token
+    assert queue.get(body["token"]) is not None, (
+        "reissue branch must create a fresh, queryable entry"
+    )
+    assert queue.get(original_token) is None

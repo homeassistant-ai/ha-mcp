@@ -101,10 +101,13 @@ def build_policy_handlers(
                 status_code=409,
             )
         save_policy(data_dir, new_policy)
-        # Drop the remember-cache so a tightened rule takes effect
-        # immediately — without this, an approval remembered before the
-        # save still grants pass-through until its window expires.
-        queue.clear_remember_cache()
+        # Drop the remember-cache only when rules actually changed.
+        # Editing just wait_seconds / approval_ttl_minutes shouldn't
+        # invalidate in-flight remembered approvals; only a rule change
+        # could make a previously-approved call now want a different
+        # outcome.
+        if current.rules != new_policy.rules:
+            queue.clear_remember_cache()
         return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def get_pending(_: Request) -> JSONResponse:
@@ -194,9 +197,7 @@ def build_policy_handlers(
         # `local_provider._list_tools()` is a private FastMCP API but the
         # public ``mcp.list_tools()`` filters out tools the operator has
         # disabled via the Tools tab — the same disabled tools the user
-        # may still want to author gating rules for. The settings_ui
-        # tool-listing endpoint uses the same private accessor for the
-        # same reason; this keeps the two consistent.
+        # may still want to author gating rules for.
         try:
             tools = await server.mcp.local_provider._list_tools()
         except Exception as e:
