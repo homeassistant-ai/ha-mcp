@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 # Import test utilities
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import MCPAssertions, extract_error_message, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -213,12 +213,7 @@ class TestDashboardLifecycle:
         )
         # The key assertion: error must NOT be about hyphens
         if not data.get("success", False):
-            error = data.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
+            error_msg = extract_error_message(data)
             assert "hyphen" not in error_msg.lower(), (
                 f"'lovelace' should not be rejected by hyphen validation, got: {error_msg}"
             )
@@ -230,12 +225,7 @@ class TestDashboardLifecycle:
             {"url_path": "default", "title": "Default Dashboard"},
         )
         if not data.get("success", False):
-            error = data.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
+            error_msg = extract_error_message(data)
             assert "hyphen" not in error_msg.lower(), (
                 f"'default' should not be rejected by hyphen validation, got: {error_msg}"
             )
@@ -247,10 +237,7 @@ class TestDashboardLifecycle:
             {"url_path": "nodash", "title": "Invalid Dashboard"},
         )
         assert data["success"] is False
-        error = data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
+        error_msg = extract_error_message(data)
         assert "hyphen" in error_msg.lower()
 
         logger.info("Default dashboard hyphen validation test completed successfully")

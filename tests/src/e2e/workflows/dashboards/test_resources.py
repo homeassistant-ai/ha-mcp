@@ -18,6 +18,7 @@ import logging
 # Import test utilities
 from ...utilities.assertions import (
     MCPAssertions,
+    extract_error_message,
     safe_call_tool,
 )
 
@@ -521,10 +522,7 @@ class TestInlineDashboardResource:
             {"content": ""},
         )
         assert data["success"] is False
-        error = data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
+        error_msg = extract_error_message(data)
         assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
