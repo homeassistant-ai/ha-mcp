@@ -507,22 +507,42 @@ def get_feature_flag_origin(env_name: str) -> str:
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
 
-    For the five fields in ``BETA_FEATURE_FIELDS`` and the master
-    ``ENABLE_BETA_FEATURES``, ``"addon"`` is never returned (#1164). The
-    master is not in any addon schema; the five sub-flags exist in the
-    dev addon schema (where ``start.py`` exports them as env vars, so
-    ``origin='env'`` is returned in dev addon mode). In stable addon
-    and non-addon deployments, they follow the env/file/default chain.
+    Addon-mode handling for the master and beta sub-flags (#1164):
+
+    - ``ENABLE_BETA_FEATURES`` (master) is not in any addon schema,
+      so ``"addon"`` is never returned for it — it follows env / file
+      / default precedence regardless of mode.
+    - The five ``BETA_FEATURE_FIELDS`` (sub-flags) exist in the dev
+      addon schema but NOT the stable addon schema. In dev addon
+      mode, ``start.py`` writes the env var from ``/data/options.json``
+      so the env var is set at runtime; that signals "Supervisor
+      authoritative" and ``"addon"`` is returned. In stable addon
+      mode the env var is never written, so the sub-flag falls
+      through to file/default.
     """
     field_name = next(
         (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
         None,
     )
-    beta_fields = {"enable_beta_features", *BETA_FEATURE_FIELDS}
-    is_beta = field_name in beta_fields
+    is_master = field_name == "enable_beta_features"
+    is_beta_sub = field_name in BETA_FEATURE_FIELDS
+    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
 
-    if os.environ.get("SUPERVISOR_TOKEN") and not is_beta:
-        return "addon"
+    if in_addon:
+        if is_master:
+            # Master never has an addon schema entry — fall through to
+            # file/default chain.
+            pass
+        elif is_beta_sub:
+            # Dev addon: start.py wrote the env var → Supervisor is
+            # the source of truth, mark as addon-editable. Stable
+            # addon: env var never written → fall through to file
+            # so the UI master toggle path applies.
+            if os.environ.get(env_name) is not None:
+                return "addon"
+            # else: stable, fall through.
+        else:
+            return "addon"
     if os.environ.get(env_name) is not None:
         return "env"
     if field_name is None:
