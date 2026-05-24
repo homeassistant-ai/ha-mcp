@@ -4689,10 +4689,15 @@ def build_settings_handlers(
             _ADVANCED_SETTINGS_CHOICES,
             ADVANCED_SETTINGS_FIELDS,
             OAUTH_MODE_TOKEN,
+            _read_feature_flag_override_file,
             get_global_settings,
         )
 
         settings = get_global_settings()
+        # Read the override file ONCE for this GET — origin lookup is
+        # called per field, and re-reading the file 17+ times would
+        # produce duplicate WARNINGs on a corrupt file (one per field).
+        overrides = _read_feature_flag_override_file()
         fields: list[dict[str, Any]] = []
         for (
             fname,
@@ -4701,7 +4706,7 @@ def build_settings_handlers(
             section,
             registry_editable,
         ) in ADVANCED_SETTINGS_FIELDS:
-            origin = _origin_for_advanced_field(env_name)
+            origin = _origin_for_advanced_field(env_name, overrides=overrides)
             value: Any = getattr(settings, fname, None)
             # Mask the token: never echo the actual long-lived access
             # token to the UI. The OAuth-mode sentinel survives so
@@ -4730,12 +4735,18 @@ def build_settings_handlers(
             fields.append(row)
         return JSONResponse({"fields": fields})
 
-    def _origin_for_advanced_field(env_name: str) -> str:
+    def _origin_for_advanced_field(
+        env_name: str, overrides: dict[str, Any] | None = None
+    ) -> str:
         """Origin for an ADVANCED_SETTINGS_FIELDS entry.
 
         Returns ``'env' | 'file' | 'default'`` — advanced fields are
         never addon-routed (their POST writes land in the override
         file in either deployment mode).
+
+        Callers iterating ADVANCED_SETTINGS_FIELDS should pass a
+        pre-read ``overrides`` dict so the override file isn't re-read
+        N times per page render.
         """
         from .config import (
             ADVANCED_SETTINGS_FIELDS,
@@ -4744,7 +4755,8 @@ def build_settings_handlers(
 
         if os.environ.get(env_name) is not None:
             return "env"
-        overrides = _read_feature_flag_override_file()
+        if overrides is None:
+            overrides = _read_feature_flag_override_file()
         fname = next(
             (f for f, e, *_ in ADVANCED_SETTINGS_FIELDS if e == env_name), None
         )

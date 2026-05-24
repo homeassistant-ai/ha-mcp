@@ -421,3 +421,51 @@ def test_old_override_file_unknown_keys_ignored(isolated_data_dir, monkeypatch) 
     _reset_global_settings()
     s = get_global_settings()
     assert s.enable_beta_features is True
+
+
+# Backup-override new fields (#1164) — coverage gaps caught by review.
+
+
+def test_backup_override_dir_rejects_null_byte(isolated_data_dir, monkeypatch) -> None:
+    """auto_backup_dir is a str field; values containing null bytes
+    are rejected at apply time (defensive guard against filesystem
+    confusion)."""
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("HAMCP_BACKUP_DIR", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"auto_backup_dir": "/tmp/evil\x00bar"})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    s = get_global_settings()
+    assert s.auto_backup_dir == ""  # default — null-byte value silently dropped
+
+
+def test_backup_override_lookahead_rejects_out_of_range(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"auto_backup_calendar_lookahead_days": 9999})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    s = get_global_settings()
+    assert s.auto_backup_calendar_lookahead_days == 7  # field default
+
+
+def test_backup_override_lookahead_accepts_in_range(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS", raising=False)
+    (isolated_data_dir / "backup_settings.json").write_text(
+        json.dumps({"auto_backup_calendar_lookahead_days": 30})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    assert get_global_settings().auto_backup_calendar_lookahead_days == 30

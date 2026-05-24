@@ -764,6 +764,17 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
         return
     for fname, env_name, ftype, _section, editable in ADVANCED_SETTINGS_FIELDS:
         if not editable:
+            # Display-only field somehow landed in the override file (UI
+            # POST guard at /api/settings/advanced blocks this, so the
+            # only way in is direct hand-edit or upgrade-time drift).
+            # Log so the operator can see why the value is being ignored.
+            if fname in overrides:
+                logger.warning(
+                    "Override for %r is ignored: field is marked "
+                    "display-only in ADVANCED_SETTINGS_FIELDS (set via "
+                    "env var or addon configuration instead).",
+                    fname,
+                )
             continue
         if os.environ.get(env_name) is not None:
             continue
