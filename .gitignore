@@ -94,3 +94,6 @@ tests/initial_test_state/custom_components/hacs/hacs_frontend/
 .auto-claude/
 .worktrees/
 .claude_settings.json
+
+# Node modules — site (Astro) and tests/js (JSDOM behaviour harness)
+node_modules/
