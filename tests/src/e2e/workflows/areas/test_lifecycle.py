@@ -860,9 +860,12 @@ class TestAreaFloorIntegration:
 @pytest.mark.area
 async def test_area_list_empty_or_populated(mcp_client):
     """
-    Test: List areas works correctly (empty or with existing areas)
+    Test: ha_list_floors_areas returns the area facet correctly (empty or populated).
 
-    Basic validation that the list endpoint works.
+    Validates the area-facing parts of the combined topology response —
+    area_count and the flattened union of nested/unassigned/orphaned buckets.
+    Pairs with test_floor_list_empty_or_populated which covers the floor facet
+    of the same endpoint.
     """
     logger.info("Testing ha_list_floors_areas functionality")
 
@@ -880,9 +883,12 @@ async def test_area_list_empty_or_populated(mcp_client):
 @pytest.mark.floor
 async def test_floor_list_empty_or_populated(mcp_client):
     """
-    Test: List floors works correctly (empty or with existing floors)
+    Test: ha_list_floors_areas returns the floor facet correctly (empty or populated).
 
-    Basic validation that the list endpoint works.
+    Validates the floor-facing parts of the combined topology response —
+    floor_count and the floors list (each carrying nested areas).
+    Pairs with test_area_list_empty_or_populated which covers the area facet
+    of the same endpoint.
     """
     logger.info("Testing ha_list_floors_areas functionality")
 
