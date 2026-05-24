@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -719,6 +719,204 @@ async def list_available_addons(
     }
 
 
+def _validate_addon_access(
+    addon: dict[str, Any],
+    slug: str,
+    addon_name: str,
+    port: int | None,
+    ingress_suggestions: list[str],
+) -> None:
+    """Raise a structured error if the add-on lacks Ingress support or is not running."""
+    if not port and not addon.get("ingress"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Add-on '{addon_name}' does not support Ingress",
+                suggestions=ingress_suggestions,
+                context={"slug": slug},
+            )
+        )
+    if addon.get("state") != "started":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
+                suggestions=[
+                    f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
+                ],
+                context={"slug": slug, "state": addon.get("state")},
+            )
+        )
+
+
+async def _collect_ws_messages_loop(
+    ws: Any,
+    collection_cap: int,
+    timeout: int | float,
+    wait_for_close: bool,
+    caller_capped: bool,
+    start_time: float,
+) -> tuple[list[str], int, str]:
+    """Collect messages from an open WebSocket until a stop condition is met."""
+    collected: list[str] = []
+    total_size = 0
+    close_reason = "unknown"
+    while True:
+        remaining = timeout - (time.monotonic() - start_time)
+        if remaining <= 0:
+            close_reason = "timeout"
+            break
+        if len(collected) >= collection_cap:
+            close_reason = "message_limit" if caller_capped else "safety_ceiling"
+            break
+        if total_size >= _MAX_RESPONSE_SIZE:
+            close_reason = "size_limit"
+            break
+        recv_timeout = remaining if wait_for_close else min(remaining, 2.0)
+        try:
+            message = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
+        except TimeoutError:
+            close_reason = "silence" if not wait_for_close else "timeout"
+            break
+        except websockets.exceptions.ConnectionClosed:
+            close_reason = "server_closed"
+            break
+        if isinstance(message, bytes):
+            continue
+        clean = ANSI_ESCAPE_RE.sub("", message)
+        collected.append(clean)
+        total_size += len(clean)
+    return collected, total_size, close_reason
+
+
+async def _run_ws_session(
+    ws_url: str,
+    headers: dict[str, str],
+    body: dict[str, Any] | str | None,
+    collection_cap: int,
+    timeout: int,
+    wait_for_close: bool,
+    caller_capped: bool,
+) -> tuple[list[str], int, str, float]:
+    """Connect to a WebSocket URL, optionally send body, collect messages.
+
+    Returns (collected, total_size, close_reason, elapsed_seconds).
+    Exceptions from the WebSocket handshake or OS-level connect propagate to
+    the caller, which maps them to structured ToolErrors.
+    """
+    start_time = time.monotonic()
+    async with websockets.connect(
+        ws_url,
+        additional_headers=headers,
+        ping_interval=20,
+        ping_timeout=10,
+        max_size=5 * 1024 * 1024,  # 5MB max per message
+        open_timeout=10,
+        close_timeout=5,
+    ) as ws:
+        if body is not None:
+            await ws.send(json.dumps(body) if isinstance(body, dict) else str(body))
+        collected, total_size, close_reason = await _collect_ws_messages_loop(
+            ws, collection_cap, timeout, wait_for_close, caller_capped, start_time
+        )
+    return collected, total_size, close_reason, round(time.monotonic() - start_time, 2)
+
+
+def _build_ws_result(
+    slug: str,
+    addon_name: str,
+    collected: list[str],
+    close_reason: str,
+    elapsed: float,
+    message_limit: int | None,
+    message_offset: int,
+    summarize: bool,
+    python_transform: str | None,
+    debug: bool,
+    ws_url: str,
+    headers: dict[str, str],
+    body: dict[str, Any] | str | None,
+    total_size: int,
+    collection_cap: int,
+) -> dict[str, Any]:
+    """Build the result dict for a completed WebSocket call."""
+    parsed_messages: list[Any] = []
+    for msg in collected:
+        try:
+            parsed_messages.append(json.loads(msg))
+        except (json.JSONDecodeError, ValueError):
+            parsed_messages.append(msg)
+
+    sliced_messages, pagination = _slice_ws_messages(
+        parsed_messages, offset=message_offset, limit=message_limit
+    )
+
+    summary_meta: dict[str, Any] | None = None
+    processed_messages: list[Any] = sliced_messages
+    if summarize:
+        processed_messages, summary_meta = _summarize_ws_messages(sliced_messages)
+
+    transformed = False
+    pre_transform_count = len(processed_messages)
+    if python_transform is not None:
+        processed_messages = _apply_response_transform(
+            processed_messages, python_transform
+        )
+        transformed = True
+
+    msg_count = (
+        len(processed_messages) if isinstance(processed_messages, list) else None
+    )
+    result: dict[str, Any] = {
+        "success": True,
+        "messages": processed_messages,
+        "message_count": msg_count,
+        "closed_by": close_reason,
+        "duration_seconds": elapsed,
+        "addon_name": addon_name,
+        "slug": slug,
+    }
+
+    if message_offset > 0 or message_limit is not None:
+        result["pagination"] = pagination
+
+    if summary_meta is not None and summary_meta["elided_count"] > 0:
+        result["summary"] = summary_meta
+
+    if transformed:
+        result["transformed"] = True
+        result["pre_transform_message_count"] = pre_transform_count
+
+    if debug:
+        result["_debug"] = {
+            "ws_url": ws_url,
+            "request_headers": dict(headers),
+            "initial_message": body,
+            "total_bytes_collected": total_size,
+            "collection_cap": collection_cap,
+        }
+
+    # Cap the serialized result size (raw bytes undercount due to JSON + MCP overhead)
+    result_serialized = json.dumps(result, default=str)
+    if len(result_serialized) > _MAX_RESPONSE_SIZE:
+        result = {
+            "success": True,
+            "error": "RESPONSE_TOO_LARGE",
+            "message": f"WebSocket response ({len(result_serialized)} bytes "
+            f"serialized) exceeds {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+            "message_count": msg_count,
+            "closed_by": close_reason,
+            "duration_seconds": elapsed,
+            "addon_name": addon_name,
+            "slug": slug,
+            "truncated": True,
+            "hint": "Lower message_limit, raise message_offset, keep summarize=True, "
+            "or narrow the response with python_transform.",
+        }
+
+    return result
+
+
 async def _call_addon_ws(
     client: HomeAssistantClient,
     slug: str,
@@ -779,51 +977,28 @@ async def _call_addon_ws(
             )
         )
 
-    # 2. Get add-on info
+    # 2. Get add-on info and validate access
     addon_response = await get_addon_info(client, slug)
     if not addon_response.get("success"):
         raise_tool_error(addon_response)
 
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
+    _validate_addon_access(
+        addon,
+        slug,
+        addon_name,
+        port,
+        ingress_suggestions=[
+            "Use the 'port' parameter for WebSocket connections to this add-on",
+            f"Use ha_get_addon(slug='{slug}') to see available ports",
+        ],
+    )
 
-    # 3. Verify add-on supports Ingress (unless using direct port override)
-    if not port and not addon.get("ingress"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                f"Add-on '{addon_name}' does not support Ingress",
-                suggestions=[
-                    "Use the 'port' parameter for WebSocket connections to this add-on",
-                    f"Use ha_get_addon(slug='{slug}') to see available ports",
-                ],
-                context={"slug": slug},
-            )
-        )
-
-    # 4. Verify add-on is running
-    if addon.get("state") != "started":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
-                suggestions=[
-                    f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
-                ],
-                context={"slug": slug, "state": addon.get("state")},
-            )
-        )
-
-    # 5. Resolve route (direct-port / addon-variant / off-host).
+    # 3. Resolve route (direct-port / addon-variant / off-host).
     ws_url, headers = await _resolve_ws_route(client, addon, normalized, port)
 
-    # 7. Connect and exchange messages
-    collected: list[str] = []
-    total_size = 0
-    close_reason = "unknown"
-    start_time = time.monotonic()
-
-    # Effective collection cap: callers may lower _MAX_WS_MESSAGES via
+    # 4. Compute effective collection cap: callers may lower _MAX_WS_MESSAGES via
     # message_limit but cannot raise it. A caller's message_limit interacts
     # with message_offset — we collect enough to satisfy `offset + limit`
     # so requesting a later window actually returns the window.
@@ -834,67 +1009,15 @@ async def _call_addon_ws(
         collection_cap = min(_MAX_WS_MESSAGES, requested)
 
     try:
-        async with websockets.connect(
+        collected, total_size, close_reason, elapsed = await _run_ws_session(
             ws_url,
-            additional_headers=headers,
-            ping_interval=20,
-            ping_timeout=10,
-            max_size=5 * 1024 * 1024,  # 5MB max per message
-            open_timeout=10,
-            close_timeout=5,
-        ) as ws:
-            # Send initial message if provided
-            if body is not None:
-                if isinstance(body, dict):
-                    await ws.send(json.dumps(body))
-                else:
-                    await ws.send(str(body))
-
-            # Collect responses
-            while True:
-                remaining = timeout - (time.monotonic() - start_time)
-                if remaining <= 0:
-                    close_reason = "timeout"
-                    break
-
-                if len(collected) >= collection_cap:
-                    # Distinguish caller-set cap from the global safety ceiling
-                    # so an agent reading the response can tell "I capped this"
-                    # from "ha-mcp's hard ceiling kicked in".
-                    close_reason = (
-                        "message_limit"
-                        if message_limit is not None
-                        else "safety_ceiling"
-                    )
-                    break
-
-                if total_size >= _MAX_RESPONSE_SIZE:
-                    close_reason = "size_limit"
-                    break
-
-                try:
-                    # If not waiting for close, use a short timeout to detect silence
-                    recv_timeout = remaining if wait_for_close else min(remaining, 2.0)
-                    message = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
-                except TimeoutError:
-                    if wait_for_close:
-                        close_reason = "timeout"
-                    else:
-                        close_reason = "silence"
-                    break
-                except websockets.exceptions.ConnectionClosed:
-                    close_reason = "server_closed"
-                    break
-
-                # Process message (skip binary frames)
-                if isinstance(message, bytes):
-                    continue
-
-                # Strip ANSI escape codes
-                clean = ANSI_ESCAPE_RE.sub("", message)
-                collected.append(clean)
-                total_size += len(clean)
-
+            headers,
+            body,
+            collection_cap,
+            timeout,
+            wait_for_close,
+            caller_capped=message_limit is not None,
+        )
     except websockets.exceptions.InvalidHandshake as e:
         suggestions = [
             "Check that the add-on supports WebSocket on this path",
@@ -957,99 +1080,23 @@ async def _call_addon_ws(
             )
         )
 
-    elapsed = round(time.monotonic() - start_time, 2)
-
-    # 8. Build result
-    # Try to parse each message as JSON; keep as string if not JSON.
-    # Result shape is list[dict | str] — the heterogeneity is part of the
-    # python_transform contract (see ha_manage_addon docstring).
-    parsed_messages: list[Any] = []
-    for msg in collected:
-        try:
-            parsed_messages.append(json.loads(msg))
-        except (json.JSONDecodeError, ValueError):
-            parsed_messages.append(msg)
-
-    # 8a. Apply offset/limit slicing before summarize/transform so users
-    # paginate the raw collected list, not the post-summarize output.
-    sliced_messages, pagination = _slice_ws_messages(
-        parsed_messages,
-        offset=message_offset,
-        limit=message_limit,
+    return _build_ws_result(
+        slug=slug,
+        addon_name=addon_name,
+        collected=collected,
+        close_reason=close_reason,
+        elapsed=elapsed,
+        message_limit=message_limit,
+        message_offset=message_offset,
+        summarize=summarize,
+        python_transform=python_transform,
+        debug=debug,
+        ws_url=ws_url,
+        headers=headers,
+        body=body,
+        total_size=total_size,
+        collection_cap=collection_cap,
     )
-
-    # 8b. Summarize (default on) — collapse bulk non-signal runs.
-    summary_meta: dict[str, Any] | None = None
-    processed_messages: list[Any] = sliced_messages
-    if summarize:
-        processed_messages, summary_meta = _summarize_ws_messages(sliced_messages)
-
-    # 8c. python_transform (optional) — user-controlled post-processing.
-    transformed = False
-    pre_transform_count = len(processed_messages)
-    if python_transform is not None:
-        processed_messages = _apply_response_transform(
-            processed_messages,
-            python_transform,
-        )
-        transformed = True
-
-    result: dict[str, Any] = {
-        "success": True,
-        "messages": processed_messages,
-        "message_count": (
-            len(processed_messages) if isinstance(processed_messages, list) else None
-        ),
-        "closed_by": close_reason,
-        "duration_seconds": elapsed,
-        "addon_name": addon_name,
-        "slug": slug,
-    }
-
-    # Pagination metadata is always present when offset/limit were used so
-    # callers have a stable shape to reason about.
-    if message_offset > 0 or message_limit is not None:
-        result["pagination"] = pagination
-
-    if summary_meta is not None and summary_meta["elided_count"] > 0:
-        result["summary"] = summary_meta
-
-    if transformed:
-        result["transformed"] = True
-        result["pre_transform_message_count"] = pre_transform_count
-
-    if debug:
-        result["_debug"] = {
-            "ws_url": ws_url,
-            "request_headers": dict(headers),
-            "initial_message": body,
-            "total_bytes_collected": total_size,
-            "collection_cap": collection_cap,
-        }
-
-    # Cap the serialized result size (raw bytes undercount due to JSON + MCP overhead)
-    result_serialized = json.dumps(result, default=str)
-    if len(result_serialized) > _MAX_RESPONSE_SIZE:
-        result = {
-            "success": True,
-            "error": "RESPONSE_TOO_LARGE",
-            "message": f"WebSocket response ({len(result_serialized)} bytes "
-            f"serialized) exceeds {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-            "message_count": (
-                len(processed_messages)
-                if isinstance(processed_messages, list)
-                else None
-            ),
-            "closed_by": close_reason,
-            "duration_seconds": elapsed,
-            "addon_name": addon_name,
-            "slug": slug,
-            "truncated": True,
-            "hint": "Lower message_limit, raise message_offset, keep summarize=True, "
-            "or narrow the response with python_transform.",
-        }
-
-    return result
 
 
 _ARRAY_PATCH_OPS = {"patch", "delete", "add", "delete_where"}
@@ -1058,6 +1105,163 @@ _ARRAY_PATCH_OPS = {"patch", "delete", "add", "delete_where"}
 # in array_patch validation. dict.get() with this default lets us detect a
 # missing 'value' field without rejecting legitimate {"value": None} ops.
 _ARRAY_PATCH_MISSING: Any = object()
+
+
+def _op_patch(
+    working: list[Any],
+    op_spec: dict[str, Any],
+    index: int,
+    id_field: str,
+) -> dict[str, Any]:
+    target_id = op_spec.get("id")
+    if target_id is None:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch patch op #{index} missing 'id'",
+                parameter=f"array_patch.operations[{index}].id",
+            )
+        )
+    patches = op_spec.get("patches")
+    if not isinstance(patches, dict):
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch patch op #{index} 'patches' must be an object",
+                parameter=f"array_patch.operations[{index}].patches",
+            )
+        )
+    if not patches:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch patch op #{index} 'patches' cannot be empty "
+                "(no fields to update)",
+                parameter=f"array_patch.operations[{index}].patches",
+            )
+        )
+    target = next(
+        (
+            it
+            for it in working
+            if isinstance(it, dict) and it.get(id_field) == target_id
+        ),
+        None,
+    )
+    if target is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"No item with {id_field}={target_id!r} for patch op #{index}",
+                context={"id_field": id_field, "id": target_id},
+            )
+        )
+    target.update(patches)
+    return {"id": target_id, "fields": list(patches.keys())}
+
+
+def _op_delete(
+    working: list[Any],
+    op_spec: dict[str, Any],
+    index: int,
+    id_field: str,
+) -> tuple[list[Any], dict[str, Any]]:
+    target_id = op_spec.get("id")
+    if target_id is None:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch delete op #{index} missing 'id'",
+                parameter=f"array_patch.operations[{index}].id",
+            )
+        )
+    new_working = [
+        it
+        for it in working
+        if not (isinstance(it, dict) and it.get(id_field) == target_id)
+    ]
+    if len(new_working) == len(working):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"No item with {id_field}={target_id!r} for delete op #{index}",
+                context={"id_field": id_field, "id": target_id},
+            )
+        )
+    return new_working, {"id": target_id}
+
+
+def _op_add(
+    working: list[Any],
+    op_spec: dict[str, Any],
+    index: int,
+    id_field: str,
+) -> dict[str, Any]:
+    new_item = op_spec.get("item")
+    if not isinstance(new_item, dict):
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch add op #{index} 'item' must be an object",
+                parameter=f"array_patch.operations[{index}].item",
+            )
+        )
+    if id_field not in new_item:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch add op #{index} 'item' missing id field {id_field!r}",
+                parameter=f"array_patch.operations[{index}].item",
+            )
+        )
+    new_id = new_item[id_field]
+    if new_id is None or (isinstance(new_id, str) and not new_id.strip()):
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch add op #{index} item {id_field!r} cannot be "
+                "None, empty, or whitespace-only",
+                parameter=f"array_patch.operations[{index}].item.{id_field}",
+            )
+        )
+    if any(isinstance(it, dict) and it.get(id_field) == new_id for it in working):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_ALREADY_EXISTS,
+                f"Item with {id_field}={new_id!r} already exists (add op #{index})",
+                context={"id_field": id_field, "id": new_id},
+            )
+        )
+    working.append(new_item)
+    return {"id": new_id}
+
+
+def _op_delete_where(
+    working: list[Any],
+    op_spec: dict[str, Any],
+    index: int,
+) -> tuple[list[Any], dict[str, Any]]:
+    field = op_spec.get("field")
+    value = op_spec.get("value", _ARRAY_PATCH_MISSING)
+    if not isinstance(field, str) or not field:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch delete_where op #{index} missing or empty 'field'",
+                parameter=f"array_patch.operations[{index}].field",
+            )
+        )
+    if value is _ARRAY_PATCH_MISSING:
+        raise_tool_error(
+            create_validation_error(
+                f"array_patch delete_where op #{index} missing 'value'",
+                parameter=f"array_patch.operations[{index}].value",
+            )
+        )
+    new_working = [
+        it for it in working if not (isinstance(it, dict) and it.get(field) == value)
+    ]
+    removed = len(working) - len(new_working)
+    entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
+    inspectable = [it for it in new_working if isinstance(it, dict)]
+    if removed == 0 and inspectable and not any(field in it for it in inspectable):
+        entry.setdefault("warnings", []).append(
+            f"field {field!r} is not present on any item — "
+            "check for a typo in the field name"
+        )
+    return new_working, entry
 
 
 def _apply_array_ops(
@@ -1120,165 +1324,154 @@ def _apply_array_ops(
             )
 
         if op == "patch":
-            target_id = op_spec.get("id")
-            patches = op_spec.get("patches")
-            if target_id is None:
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch patch op #{index} missing 'id'",
-                        parameter=f"array_patch.operations[{index}].id",
-                    )
-                )
-            if not isinstance(patches, dict):
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch patch op #{index} 'patches' must be an object",
-                        parameter=f"array_patch.operations[{index}].patches",
-                    )
-                )
-            if not patches:
-                # `target.update({})` is a no-op; reject so the caller learns
-                # their op was meaningless rather than seeing a silent
-                # `summary["patched"]` entry with `"fields": []`.
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch patch op #{index} 'patches' cannot be empty "
-                        "(no fields to update)",
-                        parameter=f"array_patch.operations[{index}].patches",
-                    )
-                )
-            target = next(
-                (
-                    it
-                    for it in working
-                    if isinstance(it, dict) and it.get(id_field) == target_id
-                ),
-                None,
-            )
-            if target is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"No item with {id_field}={target_id!r} for patch op #{index}",
-                        context={"id_field": id_field, "id": target_id},
-                    )
-                )
-            target.update(patches)
-            summary["patched"].append({"id": target_id, "fields": list(patches.keys())})
-
+            summary["patched"].append(_op_patch(working, op_spec, index, id_field))
         elif op == "delete":
-            target_id = op_spec.get("id")
-            if target_id is None:
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch delete op #{index} missing 'id'",
-                        parameter=f"array_patch.operations[{index}].id",
-                    )
-                )
-            before = len(working)
-            working = [
-                it
-                for it in working
-                if not (isinstance(it, dict) and it.get(id_field) == target_id)
-            ]
-            if len(working) == before:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"No item with {id_field}={target_id!r} for delete op #{index}",
-                        context={"id_field": id_field, "id": target_id},
-                    )
-                )
-            summary["deleted"].append({"id": target_id})
-
+            working, entry = _op_delete(working, op_spec, index, id_field)
+            summary["deleted"].append(entry)
         elif op == "add":
-            new_item = op_spec.get("item")
-            if not isinstance(new_item, dict):
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch add op #{index} 'item' must be an object",
-                        parameter=f"array_patch.operations[{index}].item",
-                    )
-                )
-            if id_field not in new_item:
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch add op #{index} 'item' missing id field "
-                        f"{id_field!r}",
-                        parameter=f"array_patch.operations[{index}].item",
-                    )
-                )
-            new_id = new_item[id_field]
-            if new_id is None or (isinstance(new_id, str) and not new_id.strip()):
-                # Items missing the id field have `dict.get(id_field) == None`
-                # by default, so allowing None/""/whitespace-only ids would
-                # let later patch / delete ops match unrelated items.
-                # Non-string ids (e.g. integers) stay valid by design — see
-                # ``test_add_with_integer_zero_id_is_accepted``.
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch add op #{index} item {id_field!r} cannot be "
-                        "None, empty, or whitespace-only",
-                        parameter=f"array_patch.operations[{index}].item.{id_field}",
-                    )
-                )
-            if any(
-                isinstance(it, dict) and it.get(id_field) == new_id for it in working
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_ALREADY_EXISTS,
-                        f"Item with {id_field}={new_id!r} already exists "
-                        f"(add op #{index})",
-                        context={"id_field": id_field, "id": new_id},
-                    )
-                )
-            working.append(new_item)
-            summary["added"].append({"id": new_id})
-
+            # _op_add mutates working in place via append
+            summary["added"].append(_op_add(working, op_spec, index, id_field))
         else:  # delete_where
-            field = op_spec.get("field")
-            value = op_spec.get("value", _ARRAY_PATCH_MISSING)
-            if not isinstance(field, str) or not field:
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch delete_where op #{index} missing or empty 'field'",
-                        parameter=f"array_patch.operations[{index}].field",
-                    )
-                )
-            if value is _ARRAY_PATCH_MISSING:
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch delete_where op #{index} missing 'value'",
-                        parameter=f"array_patch.operations[{index}].value",
-                    )
-                )
-            before = len(working)
-            working = [
-                it
-                for it in working
-                if not (isinstance(it, dict) and it.get(field) == value)
-            ]
-            removed = before - len(working)
-            entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
-            # Distinguish "value not present" from "field name unknown to any
-            # item" — the latter is almost always a typo and would otherwise
-            # be a silent count=0. Only warn when there are dict items to
-            # inspect; an empty array or all-non-dict array would `not any(...)`
-            # trivially and produce a misleading typo suggestion.
-            inspectable = [it for it in working if isinstance(it, dict)]
-            if (
-                removed == 0
-                and inspectable
-                and not any(field in it for it in inspectable)
-            ):
-                entry.setdefault("warnings", []).append(
-                    f"field {field!r} is not present on any item — "
-                    "check for a typo in the field name"
-                )
+            working, entry = _op_delete_where(working, op_spec, index)
             summary["deleted_where"].append(entry)
 
     return working, summary
+
+
+def _parse_response_body(response: Any) -> Any:
+    """Parse HTTP response body: JSON if content-type matches, else raw text."""
+    content_type = response.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            return response.json()
+        except (json.JSONDecodeError, ValueError):
+            return response.text
+    return response.text
+
+
+def _truncate_http_response(response_data: Any, raw: bool) -> tuple[Any, bool]:
+    """Apply size-based truncation to an HTTP response body.
+
+    Returns (possibly_truncated_data, was_truncated). Skipped when raw=True
+    so array_patch mode can work with the full parsed payload in memory.
+    """
+    if raw:
+        return response_data, False
+    if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
+        return response_data[:_MAX_RESPONSE_SIZE], True
+    if isinstance(response_data, list):
+        serialized = json.dumps(response_data, default=str)
+        if len(serialized) > _MAX_RESPONSE_SIZE:
+            total_items = len(response_data)
+            return {
+                "error": "RESPONSE_TOO_LARGE",
+                "message": f"The JSON array ({len(serialized)} bytes, {total_items} items) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                "total_items": total_items,
+                "hint": "Use offset and limit to paginate. Example: offset=0, limit=20",
+            }, True
+    if isinstance(response_data, dict):
+        serialized = json.dumps(response_data, default=str)
+        if len(serialized) > _MAX_RESPONSE_SIZE:
+            key_info = {}
+            for k, v in response_data.items():
+                v_serialized = json.dumps(v, default=str)
+                if isinstance(v, list):
+                    key_info[k] = f"array[{len(v)}] ({len(v_serialized)} bytes)"
+                elif isinstance(v, dict):
+                    key_info[k] = f"object ({len(v_serialized)} bytes)"
+                else:
+                    key_info[k] = f"{type(v).__name__} ({len(v_serialized)} bytes)"
+            return {
+                "error": "RESPONSE_TOO_LARGE",
+                "message": f"The JSON object ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
+                "top_level_keys": key_info,
+                "hint": "Use a more specific API path to request individual keys/sections.",
+            }, True
+    return response_data, False
+
+
+def _build_http_result(
+    response: Any,
+    response_data: Any,
+    addon_name: str,
+    slug: str,
+    url: str,
+    headers: dict[str, str],
+    debug: bool,
+    pagination_meta: dict[str, Any] | None,
+    transformed: bool,
+    truncated: bool,
+) -> dict[str, Any]:
+    """Assemble the result dict for an HTTP add-on API call."""
+    result: dict[str, Any] = {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "response": response_data,
+        "content_type": response.headers.get("content-type", ""),
+        "addon_name": addon_name,
+        "slug": slug,
+    }
+    if debug:
+        result["_debug"] = {
+            "url": url,
+            "request_headers": dict(headers),
+            "response_headers": dict(response.headers),
+        }
+    if pagination_meta:
+        result["pagination"] = pagination_meta
+    if transformed:
+        result["transformed"] = True
+    if truncated:
+        result["truncated"] = True
+        result["note"] = (
+            f"Response truncated to {_MAX_RESPONSE_SIZE // 1024}KB. The full response was larger."
+        )
+    return result
+
+
+def _add_http_error_hints(
+    result: dict[str, Any],
+    response: Any,
+    addon: dict[str, Any],
+    slug: str,
+) -> None:
+    """Mutate result to add error hints for 4xx HTTP responses."""
+    if response.status_code >= 400:
+        result["error"] = f"Add-on API returned HTTP {response.status_code}"
+        if response.status_code == 401:
+            result["suggestion"] = (
+                "Authentication failed. The ingress session may have expired, "
+                "or your HA token may lack the required scope. Verify the "
+                "token has admin rights and try again."
+            )
+        elif response.status_code == 403:
+            ports_dict = addon.get("network") or addon.get("ports") or {}
+            unmapped = sorted(k for k, v in ports_dict.items() if v is None)
+            result["addon_config"] = {
+                "options": addon.get("options"),
+                "ports": ports_dict or None,
+                "host_network": addon.get("host_network"),
+                "ingress_port": addon.get("ingress_port"),
+            }
+            slug_val = addon.get("slug") or "<slug>"
+            example_proto = unmapped[0] if unmapped else ""
+            example_port = example_proto.split("/", 1)[0] if example_proto else ""
+            if unmapped and example_port.isdigit():
+                addon_label = addon.get("name") or slug_val
+                result["suggestion"] = (
+                    f"Map {example_proto} to a host port in the HA UI "
+                    f"('{addon_label}' → Configuration → Network), restart the "
+                    f"add-on, then retry with ha_manage_addon(slug='{slug_val}', "
+                    f"path='...', port={example_port})."
+                )
+            else:
+                result["suggestion"] = (
+                    "This add-on is blocking direct connections (likely Nginx IP restriction). "
+                    "Try using the 'port' parameter to connect to the add-on's direct access port "
+                    "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
+                    "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
+                    "The user may need to change add-on settings in the HA UI and restart the add-on."
+                )
 
 
 async def _call_addon_api(
@@ -1348,46 +1541,29 @@ async def _call_addon_api(
             )
         )
 
-    # 2. Get add-on info to verify ingress support and get entry path
+    # 2. Get add-on info and validate access
     addon_response = await get_addon_info(client, slug)
     if not addon_response.get("success"):
         raise_tool_error(addon_response)
 
     addon = addon_response["addon"]
     addon_name = addon.get("name", slug)
+    _validate_addon_access(
+        addon,
+        slug,
+        addon_name,
+        port,
+        ingress_suggestions=[
+            "Check if this add-on exposes a direct port instead",
+            f"Use ha_get_addon(slug='{slug}') to see port mappings",
+            "Use the 'port' parameter to connect to a direct access port",
+        ],
+    )
 
-    # 3. Verify add-on supports Ingress (unless using direct port override)
-    if not port and not addon.get("ingress"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                f"Add-on '{addon_name}' does not support Ingress",
-                suggestions=[
-                    "Check if this add-on exposes a direct port instead",
-                    f"Use ha_get_addon(slug='{slug}') to see port mappings",
-                    "Use the 'port' parameter to connect to a direct access port",
-                ],
-                context={"slug": slug},
-            )
-        )
-
-    # 4. Verify add-on is running
-    if addon.get("state") != "started":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Add-on '{addon_name}' is not running (state: {addon.get('state')})",
-                suggestions=[
-                    f"Start the add-on first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
-                ],
-                context={"slug": slug, "state": addon.get("state")},
-            )
-        )
-
-    # 5. Resolve route (direct-port / addon-variant / off-host).
+    # 3. Resolve route (direct-port / addon-variant / off-host).
     url, headers = await _resolve_http_route(client, addon, normalized, port)
 
-    # 6. Layer caller-supplied headers UNDER the proxy's framing so internal
+    # 4. Layer caller-supplied headers UNDER the proxy's framing so internal
     # headers (X-Ingress-Path, X-Hass-Source, Cookie, Content-Type) always
     # win on collision — a caller cannot forge ingress identity.
     if extra_headers:
@@ -1395,7 +1571,7 @@ async def _call_addon_api(
         merged.update(headers)
         headers = merged
 
-    # 7. Set content type based on body type
+    # 5. Set content type based on body type
     if isinstance(body, dict | list):
         headers["Content-Type"] = "application/json"
         request_content = json.dumps(body).encode()
@@ -1440,19 +1616,10 @@ async def _call_addon_api(
             )
         )
 
-    # 7. Parse response
-    content_type = response.headers.get("content-type", "")
-    response_data: Any
+    # 6. Parse response body
+    response_data: Any = _parse_response_body(response)
 
-    if "application/json" in content_type:
-        try:
-            response_data = response.json()
-        except (json.JSONDecodeError, ValueError):
-            response_data = response.text
-    else:
-        response_data = response.text
-
-    # 8. Apply offset/limit slicing to array responses
+    # 7. Apply offset/limit slicing to array responses
     pagination_meta: dict[str, Any] | None = None
     if isinstance(response_data, list) and (offset > 0 or limit is not None):
         total_items = len(response_data)
@@ -1465,127 +1632,516 @@ async def _call_addon_api(
             "returned": len(response_data),
         }
 
-    # 8a. python_transform (optional) — runs after slicing, before size cap,
+    # 8. python_transform (optional) — runs after slicing, before size cap,
     # so an agent can narrow a large response down under the limit.
     transformed = False
     if python_transform is not None:
         response_data = _apply_response_transform(response_data, python_transform)
         transformed = True
 
-    # 9. Truncate large responses (skipped in raw mode; array_patch needs the
-    #    full parsed payload in memory regardless of size)
-    truncated = False
-    if not raw:
-        if isinstance(response_data, str) and len(response_data) > _MAX_RESPONSE_SIZE:
-            response_data = response_data[:_MAX_RESPONSE_SIZE]
-            truncated = True
-        elif isinstance(response_data, list):
-            serialized = json.dumps(response_data, default=str)
-            if len(serialized) > _MAX_RESPONSE_SIZE:
-                total_items = len(response_data)
-                response_data = {
-                    "error": "RESPONSE_TOO_LARGE",
-                    "message": f"The JSON array ({len(serialized)} bytes, {total_items} items) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-                    "total_items": total_items,
-                    "hint": "Use offset and limit to paginate. Example: offset=0, limit=20",
-                }
-                truncated = True
-        elif isinstance(response_data, dict):
-            serialized = json.dumps(response_data, default=str)
-            if len(serialized) > _MAX_RESPONSE_SIZE:
-                # Show top-level keys and their approximate sizes to help caller
-                # make more targeted API calls
-                key_info = {}
-                for k, v in response_data.items():
-                    v_serialized = json.dumps(v, default=str)
-                    if isinstance(v, list):
-                        key_info[k] = f"array[{len(v)}] ({len(v_serialized)} bytes)"
-                    elif isinstance(v, dict):
-                        key_info[k] = f"object ({len(v_serialized)} bytes)"
-                    else:
-                        key_info[k] = f"{type(v).__name__} ({len(v_serialized)} bytes)"
-                response_data = {
-                    "error": "RESPONSE_TOO_LARGE",
-                    "message": f"The JSON object ({len(serialized)} bytes) exceeds the {_MAX_RESPONSE_SIZE // 1024}KB limit.",
-                    "top_level_keys": key_info,
-                    "hint": "Use a more specific API path to request individual keys/sections.",
-                }
-                truncated = True
+    # 9. Truncate large responses (skipped in raw mode)
+    response_data, truncated = _truncate_http_response(response_data, raw)
 
-    result: dict[str, Any] = {
-        "success": response.status_code < 400,
-        "status_code": response.status_code,
-        "response": response_data,
-        "content_type": content_type,
-        "addon_name": addon_name,
-        "slug": slug,
-    }
+    result = _build_http_result(
+        response,
+        response_data,
+        addon_name,
+        slug,
+        url,
+        headers,
+        debug,
+        pagination_meta,
+        transformed,
+        truncated,
+    )
+    _add_http_error_hints(result, response, addon, slug)
+    return result
 
-    # Include diagnostic info when debug mode is enabled
+
+def _proxy_overrides_basic(
+    method: str,
+    body: Any,
+    debug: bool,
+    port: int | None,
+    offset: int,
+    limit: int | None,
+    websocket: bool,
+) -> list[tuple[str, str]]:
+    """Collect (param_name, display) pairs for basic proxy params set in config mode."""
+    result: list[tuple[str, str]] = []
+    if method != "GET":
+        result.append(("method", f"method={method!r}"))
+    if body is not None:
+        result.append(("body", "body"))
     if debug:
-        result["_debug"] = {
-            "url": url,
-            "request_headers": dict(headers),
-            "response_headers": dict(response.headers),
-        }
+        result.append(("debug", "debug=True"))
+    if port is not None:
+        result.append(("port", f"port={port}"))
+    if offset != 0:
+        result.append(("offset", f"offset={offset}"))
+    if limit is not None:
+        result.append(("limit", f"limit={limit}"))
+    if websocket:
+        result.append(("websocket", "websocket=True"))
+    return result
 
-    if pagination_meta:
-        result["pagination"] = pagination_meta
 
-    if transformed:
-        result["transformed"] = True
+def _proxy_overrides_ws_and_extra(
+    wait_for_close: bool,
+    message_limit: int | None,
+    message_offset: int,
+    summarize: bool,
+    python_transform: str | None,
+    array_patch: dict[str, Any] | None,
+    request_headers: dict[str, str] | None,
+) -> list[tuple[str, str]]:
+    """Collect (param_name, display) pairs for WS and transform params set in config mode."""
+    result: list[tuple[str, str]] = []
+    if not wait_for_close:
+        result.append(("wait_for_close", "wait_for_close=False"))
+    if message_limit is not None:
+        result.append(("message_limit", f"message_limit={message_limit}"))
+    if message_offset != 0:
+        result.append(("message_offset", f"message_offset={message_offset}"))
+    if not summarize:
+        result.append(("summarize", "summarize=False"))
+    if python_transform is not None:
+        result.append(("python_transform", "python_transform"))
+    if array_patch is not None:
+        result.append(("array_patch", "array_patch"))
+    if request_headers is not None:
+        result.append(("request_headers", "request_headers"))
+    return result
 
-    if truncated:
-        result["truncated"] = True
-        result["note"] = (
-            f"Response truncated to {_MAX_RESPONSE_SIZE // 1024}KB. The full response was larger."
+
+class AddOnTools:
+    """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon."""
+
+    def __init__(self, client: HomeAssistantClient) -> None:
+        self._client = client
+
+    async def get_addon(
+        self,
+        source: str | None,
+        slug: str | None,
+        include_stats: bool,
+        repository: str | None,
+        query: str | None,
+    ) -> dict[str, Any]:
+        if slug:
+            result = await get_addon_info(self._client, slug)
+            if not result.get("success"):
+                raise_tool_error(result)
+            return result
+
+        effective_source = (source or "installed").lower()
+
+        if effective_source == "available":
+            result = await list_available_addons(self._client, repository, query)
+        elif effective_source == "installed":
+            result = await list_addons(self._client, include_stats)
+        else:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid source: {source}. Must be 'installed' or 'available'.",
+                    parameter="source",
+                    details="Valid sources: installed, available",
+                )
+            )
+
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
+
+    @staticmethod
+    def _build_config_payload(
+        options: dict[str, Any] | None,
+        network: dict[str, Any] | None,
+        boot: str | None,
+        auto_update: bool | None,
+        watchdog: bool | None,
+    ) -> dict[str, Any]:
+        config_data: dict[str, Any] = {}
+        if options:
+            config_data["options"] = options
+        if network:
+            config_data["network"] = network
+        if boot is not None:
+            config_data["boot"] = boot
+        if auto_update is not None:
+            config_data["auto_update"] = auto_update
+        if watchdog is not None:
+            config_data["watchdog"] = watchdog
+        return config_data
+
+    @staticmethod
+    def _validate_manage_mode(path: str | None, config_data: dict[str, Any]) -> None:
+        if path is not None and path == "":
+            raise_tool_error(
+                create_validation_error(
+                    "'path' must not be empty. Provide a non-empty path for proxy mode "
+                    "(e.g., '/api/events') or omit it to use config mode.",
+                    parameter="path",
+                )
+            )
+        if path is not None and config_data:
+            raise_tool_error(
+                create_validation_error(
+                    "Cannot combine 'path' (proxy mode) with config parameters "
+                    "(options/network/boot/auto_update/watchdog). Use one mode at a time.",
+                    parameter="path",
+                )
+            )
+        if not path and not config_data:
+            raise_tool_error(
+                create_validation_error(
+                    "Must provide either 'path' for proxy mode or at least one config parameter "
+                    "(options/network/boot/auto_update/watchdog) for config mode.",
+                    parameter="path",
+                )
+            )
+
+    async def _execute_config_mode(
+        self,
+        slug: str,
+        config_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        ignored_fields: list[str] = []
+        if "options" in config_data:
+            info_result = await _supervisor_api_call(
+                self._client, f"/addons/{slug}/info"
+            )
+            if not info_result.get("success"):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Add-on '{slug}' not found or Supervisor unavailable",
+                        details=str(info_result),
+                    )
+                )
+            addon_info = info_result.get("result", {})
+
+            # Merge caller's options into current options (fixes partial-update rejection).
+            current_options: dict = addon_info.get("options") or {}
+            merged_options = _merge_options(current_options, config_data["options"])
+
+            # Pre-write schema check: identify fields not in the add-on's schema.
+            schema_ui: list | None = addon_info.get("schema")
+            if schema_ui is not None:
+                allowed_keys = {item["name"] for item in schema_ui if "name" in item}
+                ignored_fields = [
+                    k for k in config_data["options"] if k not in allowed_keys
+                ]
+                for k in ignored_fields:
+                    merged_options.pop(k, None)
+
+            config_data["options"] = merged_options
+
+        result = await _supervisor_api_call(
+            self._client,
+            f"/addons/{slug}/options",
+            method="POST",
+            data=config_data,
+        )
+        if not result.get("success"):
+            error_detail = str(result)
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_FAILED,
+                    f"Supervisor rejected configuration for add-on '{slug}'",
+                    details=error_detail,
+                    suggestions=[
+                        "Fetch current options via ha_get_addon(slug) to see required fields",
+                        "Re-submit all required option fields together",
+                    ],
+                )
+            )
+        submitted_fields = list(config_data.keys())
+        if {"options", "network"} & config_data.keys():
+            response: dict = {
+                "status": "pending_restart",
+                "message": (
+                    f"Configuration submitted for add-on '{slug}'. "
+                    "Restart the add-on for options/network changes to take effect."
+                ),
+                "submitted_fields": submitted_fields,
+            }
+        else:
+            response = {
+                "success": True,
+                "message": f"Configuration updated for add-on '{slug}'.",
+                "submitted_fields": submitted_fields,
+            }
+        if ignored_fields:
+            response.setdefault("warnings", []).append(
+                f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
+                f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
+                "declared schema."
+            )
+            response["ignored_fields"] = ignored_fields
+        return response
+
+    @staticmethod
+    def _validate_array_patch_input(
+        array_patch: dict[str, Any],
+        websocket: bool,
+        body: Any,
+        offset: int,
+        limit: int | None,
+    ) -> tuple[str, list[Any]]:
+        """Validate array_patch parameters and return (id_field, operations)."""
+        if not isinstance(array_patch, dict):
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch must be an object", parameter="array_patch"
+                )
+            )
+        if websocket:
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch is HTTP-only and cannot be combined with websocket=True",
+                    parameter="array_patch",
+                )
+            )
+        if body is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch builds the POST body itself; remove the explicit 'body' parameter",
+                    parameter="array_patch",
+                )
+            )
+        if offset != 0 or limit is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch needs the full array; offset/limit are not supported in this mode",
+                    parameter="array_patch",
+                )
+            )
+        id_field = array_patch.get("id_field", "id")
+        if not isinstance(id_field, str) or not id_field:
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch.id_field must be a non-empty string",
+                    parameter="array_patch.id_field",
+                )
+            )
+        ops = array_patch.get("operations")
+        if not isinstance(ops, list) or not ops:
+            raise_tool_error(
+                create_validation_error(
+                    "array_patch.operations must be a non-empty list",
+                    parameter="array_patch.operations",
+                )
+            )
+        assert isinstance(ops, list)
+        return id_field, ops
+
+    async def _execute_array_patch(
+        self,
+        slug: str,
+        path: str,
+        array_patch: dict[str, Any],
+        websocket: bool,
+        body: Any,
+        offset: int,
+        limit: int | None,
+        debug: bool,
+        port: int | None,
+        request_headers: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        id_field, ops = self._validate_array_patch_input(
+            array_patch, websocket, body, offset, limit
         )
 
-    if response.status_code >= 400:
-        result["error"] = f"Add-on API returned HTTP {response.status_code}"
-        # 401 = auth credential problem (token/scope/session); IP-restriction
-        # hint and addon_config attachment would misdirect.
-        # 403 = forbidden (likely Nginx ACL); addon_config helps the LLM spot
-        # relevant toggles like leave_front_door_open and port mappings.
-        if response.status_code == 401:
-            result["suggestion"] = (
-                "Authentication failed. The ingress session may have expired, "
-                "or your HA token may lack the required scope. Verify the "
-                "token has admin rights and try again."
-            )
-        elif response.status_code == 403:
-            ports_dict = addon.get("network") or addon.get("ports") or {}
-            # Ingress nginx in peer add-ons typically rejects cross-container
-            # traffic; the direct-port fallback only works if the user mapped
-            # a host port. Detect and call out the unmapped case explicitly.
-            unmapped = sorted(k for k, v in ports_dict.items() if v is None)
-            result["addon_config"] = {
-                "options": addon.get("options"),
-                "ports": ports_dict or None,
-                "host_network": addon.get("host_network"),
-                "ingress_port": addon.get("ingress_port"),
-            }
-            slug = addon.get("slug") or "<slug>"
-            example_proto = unmapped[0] if unmapped else ""
-            example_port = example_proto.split("/", 1)[0] if example_proto else ""
-            if unmapped and example_port.isdigit():
-                addon_label = addon.get("name") or slug
-                result["suggestion"] = (
-                    f"Map {example_proto} to a host port in the HA UI "
-                    f"('{addon_label}' → Configuration → Network), restart the "
-                    f"add-on, then retry with ha_manage_addon(slug='{slug}', "
-                    f"path='...', port={example_port})."
-                )
-            else:
-                result["suggestion"] = (
-                    "This add-on is blocking direct connections (likely Nginx IP restriction). "
-                    "Try using the 'port' parameter to connect to the add-on's direct access port "
-                    "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
-                    "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
-                    "The user may need to change add-on settings in the HA UI and restart the add-on."
-                )
+        fetch_result = await _call_addon_api(
+            client=self._client,
+            slug=slug,
+            path=path,
+            method="GET",
+            debug=debug,
+            port=port,
+            raw=True,
+            extra_headers=request_headers,
+        )
+        if not fetch_result.get("success"):
+            raise_tool_error(fetch_result)
 
-    return result
+        fetched = fetch_result.get("response")
+        if not isinstance(fetched, list):
+            raise_tool_error(
+                create_validation_error(
+                    f"array_patch requires a JSON array at {path!r}; "
+                    f"got {type(fetched).__name__}",
+                    parameter="path",
+                )
+            )
+
+        new_array, summary = _apply_array_ops(fetched, ops, id_field)
+
+        post_result = await _call_addon_api(
+            client=self._client,
+            slug=slug,
+            path=path,
+            method="POST",
+            body=new_array,
+            debug=debug,
+            port=port,
+            extra_headers=request_headers,
+        )
+        if not post_result.get("success"):
+            raise_tool_error(post_result)
+
+        response_payload: dict[str, Any] = {
+            "success": True,
+            "slug": slug,
+            "addon_name": fetch_result.get("addon_name"),
+            "path": path,
+            "id_field": id_field,
+            "items_before": len(fetched),
+            "items_after": len(new_array),
+            "summary": summary,
+        }
+        if debug:
+            response_payload["_debug"] = {
+                "fetch": fetch_result.get("_debug"),
+                "post": post_result.get("_debug"),
+            }
+        return response_payload
+
+    async def manage_addon(
+        self,
+        slug: str,
+        path: str | None,
+        method: str,
+        body: dict[str, Any] | str | None,
+        debug: bool,
+        port: int | None,
+        offset: int,
+        limit: int | None,
+        websocket: bool,
+        wait_for_close: bool,
+        message_limit: int | None,
+        message_offset: int,
+        summarize: bool,
+        python_transform: str | None,
+        options: dict[str, Any] | None,
+        network: dict[str, Any] | None,
+        boot: str | None,
+        auto_update: bool | None,
+        watchdog: bool | None,
+        array_patch: dict[str, Any] | None,
+        request_headers: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        validate_identifier_not_empty(
+            slug,
+            "slug",
+            suggestions=["Use ha_get_addon() to discover installed add-on slugs"],
+        )
+        config_data = self._build_config_payload(
+            options, network, boot, auto_update, watchdog
+        )
+        self._validate_manage_mode(path, config_data)
+
+        if config_data:
+            proxy_overrides = _proxy_overrides_basic(
+                method, body, debug, port, offset, limit, websocket
+            ) + _proxy_overrides_ws_and_extra(
+                wait_for_close,
+                message_limit,
+                message_offset,
+                summarize,
+                python_transform,
+                array_patch,
+                request_headers,
+            )
+            if proxy_overrides:
+                raise_tool_error(
+                    create_validation_error(
+                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
+                        "Remove these parameters or switch to proxy mode by providing 'path'.",
+                        parameter=proxy_overrides[0][0],
+                    )
+                )
+            return await self._execute_config_mode(slug, config_data)
+
+        # request_headers applies only to HTTP / array_patch mode.
+        if request_headers is not None and websocket:
+            raise_tool_error(
+                create_validation_error(
+                    "request_headers applies only to HTTP and array_patch modes; "
+                    "remove it or set websocket=False",
+                    parameter="request_headers",
+                )
+            )
+
+        assert path is not None
+
+        if array_patch is not None:
+            return await self._execute_array_patch(
+                slug,
+                path,
+                array_patch,
+                websocket,
+                body,
+                offset,
+                limit,
+                debug,
+                port,
+                request_headers,
+            )
+
+        if websocket:
+            result = await _call_addon_ws(
+                client=self._client,
+                slug=slug,
+                path=path,
+                body=body,
+                timeout=120 if wait_for_close else 10,
+                debug=debug,
+                port=port,
+                wait_for_close=wait_for_close,
+                message_limit=message_limit,
+                message_offset=message_offset,
+                summarize=summarize,
+                python_transform=python_transform,
+            )
+            if not result.get("success"):
+                raise_tool_error(result)
+            return result
+
+        valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+        if method.upper() not in valid_methods:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
+                    parameter="method",
+                )
+            )
+        if message_limit is not None or message_offset != 0 or not summarize:
+            raise_tool_error(
+                create_validation_error(
+                    "message_limit / message_offset / summarize apply only to "
+                    "WebSocket mode. Set websocket=True or remove them.",
+                    parameter="message_limit",
+                )
+            )
+
+        result = await _call_addon_api(
+            client=self._client,
+            slug=slug,
+            path=path,
+            method=method,
+            body=body,
+            debug=debug,
+            port=port,
+            offset=offset,
+            limit=limit,
+            python_transform=python_transform,
+            extra_headers=request_headers,
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return result
 
 
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
@@ -1597,6 +2153,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         client: Home Assistant REST client
         **kwargs: Additional arguments (ignored, for auto-discovery compatibility)
     """
+
+    tools = AddOnTools(client)
 
     @mcp.tool(
         tags={"Add-ons"},
@@ -1678,32 +2236,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - List available add-ons: ha_get_addon(source="available")
         - Search for MQTT: ha_get_addon(source="available", query="mqtt")
         """
-        # If slug is provided, return detailed info for that specific add-on
-        if slug:
-            result = await get_addon_info(client, slug)
-            if not result.get("success"):
-                raise_tool_error(result)
-            return result
-
-        # Default to installed if not specified
-        effective_source = (source or "installed").lower()
-
-        if effective_source == "available":
-            result = await list_available_addons(client, repository, query)
-        elif effective_source == "installed":
-            result = await list_addons(client, include_stats)
-        else:
-            raise_tool_error(
-                create_validation_error(
-                    f"Invalid source: {source}. Must be 'installed' or 'available'.",
-                    parameter="source",
-                    details="Valid sources: installed, available",
-                )
-            )
-
-        if not result.get("success"):
-            raise_tool_error(result)
-        return result
+        return await tools.get_addon(
+            source=source,
+            slug=slug,
+            include_stats=include_stats,
+            repository=repository,
+            query=query,
+        )
 
     @mcp.tool(
         tags={"Add-ons"},
@@ -1974,367 +2513,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ha_manage_addon(slug="...", path="/api/state",
                             request_headers={"Accept": "text/plain"})
         """
-        # Empty/whitespace slug would propagate to every dispatch arm
-        # (Supervisor API, ingress proxy, websocket bridge) and surface as a
-        # misleading "addon not found" or 404 from the Supervisor. Reject
-        # up-front so the caller learns the slug was unusable before any
-        # backend call.
-        validate_identifier_not_empty(
-            slug,
-            "slug",
-            suggestions=[
-                "Use ha_get_addon() to discover installed add-on slugs",
-            ],
-        )
-        # Build config payload from provided config parameters
-        config_data: dict[str, Any] = {}
-        if options:
-            config_data["options"] = options
-        if network:
-            config_data["network"] = network
-        if boot is not None:
-            config_data["boot"] = boot
-        if auto_update is not None:
-            config_data["auto_update"] = auto_update
-        if watchdog is not None:
-            config_data["watchdog"] = watchdog
-
-        # Validate mode selection
-        if path is not None and path == "":
-            raise_tool_error(
-                create_validation_error(
-                    "'path' must not be empty. Provide a non-empty path for proxy mode "
-                    "(e.g., '/api/events') or omit it to use config mode.",
-                    parameter="path",
-                )
-            )
-        if path is not None and config_data:
-            raise_tool_error(
-                create_validation_error(
-                    "Cannot combine 'path' (proxy mode) with config parameters "
-                    "(options/network/boot/auto_update/watchdog). Use one mode at a time.",
-                    parameter="path",
-                )
-            )
-        if not path and not config_data:
-            raise_tool_error(
-                create_validation_error(
-                    "Must provide either 'path' for proxy mode or at least one config parameter "
-                    "(options/network/boot/auto_update/watchdog) for config mode.",
-                    parameter="path",
-                )
-            )
-
-        # Validate that proxy-only params are not passed in config mode
-        if config_data:
-            proxy_overrides: list[tuple[str, str]] = []
-            if method != "GET":
-                proxy_overrides.append(("method", f"method={method!r}"))
-            if body is not None:
-                proxy_overrides.append(("body", "body"))
-            if debug:
-                proxy_overrides.append(("debug", "debug=True"))
-            if port is not None:
-                proxy_overrides.append(("port", f"port={port}"))
-            if offset != 0:
-                proxy_overrides.append(("offset", f"offset={offset}"))
-            if limit is not None:
-                proxy_overrides.append(("limit", f"limit={limit}"))
-            if websocket:
-                proxy_overrides.append(("websocket", "websocket=True"))
-            if not wait_for_close:
-                proxy_overrides.append(("wait_for_close", "wait_for_close=False"))
-            if message_limit is not None:
-                proxy_overrides.append(
-                    ("message_limit", f"message_limit={message_limit}")
-                )
-            if message_offset != 0:
-                proxy_overrides.append(
-                    ("message_offset", f"message_offset={message_offset}")
-                )
-            if not summarize:
-                proxy_overrides.append(("summarize", "summarize=False"))
-            if python_transform is not None:
-                proxy_overrides.append(("python_transform", "python_transform"))
-            if array_patch is not None:
-                proxy_overrides.append(("array_patch", "array_patch"))
-            if request_headers is not None:
-                proxy_overrides.append(("request_headers", "request_headers"))
-            if proxy_overrides:
-                raise_tool_error(
-                    create_validation_error(
-                        f"Proxy-mode parameters cannot be used in config mode: {', '.join(d for _, d in proxy_overrides)}. "
-                        "Remove these parameters or switch to proxy mode by providing 'path'.",
-                        parameter=proxy_overrides[0][0],
-                    )
-                )
-
-        # array_patch needs its own input shape validation (the field is dict[str, Any]
-        # at the schema level so the model will happily send malformed payloads)
-        if array_patch is not None:
-            if not isinstance(array_patch, dict):
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch must be an object",
-                        parameter="array_patch",
-                    )
-                )
-            if websocket:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch is HTTP-only and cannot be combined with websocket=True",
-                        parameter="array_patch",
-                    )
-                )
-            if body is not None:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch builds the POST body itself; remove the explicit 'body' parameter",
-                        parameter="array_patch",
-                    )
-                )
-            if offset != 0 or limit is not None:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch needs the full array; offset/limit are not supported in this mode",
-                        parameter="array_patch",
-                    )
-                )
-            id_field = array_patch.get("id_field", "id")
-            if not isinstance(id_field, str) or not id_field:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch.id_field must be a non-empty string",
-                        parameter="array_patch.id_field",
-                    )
-                )
-            ops = array_patch.get("operations")
-            if not isinstance(ops, list) or not ops:
-                raise_tool_error(
-                    create_validation_error(
-                        "array_patch.operations must be a non-empty list",
-                        parameter="array_patch.operations",
-                    )
-                )
-
-        # request_headers applies only to HTTP / array_patch mode.
-        # _call_addon_ws does not accept caller headers — reject the combo
-        # rather than silently dropping them (matches the fail-loud-on-misroute
-        # pattern used for message_limit / message_offset / summarize on HTTP).
-        if request_headers is not None and websocket:
-            raise_tool_error(
-                create_validation_error(
-                    "request_headers applies only to HTTP and array_patch modes; "
-                    "remove it or set websocket=False",
-                    parameter="request_headers",
-                )
-            )
-
-        # Config mode: update Supervisor settings
-        if config_data:
-            ignored_fields: list[str] = []  # populated only when options are provided
-            # For options updates: fetch current state first.
-            # GET /info provides both current options (for merge) and schema_ui
-            # (for pre-write unknown-field detection) in a single roundtrip.
-            if "options" in config_data:
-                info_result = await _supervisor_api_call(client, f"/addons/{slug}/info")
-                if not info_result.get("success"):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Add-on '{slug}' not found or Supervisor unavailable",
-                            details=str(info_result),
-                        )
-                    )
-                addon_info = info_result.get("result", {})
-
-                # Merge caller's options into current options (fixes partial-update rejection).
-                # Supervisor validates the full options dict against the add-on schema,
-                # so callers must always submit all required fields — merging makes that
-                # transparent.
-                current_options: dict = addon_info.get("options") or {}
-                merged_options = _merge_options(current_options, config_data["options"])
-
-                # Pre-write schema check: identify fields not in the add-on's schema.
-                # Supervisor silently drops unknown fields on write; surfacing them here
-                # lets the caller correct mistakes before any state is changed.
-                schema_ui: list | None = addon_info.get("schema")
-                if schema_ui is not None:
-                    allowed_keys = {
-                        item["name"] for item in schema_ui if "name" in item
-                    }
-                    ignored_fields = [
-                        k for k in config_data["options"] if k not in allowed_keys
-                    ]
-                    # Remove unknown fields from the merged dict so Supervisor does not
-                    # silently strip them after the write succeeds.
-                    for k in ignored_fields:
-                        merged_options.pop(k, None)
-
-                config_data["options"] = merged_options
-
-            result = await _supervisor_api_call(
-                client,
-                f"/addons/{slug}/options",
-                method="POST",
-                data=config_data,
-            )
-            if not result.get("success"):
-                # Surface Supervisor schema errors (e.g. missing required field) as
-                # VALIDATION_FAILED so the model receives an actionable error code.
-                error_detail = str(result)
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_FAILED,
-                        f"Supervisor rejected configuration for add-on '{slug}'",
-                        details=error_detail,
-                        suggestions=[
-                            "Fetch current options via ha_get_addon(slug) to see required fields",
-                            "Re-submit all required option fields together",
-                        ],
-                    )
-                )
-            submitted_fields = list(config_data.keys())
-            response: dict = {}
-            if {"options", "network"} & config_data.keys():
-                response = {
-                    "status": "pending_restart",
-                    "message": (
-                        f"Configuration submitted for add-on '{slug}'. "
-                        "Restart the add-on for options/network changes to take effect."
-                    ),
-                    "submitted_fields": submitted_fields,
-                }
-            else:
-                response = {
-                    "success": True,
-                    "message": f"Configuration updated for add-on '{slug}'.",
-                    "submitted_fields": submitted_fields,
-                }
-            if ignored_fields:
-                response.setdefault("warnings", []).append(
-                    f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
-                    f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
-                    "declared schema."
-                )
-                response["ignored_fields"] = ignored_fields
-            return response
-
-        # Proxy mode: call add-on container API
-        # At this point path is guaranteed non-None (validated above)
-        assert path is not None
-
-        # Array-patch mode: GET → mutate → POST atomically.
-        # Done before the websocket/HTTP branches so it can fully own the
-        # response shape and skip the truncation/pagination paths.
-        # id_field and ops were validated in the early validation block above.
-        if array_patch is not None:
-            fetch_result = await _call_addon_api(
-                client=client,
-                slug=slug,
-                path=path,
-                method="GET",
-                debug=debug,
-                port=port,
-                raw=True,
-                extra_headers=request_headers,
-            )
-            if not fetch_result.get("success"):
-                raise_tool_error(fetch_result)
-
-            fetched = fetch_result.get("response")
-            if not isinstance(fetched, list):
-                raise_tool_error(
-                    create_validation_error(
-                        f"array_patch requires a JSON array at {path!r}; "
-                        f"got {type(fetched).__name__}",
-                        parameter="path",
-                    )
-                )
-
-            # Re-narrow operations for the type checker — the early validation
-            # block established `ops` is a non-empty list, but the narrowing
-            # doesn't carry across the intervening config_data branch.
-            # cast() (vs assert) keeps the narrowing under `python -O`.
-            new_array, summary = _apply_array_ops(
-                fetched, cast(list[Any], ops), id_field
-            )
-
-            # POST response is small (deploy revision string or status); skip
-            # raw mode here so the size-based truncation guard is in effect.
-            post_result = await _call_addon_api(
-                client=client,
-                slug=slug,
-                path=path,
-                method="POST",
-                body=new_array,
-                debug=debug,
-                port=port,
-                extra_headers=request_headers,
-            )
-            if not post_result.get("success"):
-                raise_tool_error(post_result)
-
-            response_payload: dict[str, Any] = {
-                "success": True,
-                "slug": slug,
-                "addon_name": fetch_result.get("addon_name"),
-                "path": path,
-                "id_field": id_field,
-                "items_before": len(fetched),
-                "items_after": len(new_array),
-                "summary": summary,
-            }
-            if debug:
-                response_payload["_debug"] = {
-                    "fetch": fetch_result.get("_debug"),
-                    "post": post_result.get("_debug"),
-                }
-            return response_payload
-
-        # WebSocket
-        if websocket:
-            result = await _call_addon_ws(
-                client=client,
-                slug=slug,
-                path=path,
-                body=body,
-                timeout=120 if wait_for_close else 10,
-                debug=debug,
-                port=port,
-                wait_for_close=wait_for_close,
-                message_limit=message_limit,
-                message_offset=message_offset,
-                summarize=summarize,
-                python_transform=python_transform,
-            )
-            if not result.get("success"):
-                raise_tool_error(result)
-            return result
-
-        # HTTP
-        valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-        if method.upper() not in valid_methods:
-            raise_tool_error(
-                create_validation_error(
-                    f"Invalid HTTP method: {method}. Must be one of: {', '.join(sorted(valid_methods))}",
-                    parameter="method",
-                )
-            )
-
-        # HTTP mode does not use WebSocket-specific params. Reject explicit
-        # use so misroutes surface immediately rather than silently ignoring.
-        if message_limit is not None or message_offset != 0 or not summarize:
-            raise_tool_error(
-                create_validation_error(
-                    "message_limit / message_offset / summarize apply only to "
-                    "WebSocket mode. Set websocket=True or remove them.",
-                    parameter="message_limit",
-                )
-            )
-
-        result = await _call_addon_api(
-            client=client,
+        return await tools.manage_addon(
             slug=slug,
             path=path,
             method=method,
@@ -2343,9 +2522,17 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             port=port,
             offset=offset,
             limit=limit,
+            websocket=websocket,
+            wait_for_close=wait_for_close,
+            message_limit=message_limit,
+            message_offset=message_offset,
+            summarize=summarize,
             python_transform=python_transform,
-            extra_headers=request_headers,
+            options=options,
+            network=network,
+            boot=boot,
+            auto_update=auto_update,
+            watchdog=watchdog,
+            array_patch=array_patch,
+            request_headers=request_headers,
         )
-        if not result.get("success"):
-            raise_tool_error(result)
-        return result

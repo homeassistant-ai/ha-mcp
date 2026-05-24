@@ -66,11 +66,15 @@ def skip_if_unsupported() -> None:
     failure.
     """
     if not _node_available():
-        pytest.skip("node not installed — install Node.js to run JS behaviour tests")
+        pytest.skip(
+            "node not installed — install Node.js to run JS behaviour tests",
+            allow_module_level=True,
+        )
     if not _jsdom_installed():
         pytest.skip(
             "jsdom not installed — run `npm install` in tests/js/ to enable "
             "JS behaviour tests",
+            allow_module_level=True,
         )
 
 

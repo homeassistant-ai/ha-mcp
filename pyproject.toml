@@ -139,7 +139,6 @@ ignore = [
 "tests/**/*" = ["E501", "B011"]
 # C901 ignores for tools files with complex methods (see #925).
 # Remove lines as individual methods are simplified below threshold.
-"src/ha_mcp/tools/tools_addons.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_dashboards.py" = ["C901"]
 "src/ha_mcp/tools/tools_config_helpers.py" = ["C901"]
 "src/ha_mcp/tools/tools_entities.py" = ["C901"]
