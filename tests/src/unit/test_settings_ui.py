@@ -1681,11 +1681,16 @@ class TestSaveFeatureFlagsAddonMode:
     """Addon-mode ``POST /api/settings/features`` flow.
 
     Mirror of TestSaveBackupConfigAddonMode for feature flags. In addon
-    mode, ``get_feature_flag_origin`` returns ``"addon"`` for every
-    flag (because SUPERVISOR_TOKEN is set), so the handler must route
+    mode, ``get_feature_flag_origin`` returns ``"addon"`` for non-beta
+    flags (because SUPERVISOR_TOKEN is set), so the handler routes
     through Supervisor instead of refusing the write or persisting to
-    the override file (the file is ignored in addon mode anyway —
+    the override file (the file is ignored in addon mode for those —
     ``start.py`` rewrites env vars from ``config.yaml`` on every boot).
+
+    Beta sub-flags in addon mode have channel-dependent behavior (see
+    ``get_feature_flag_origin`` docstring): dev addon → Supervisor;
+    stable addon → file. These tests use ``enable_tool_search`` which
+    is non-beta and routes identically in both channels.
     """
 
     def _make_request(self, body):
@@ -1731,7 +1736,7 @@ class TestSaveFeatureFlagsAddonMode:
         )
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 200
@@ -1739,7 +1744,7 @@ class TestSaveFeatureFlagsAddonMode:
         assert body["mode"] == "addon"
         assert body["restart_required"] is True
         assert "restarting" not in body
-        merge_mock.assert_awaited_once_with(True, {"enable_yaml_config_editing": True})
+        merge_mock.assert_awaited_once_with(True, {"enable_tool_search": True})
         schedule_mock.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1775,7 +1780,7 @@ class TestSaveFeatureFlagsAddonMode:
         )
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 400
@@ -1810,7 +1815,7 @@ class TestSaveFeatureFlagsAddonMode:
         register_settings_routes(mcp, None, secret_path="/x")
 
         resp = await captured["post"](
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 500
@@ -1871,7 +1876,7 @@ class TestSaveFeatureFlagsStandaloneMode:
         post_handler = self._capture_post_handler(monkeypatch, tmp_path)
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 200
