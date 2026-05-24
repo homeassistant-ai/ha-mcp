@@ -61,3 +61,39 @@ def test_every_env_aliased_setting_is_surfaced_or_allowlisted() -> None:
         "Add them to ADVANCED_SETTINGS_FIELDS, FEATURE_FLAG_FIELDS, or "
         "BACKUP_OVERRIDE_FIELDS, or document in ALLOWLIST with a reason."
     )
+
+
+def test_advanced_section_values_are_in_known_set() -> None:
+    """Section strings are consumed by the UI to pick a render
+    container. A typo (e.g. ``"connetion"``) would silently render the
+    row into nothing. Lock the closed set."""
+    known = {
+        "connection",
+        "search",
+        "operations",
+        "diagnostics",
+        "tools_surface",
+        "beta_codemode",
+    }
+    seen = {row[3] for row in ADVANCED_SETTINGS_FIELDS}
+    bad = seen - known
+    assert not bad, (
+        f"ADVANCED_SETTINGS_FIELDS has unknown section values: {sorted(bad)}. "
+        f"Known set: {sorted(known)}."
+    )
+
+
+def test_advanced_registries_are_name_disjoint() -> None:
+    """Each override-file key must be applied by exactly one of
+    _apply_feature_flag_overrides or _apply_advanced_overrides. A
+    field listed in both would be coerced twice with potentially
+    divergent policies (e.g. bool branch vs str branch)."""
+    advanced = {row[0] for row in ADVANCED_SETTINGS_FIELDS}
+    flags = {row[0] for row in FEATURE_FLAG_FIELDS}
+    backup = {row[0] for row in BACKUP_OVERRIDE_FIELDS}
+    overlap = (advanced & flags) | (advanced & backup) | (flags & backup)
+    assert not overlap, (
+        f"Settings field name appears in multiple registries: {sorted(overlap)}. "
+        "Each field must be in exactly one of ADVANCED_SETTINGS_FIELDS, "
+        "FEATURE_FLAG_FIELDS, or BACKUP_OVERRIDE_FIELDS."
+    )

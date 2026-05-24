@@ -798,14 +798,22 @@ class TestEnvPinnedToolRows:
             f"expected 'DISABLED_TOOLS' in env-pinned banner; "
             f"dom tail: {result.dom[-3000:]}"
         )
-        # The enabled-toggle input must be disabled (HTML attribute present).
-        assert 'data-field="enabled"' in result.dom, (
-            "expected enabled-toggle input in rendered tool row"
+        # Specifically: the enabled-toggle input for ha_foo must carry
+        # the HTML `disabled` attribute. Coarse `"disabled" in result.dom`
+        # would also pass on CSS class names elsewhere in the page; pin
+        # the regex to the actual input element.
+        import re
+
+        enabled_input_match = re.search(
+            r'<input[^>]*data-field="enabled"[^>]*>',
+            result.dom,
         )
-        # All checkboxes for ha_foo must be disabled — verify the disabled
-        # attribute appears in the row HTML.
-        assert "disabled" in result.dom, (
-            "expected 'disabled' attribute on at least one toggle input"
+        assert enabled_input_match is not None, (
+            "expected enabled-toggle <input data-field='enabled'> in DOM"
+        )
+        assert " disabled" in enabled_input_match.group(0), (
+            f"expected disabled attribute on enabled-toggle input; got: "
+            f"{enabled_input_match.group(0)}"
         )
 
     def test_env_pinned_pinned_tool_renders_locked_with_env_var_label(
@@ -849,4 +857,18 @@ class TestEnvPinnedToolRows:
         assert "PINNED_TOOLS" in result.dom, (
             f"expected 'PINNED_TOOLS' in env-pinned banner; "
             f"dom tail: {result.dom[-3000:]}"
+        )
+        # Pinned-toggle input for ha_bar must be disabled.
+        import re
+
+        pin_input_match = re.search(
+            r'<input[^>]*data-field="pinned"[^>]*>',
+            result.dom,
+        )
+        assert pin_input_match is not None, (
+            "expected pin-toggle <input data-field='pinned'> in DOM"
+        )
+        assert " disabled" in pin_input_match.group(0), (
+            f"expected disabled attribute on pin-toggle input; got: "
+            f"{pin_input_match.group(0)}"
         )

@@ -633,9 +633,12 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
        this branch because start.py owns env vars from config.yaml.
 
        EXCEPTION: the beta-master + beta-sub-flag fields skip the
-       addon-mode short-circuit. They are not in any addon config.yaml
-       schema (#1164), so the override file is the only authoritative
-       source for them in either mode.
+       addon-mode short-circuit. The master isn't in any addon schema;
+       the five sub-flags are in the dev-addon schema (where ``start.py``
+       writes the env var from options.json — env-var-wins skips the
+       file read here, leaving Supervisor authoritative) but NOT in the
+       stable schema (where the env var is never written, so the file
+       is read and applied). In standalone mode neither is addon-routed.
 
     2. **Beta master gate** (#1164): after the per-field pass, if
        ``enable_beta_features`` is False on the resolved Settings,
