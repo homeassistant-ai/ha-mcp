@@ -39,7 +39,9 @@ def _backup_info(state: str, event_state: str | None, backups: list[dict]) -> di
     }
 
 
-def _backup_entry(name: str, *, backup_id: str = "abc123", agent_id: str = "backup.local") -> dict:
+def _backup_entry(
+    name: str, *, backup_id: str = "abc123", agent_id: str = "backup.local"
+) -> dict:
     """Compose one entry of `result.backups` matching the shape HA returns."""
     return {
         "backup_id": backup_id,

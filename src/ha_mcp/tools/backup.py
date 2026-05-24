@@ -196,9 +196,7 @@ def _build_success_response_if_found(
         "backup_job_id": backup_job_id,
         "name": name,
         "date": created_backup.get("date"),
-        "size_bytes": created_backup.get("agents", {})
-        .get(agent_id, {})
-        .get("size"),
+        "size_bytes": created_backup.get("agents", {}).get(agent_id, {}).get("size"),
         "status": "Backup completed successfully",
         "duration_seconds": duration_seconds,
         "note": "Backup uses your Home Assistant's default backup password",
@@ -293,8 +291,7 @@ async def _poll_backup_completion(
                 "expected. Increase max_wait_seconds if this recurs.",
             ]
             logger.info(
-                f"Backup found in post-timeout list lookup: "
-                f"{response['backup_id']}"
+                f"Backup found in post-timeout list lookup: {response['backup_id']}"
             )
             return response
 
