@@ -2276,14 +2276,19 @@ function renderPolicyCard(toolName, rule) {
       html += '<option value="">(no schema — type a path)</option>';
     } else {
       html += '<option value="">(pick an argument)</option>';
-      for (const p of paths) {
-        const tip = p.description ? ' title="' + escapeHtml(p.description) + '"' : '';
-        html += '<option value="' + escapeHtml(p.path) + '"' + tip + '>' +
-          escapeHtml(p.label) +
-          (p.required ? ' *' : '') +
-          (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
-          '</option>';
-      }
+    }
+    // Wildcard: match the predicate against EVERY argument of the call.
+    // Useful for catch-all rules like "block if any arg equals lock".
+    html += '<option value="args.*" ' +
+      'title="Match against every argument of the call. Combine with op=equals/is one of to gate on any arg having a given value.">' +
+      '(any argument)</option>';
+    for (const p of paths) {
+      const tip = p.description ? ' title="' + escapeHtml(p.description) + '"' : '';
+      html += '<option value="' + escapeHtml(p.path) + '"' + tip + '>' +
+        escapeHtml(p.label) +
+        (p.required ? ' *' : '') +
+        (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
+        '</option>';
     }
     html += '<option value="' + FREE_TEXT_OPT + '">(other — type a path)</option>';
     pathSelectEl.innerHTML = html;
@@ -2325,29 +2330,29 @@ function renderPolicyCard(toolName, rule) {
     }
   };
 
-  // Ops where backend accepts a missing value entirely. For these,
-  // leaving the value box blank is fine and the rule still works
-  // (exists: arg just has to be present; eq/neq/contains: matches the
-  // null/missing case explicitly).
-  const VALUE_OPTIONAL_OPS = new Set(['exists', 'eq', 'neq', 'contains']);
+  // Only op=exists treats blank value as the legitimate "match anything"
+  // shape. For every other op, blank means "match against null", which
+  // is almost never what the user wants — point them at op=exists in
+  // the error rather than save a useless rule.
+  const VALUE_OPTIONAL_OPS = new Set(['exists']);
 
   const hintForOp = (op) => {
     if (op === 'exists') {
-      return 'Optional. Leave blank to gate on the argument being present at all.';
+      return 'Leave blank — this op gates on the argument being present at all, regardless of value.';
     }
     if (op === 'in' || op === 'not_in') {
-      return 'Required. Pick one or more values, or type a JSON list.';
+      return 'Pick one or more values, or type a JSON list.';
     }
     if (op === 'regex') {
-      return 'Required. A regular expression to match the argument against.';
+      return 'A regular expression to match the argument against.';
     }
     if (op === 'contains') {
-      return 'Optional. A substring (for strings) or item (for lists).';
+      return 'A substring (for strings) or item (for lists). To gate on any value at all, use "is present" instead.';
     }
     if (op === 'gt' || op === 'lt') {
-      return 'Required. A number to compare against.';
+      return 'A number to compare against.';
     }
-    return 'Optional. The value the argument must equal. Leave blank to gate on null.';
+    return 'The value the argument must equal. To gate on any value at all, switch op to "is present" instead.';
   };
 
   // Render the value control inside valueSlotEl based on current op +
@@ -2399,7 +2404,7 @@ function renderPolicyCard(toolName, rule) {
       (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
       '>';
     if (!isMulti) {
-      html += '<option value="">(leave blank or pick a value)</option>';
+      html += '<option value="">(pick a value)</option>';
     }
     for (const c of choices) {
       const selected = existingArr.includes(c) ? ' selected' : '';

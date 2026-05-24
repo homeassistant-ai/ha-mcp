@@ -1,12 +1,11 @@
 """Evaluate a tool call against a Policy. Pure functions — no I/O, no state."""
 
 import re
+from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any
 
 from .model import Policy, Predicate, Rule
-
-_MISSING = object()
 
 
 class Verdict(StrEnum):
@@ -14,31 +13,42 @@ class Verdict(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-def extract_path(args: dict[str, Any], path: str) -> Any:
-    """Walk a dotted path like 'args.config.alias' against the args dict.
+def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
+    """Yield every value the dotted path resolves to.
 
-    'args' is implicit — the leading 'args.' is stripped. Returns _MISSING if any
-    intermediate key is absent.
+    The leading ``args`` segment is implicit and stripped. A ``*`` segment
+    fans out across the current node — across dict values for dicts,
+    across items for lists — so ``args.*`` yields every top-level
+    argument, ``args.config.*`` yields every leaf of the ``config``
+    sub-dict, and so on. Empty iterator = no match.
     """
     parts = path.split(".")
     if parts[0] == "args":
         parts = parts[1:]
-    cur: Any = args
-    for part in parts:
-        if not isinstance(cur, dict) or part not in cur:
-            return _MISSING
-        cur = cur[part]
-    return cur
+
+    def walk(cur: Any, rest: list[str]) -> Iterator[Any]:
+        if not rest:
+            yield cur
+            return
+        head, tail = rest[0], rest[1:]
+        if head == "*":
+            if isinstance(cur, dict):
+                for v in cur.values():
+                    yield from walk(v, tail)
+            elif isinstance(cur, (list, tuple)):
+                for v in cur:
+                    yield from walk(v, tail)
+            return
+        if isinstance(cur, dict) and head in cur:
+            yield from walk(cur[head], tail)
+
+    yield from walk(args, parts)
 
 
-def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
-    val = extract_path(args, predicate.path)
-    if predicate.op == "exists":
-        return val is not _MISSING
-    if val is _MISSING:
-        return False
-    pv = predicate.value
-    match predicate.op:
+def _op_matches(val: Any, op: str, pv: Any) -> bool:
+    """Apply one op to one concrete value. Predicate dispatches over
+    the candidate values (which may be many for wildcard paths)."""
+    match op:
         case "eq":
             return bool(val == pv)
         case "neq":
@@ -47,8 +57,9 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
             return val in (pv or [])
         case "not_in":
             return val not in (pv or [])
-        # `regex` is re.search (substring match). Anchor with ^...$ for full-match.
         case "regex":
+            # `regex` is re.search (substring match). Anchor with ^...$
+            # for full-match.
             return (
                 isinstance(val, str)
                 and isinstance(pv, str)
@@ -67,6 +78,18 @@ def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
             except TypeError:
                 return False
     return False
+
+
+def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
+    values = list(iter_path_values(args, predicate.path))
+    if predicate.op == "exists":
+        return bool(values)
+    if not values:
+        return False
+    # Existential semantics: a wildcard path matches if ANY value at the
+    # wildcard satisfies the op. For non-wildcard paths there's at most
+    # one value so the any() collapses to a single check.
+    return any(_op_matches(v, predicate.op, predicate.value) for v in values)
 
 
 def match_rule(rule: Rule, tool_name: str, args: dict[str, Any]) -> bool:

@@ -1,27 +1,43 @@
 import pytest
 
 from ha_mcp.policy.evaluator import (
-    _MISSING,
     Verdict,
     evaluate,
-    extract_path,
     find_matching_rule,
+    iter_path_values,
     match_predicate,
     match_rule,
 )
 from ha_mcp.policy.model import Policy, Predicate, Rule
 
 
-# --- extract_path ---
-class TestExtractPath:
+# --- iter_path_values ---
+class TestIterPathValues:
     def test_args_top_level(self):
-        assert extract_path({"domain": "light"}, "args.domain") == "light"
+        assert list(iter_path_values({"domain": "light"}, "args.domain")) == ["light"]
 
     def test_nested(self):
-        assert extract_path({"config": {"alias": "x"}}, "args.config.alias") == "x"
+        assert list(
+            iter_path_values({"config": {"alias": "x"}}, "args.config.alias")
+        ) == ["x"]
 
-    def test_missing_returns_sentinel(self):
-        assert extract_path({}, "args.domain") is _MISSING
+    def test_missing_returns_empty(self):
+        assert list(iter_path_values({}, "args.domain")) == []
+
+    def test_wildcard_yields_all_top_level_values(self):
+        assert sorted(
+            iter_path_values({"domain": "light", "service": "turn_on"}, "args.*")
+        ) == ["light", "turn_on"]
+
+    def test_wildcard_descends_into_lists(self):
+        assert list(iter_path_values({"items": [1, 2, 3]}, "args.items.*")) == [
+            1,
+            2,
+            3,
+        ]
+
+    def test_wildcard_on_empty_dict_yields_nothing(self):
+        assert list(iter_path_values({}, "args.*")) == []
 
 
 # --- match_predicate ---
@@ -142,3 +158,41 @@ class TestEvaluate:
         first = find_matching_rule("ha_call_service", {}, p)
         assert first is not None
         assert first.remember_minutes == 10
+
+
+# --- wildcard path semantics (catch-all "any argument matches X") ---
+class TestWildcardPredicate:
+    def test_wildcard_eq_matches_when_any_arg_equals_value(self):
+        p = Predicate(path="args.*", op="eq", value="lock")
+        assert match_predicate(p, {"domain": "lock", "service": "unlock"}) is True
+        assert match_predicate(p, {"domain": "light", "service": "turn_on"}) is False
+
+    def test_wildcard_in_matches_when_any_arg_is_in_value_list(self):
+        p = Predicate(path="args.*", op="in", value=["lock", "alarm"])
+        assert match_predicate(p, {"service": "alarm"}) is True
+        assert match_predicate(p, {"service": "unlock"}) is False
+
+    def test_wildcard_exists_matches_any_args_present(self):
+        p = Predicate(path="args.*", op="exists")
+        assert match_predicate(p, {"x": 1}) is True
+        assert match_predicate(p, {}) is False
+
+    def test_wildcard_regex_matches_any_string_arg(self):
+        p = Predicate(path="args.*", op="regex", value="^light\\.")
+        assert match_predicate(p, {"entity_id": "light.bedroom"}) is True
+        assert match_predicate(p, {"entity_id": "switch.fan"}) is False
+
+    def test_wildcard_evaluate_end_to_end(self):
+        pol = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_call_service",
+                    when=[Predicate(path="args.*", op="eq", value="lock")],
+                ),
+            ],
+        )
+        assert (
+            evaluate("ha_call_service", {"domain": "lock", "service": "unlock"}, pol)
+            == Verdict.REQUIRE_APPROVAL
+        )
+        assert evaluate("ha_call_service", {"domain": "light"}, pol) == Verdict.ALLOW
