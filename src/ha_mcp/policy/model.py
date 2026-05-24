@@ -82,9 +82,15 @@ class Policy(BaseModel):
     The system is always "allow unless a rule matches; rule = require
     approval". There is no global deny/require-approval default — rules
     grant approval gates, nothing else.
+
+    ``extra="ignore"`` so policies persisted by an older version of this
+    PR (which may carry removed fields like ``default_action``) load
+    cleanly; the dropped fields are silently discarded on next save.
+    Predicate/Rule keep ``extra="forbid"`` since those are constructed
+    from UI / user-typed JSON where typos should fail loudly.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool = False
     wait_seconds: int = Field(default=60, ge=5, le=600)
