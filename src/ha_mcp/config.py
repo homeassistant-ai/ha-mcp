@@ -693,18 +693,36 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 continue
         else:
             continue
+        if not hasattr(settings, field_name):
+            logger.warning(
+                "Override for %r (value=%r) targets a field that does "
+                "not exist on Settings; ignoring. Likely a stale entry "
+                "after a field was renamed/removed.",
+                field_name,
+                coerced,
+            )
+            continue
         try:
             setattr(settings, field_name, coerced)
-        except Exception:
+        except (ValueError, TypeError) as err:
             logger.warning(
-                "Override for %r could not be applied to Settings; ignoring.",
+                "Override for %r (value=%r) rejected by Settings (%s); ignoring.",
                 field_name,
-                exc_info=True,
+                coerced,
+                err,
             )
 
     # === Master beta gate ===
     if not getattr(settings, "enable_beta_features", False):
         for sub in BETA_FEATURE_FIELDS:
+            if not hasattr(settings, sub):
+                logger.warning(
+                    "Beta gate: %s is not a Settings attribute; "
+                    "BETA_FEATURE_FIELDS may have drifted from the "
+                    "model. Skipping.",
+                    sub,
+                )
+                continue
             current = getattr(settings, sub, False)
             if current:
                 logger.info(
@@ -714,11 +732,11 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 )
             try:
                 setattr(settings, sub, False)
-            except Exception:
+            except (ValueError, TypeError) as err:
                 logger.warning(
-                    "Could not force %s=False via master gate; ignoring.",
+                    "Could not force %s=False via master gate (%s); ignoring.",
                     sub,
-                    exc_info=True,
+                    err,
                 )
 
 
@@ -985,6 +1003,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
         if field_name not in overrides:
             continue
         raw = overrides[field_name]
+        coerced: bool | int | str
         if ftype is bool:
             if not isinstance(raw, bool | int):
                 logger.warning(
@@ -993,7 +1012,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     type(raw).__name__,
                 )
                 continue
-            coerced: bool | int | str = bool(raw)
+            coerced = bool(raw)
         elif ftype is int:
             if isinstance(raw, bool) or not isinstance(raw, int):
                 logger.warning(
