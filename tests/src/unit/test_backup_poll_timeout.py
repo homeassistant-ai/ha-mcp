@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools.backup import (
     _build_success_response_if_found,
     _poll_backup_completion,
@@ -147,10 +148,12 @@ class TestPollBackupCompletionPostTimeout:
         assert "TIMEOUT_OPERATION" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_post_timeout_final_info_call_fails_raises_timeout(self):
-        """If the final `backup/info` itself returns success=false, fall
-        through to TIMEOUT_OPERATION rather than swallowing the failure."""
-        ws = _ws_client({"success": False, "error": "ws closed"})
+    async def test_post_timeout_final_info_call_raises_falls_through_to_timeout(self):
+        """If the final `backup/info` call raises (HA WS error, dropped
+        connection, etc.), fall through to TIMEOUT_OPERATION rather than
+        propagating an unrelated error that would mask the original timeout."""
+        ws = AsyncMock()
+        ws.send_command.side_effect = HomeAssistantCommandError("ws closed")
         with pytest.raises(ToolError) as exc_info:
             await _poll_backup_completion(
                 ws,

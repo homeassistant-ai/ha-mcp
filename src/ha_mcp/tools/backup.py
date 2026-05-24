@@ -275,8 +275,18 @@ async def _poll_backup_completion(
         f"Backup did not reach state=idle within {max_wait_seconds}s; "
         "performing final backup-list lookup before raising timeout"
     )
-    final_info = await ws_client.send_command("backup/info")
-    if final_info.get("success"):
+    # send_command raises on failure rather than returning success=false; treat
+    # any exception during this best-effort verification as "couldn't verify"
+    # and fall through to the original timeout signal rather than letting an
+    # unrelated WebSocket error mask it.
+    try:
+        final_info = await ws_client.send_command("backup/info")
+    except Exception as e:
+        logger.warning(
+            f"Post-timeout backup/info lookup failed ({e!r}); "
+            "falling through to TIMEOUT_OPERATION"
+        )
+    else:
         response = _build_success_response_if_found(
             final_info,
             name=name,
