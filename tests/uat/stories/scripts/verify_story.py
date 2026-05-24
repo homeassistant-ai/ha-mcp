@@ -40,7 +40,12 @@ async def _check_entity_exists(client: httpx.AsyncClient, check: dict) -> dict:
     result = await _retry(attempt)
     if result is not None:
         return {**check, "type": "entity_exists", **result}
-    return {**check, "type": "entity_exists", "passed": False, "detail": f"{entity_id} not found"}
+    return {
+        **check,
+        "type": "entity_exists",
+        "passed": False,
+        "detail": f"{entity_id} not found",
+    }
 
 
 async def _check_entity_state(client: httpx.AsyncClient, check: dict) -> dict:
@@ -63,10 +68,17 @@ async def _check_entity_state(client: httpx.AsyncClient, check: dict) -> dict:
         actual = r.json().get("state") if r.status_code == 200 else "not found"
     except Exception:
         actual = "not found"
-    return {**check, "type": "entity_state", "passed": False, "detail": f"expected={expected}, actual={actual}"}
+    return {
+        **check,
+        "type": "entity_state",
+        "passed": False,
+        "detail": f"expected={expected}, actual={actual}",
+    }
 
 
-async def _find_in_states(client: httpx.AsyncClient, domain: str, alias: str) -> dict | None:
+async def _find_in_states(
+    client: httpx.AsyncClient, domain: str, alias: str
+) -> dict | None:
     """Search /api/states for entity in domain whose friendly_name contains alias. Returns state dict or None."""
     r = await client.get("/api/states")
     if r.status_code != 200:
@@ -97,11 +109,18 @@ async def _check_domain_entity_exists(
     result = await _retry(attempt)
     if result is not None:
         return {**check, "type": check_type, **result}
-    return {**check, "type": check_type, "passed": False, "detail": f"No {domain} matching '{alias}'"}
+    return {
+        **check,
+        "type": check_type,
+        "passed": False,
+        "detail": f"No {domain} matching '{alias}'",
+    }
 
 
 async def _check_automation_exists(client: httpx.AsyncClient, check: dict) -> dict:
-    return await _check_domain_entity_exists(client, check, "automation", "automation_exists")
+    return await _check_domain_entity_exists(
+        client, check, "automation", "automation_exists"
+    )
 
 
 async def _check_script_exists(client: httpx.AsyncClient, check: dict) -> dict:
@@ -113,7 +132,9 @@ async def _check_script_exists(client: httpx.AsyncClient, check: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def _find_in_automation_config(client: httpx.AsyncClient, alias: str) -> dict | None:
+async def _find_in_automation_config(
+    client: httpx.AsyncClient, alias: str
+) -> dict | None:
     """Return the automation config dict whose alias matches, or None."""
     # Find entity via states; unique_id is in the 'id' attribute of the same state dict.
     state = await _find_in_states(client, "automation", alias)
@@ -131,26 +152,58 @@ async def _find_in_automation_config(client: httpx.AsyncClient, alias: str) -> d
         return None
 
 
-async def _check_automation_has_condition(client: httpx.AsyncClient, check: dict) -> dict:
+async def _check_automation_has_condition(
+    client: httpx.AsyncClient, check: dict
+) -> dict:
     alias = check["alias"]
     auto = await _find_in_automation_config(client, alias)
     if auto is None:
-        return {**check, "type": "automation_has_condition", "passed": False, "detail": f"Automation '{alias}' not found"}
+        return {
+            **check,
+            "type": "automation_has_condition",
+            "passed": False,
+            "detail": f"Automation '{alias}' not found",
+        }
     conditions = auto.get("condition", auto.get("conditions", []))
     if conditions:
-        return {**check, "type": "automation_has_condition", "passed": True, "detail": f"{len(conditions)} condition(s)"}
-    return {**check, "type": "automation_has_condition", "passed": False, "detail": "No conditions found"}
+        return {
+            **check,
+            "type": "automation_has_condition",
+            "passed": True,
+            "detail": f"{len(conditions)} condition(s)",
+        }
+    return {
+        **check,
+        "type": "automation_has_condition",
+        "passed": False,
+        "detail": "No conditions found",
+    }
 
 
 async def _check_automation_has_trigger(client: httpx.AsyncClient, check: dict) -> dict:
     alias = check["alias"]
     auto = await _find_in_automation_config(client, alias)
     if auto is None:
-        return {**check, "type": "automation_has_trigger", "passed": False, "detail": f"Automation '{alias}' not found"}
+        return {
+            **check,
+            "type": "automation_has_trigger",
+            "passed": False,
+            "detail": f"Automation '{alias}' not found",
+        }
     triggers = auto.get("trigger", auto.get("triggers", []))
     if triggers:
-        return {**check, "type": "automation_has_trigger", "passed": True, "detail": f"{len(triggers)} trigger(s)"}
-    return {**check, "type": "automation_has_trigger", "passed": False, "detail": "No triggers found"}
+        return {
+            **check,
+            "type": "automation_has_trigger",
+            "passed": True,
+            "detail": f"{len(triggers)} trigger(s)",
+        }
+    return {
+        **check,
+        "type": "automation_has_trigger",
+        "passed": False,
+        "detail": "No triggers found",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +222,25 @@ async def _check_area_exists(mcp_client, check: dict) -> dict:
     try:
         text = await _mcp_call(mcp_client, "ha_list_floors_areas")
         if name.lower() in text.lower():
-            return {**check, "type": "area_exists", "passed": True, "detail": f"Found area '{name}'"}
+            return {
+                **check,
+                "type": "area_exists",
+                "passed": True,
+                "detail": f"Found area '{name}'",
+            }
     except Exception as e:
-        return {**check, "type": "area_exists", "passed": False, "detail": f"Error: {e}"}
-    return {**check, "type": "area_exists", "passed": False, "detail": f"Area '{name}' not found"}
+        return {
+            **check,
+            "type": "area_exists",
+            "passed": False,
+            "detail": f"Error: {e}",
+        }
+    return {
+        **check,
+        "type": "area_exists",
+        "passed": False,
+        "detail": f"Area '{name}' not found",
+    }
 
 
 async def _check_label_exists(mcp_client, check: dict) -> dict:
@@ -180,21 +248,53 @@ async def _check_label_exists(mcp_client, check: dict) -> dict:
     try:
         text = await _mcp_call(mcp_client, "ha_config_get_label")
         if name.lower() in text.lower():
-            return {**check, "type": "label_exists", "passed": True, "detail": f"Found label '{name}'"}
+            return {
+                **check,
+                "type": "label_exists",
+                "passed": True,
+                "detail": f"Found label '{name}'",
+            }
     except Exception as e:
-        return {**check, "type": "label_exists", "passed": False, "detail": f"Error: {e}"}
-    return {**check, "type": "label_exists", "passed": False, "detail": f"Label '{name}' not found"}
+        return {
+            **check,
+            "type": "label_exists",
+            "passed": False,
+            "detail": f"Error: {e}",
+        }
+    return {
+        **check,
+        "type": "label_exists",
+        "passed": False,
+        "detail": f"Label '{name}' not found",
+    }
 
 
 async def _check_dashboard_exists(mcp_client, check: dict) -> dict:
     url_path = check["url_path"]
     try:
-        text = await _mcp_call(mcp_client, "ha_config_get_dashboard", {"list_only": True})
+        text = await _mcp_call(
+            mcp_client, "ha_config_get_dashboard", {"list_only": True}
+        )
         if url_path in text:
-            return {**check, "type": "dashboard_exists", "passed": True, "detail": f"Found dashboard '{url_path}'"}
+            return {
+                **check,
+                "type": "dashboard_exists",
+                "passed": True,
+                "detail": f"Found dashboard '{url_path}'",
+            }
     except Exception as e:
-        return {**check, "type": "dashboard_exists", "passed": False, "detail": f"Error: {e}"}
-    return {**check, "type": "dashboard_exists", "passed": False, "detail": f"No dashboard with url_path='{url_path}'"}
+        return {
+            **check,
+            "type": "dashboard_exists",
+            "passed": False,
+            "detail": f"Error: {e}",
+        }
+    return {
+        **check,
+        "type": "dashboard_exists",
+        "passed": False,
+        "detail": f"No dashboard with url_path='{url_path}'",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -205,15 +305,35 @@ async def _check_dashboard_exists(mcp_client, check: dict) -> dict:
 def _check_response_contains(check: dict, agent_output: str) -> dict:
     value = check["value"]
     if value.lower() in agent_output.lower():
-        return {**check, "type": "response_contains", "passed": True, "detail": f"Found '{value}'"}
-    return {**check, "type": "response_contains", "passed": False, "detail": f"'{value}' not in response"}
+        return {
+            **check,
+            "type": "response_contains",
+            "passed": True,
+            "detail": f"Found '{value}'",
+        }
+    return {
+        **check,
+        "type": "response_contains",
+        "passed": False,
+        "detail": f"'{value}' not in response",
+    }
 
 
 def _check_response_matches(check: dict, agent_output: str) -> dict:
     pattern = check["pattern"]
     if re.search(pattern, agent_output):
-        return {**check, "type": "response_matches", "passed": True, "detail": f"Pattern matched: {pattern}"}
-    return {**check, "type": "response_matches", "passed": False, "detail": f"Pattern not matched: {pattern}"}
+        return {
+            **check,
+            "type": "response_matches",
+            "passed": True,
+            "detail": f"Pattern matched: {pattern}",
+        }
+    return {
+        **check,
+        "type": "response_matches",
+        "passed": False,
+        "detail": f"Pattern not matched: {pattern}",
+    }
 
 
 # ---------------------------------------------------------------------------

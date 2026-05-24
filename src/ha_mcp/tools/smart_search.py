@@ -197,14 +197,13 @@ class SmartSearchTools:
             aliases_map: dict[str, list[str]] = {}
             if survivor_ids:
                 try:
-                    entries_resp = await self.client.send_websocket_message({
-                        "type": "config/entity_registry/get_entries",
-                        "entity_ids": survivor_ids,
-                    })
-                    if (
-                        isinstance(entries_resp, dict)
-                        and entries_resp.get("success")
-                    ):
+                    entries_resp = await self.client.send_websocket_message(
+                        {
+                            "type": "config/entity_registry/get_entries",
+                            "entity_ids": survivor_ids,
+                        }
+                    )
+                    if isinstance(entries_resp, dict) and entries_resp.get("success"):
                         for eid, entry in (
                             entries_resp.get("result", {}) or {}
                         ).items():
@@ -232,11 +231,13 @@ class SmartSearchTools:
                 # Shallow copy + private-prefixed keys so downstream
                 # consumers that round-trip these dicts don't ship
                 # internal fields back to clients.
-                enriched.append({
-                    **entity,
-                    "_aliases": aliases_map.get(eid, []),
-                    "_hidden_by": slim.get("hidden_by"),
-                })
+                enriched.append(
+                    {
+                        **entity,
+                        "_aliases": aliases_map.get(eid, []),
+                        "_hidden_by": slim.get("hidden_by"),
+                    }
+                )
 
             entities = enriched
             if domain_filter:
@@ -519,9 +520,7 @@ class SmartSearchTools:
                                 ),
                                 "state": state_info.get("state", "unknown"),
                                 "_hidden_by": (
-                                    "hidden"
-                                    if entity_id in hidden_entity_ids
-                                    else None
+                                    "hidden" if entity_id in hidden_entity_ids else None
                                 ),
                             }
                         )
@@ -538,9 +537,7 @@ class SmartSearchTools:
                             "domain": entity_id.split(".")[0],
                             "state": state_info.get("state", "unknown"),
                             "_hidden_by": (
-                                "hidden"
-                                if entity_id in hidden_entity_ids
-                                else None
+                                "hidden" if entity_id in hidden_entity_ids else None
                             ),
                         }
                         for entity_id in area_entities
