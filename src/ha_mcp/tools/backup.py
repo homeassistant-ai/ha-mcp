@@ -171,6 +171,40 @@ async def _get_backup_password(
     return cast(str, default_password)
 
 
+def _build_success_response_if_found(
+    info_result: dict[str, Any],
+    *,
+    name: str,
+    backup_job_id: str,
+    agent_id: str,
+    duration_seconds: int,
+) -> dict[str, Any] | None:
+    """Return the canonical success-response dict if a backup with ``name``
+    is present in ``info_result['result']['backups']``, else None.
+
+    Single source of truth for the success shape — called both from the
+    in-loop branch (when state=idle+completed is observed) and from the
+    post-timeout final check (#1433).
+    """
+    backups = info_result.get("result", {}).get("backups", [])
+    created_backup = next((b for b in backups if b.get("name") == name), None)
+    if created_backup is None:
+        return None
+    return {
+        "success": True,
+        "backup_id": created_backup.get("backup_id"),
+        "backup_job_id": backup_job_id,
+        "name": name,
+        "date": created_backup.get("date"),
+        "size_bytes": created_backup.get("agents", {})
+        .get(agent_id, {})
+        .get("size"),
+        "status": "Backup completed successfully",
+        "duration_seconds": duration_seconds,
+        "note": "Backup uses your Home Assistant's default backup password",
+    }
+
+
 async def _poll_backup_completion(
     ws_client: HomeAssistantWebSocketClient,
     name: str,
@@ -185,7 +219,16 @@ async def _poll_backup_completion(
     ``hassio.local`` on Supervised, ``backup.local`` on Core); used to look
     up the per-agent size in the backup-info payload.
 
-    Raises ToolError on backup failure or timeout.
+    On timeout, performs one final ``backup/info`` lookup before raising:
+    if a backup matching ``name`` is in the list, returns the success
+    response with a ``warnings`` entry noting the late detection (#1433).
+    The polling loop can exit before observing ``state=idle`` even when
+    HA is producing the backup successfully — slow disks, slow HA core,
+    or congestion can stretch a real backup past ``max_wait_seconds``.
+    Raising ``TIMEOUT_OPERATION`` in that case is silent-failure-as-failure;
+    callers wrapping ``ha_manage_backup`` retry and produce duplicates.
+
+    Raises ToolError on backup failure or final timeout with no completion.
     """
     waited = 0
 
@@ -204,35 +247,22 @@ async def _poll_backup_completion(
             )
 
             if state == "idle" and event_state == "completed":
-                backups = info_result.get("result", {}).get("backups", [])
-                created_backup = None
-                for backup in backups:
-                    if backup.get("name") == name:
-                        created_backup = backup
-                        break
-
-                if created_backup:
+                response = _build_success_response_if_found(
+                    info_result,
+                    name=name,
+                    backup_job_id=backup_job_id,
+                    agent_id=agent_id,
+                    duration_seconds=waited,
+                )
+                if response is not None:
                     logger.info(
-                        f"Backup completed successfully: {created_backup.get('backup_id')}"
+                        f"Backup completed successfully: {response['backup_id']}"
                     )
-                    return {
-                        "success": True,
-                        "backup_id": created_backup.get("backup_id"),
-                        "backup_job_id": backup_job_id,
-                        "name": name,
-                        "date": created_backup.get("date"),
-                        "size_bytes": created_backup.get("agents", {})
-                        .get(agent_id, {})
-                        .get("size"),
-                        "status": "Backup completed successfully",
-                        "duration_seconds": waited,
-                        "note": "Backup uses your Home Assistant's default backup password",
-                    }
-                else:
-                    logger.warning(
-                        "Backup completed but not found in backup list yet, waiting..."
-                    )
-                    continue
+                    return response
+                logger.warning(
+                    "Backup completed but not found in backup list yet, waiting..."
+                )
+                continue
 
             elif event_state == "failed":
                 raise_tool_error(
@@ -242,6 +272,31 @@ async def _poll_backup_completion(
                         context={"backup_job_id": backup_job_id},
                     )
                 )
+
+    logger.info(
+        f"Backup did not reach state=idle within {max_wait_seconds}s; "
+        "performing final backup-list lookup before raising timeout"
+    )
+    final_info = await ws_client.send_command("backup/info")
+    if final_info.get("success"):
+        response = _build_success_response_if_found(
+            final_info,
+            name=name,
+            backup_job_id=backup_job_id,
+            agent_id=agent_id,
+            duration_seconds=max_wait_seconds,
+        )
+        if response is not None:
+            response["warnings"] = [
+                f"Backup completion observed only after the {max_wait_seconds}s "
+                "poll window — the operation succeeded but took longer than "
+                "expected. Increase max_wait_seconds if this recurs.",
+            ]
+            logger.info(
+                f"Backup found in post-timeout list lookup: "
+                f"{response['backup_id']}"
+            )
+            return response
 
     logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
     raise_tool_error(
