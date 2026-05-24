@@ -5,6 +5,7 @@ This module provides tools for listing, creating, updating, and deleting
 Home Assistant areas and floors - essential organizational features for smart homes.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
@@ -210,14 +211,28 @@ class AreaTools:
             "phase": "start",
         }
         try:
-            areas_result = await self._client.send_websocket_message(
-                {"type": "config/area_registry/list"}
+            # Fetch both registries concurrently. Sequential awaits add a
+            # round-trip per call on the WS transport; gather halves the
+            # tool-side latency. Use return_exceptions=True so a failure on
+            # one side doesn't cancel the other — the post-fetch guard
+            # below reports both registries' state in the error context for
+            # diagnosis.
+            areas_result, floors_result = await asyncio.gather(
+                self._client.send_websocket_message(
+                    {"type": "config/area_registry/list"}
+                ),
+                self._client.send_websocket_message(
+                    {"type": "config/floor_registry/list"}
+                ),
+                return_exceptions=True,
             )
-            progress["phase"] = "areas_fetched"
-            floors_result = await self._client.send_websocket_message(
-                {"type": "config/floor_registry/list"}
-            )
-            progress["phase"] = "floors_fetched"
+            progress["phase"] = "registries_fetched"
+
+            # Re-raise transport-level exceptions from either fetch so the
+            # outer except handler classifies them via exception_to_structured_error.
+            for r in (areas_result, floors_result):
+                if isinstance(r, BaseException):
+                    raise r
 
             # A response with success=True but no "result" key is malformed —
             # treat it as a service call failure rather than silently returning
@@ -248,7 +263,7 @@ class AreaTools:
             # Partition areas into three disjoint sets:
             #   - nested:    floor_id present AND points to a known floor
             #   - orphaned:  floor_id present BUT points to a non-existent floor
-            #                (race between the two sequential reads, or manual
+            #                (race between the concurrent reads, or manual
             #                .storage inconsistency)
             #   - unassigned: no floor_id at all
             # Orphaned is surfaced as a separate key so the LLM can diagnose
