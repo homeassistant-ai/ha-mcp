@@ -1,4 +1,4 @@
-"""Value-source registry for the predicate builder UI (#966).
+"""Value-source registry for the predicate builder UI.
 
 When a user picks a tool + arg-path in the Tool Security Policies tab,
 the UI needs to know whether to render a free-text input or a dropdown
@@ -13,9 +13,12 @@ registry falls back to free-text JSON entry in the UI.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # (tool_name, arg_path) → value_source key. arg_path is the same dotted
 # string the user picks in the predicate "path" dropdown — i.e. with the
@@ -96,7 +99,13 @@ async def fetch_value_source(
     if cached is not None:
         return cached
     values = sorted(await fetcher(client, params))
-    _cache_set(cache_key, values)
+    # Don't cache an empty result — a transient HA glitch (WebSocket
+    # reconnect window, auth lapse, etc.) can return [] briefly; caching
+    # that for 30s would degrade the dropdown UX for the whole window.
+    # Genuine "this source legitimately has no values" callers re-fetch
+    # cheap enough.
+    if values:
+        _cache_set(cache_key, values)
     return values
 
 
@@ -108,6 +117,11 @@ async def _fetch_ha_domains(client: Any, _params: dict[str, str]) -> list[str]:
         return list(services.keys())
     if isinstance(services, list):
         return [s["domain"] for s in services if isinstance(s, dict) and "domain" in s]
+    # Unknown shape — surface it so a future HA API change doesn't silently
+    # blank the domain dropdown (looks identical to "HA has no domains").
+    logger.warning(
+        "ha_domains: get_services returned unexpected shape %s", type(services).__name__
+    )
     return []
 
 
@@ -133,6 +147,10 @@ async def _fetch_ha_services(client: Any, params: dict[str, str]) -> list[str]:
             if isinstance(svcs, dict):
                 out.update(svcs.keys())
         return list(out)
+    logger.warning(
+        "ha_services: get_services returned unexpected shape %s",
+        type(services).__name__,
+    )
     return []
 
 

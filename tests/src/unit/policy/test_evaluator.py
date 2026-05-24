@@ -39,6 +39,14 @@ class TestIterPathValues:
     def test_wildcard_on_empty_dict_yields_nothing(self):
         assert list(iter_path_values({}, "args.*")) == []
 
+    def test_wildcard_on_scalar_arg_silently_no_ops(self):
+        # `args.x.*` against a scalar arg (string/int/None) should yield
+        # nothing — predicates targeting a deep path through a non-dict
+        # node just don't match, instead of crashing.
+        assert list(iter_path_values({"x": "lock"}, "args.x.*")) == []
+        assert list(iter_path_values({"x": 42}, "args.x.*")) == []
+        assert list(iter_path_values({"x": None}, "args.x.*")) == []
+
 
 # --- match_predicate ---
 class TestMatchPredicate:

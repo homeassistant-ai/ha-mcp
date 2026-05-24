@@ -1,4 +1,4 @@
-"""Pydantic models for tool security policies (issue #966)."""
+"""Pydantic models for tool security policies."""
 
 import re
 from typing import Any, Literal
@@ -83,11 +83,11 @@ class Policy(BaseModel):
     approval". There is no global deny/require-approval default — rules
     grant approval gates, nothing else.
 
-    ``extra="ignore"`` so policies persisted by an older version of this
-    PR (which may carry removed fields like ``default_action``) load
-    cleanly; the dropped fields are silently discarded on next save.
-    Predicate/Rule keep ``extra="forbid"`` since those are constructed
-    from UI / user-typed JSON where typos should fail loudly.
+    ``extra="ignore"`` so policy files written by older builds (which may
+    carry fields since dropped from the schema) still load; dropped fields
+    are silently discarded on next save. Predicate/Rule keep
+    ``extra="forbid"`` since those are constructed from UI / user-typed
+    JSON where typos should fail loudly.
     """
 
     model_config = ConfigDict(extra="ignore")

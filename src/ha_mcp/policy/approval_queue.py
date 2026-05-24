@@ -72,9 +72,22 @@ class ApprovalQueue:
     Users will need to re-issue an approval click after a restart.
     """
 
+    # Hard cap on pending entries to prevent memory exhaustion if an LLM
+    # in a retry loop with mutated args creates a new entry every call.
+    # Hit = oldest non-resolved entries are evicted FIFO. 1000 is well
+    # above any realistic interactive use (the UI shows them all at once);
+    # an attacker probing past the cap just churns the queue.
+    PENDING_CAP = 1000
+
     def __init__(self) -> None:
         self._by_token: dict[str, PendingApproval] = {}
         self._remember: dict[tuple[str, str], datetime] = {}
+        # Serialises find_or_create against concurrent on_call_tool
+        # invocations with identical (tool_name, args_hash) — without it
+        # two coroutines could both find() == None then both create()
+        # separate pending entries, and approving one would leave the
+        # other waiter blocked forever.
+        self._create_lock = anyio.Lock()
 
     # --- remember cache ---
     def remember(self, tool_name: str, args_hash: str, *, minutes: int) -> None:
@@ -102,6 +115,17 @@ class ApprovalQueue:
         *,
         ttl_minutes: int,
     ) -> PendingApproval:
+        # Enforce PENDING_CAP — evict oldest already-resolved entries
+        # first (the middleware should have removed them but the UI may
+        # not have called approve/deny). If still over cap, evict oldest
+        # pending too.
+        if len(self._by_token) >= self.PENDING_CAP:
+            self._sweep_expired()
+            if len(self._by_token) >= self.PENDING_CAP:
+                overflow = len(self._by_token) - self.PENDING_CAP + 1
+                ordered = sorted(self._by_token.values(), key=lambda e: e.created_at)
+                for stale in ordered[:overflow]:
+                    self._by_token.pop(stale.token, None)
         now = datetime.now(UTC)
         entry = PendingApproval(
             token=secrets.token_urlsafe(24),
@@ -113,6 +137,24 @@ class ApprovalQueue:
         )
         self._by_token[entry.token] = entry
         return entry
+
+    async def find_or_create(
+        self,
+        tool_name: str,
+        args_hash: str,
+        args: dict[str, Any],
+        *,
+        ttl_minutes: int,
+    ) -> PendingApproval:
+        """Atomic find-then-create: prevents two concurrent on_call_tool
+        coroutines with identical (tool_name, args_hash) from creating
+        two separate pending entries that would then each block their
+        own waiter independently."""
+        async with self._create_lock:
+            existing = self.find(tool_name, args_hash)
+            if existing is not None:
+                return existing
+            return self.create(tool_name, args_hash, args, ttl_minutes=ttl_minutes)
 
     def find(self, tool_name: str, args_hash: str) -> PendingApproval | None:
         self._sweep_expired()

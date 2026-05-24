@@ -174,3 +174,52 @@ async def test_event_wakes_waiter():
         decision = await p.wait()
     assert decision == "approved"
     assert p.decision == "approved"
+
+
+# --- find_or_create + concurrency ---
+
+
+@pytest.mark.anyio
+async def test_find_or_create_returns_existing_when_args_hash_matches():
+    q = ApprovalQueue()
+    first = q.create("ha_x", "abc", {"a": 1}, ttl_minutes=5)
+    second = await q.find_or_create("ha_x", "abc", {"a": 1}, ttl_minutes=5)
+    assert second.token == first.token, "should reuse existing pending entry"
+
+
+@pytest.mark.anyio
+async def test_find_or_create_concurrent_callers_share_entry():
+    """Two coroutines hitting find_or_create with identical
+    (tool_name, args_hash) must end up with the SAME token. The lock
+    inside find_or_create is what prevents two duplicate pending
+    entries that would each block their own waiter independently."""
+    q = ApprovalQueue()
+    tokens: list[str] = []
+
+    async def race(idx: int) -> None:
+        entry = await q.find_or_create("ha_x", "abc", {}, ttl_minutes=5)
+        tokens.append(entry.token)
+
+    async with anyio.create_task_group() as tg:
+        for i in range(10):
+            tg.start_soon(race, i)
+
+    assert len(tokens) == 10
+    assert len(set(tokens)) == 1, f"expected one shared token, got {set(tokens)}"
+    assert len(q.list_pending()) == 1
+
+
+# --- pending-cap enforcement ---
+
+
+def test_create_evicts_oldest_when_pending_cap_hit():
+    q = ApprovalQueue()
+    q.PENDING_CAP = 3  # shrink for the test
+    a = q.create("ha_x", "h1", {}, ttl_minutes=5)
+    b = q.create("ha_x", "h2", {}, ttl_minutes=5)
+    c = q.create("ha_x", "h3", {}, ttl_minutes=5)
+    d = q.create("ha_x", "h4", {}, ttl_minutes=5)
+    # a is oldest → evicted; b/c/d survive.
+    assert q.get(a.token) is None
+    for entry in (b, c, d):
+        assert q.get(entry.token) is not None

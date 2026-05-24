@@ -240,3 +240,76 @@ def test_value_source_fetcher_exception_returns_502(tmp_path):
     r = c.get("/api/policy/value-source?source=ha_domains")
     assert r.status_code == 502
     assert "HA unreachable" in r.json()["error"]
+
+
+def test_value_source_no_server_returns_503(tmp_path):
+    # Sidecar parity with tool-schema: value-source endpoint should
+    # 503 when there's no server to introspect HA against.
+    h = build_policy_handlers(data_dir=tmp_path, queue=ApprovalQueue(), server=None)
+    app = TestClient(
+        Starlette(
+            routes=[
+                Route(
+                    "/api/policy/value-source",
+                    h["policy_get_value_source"],
+                    methods=["GET"],
+                )
+            ]
+        )
+    )
+    r = app.get("/api/policy/value-source?source=ha_domains")
+    assert r.status_code == 503
+
+
+def test_tool_schema_returns_500_when_list_tools_fails(tmp_path):
+    """A FastMCP version bump that breaks `_list_tools()` should surface
+    the failure (with logged stack) rather than silently 200 with empty
+    paths."""
+    server = MagicMock()
+    server.mcp.local_provider._list_tools = AsyncMock(
+        side_effect=RuntimeError("FastMCP rename broke us")
+    )
+    c = _make_app(tmp_path, server)
+    r = c.get("/api/policy/tool-schema?name=ha_anything")
+    assert r.status_code == 500
+    assert "FastMCP rename" in r.json()["error"]
+
+
+def test_value_source_cache_keys_separate_per_params(tmp_path):
+    """Cache key includes params: ha_entities?domain=light and
+    ha_entities?domain=lock must NOT share a cached result."""
+    client = MagicMock()
+    # First call returns light entities; second returns nothing on purpose
+    # so we'd notice if the second call was served from the first's cache.
+    client.get_states = AsyncMock(
+        return_value=[
+            {"entity_id": "light.bed"},
+            {"entity_id": "lock.front"},
+        ]
+    )
+    c = _make_app(tmp_path, _make_server(tools=[], client=client))
+    r_light = c.get("/api/policy/value-source?source=ha_entities&domain=light")
+    r_lock = c.get("/api/policy/value-source?source=ha_entities&domain=lock")
+    assert r_light.json()["values"] == ["light.bed"]
+    assert r_lock.json()["values"] == ["lock.front"]
+
+
+def test_tool_schema_handles_malformed_properties(tmp_path):
+    """A tool with a non-dict property schema entry (quirky FastMCP
+    schema) should be skipped, not crash the endpoint."""
+    tool = _make_fake_tool(
+        "ha_quirky",
+        parameters={
+            "properties": {
+                "ok": {"type": "string"},
+                "broken": "this should be a dict",
+            }
+        },
+        destructive=True,
+    )
+    c = _make_app(tmp_path, _make_server(tools=[tool]))
+    r = c.get("/api/policy/tool-schema?name=ha_quirky")
+    assert r.status_code == 200
+    paths = {p["path"] for p in r.json()["paths"]}
+    assert "args.ok" in paths
+    assert "args.broken" not in paths

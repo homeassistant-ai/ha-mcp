@@ -155,7 +155,8 @@ async def test_timeout_raises_pending_error_and_keeps_entry(queue):
         )
     body = json.loads(ei.value.args[0])
     assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
-    assert body["error"]["context"]["token"]
+    # create_error_response splays context fields at top level, alongside `error`.
+    assert body["token"]
     assert "Tool Security Policies" in body["error"]["message"]
     call_next.assert_not_called()
     # entry survives for re-call
@@ -244,7 +245,7 @@ async def test_pending_error_reports_remaining_not_total_ttl(queue):
             make_context("ha_call_service", {"domain": "lock"}), call_next
         )
     body = json.loads(ei.value.args[0])
-    remaining = body["error"]["context"]["expires_in_seconds"]
+    remaining = body["expires_in_seconds"]
     # Full TTL is 300s; remaining should be ~60s and definitely <300.
     assert 0 <= remaining < 300, f"expected <300s remaining, got {remaining}"
 

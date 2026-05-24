@@ -1,18 +1,18 @@
-"""FastMCP on_call_tool middleware for tool security policies (issue #966)."""
+"""FastMCP on_call_tool middleware for tool security policies."""
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import anyio
-from fastmcp.exceptions import ToolError
+from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
-from ..tools.helpers import safe_progress
+from ..errors import ErrorCode, create_error_response
+from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import Verdict, evaluate, find_matching_rule
 from .model import Policy, Rule
@@ -54,7 +54,10 @@ class PolicyMiddleware(Middleware):
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
         try:
-            policy = self._policy_provider()
+            # Hoist sync file read off the event loop (fastmcp request
+            # handler runs in the async task). load_policy() is fast on
+            # warm disk but a corrupt/slow FS shouldn't pause the loop.
+            policy = await run_in_thread(self._policy_provider)
         except ValueError as e:
             # Fail-closed: a corrupt or invalid tool_policy.json is a
             # security-relevant config error. Passing through would
@@ -62,25 +65,17 @@ class PolicyMiddleware(Middleware):
             # structured ToolError so the LLM (and the user) sees what
             # to do, instead of crashing the call with an opaque trace.
             logger.exception("Tool security policy load failed; failing closed")
-            raise ToolError(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": {
-                            "code": "POLICY_LOAD_FAILED",
-                            "message": (
-                                "Tool security policy file is corrupt or "
-                                f"invalid: {e}. Edit or delete tool_policy.json "
-                                "and reload."
-                            ),
-                            "suggestions": [
-                                "Open the Tool Security Policies tab in the "
-                                "web UI to view/repair the policy.",
-                            ],
-                        },
-                    }
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.POLICY_LOAD_FAILED,
+                    f"Tool security policy file is corrupt or invalid: {e}. "
+                    "Edit or delete tool_policy.json and reload.",
+                    suggestions=[
+                        "Open the Tool Security Policies tab in the web UI "
+                        "to view/repair the policy.",
+                    ],
                 )
-            ) from e
+            )
         name = context.message.name
         args = context.message.arguments or {}
 
@@ -105,9 +100,12 @@ class PolicyMiddleware(Middleware):
             return await call_next(context)
         if existing and existing.decision == "denied":
             self._queue.remove(existing.token)
-            raise self._denied_error()
+            self._raise_denied_error()
 
-        pending = existing or self._queue.create(
+        # find_or_create serialises the create — two concurrent calls with
+        # the same args_hash share one pending entry, so the user only sees
+        # one approval row and approving it releases every waiter.
+        pending = await self._queue.find_or_create(
             name,
             args_hash,
             args,
@@ -129,9 +127,9 @@ class PolicyMiddleware(Middleware):
             return await call_next(context)
         if pending.decision == "denied":
             self._queue.remove(pending.token)
-            raise self._denied_error()
+            self._raise_denied_error()
 
-        raise self._pending_error(pending, rule)
+        self._raise_pending_error(pending, rule)
 
     async def _wait_for_decision(
         self,
@@ -159,25 +157,20 @@ class PolicyMiddleware(Middleware):
                 await pending.wait()
 
     @staticmethod
-    def _denied_error() -> ToolError:
-        return ToolError(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "USER_DENIED",
-                        "message": "User explicitly denied this tool call.",
-                        "suggestions": [
-                            "Do not retry without confirming with the user first."
-                        ],
-                    },
-                }
+    def _raise_denied_error() -> None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.USER_DENIED,
+                "User explicitly denied this tool call.",
+                suggestions=[
+                    "Do not retry without confirming with the user first.",
+                ],
             )
         )
 
-    def _pending_error(
+    def _raise_pending_error(
         self, pending: PendingApproval, rule: Rule | None = None
-    ) -> ToolError:
+    ) -> None:
         # Time-remaining, not total TTL: an LLM that re-calls a minute
         # before expiry should see "~60s left", not the original 300s.
         remaining = max(
@@ -195,24 +188,19 @@ class PolicyMiddleware(Middleware):
                 "tool_name": rule.tool_name,
                 "when": [p.model_dump() for p in rule.when],
             }
-        return ToolError(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "USER_APPROVAL_REQUIRED",
-                        "message": (
-                            "User approval required. Tell the user to open the "
-                            "ha-mcp settings UI, go to the Tool Security Policies "
-                            "tab, and approve or deny the pending request. Re-call "
-                            "this tool with the same arguments after the user approves."
-                        ),
-                        "context": context,
-                        "suggestions": [
-                            "Tell the user to open the Tool Security Policies tab in the ha-mcp settings UI and approve the pending request.",
-                            "Re-call this tool with the same arguments after the user approves.",
-                        ],
-                    },
-                }
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.USER_APPROVAL_REQUIRED,
+                "User approval required. Tell the user to open the ha-mcp "
+                "settings UI, go to the Tool Security Policies tab, and "
+                "approve or deny the pending request. Re-call this tool "
+                "with the same arguments after the user approves.",
+                suggestions=[
+                    "Tell the user to open the Tool Security Policies tab in "
+                    "the ha-mcp settings UI and approve the pending request.",
+                    "Re-call this tool with the same arguments after the user "
+                    "approves.",
+                ],
+                context=context,
             )
         )

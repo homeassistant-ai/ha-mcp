@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,14 @@ from .value_sources import (
     fetch_value_source,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _is_write_or_destructive(tool: Any) -> bool:
-    """True iff the tool can mutate state (not read-only) — the only
-    surface gating-UX polish is worth investing in. Read-only tools
-    still gate correctly if a user adds a rule, they just get the
-    free-text predicate fallback in the UI."""
+    """True iff the tool may mutate state. The UI only invests in path /
+    value pickers for these; read-only tools still gate correctly if a
+    user adds a rule, they just get the free-text predicate fallback in
+    the UI."""
     ann = getattr(tool, "annotations", None)
     # No annotations = treat as potentially write (safe default for the
     # UI, matches the runtime gate which doesn't skip read-only).
@@ -184,9 +187,16 @@ def build_policy_handlers(
                 {"error": "tool schema introspection unavailable in this mode"},
                 503,
             )
+        # `local_provider._list_tools()` is a private FastMCP API but the
+        # public ``mcp.list_tools()`` filters out tools the operator has
+        # disabled via the Tools tab — the same disabled tools the user
+        # may still want to author gating rules for. The settings_ui
+        # tool-listing endpoint uses the same private accessor for the
+        # same reason; this keeps the two consistent.
         try:
             tools = await server.mcp.local_provider._list_tools()
         except Exception as e:
+            logger.exception("tool-schema: failed to list tools")
             return JSONResponse({"error": f"tool list failed: {e}"}, 500)
         tool = next((t for t in tools if getattr(t, "name", None) == name), None)
         if tool is None:
@@ -231,6 +241,9 @@ def build_policy_handlers(
         except ValueError as e:
             return JSONResponse({"error": str(e)}, 400)
         except Exception as e:
+            logger.exception(
+                "value-source fetch failed: source=%s params=%s", source, params
+            )
             return JSONResponse({"error": f"value-source fetch failed: {e}"}, 502)
         return JSONResponse({"source": source, "values": values})
 

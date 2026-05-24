@@ -96,9 +96,9 @@ MANDATORY_TOOLS: set[str] = {
     # "consult skill before writing config" workflow.
     "ha_get_skill_guide",
     # Backups are operational essentials — needed as the pre-change safety
-    # net before config edits and as the recovery path after them. Added
-    # per #966 alongside the tool security policies middleware so even users
-    # who aggressively disable everything keep a working backup tool.
+    # net before config edits and as the recovery path after them. Kept
+    # always-on so users who aggressively disable everything keep a
+    # working backup tool.
     "ha_manage_backup",
 }
 
@@ -746,7 +746,7 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
-  /* Tool Security Policies — per-tool card layout (#966).
+  /* Tool Security Policies — per-tool card layout.
      Cards reuse the surface/border variables already in use elsewhere
      so they read consistently with backup-row / group blocks. */
   .policy-rule-card { background: var(--surface); border: 1px solid var(--border);
@@ -866,10 +866,10 @@ _SETTINGS_HTML = (
 <div class="panel" id="panel-tool-security-policies">
   <h2>Tool Security Policies</h2>
   <p class="features-sub">
-    Per-tool approval gating for high-stakes calls (issue #966). Use the
+    Per-tool approval gating for high-stakes calls. Use the
     <strong>Tools</strong> tab to enable gating for a tool, then refine
-    the matching rules and approval lifetime here. Predicate operators:
-    eq, neq, in, not_in, regex, contains, exists, gt, lt.
+    the matching conditions and approval lifetime here. Condition operators:
+    equals, is one of, regex, contains, is present, greater than, less than.
   </p>
 
   <section id="policy-global-settings" style="margin-bottom:16px">
@@ -2075,7 +2075,7 @@ async function saveFeatureFlag(fieldName, value) {
   }
 }
 
-// ===== Tool Security Policies tab (issue #966) =====
+// ===== Tool Security Policies tab =====
 // Live approval routes (pending/approve/deny) are only available from
 // the main server (in-process ApprovalQueue). The sidecar serves
 // config GET/PUT but returns 503 for the live endpoints — the UI
@@ -2815,7 +2815,7 @@ loadTools();
 
 
 def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
-    """Sidecar variant of the tool security policies handlers (issue #966).
+    """Sidecar variant of the tool security policies handlers.
 
     Serves policy config GET/PUT (the on-disk policy file is shared with
     the main server), but returns 503 for pending/approve/deny — those
@@ -4182,7 +4182,7 @@ def build_settings_handlers(
         "save_backup_config": _save_backup_config,
     }
 
-    # Tool security policies (issue #966). The main server attaches an
+    # Tool security policies. The main server attaches an
     # ApprovalQueue to the server object once PolicyMiddleware is wired
     # in. Only the main server can serve the live pending/approve/deny
     # endpoints because the queue is in-memory; the sidecar (or a main
@@ -4293,7 +4293,7 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
             handlers["save_backup_config"]
         )
-        # Tool security policies endpoints (#966)
+        # Tool security policies endpoints
         mcp.custom_route("/api/policy/config", methods=["GET"])(
             handlers["policy_get_config"]
         )
@@ -4367,7 +4367,7 @@ def register_settings_routes(
         mcp.custom_route(
             f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
         )(handlers["save_backup_config"])
-        # Tool security policies endpoints (#966)
+        # Tool security policies endpoints
         mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["GET"])(
             handlers["policy_get_config"]
         )
