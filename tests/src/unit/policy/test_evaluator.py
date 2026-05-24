@@ -160,6 +160,34 @@ class TestEvaluate:
         assert first.remember_minutes == 10
 
 
+# --- case-insensitive string comparison ---
+class TestCaseInsensitive:
+    @pytest.mark.parametrize(
+        "op,value,arg",
+        [
+            ("eq", "lock", "LOCK"),
+            ("eq", "Lock", "lock"),
+            ("in", ["lock", "alarm"], "LOCK"),
+            ("not_in", ["lock"], "light"),  # still True (case-insensitive miss)
+            ("contains", "lock", "FRONT_DOOR_LOCK"),
+            ("regex", r"^light\.", "Light.kitchen"),
+        ],
+    )
+    def test_string_ops_ignore_case(self, op, value, arg):
+        p = Predicate(path="args.x", op=op, value=value)
+        assert match_predicate(p, {"x": arg}) is True
+
+    def test_neq_case_insensitive_same_string_returns_false(self):
+        # 'Lock' == 'lock' under CI, so neq should be False.
+        p = Predicate(path="args.x", op="neq", value="Lock")
+        assert match_predicate(p, {"x": "lock"}) is False
+
+    def test_non_string_types_preserve_natural_equality(self):
+        # CI lowering is string-only — int != "1" still.
+        p = Predicate(path="args.x", op="eq", value="1")
+        assert match_predicate(p, {"x": 1}) is False
+
+
 # --- wildcard path semantics (catch-all "any argument matches X") ---
 class TestWildcardPredicate:
     def test_wildcard_eq_matches_when_any_arg_equals_value(self):

@@ -45,28 +45,43 @@ def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
     yield from walk(args, parts)
 
 
+def _ci(x: Any) -> Any:
+    """Lower-case strings for case-insensitive comparison; pass other
+    types through unchanged so type semantics (int != "1") survive.
+    Used on both sides of every string op — security gates should fire
+    whether the caller wrote 'Lock' or 'LOCK' or 'lock'."""
+    return x.lower() if isinstance(x, str) else x
+
+
 def _op_matches(val: Any, op: str, pv: Any) -> bool:
     """Apply one op to one concrete value. Predicate dispatches over
-    the candidate values (which may be many for wildcard paths)."""
+    the candidate values (which may be many for wildcard paths).
+
+    String comparisons are case-insensitive (security gates shouldn't
+    care whether the LLM lowercased its args). Non-string types
+    preserve their natural comparison semantics.
+    """
     match op:
         case "eq":
-            return bool(val == pv)
+            return _ci(val) == _ci(pv)
         case "neq":
-            return bool(val != pv)
+            return _ci(val) != _ci(pv)
         case "in":
-            return val in (pv or [])
+            return _ci(val) in [_ci(x) for x in (pv or [])]
         case "not_in":
-            return val not in (pv or [])
+            return _ci(val) not in [_ci(x) for x in (pv or [])]
         case "regex":
             # `regex` is re.search (substring match). Anchor with ^...$
-            # for full-match.
+            # for full-match. re.IGNORECASE so '^light\.' matches 'Light.x'.
             return (
                 isinstance(val, str)
                 and isinstance(pv, str)
-                and re.search(pv, val) is not None
+                and re.search(pv, val, re.IGNORECASE) is not None
             )
         case "contains":
-            return isinstance(val, (str, list, tuple, set)) and pv in val
+            if isinstance(val, str) and isinstance(pv, str):
+                return pv.lower() in val.lower()
+            return isinstance(val, (list, tuple, set)) and pv in val
         case "gt":
             try:
                 return bool(val > pv)
