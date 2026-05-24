@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -256,7 +256,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -386,7 +386,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 88+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -397,8 +397,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
 
 ### Areas & Floors
-- `ha_config_list_areas` — List all Home Assistant areas (rooms).
-- `ha_config_list_floors` — List all Home Assistant floors.
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 - `ha_remove_area_or_floor` — Remove a Home Assistant area or floor.
 - `ha_set_area_or_floor` — Create or update a Home Assistant area or floor.
@@ -465,7 +463,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
 - `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
-- `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
+- `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.

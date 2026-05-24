@@ -68,9 +68,7 @@ class TestRenameConsolidationEdgeCases:
         assert isinstance(warnings, list) and warnings, (
             f"Rename should include warnings about updating references: {rename_data.keys()}"
         )
-        assert any(
-            "automations, scripts, or dashboards" in w for w in warnings
-        ), (
+        assert any("automations, scripts, or dashboards" in w for w in warnings), (
             f"Expected update-references warning content; got: {warnings!r}"
         )
 
@@ -79,7 +77,7 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
 
@@ -140,7 +138,7 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )
 
@@ -193,6 +191,6 @@ class TestRenameConsolidationEdgeCases:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"helper_type": "input_boolean", "target": new_name, "confirm": True},
         )

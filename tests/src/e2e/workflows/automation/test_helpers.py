@@ -184,7 +184,7 @@ class TestHelperIntegration:
         # 4. DELETE: Clean up helper
         logger.info("🗑️ Deleting helper...")
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
                 "target": helper_name,
@@ -234,7 +234,8 @@ class TestHelperIntegration:
                 "initial": 25,
                 "mode": "slider",
                 "unit_of_measurement": "%",
-                "icon": "mdi:brightness-percent"},
+                "icon": "mdi:brightness-percent",
+            },
         )
 
         create_data = parse_mcp_result(create_result)
@@ -360,7 +361,7 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_number",
                 "target": helper_name,
@@ -392,7 +393,8 @@ class TestHelperIntegration:
                 "name": helper_name,
                 "options": options,
                 "initial": "Option 2",
-                "icon": "mdi:format-list-bulleted"},
+                "icon": "mdi:format-list-bulleted",
+            },
         )
 
         create_data = parse_mcp_result(create_result)
@@ -476,7 +478,7 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_select",
                 "target": helper_name,
@@ -507,7 +509,8 @@ class TestHelperIntegration:
                 "name": helper_name,
                 "initial": "Test",
                 "mode": "text",
-                "icon": "mdi:text-box"},
+                "icon": "mdi:text-box",
+            },
         )
 
         create_data = parse_mcp_result(create_result)
@@ -597,7 +600,7 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_text",
                 "target": helper_name,
@@ -720,7 +723,7 @@ class TestHelperIntegration:
 
             # 4. CLEANUP: Delete this datetime helper
             delete_result = await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "helper_type": "input_datetime",
                     "target": helper_name,
@@ -749,7 +752,8 @@ class TestHelperIntegration:
             {
                 "helper_type": "input_button",
                 "name": helper_name,
-                "icon": "mdi:button-pointer"},
+                "icon": "mdi:button-pointer",
+            },
         )
 
         create_data = parse_mcp_result(create_result)
@@ -829,7 +833,7 @@ class TestHelperIntegration:
 
         # Cleanup
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_button",
                 "target": helper_name,
@@ -941,12 +945,11 @@ class TestHelperIntegration:
                 )
                 logger.info(f"✅ Toggled: {helper_entity}")
 
-
         # 4. CLEANUP: Bulk deletion
         logger.info(f"🗑️ Bulk deleting {len(created_helpers)} helpers...")
         for helper_type, helper_id, helper_entity in created_helpers:
             delete_result = await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "helper_type": helper_type,
                     "target": helper_id,
@@ -1021,7 +1024,9 @@ async def test_helper_search_and_discovery(mcp_client):
 
     # Get system overview to see helper information (use standard level for full domain listing)
     logger.info("🔍 Getting system overview...")
-    overview_result = await mcp_client.call_tool("ha_get_overview", {"detail_level": "standard"})
+    overview_result = await mcp_client.call_tool(
+        "ha_get_overview", {"detail_level": "standard"}
+    )
     overview_data = parse_mcp_result(overview_result)
 
     # If helpers were found, they should appear in overview
@@ -1032,7 +1037,9 @@ async def test_helper_search_and_discovery(mcp_client):
         )
         logger.info("✅ System overview includes helper data")
     else:
-        logger.info("ℹ️ No helpers found in test environment, skipping overview validation")
+        logger.info(
+            "ℹ️ No helpers found in test environment, skipping overview validation"
+        )
 
     logger.info("✅ Helper search and discovery tests completed")
 
@@ -1171,7 +1178,7 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
     logger.info("🗑️ Cleaning up test helpers...")
     for helper_type, helper_name in test_helpers_created:
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": helper_type,
                 "target": helper_name,

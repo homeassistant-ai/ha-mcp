@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
+from ...utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,11 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
                 "views": [
                     {
                         "cards": [
-                            {"type": "button", "entity": "light.test", "icon": "mdi:lamp"}
+                            {
+                                "type": "button",
+                                "entity": "light.test",
+                                "icon": "mdi:lamp",
+                            }
                         ]
                     }
                 ]
@@ -145,7 +149,8 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
     mcp = MCPAssertions(mcp_client)
 
     await mcp.call_tool_success(
-        "ha_config_set_dashboard", {"url_path": "test-python-hash", "config": {"views": []}}
+        "ha_config_set_dashboard",
+        {"url_path": "test-python-hash", "config": {"views": []}},
     )
 
     # Try without config_hash - should fail
@@ -174,7 +179,10 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
     )
     # Verify error message mentions mutual exclusivity
     error_msg = extract_error_message(result)
-    assert "cannot use both" in error_msg.lower() or "mutually exclusive" in error_msg.lower()
+    assert (
+        "cannot use both" in error_msg.lower()
+        or "mutually exclusive" in error_msg.lower()
+    )
 
 
 @pytest.mark.asyncio
@@ -334,8 +342,15 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
                     {
                         "title": "View 1",
                         "cards": [
-                            {"type": "button", "entity": "light.test_a", "icon": "mdi:lamp"},
-                            {"type": "entities", "entities": ["light.test_b", "switch.test_c"]},
+                            {
+                                "type": "button",
+                                "entity": "light.test_a",
+                                "icon": "mdi:lamp",
+                            },
+                            {
+                                "type": "entities",
+                                "entities": ["light.test_b", "switch.test_c"],
+                            },
                         ],
                     },
                     {
@@ -543,13 +558,7 @@ async def test_python_transform_returns_authoritative_post_save_hash(
             {
                 "url_path": url_path,
                 "config": {
-                    "views": [
-                        {
-                            "cards": [
-                                {"type": "markdown", "content": "v1"}
-                            ]
-                        }
-                    ]
+                    "views": [{"cards": [{"type": "markdown", "content": "v1"}]}]
                 },
             },
         )

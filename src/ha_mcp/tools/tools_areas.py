@@ -5,6 +5,7 @@ This module provides tools for listing, creating, updating, and deleting
 Home Assistant areas and floors - essential organizational features for smart homes.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
@@ -130,20 +131,20 @@ class AreaTools:
         return message
 
     # ============================================================
-    # AREA TOOLS
+    # AREA & FLOOR LISTING
     # ============================================================
 
     @tool(
-        name="ha_config_list_areas",
+        name="ha_list_floors_areas",
         tags={"Areas & Floors"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "List Areas",
+            "title": "List Floors and Areas",
         },
     )
     @log_tool_usage
-    async def ha_config_list_areas(
+    async def ha_list_floors_areas(
         self,
         fields: Annotated[
             str | list[str] | None,
@@ -151,9 +152,11 @@ class AreaTools:
                 default=None,
                 description=(
                     "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["areas"]). '
+                    'response size (e.g. ["floors"]). '
                     "None = full response (default). "
-                    "Available keys: success, count, areas, message."
+                    "Available keys: success, floor_count, area_count, "
+                    "unassigned_count, orphaned_count, floors, unassigned_areas, "
+                    "orphaned_areas, message."
                 ),
             ),
         ] = None,
@@ -162,25 +165,32 @@ class AreaTools:
             Field(
                 default=None,
                 description=(
-                    "Project each area record to only the specified keys. "
-                    'E.g. ["area_id", "name"] returns slim area records. '
-                    "None = full records (default). Unknown keys yield empty records. "
-                    "Available keys: area_id, name, icon, floor_id, aliases, picture, labels."
+                    "Project each area record (in floors[].areas, unassigned_areas, "
+                    'and orphaned_areas) to only the specified keys. E.g. ["area_id", '
+                    '"name"] returns slim area records. None = full records (default). '
+                    "Unknown keys yield empty records. Available keys: area_id, name, "
+                    "icon, floor_id, aliases, picture, labels."
                 ),
             ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        List all Home Assistant areas (rooms).
+        List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
-        Returns area ID, name, icon, floor assignment, aliases, and picture URL.
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Optionally project the response with fields= (top-level keys) or area_fields= (per-area-record keys, applied uniformly across nested, unassigned, and orphaned buckets).
+
+        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
         """
+        # Validate projection params before any WS round-trips so a bad shape
+        # fails fast without burning two registry reads.
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
                 parsed_fields = parse_string_list_param(
                     fields, "fields", allow_csv=True
                 )
+                if parsed_fields is not None and len(parsed_fields) == 0:
+                    raise ValueError("fields must contain at least one key")
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_area_fields: list[str] | None = None
@@ -195,141 +205,39 @@ class AreaTools:
                 raise_tool_error(
                     create_validation_error(str(exc), parameter="area_fields")
                 )
-        try:
-            message: dict[str, Any] = {
-                "type": "config/area_registry/list",
-            }
 
-            result = await self._client.send_websocket_message(message)
-
-            if result.get("success"):
-                areas = result.get("result", [])
-                _orig_areas = areas
-                if parsed_area_fields is not None:
-                    areas = project_records(areas, parsed_area_fields)
-                response: dict[str, Any] = {
-                    "success": True,
-                    "count": len(areas),
-                    "areas": areas,
-                    "message": f"Found {len(areas)} area(s)",
-                }
-                if parsed_area_fields is not None:
-                    _warn = result_fields_warning(
-                        _orig_areas, areas, parsed_area_fields, param_name="area_fields"
-                    )
-                    if _warn:
-                        response.setdefault("warnings", []).append(_warn)
-                return project_fields(response, parsed_fields)
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get("error", "Failed to list areas"),
-                    )
-                )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Error listing areas: {e}")
-            exception_to_structured_error(
-                e,
-                context={"operation": "list_areas"},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            )
-
-    # ============================================================
-    # FLOOR TOOLS
-    # ============================================================
-
-    @tool(
-        name="ha_config_list_floors",
-        tags={"Areas & Floors"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Floors",
-        },
-    )
-    @log_tool_usage
-    async def ha_config_list_floors(self) -> dict[str, Any]:
-        """
-        List all Home Assistant floors.
-
-        Returns floor ID, name, icon, level (0=ground, 1=first, -1=basement), and aliases.
-        """
-        try:
-            message: dict[str, Any] = {
-                "type": "config/floor_registry/list",
-            }
-
-            result = await self._client.send_websocket_message(message)
-
-            if result.get("success"):
-                floors = result.get("result", [])
-                return {
-                    "success": True,
-                    "count": len(floors),
-                    "floors": floors,
-                    "message": f"Found {len(floors)} floor(s)",
-                }
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get("error", "Failed to list floors"),
-                    )
-                )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error(f"Error listing floors: {e}")
-            exception_to_structured_error(
-                e,
-                context={"operation": "list_floors"},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            )
-
-    @tool(
-        name="ha_list_floors_areas",
-        tags={"Areas & Floors"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "List Floors and Areas",
-        },
-    )
-    @log_tool_usage
-    async def ha_list_floors_areas(self) -> dict[str, Any]:
-        """
-        List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
-
-        Do not use for flat listings — ha_config_list_areas and ha_config_list_floors cover those.
-
-        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
-
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
-        """
         progress: dict[str, Any] = {
             "operation": "list_floors_areas",
             "phase": "start",
         }
         try:
-            areas_result = await self._client.send_websocket_message(
-                {"type": "config/area_registry/list"}
+            # Fetch both registries concurrently. Sequential awaits add a
+            # round-trip per call on the WS transport; gather halves the
+            # tool-side latency. Use return_exceptions=True so a failure on
+            # one side doesn't cancel the other — the post-fetch guard
+            # below reports both registries' state in the error context for
+            # diagnosis. Indexed access + explicit annotations rather than
+            # tuple-unpack — gather returns list[Any] which mypy can't
+            # statically narrow to a 2-tuple.
+            results = await asyncio.gather(
+                self._client.send_websocket_message(
+                    {"type": "config/area_registry/list"}
+                ),
+                self._client.send_websocket_message(
+                    {"type": "config/floor_registry/list"}
+                ),
+                return_exceptions=True,
             )
-            progress["phase"] = "areas_fetched"
-            floors_result = await self._client.send_websocket_message(
-                {"type": "config/floor_registry/list"}
-            )
-            progress["phase"] = "floors_fetched"
+            progress["phase"] = "registries_fetched"
+
+            # Re-raise transport-level exceptions from either fetch so the
+            # outer except handler classifies them via exception_to_structured_error.
+            if isinstance(results[0], BaseException):
+                raise results[0]
+            if isinstance(results[1], BaseException):
+                raise results[1]
+            areas_result: dict[str, Any] = results[0]
+            floors_result: dict[str, Any] = results[1]
 
             # A response with success=True but no "result" key is malformed —
             # treat it as a service call failure rather than silently returning
@@ -360,7 +268,7 @@ class AreaTools:
             # Partition areas into three disjoint sets:
             #   - nested:    floor_id present AND points to a known floor
             #   - orphaned:  floor_id present BUT points to a non-existent floor
-            #                (race between the two sequential reads, or manual
+            #                (race between the concurrent reads, or manual
             #                .storage inconsistency)
             #   - unassigned: no floor_id at all
             # Orphaned is surfaced as a separate key so the LLM can diagnose
@@ -410,21 +318,49 @@ class AreaTools:
             topology.sort(key=_floor_sort_key)
             progress["phase"] = "sorted"
 
-            return {
+            # Apply per-area projection across all 3 buckets uniformly.
+            # Snapshot pre-projection areas for the typo-guard warning.
+            _orig_all_areas = list(areas)
+            if parsed_area_fields is not None:
+                for floor in topology:
+                    floor["areas"] = project_records(floor["areas"], parsed_area_fields)
+                unassigned_areas = project_records(unassigned_areas, parsed_area_fields)
+                orphaned_areas = project_records(orphaned_areas, parsed_area_fields)
+
+            response: dict[str, Any] = {
                 "success": True,
                 "floor_count": len(topology),
-                "area_count": len(areas),
+                "area_count": len(_orig_all_areas),
                 "unassigned_count": len(unassigned_areas),
                 "orphaned_count": len(orphaned_areas),
                 "floors": topology,
                 "unassigned_areas": unassigned_areas,
                 "orphaned_areas": orphaned_areas,
                 "message": (
-                    f"Found {len(topology)} floor(s), {len(areas)} area(s), "
+                    f"Found {len(topology)} floor(s), {len(_orig_all_areas)} area(s), "
                     f"{len(unassigned_areas)} unassigned, "
                     f"{len(orphaned_areas)} orphaned"
                 ),
             }
+
+            # Typo-guard: combine projected areas across buckets to detect the
+            # all-empty-records situation that signals an unknown area_fields key.
+            if parsed_area_fields is not None:
+                _projected_all = (
+                    [a for f in topology for a in f["areas"]]
+                    + unassigned_areas
+                    + orphaned_areas
+                )
+                _warn = result_fields_warning(
+                    _orig_all_areas,
+                    _projected_all,
+                    parsed_area_fields,
+                    param_name="area_fields",
+                )
+                if _warn:
+                    response.setdefault("warnings", []).append(_warn)
+
+            return project_fields(response, parsed_fields)
 
         except ToolError:
             raise

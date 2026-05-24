@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
 
 LOG = logging.getLogger(__name__)
 
@@ -40,11 +40,18 @@ def _find_forecast_plane(
 @pytest.mark.asyncio
 @pytest.mark.config
 @pytest.mark.slow
+@pytest.mark.flaky(reruns=2, reruns_delay=10)
 async def test_forecast_solar_config_subentry_create_list_delete(
     mcp_client: Any,
     ha_client: Any,
 ) -> None:
-    """Create, list, and delete a Forecast.Solar plane config subentry."""
+    """Create, list, and delete a Forecast.Solar plane config subentry.
+
+    Flaky on the inaddon HAOS runner: ``submit_config_flow_step`` for
+    the initial entry create has been observed hitting the 30s client
+    timeout. Retried up to 3x to absorb the transient; a genuine
+    regression will still fail all attempts.
+    """
     unique = uuid.uuid4().hex[:8]
     entry_id: str | None = None
     subentry_id: str | None = None
@@ -118,7 +125,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         )
 
         delete_raw = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "target": entry_id,
                 "helper_type": "config_subentry",
@@ -139,14 +146,14 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         assert isinstance(after_subentries, list), (
             f"Expected subentries list after delete: {after_data}"
         )
-        assert _find_forecast_plane(
-            after_subentries, modules_power=modules_power
-        ) is None
+        assert (
+            _find_forecast_plane(after_subentries, modules_power=modules_power) is None
+        )
     finally:
         if entry_id and subentry_id:
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "target": entry_id,
                     "helper_type": "config_subentry",
@@ -157,7 +164,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         if entry_id:
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": entry_id, "confirm": True},
             )
             LOG.info("Cleaned up forecast_solar entry %s", entry_id)

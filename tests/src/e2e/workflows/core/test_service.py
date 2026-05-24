@@ -167,7 +167,9 @@ class TestCallService:
         self, mcp_client, test_light_entity
     ):
         """Test calling homeassistant.toggle universal service."""
-        logger.info(f"Testing ha_call_service homeassistant.toggle on {test_light_entity}")
+        logger.info(
+            f"Testing ha_call_service homeassistant.toggle on {test_light_entity}"
+        )
 
         result = await mcp_client.call_tool(
             "ha_call_service",
@@ -185,7 +187,9 @@ class TestCallService:
 
         logger.info(f"Universal toggle executed successfully: {data.get('message')}")
 
-    async def test_call_service_automation_trigger(self, mcp_client, cleanup_tracker, test_data_factory):
+    async def test_call_service_automation_trigger(
+        self, mcp_client, cleanup_tracker, test_data_factory
+    ):
         """Test triggering an automation via service call."""
         # Create a test automation first
         test_light = "light.bed_light"
@@ -204,11 +208,12 @@ class TestCallService:
         create_data = assert_mcp_success(create_result, "Create test automation")
         automation_entity = create_data.get("entity_id")
         if not automation_entity:
-            automation_entity = f"automation.{automation_name.lower().replace(' ', '_')}_e2e"
+            automation_entity = (
+                f"automation.{automation_name.lower().replace(' ', '_')}_e2e"
+            )
         cleanup_tracker.track("automation", automation_entity)
 
         logger.info(f"Testing automation.trigger on {automation_entity}")
-
 
         # Trigger the automation
         result = await mcp_client.call_tool(
@@ -386,7 +391,6 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
     cleanup_tracker.track("input_boolean", entity_id)
     logger.info(f"Created test input_boolean: {entity_id}")
 
-
     # Toggle the input_boolean
     result = await mcp_client.call_tool(
         "ha_call_service",
@@ -409,10 +413,12 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
     if state_data.get("success"):
         current_state = state_data.get("data", {}).get("state")
         logger.info(f"Input boolean state after toggle: {current_state}")
-        assert current_state == "on", f"Should be on after toggle from off: {current_state}"
+        assert current_state == "on", (
+            f"Should be on after toggle from off: {current_state}"
+        )
 
     # Cleanup
     await mcp_client.call_tool(
-        "ha_delete_helpers_integrations",
+        "ha_remove_helpers_integrations",
         {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
     )
