@@ -886,7 +886,7 @@ class TestFlowHelperDirectGuard:
 # --- tools_integrations.py (Round-4 sibling sweep) -----------------------
 #
 # Two destructive-class siblings the round-3 audit missed:
-#   1. ``ha_delete_helpers_integrations`` — empty/whitespace ``target``
+#   1. ``ha_remove_helpers_integrations`` — empty/whitespace ``target``
 #      would reach the destructive backend call on every routing path
 #      (simple-helper WS delete, flow-helper entry-resolution, direct
 #      config-entry delete). Single up-front guard closes all three.
@@ -908,7 +908,7 @@ class TestIntegrationsIdentifierValidation:
         [None, "input_boolean", "utility_meter"],
         ids=["direct_entry", "simple_helper", "flow_helper"],
     )
-    async def test_delete_helpers_integrations_rejects_empty_target(
+    async def test_remove_helpers_integrations_rejects_empty_target(
         self, tools, bad, helper_type
     ):
         # Parametrized across all three routing paths (None→direct entry,
@@ -916,7 +916,7 @@ class TestIntegrationsIdentifierValidation:
         # guard is locked against a regression that moves it inside any
         # one path.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target=bad, helper_type=helper_type, confirm=True
             )
         _assert_invalid_param(excinfo)

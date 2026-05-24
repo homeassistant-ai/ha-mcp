@@ -2,6 +2,7 @@
 E2E tests for integration management tools.
 """
 
+import json
 import logging
 
 import pytest
@@ -102,7 +103,7 @@ class TestIntegrationManagement:
         """Test deletion safety check."""
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": "fake_id", "confirm": False},
         )
         assert not data.get("success"), "Delete without confirm should fail"
@@ -117,7 +118,7 @@ class TestIntegrationManagement:
         # Test with string "false" - should fail
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": "fake_id", "confirm": "false"},
         )
         assert not data.get("success"), "Delete with string false should fail"
@@ -165,7 +166,7 @@ class TestIntegrationManagement:
 
         # Delete the entry
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
         delete_data = assert_mcp_success(delete_result, "Delete config entry")
@@ -193,29 +194,30 @@ class TestIntegrationManagement:
         # Should fail - either through validation or API error
         assert not data.get("success", False)
 
-    async def test_delete_config_entry_nonexistent_confirmed(self, mcp_client):
+    async def test_delete_config_entry_nonexistent_raises(self, mcp_client):
         """
-        Test: ha_delete_helpers_integrations with a nonexistent entry_id and
-        confirm=True returns a structured error, not success=True.
+        Pin the missing-target contract for the Path 3 (direct config
+        entry) branch: confirmed deletion of an entry that does not
+        exist raises RESOURCE_NOT_FOUND so a typo'd entry_id surfaces
+        at the caller layer instead of being silently masked as success.
 
-        Source path: confirm_bool=True bypasses the guard; delete_config_entry()
-        reaches the HA REST API with an unknown entry_id → Exception →
-        exception_to_structured_error(raise_error=True) → ToolError.
-
-        Existing tests cover confirm=False (guard path) and a valid entry_id
-        (CRUD cycle). This test covers the third structurally distinct path:
-        confirmed deletion of an entry that does not exist.
+        Source path: confirm_bool=True bypasses the confirm guard;
+        delete_config_entry() reaches the HA REST API which returns 404
+        (HomeAssistantAPIError); _delete_direct_entry catches the 404
+        and raises RESOURCE_NOT_FOUND. Non-404 API errors surface as
+        different structured tool errors via exception_to_structured_error.
         """
         data = await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": "nonexistent_entry_a7_e2e_xyz", "confirm": True},
         )
-        assert not data.get("success", False), (
-            f"Expected failure for nonexistent entry_id with confirm=True, "
-            f"got success=True: {data}"
+        assert data.get("success") is False, (
+            f"Expected raise for nonexistent entry_id, got: {data}"
         )
-        # Verify a structured error is returned (not a silent pass-through)
-        assert data.get("error") is not None, (
-            f"Expected error details in failure response, got: {data}"
+        assert data.get("error", {}).get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got: {data!r}"
+        )
+        assert "already_deleted" not in json.dumps(data), (
+            f"Stale already_deleted marker leaked into error: {data!r}"
         )

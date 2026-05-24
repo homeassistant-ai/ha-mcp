@@ -136,7 +136,9 @@ class TestConfigToolCategories:
             {"scope": "script", "category_id": category_id},
         )
 
-    async def test_automation_category_in_config_dict(self, mcp_client, cleanup_tracker):
+    async def test_automation_category_in_config_dict(
+        self, mcp_client, cleanup_tracker
+    ):
         """Test that category in config dict is extracted and applied."""
         logger.info("Testing category extraction from config dict")
 
@@ -162,7 +164,9 @@ class TestConfigToolCategories:
                 },
             },
         )
-        auto_data = assert_mcp_success(auto_result, "Create automation with config-dict category")
+        auto_data = assert_mcp_success(
+            auto_result, "Create automation with config-dict category"
+        )
         entity_id = auto_data.get("entity_id")
         assert entity_id, f"Missing entity_id: {auto_data}"
         cleanup_tracker.track("automation", entity_id)
@@ -219,7 +223,9 @@ class TestConfigToolCategories:
                 "category": cat_a_id,
             },
         )
-        auto_data = assert_mcp_success(auto_result, "Create automation with both category sources")
+        auto_data = assert_mcp_success(
+            auto_result, "Create automation with both category sources"
+        )
         entity_id = auto_data.get("entity_id")
         assert entity_id, f"Missing entity_id: {auto_data}"
         cleanup_tracker.track("automation", entity_id)
@@ -266,7 +272,9 @@ class TestConfigToolCategories:
                 },
             },
         )
-        auto_data = assert_mcp_success(auto_result, "Create automation without category")
+        auto_data = assert_mcp_success(
+            auto_result, "Create automation without category"
+        )
         entity_id = auto_data.get("entity_id")
         assert entity_id, f"Missing entity_id: {auto_data}"
         cleanup_tracker.track("automation", entity_id)
@@ -285,7 +293,9 @@ class TestConfigToolCategories:
                 "category": category_id,
             },
         )
-        update_data = assert_mcp_success(update_result, "Update automation with category")
+        update_data = assert_mcp_success(
+            update_result, "Update automation with category"
+        )
         assert update_data.get("category") == category_id, (
             f"Category not set on update: {update_data}"
         )
@@ -326,7 +336,9 @@ class TestConfigToolCategories:
                 },
             },
         )
-        script_data = assert_mcp_success(script_result, "Create script with config-dict category")
+        script_data = assert_mcp_success(
+            script_result, "Create script with config-dict category"
+        )
         assert script_data.get("category") == category_id, (
             f"Category not applied from config dict: {script_data}"
         )
@@ -365,7 +377,9 @@ class TestConfigToolCategories:
                 "category": category_id,
             },
         )
-        helper_response = assert_mcp_success(helper_result, "Create helper with category")
+        helper_response = assert_mcp_success(
+            helper_result, "Create helper with category"
+        )
         # entity_id may be None for some helper types — derive from data.id
         entity_id = helper_response.get("entity_id")
         inner_data = helper_response.get("data", {})
@@ -383,7 +397,7 @@ class TestConfigToolCategories:
 
         # Clean up
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_boolean",
                 "target": entity_id,

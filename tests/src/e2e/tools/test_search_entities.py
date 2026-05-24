@@ -604,8 +604,7 @@ async def area_with_mixed_domains(mcp_client):
     )
     boolean_data = assert_mcp_success(boolean_result, "Create input_boolean")
     boolean_id = (
-        boolean_data.get("entity_id")
-        or f"input_boolean.{boolean_data['data']['id']}"
+        boolean_data.get("entity_id") or f"input_boolean.{boolean_data['data']['id']}"
     )
 
     number_result = await mcp_client.call_tool(
@@ -621,8 +620,7 @@ async def area_with_mixed_domains(mcp_client):
     )
     number_data = assert_mcp_success(number_result, "Create input_number")
     number_id = (
-        number_data.get("entity_id")
-        or f"input_number.{number_data['data']['id']}"
+        number_data.get("entity_id") or f"input_number.{number_data['data']['id']}"
     )
 
     # Wait until both entities are visible under this area in the registries
@@ -651,7 +649,7 @@ async def area_with_mixed_domains(mcp_client):
     ):
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "target": entity_id,
                     "helper_type": helper_type,
@@ -927,8 +925,7 @@ async def two_areas_fuzzy_match(mcp_client):
         )
         bool_data = assert_mcp_success(bool_result, f"Create boolean {tag}")
         bool_id = (
-            bool_data.get("entity_id")
-            or f"input_boolean.{bool_data['data']['id']}"
+            bool_data.get("entity_id") or f"input_boolean.{bool_data['data']['id']}"
         )
         created.append(("input_boolean", bool_id))
         helpers.append({"area_id": area_id, "boolean_id": bool_id, "tag": tag})
@@ -960,7 +957,7 @@ async def two_areas_fuzzy_match(mcp_client):
                 )
             else:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {"target": oid, "helper_type": kind, "confirm": True},
                 )
         except Exception as exc:  # pragma: no cover — cleanup best-effort
@@ -1041,7 +1038,13 @@ async def test_domain_filter_uppercase_normalized_issue_1170(mcp_client):
 @pytest.mark.parametrize(
     "padded",
     ["  light  ", "\tlight", "light\n", "  Light  ", " LIGHT\t"],
-    ids=["padded", "tab-prefix", "newline-suffix", "padded-mixed-case", "tab-and-upper"],
+    ids=[
+        "padded",
+        "tab-prefix",
+        "newline-suffix",
+        "padded-mixed-case",
+        "tab-and-upper",
+    ],
 )
 @pytest.mark.asyncio
 async def test_domain_filter_whitespace_normalized_issue_1170(mcp_client, padded):
@@ -1112,8 +1115,7 @@ async def populated_area_for_shape_test(mcp_client):
     )
     helper_data = assert_mcp_success(helper_result, "Create shape-test helper")
     boolean_id = (
-        helper_data.get("entity_id")
-        or f"input_boolean.{helper_data['data']['id']}"
+        helper_data.get("entity_id") or f"input_boolean.{helper_data['data']['id']}"
     )
     await wait_for_tool_result(
         mcp_client,
@@ -1128,7 +1130,7 @@ async def populated_area_for_shape_test(mcp_client):
     yield {"area_id": area_id, "boolean_id": boolean_id}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": boolean_id, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover — cleanup best-effort
@@ -1186,9 +1188,7 @@ async def test_area_filtered_query_no_per_result_area_filter_issue_1170(
         f"top-level area_filter should still echo: {data}"
     )
     for r in data["results"]:
-        assert "area_filter" not in r, (
-            f"per-result area_filter should be dropped: {r}"
-        )
+        assert "area_filter" not in r, f"per-result area_filter should be dropped: {r}"
 
 
 @pytest.mark.asyncio
@@ -1226,15 +1226,18 @@ async def test_result_shape_consistent_across_branches(mcp_client):
         ({"query": "light", "exact_match": False, "limit": 1}, "fuzzy_search"),
         ({"area_filter": "kitchen", "limit": 1}, "area_only"),
         (
-            {"area_filter": "kitchen", "query": "light", "exact_match": False, "limit": 1},
+            {
+                "area_filter": "kitchen",
+                "query": "light",
+                "exact_match": False,
+                "limit": 1,
+            },
             "area_filtered_query",
         ),
     ]
     for params, expected_type in calls:
         res = await mcp_client.call_tool("ha_search_entities", params)
-        data = assert_mcp_success(res, f"shape check {expected_type}").get(
-            "data", {}
-        )
+        data = assert_mcp_success(res, f"shape check {expected_type}").get("data", {})
         assert data["search_type"] == expected_type, (
             f"unexpected search_type for {params}: {data}"
         )
@@ -1246,8 +1249,7 @@ async def test_result_shape_consistent_across_branches(mcp_client):
             f"{base_keys - result_keys} (have {result_keys})"
         )
         assert not (forbidden & result_keys), (
-            f"{expected_type} surfaced forbidden keys: "
-            f"{forbidden & result_keys}"
+            f"{expected_type} surfaced forbidden keys: {forbidden & result_keys}"
         )
 
 
@@ -1263,7 +1265,9 @@ async def test_validation_error_carries_no_generic_suggestions(mcp_client):
     inner = data.get("data", data)
     assert inner.get("success") is False, f"expected failure: {inner}"
     error = inner.get("error", {})
-    assert error.get("code") == "VALIDATION_FAILED", f"expected VALIDATION_FAILED: {inner}"
+    assert error.get("code") == "VALIDATION_FAILED", (
+        f"expected VALIDATION_FAILED: {inner}"
+    )
     # No misleading "Check Home Assistant connection" boilerplate.
     suggestions = error.get("suggestions") or []
     if isinstance(error.get("suggestion"), str):
@@ -1343,7 +1347,7 @@ async def two_areas_with_shared_prefix(mcp_client):
     for h in helpers:
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": h, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1376,15 +1380,12 @@ async def test_exact_area_id_short_circuits_fuzzy_aggregation(
     )
     data = assert_mcp_success(res, "exact area_id resolution").get("data", {})
     entity_ids = {r["entity_id"] for r in data["results"]}
-    assert target_helper in entity_ids, (
-        f"target area's helper missing: {data}"
-    )
+    assert target_helper in entity_ids, f"target area's helper missing: {data}"
     assert sibling_helper not in entity_ids, (
         f"sibling area's helper leaked into exact-id resolution: {data}"
     )
     assert len(data["area_names"]) == 1, (
-        f"exact area_id should resolve to exactly one area, got "
-        f"{data['area_names']}"
+        f"exact area_id should resolve to exactly one area, got {data['area_names']}"
     )
 
 
@@ -1449,17 +1450,12 @@ async def helper_with_alias(mcp_client):
         {"helper_type": "input_boolean", "name": f"e2e 1170 alias src {suffix}"},
     )
     helper_data = assert_mcp_success(helper_res, "Create alias-target helper")
-    eid = (
-        helper_data.get("entity_id")
-        or f"input_boolean.{helper_data['data']['id']}"
-    )
-    await mcp_client.call_tool(
-        "ha_set_entity", {"entity_id": eid, "aliases": [alias]}
-    )
+    eid = helper_data.get("entity_id") or f"input_boolean.{helper_data['data']['id']}"
+    await mcp_client.call_tool("ha_set_entity", {"entity_id": eid, "aliases": [alias]})
     yield {"entity_id": eid, "alias": alias}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover
@@ -1484,8 +1480,7 @@ async def test_search_concat_token_elision_issue_1170(mcp_client):
     entity_ids = [r["entity_id"] for r in data.get("results", [])]
     # `light.bed_light` is part of the initial_test_state seed.
     assert "light.bed_light" in entity_ids, (
-        f"separator-elided query 'bedlight' should match light.bed_light: "
-        f"{entity_ids}"
+        f"separator-elided query 'bedlight' should match light.bed_light: {entity_ids}"
     )
 
 
@@ -1519,8 +1514,7 @@ async def area_with_alias(mcp_client):
             tool_name="ha_search_entities",
             arguments={"area_filter": area_id, "limit": 10},
             predicate=lambda d: any(
-                r.get("entity_id") == eid
-                for r in d.get("data", d).get("results", [])
+                r.get("entity_id") == eid for r in d.get("data", d).get("results", [])
             ),
             description="helper visible in alias-area",
         )
@@ -1532,7 +1526,7 @@ async def area_with_alias(mcp_client):
     finally:
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1604,7 +1598,7 @@ async def hidden_helper(mcp_client):
     yield {"entity_id": eid, "distinctive": distinctive}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover
@@ -1630,16 +1624,13 @@ async def test_search_includes_hidden_with_penalty_by_default_issue_1170(
     assert fixture["entity_id"] in entity_ids, (
         f"hidden entity should be in default results (option c): {data}"
     )
-    target = next(
-        r for r in data["results"] if r["entity_id"] == fixture["entity_id"]
-    )
+    target = next(r for r in data["results"] if r["entity_id"] == fixture["entity_id"])
     # The hidden entity is the only match for a uuid-suffixed query, so
     # its raw score would be 100 (exact substring) — minus the 20-point
     # penalty → 80. Asserting ``< 100`` keeps the test robust to small
     # tuning changes in the penalty constant.
     assert target["score"] < 100, (
-        f"hidden entity should carry score penalty (got {target['score']}): "
-        f"{target}"
+        f"hidden entity should carry score penalty (got {target['score']}): {target}"
     )
 
 
@@ -1668,9 +1659,7 @@ async def test_search_include_hidden_false_filters_issue_1170(
 
 
 @pytest.mark.asyncio
-async def test_search_fuzzy_mode_penalises_hidden_issue_1170(
-    mcp_client, hidden_helper
-):
+async def test_search_fuzzy_mode_penalises_hidden_issue_1170(mcp_client, hidden_helper):
     """Fuzzy mode applies the same hidden-score penalty.
 
     Default-True ``exact_match`` and the fuzzy path are SEPARATE code
@@ -1692,9 +1681,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(
     assert fixture["entity_id"] in entity_ids, (
         f"fuzzy mode should keep hidden entity (option c): {data}"
     )
-    target = next(
-        r for r in data["results"] if r["entity_id"] == fixture["entity_id"]
-    )
+    target = next(r for r in data["results"] if r["entity_id"] == fixture["entity_id"])
     assert target["score"] < 100, (
         f"fuzzy mode hidden entity should carry penalty (got "
         f"{target['score']}): {target}"
@@ -1710,9 +1697,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(
             "limit": 5,
         },
     )
-    data2 = assert_mcp_success(res2, "fuzzy include_hidden=False").get(
-        "data", {}
-    )
+    data2 = assert_mcp_success(res2, "fuzzy include_hidden=False").get("data", {})
     entity_ids2 = [r["entity_id"] for r in data2["results"]]
     assert fixture["entity_id"] not in entity_ids2, (
         f"fuzzy + include_hidden=False should filter hidden: {data2}"
@@ -1753,14 +1738,11 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
             tool_name="ha_search_entities",
             arguments={"area_filter": area_id, "limit": 10},
             predicate=lambda d: any(
-                r.get("entity_id") == eid
-                for r in d.get("data", d).get("results", [])
+                r.get("entity_id") == eid for r in d.get("data", d).get("results", [])
             ),
             description="area entity visible before hide",
         )
-        await mcp_client.call_tool(
-            "ha_set_entity", {"entity_id": eid, "hidden": True}
-        )
+        await mcp_client.call_tool("ha_set_entity", {"entity_id": eid, "hidden": True})
 
         # Default include_hidden=True: hidden entity surfaces with penalty
         res = await mcp_client.call_tool(
@@ -1794,7 +1776,7 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
         # Cleanup
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1839,10 +1821,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
         },
     )
     v_data = assert_mcp_success(v_res, "create visible")
-    v_eid = (
-        v_data.get("entity_id")
-        or f"input_boolean.{v_data['data']['id']}"
-    )
+    v_eid = v_data.get("entity_id") or f"input_boolean.{v_data['data']['id']}"
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
         {
@@ -1852,10 +1831,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
         },
     )
     h_data = assert_mcp_success(h_res, "create hidden-target")
-    h_eid = (
-        h_data.get("entity_id")
-        or f"input_boolean.{h_data['data']['id']}"
-    )
+    h_eid = h_data.get("entity_id") or f"input_boolean.{h_data['data']['id']}"
 
     try:
         # Hide the second helper.
@@ -1874,8 +1850,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
                 "limit": 20,
             },
             predicate=lambda d: any(
-                r.get("entity_id") == v_eid
-                for r in d.get("data", d).get("results", [])
+                r.get("entity_id") == v_eid for r in d.get("data", d).get("results", [])
             ),
             description="visible helper visible in area+query",
         )
@@ -1888,17 +1863,13 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
                 "limit": 20,
             },
         )
-        data = assert_mcp_success(res, "area+query hidden penalty").get(
-            "data", {}
-        )
+        data = assert_mcp_success(res, "area+query hidden penalty").get("data", {})
         ids = [r["entity_id"] for r in data["results"]]
         # With the distinctive token hitting BM25 at score 100 in both
         # entity_id and friendly_name, both helpers must surface — the
         # earlier "hidden may be absent" escape hatch was masking the
         # threshold-edge regression that's now locked down separately.
-        assert v_eid in ids, (
-            f"visible area+query match disappeared: {ids}"
-        )
+        assert v_eid in ids, f"visible area+query match disappeared: {ids}"
         assert h_eid in ids, (
             f"hidden area+query match should still surface (option-c): {ids}"
         )
@@ -1912,7 +1883,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
         for eid in (v_eid, h_eid):
             try:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {
                         "target": eid,
                         "helper_type": "input_boolean",
@@ -1944,19 +1915,13 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
         {"helper_type": "input_boolean", "name": visible_name},
     )
     v_data = assert_mcp_success(v_res, "create visible dl")
-    v_eid = (
-        v_data.get("entity_id")
-        or f"input_boolean.{v_data['data']['id']}"
-    )
+    v_eid = v_data.get("entity_id") or f"input_boolean.{v_data['data']['id']}"
     h_res = await mcp_client.call_tool(
         "ha_config_set_helper",
         {"helper_type": "input_boolean", "name": hidden_name},
     )
     h_data = assert_mcp_success(h_res, "create hidden dl")
-    h_eid = (
-        h_data.get("entity_id")
-        or f"input_boolean.{h_data['data']['id']}"
-    )
+    h_eid = h_data.get("entity_id") or f"input_boolean.{h_data['data']['id']}"
 
     try:
         await mcp_client.call_tool(
@@ -1971,12 +1936,10 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
         data = assert_mcp_success(res, "domain_listing default").get("data", {})
         by_id = {r["entity_id"]: r for r in data["results"]}
         assert h_eid in by_id, (
-            f"hidden helper should appear in domain_listing default: "
-            f"{list(by_id)[:5]}"
+            f"hidden helper should appear in domain_listing default: {list(by_id)[:5]}"
         )
         assert by_id[h_eid]["score"] < 100, (
-            f"hidden should carry penalty in domain_listing: "
-            f"{by_id[h_eid]}"
+            f"hidden should carry penalty in domain_listing: {by_id[h_eid]}"
         )
         if v_eid in by_id:
             assert by_id[v_eid]["score"] >= by_id[h_eid]["score"], (
@@ -2004,7 +1967,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
         for eid in (v_eid, h_eid):
             try:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {
                         "target": eid,
                         "helper_type": "input_boolean",
@@ -2088,10 +2051,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
                 tool_name="ha_search_entities",
                 arguments={"area_filter": "bedroom", "limit": 50},
                 predicate=lambda d: expected.issubset(
-                    {
-                        r.get("entity_id")
-                        for r in d.get("data", d).get("results", [])
-                    }
+                    {r.get("entity_id") for r in d.get("data", d).get("results", [])}
                 ),
                 description="all seed assignments visible under bedroom",
             )
@@ -2161,9 +2121,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
         )
 
     @pytest.mark.asyncio
-    async def test_area_only_pagination_realistic(
-        self, mcp_client, seeded_bedroom
-    ):
+    async def test_area_only_pagination_realistic(self, mcp_client, seeded_bedroom):
         """Pagination works correctly at realistic populated-area scale."""
         fixture = seeded_bedroom
         res = await mcp_client.call_tool(

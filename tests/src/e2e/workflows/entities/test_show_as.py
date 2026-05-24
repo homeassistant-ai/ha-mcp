@@ -22,7 +22,7 @@ async def _delete_template_helper(mcp_client, entity_id: str) -> None:
     """Best-effort cleanup for a template helper (no built-in cleaner support)."""
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entity_id, "helper_type": "template", "confirm": True},
         )
     except Exception as e:  # pragma: no cover - cleanup best-effort

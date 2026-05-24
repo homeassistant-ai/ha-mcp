@@ -450,7 +450,7 @@ class TestHelperCaptureRestore:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": f"input_boolean.{helper_id}"},
         )
 
@@ -568,7 +568,7 @@ class TestComplexHelperCaptureRestore:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": f"schedule.{helper_id}"},
         )
 

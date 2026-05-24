@@ -70,7 +70,7 @@ class TestConfigEntryFlow:
 
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
 
@@ -88,7 +88,7 @@ class TestConfigEntryFlow:
 
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
 
@@ -105,7 +105,7 @@ class TestConfigEntryFlow:
 
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
 
@@ -122,7 +122,7 @@ class TestConfigEntryFlow:
 
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
 
@@ -160,7 +160,7 @@ class TestConfigEntryFlow:
         # Cleanup
         await safe_call_tool(
             mcp_client,
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
 
