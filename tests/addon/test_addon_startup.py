@@ -76,9 +76,11 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
-        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False    # too short
+        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
+        assert (
+            self.addon._is_valid_secret_path("/custom") is False
+        )  # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False  # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
@@ -148,7 +150,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.HTTPError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
     def test_connection_error_propagates(self, monkeypatch):
         """Network failures propagate to the caller — no silent swallowing."""
@@ -159,7 +163,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.URLError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
 
 class TestMaybePersistSecretPath:
@@ -274,11 +280,16 @@ def _build_addon_image():
     """Build the addon test image via docker CLI (supports BuildKit)."""
     result = subprocess.run(
         [
-            "docker", "build",
-            "-t", IMAGE_TAG,
-            "-f", DOCKERFILE,
-            "--build-arg", "BUILD_VERSION=1.0.0-test",
-            "--build-arg", "BUILD_ARCH=amd64",
+            "docker",
+            "build",
+            "-t",
+            IMAGE_TAG,
+            "-f",
+            DOCKERFILE,
+            "--build-arg",
+            "BUILD_VERSION=1.0.0-test",
+            "--build-arg",
+            "BUILD_ARCH=amd64",
             ".",
         ],
         capture_output=True,
@@ -434,7 +445,10 @@ class TestAddonStartup:
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
             assert "Secret Path: /private_" in logs
-            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
+            assert (
+                "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!"
+                in logs
+            )
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -483,7 +497,10 @@ class TestAddonStartup:
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
-            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
+            assert (
+                "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
+                in logs
+            )
             assert "Secret Path: /my_custom_secret" in logs
 
         finally:
@@ -512,3 +529,52 @@ class TestAddonStartup:
 
         finally:
             container.stop()
+
+
+class TestBetaMasterAutoEnableInDevAddon:
+    """#1164: dev addon keeps the 5 sub-flag keys in its Supervisor
+    options schema (unlike stable). start.py auto-writes
+    ``ENABLE_BETA_FEATURES=true`` whenever any of those sub-flag keys
+    are present in ``/data/options.json``, so the runtime master gate
+    in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
+    users — Supervisor options remain authoritative for the 5 sub-flags."""
+
+    _DEV_BETA_KEYS = (
+        "enable_yaml_config_editing",
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        "enable_code_mode",
+        "enable_lite_docstrings",
+    )
+
+    def test_start_py_auto_enables_master_when_dev_beta_key_present(self):
+        """Static source check: start.py contains the
+        ``ENABLE_BETA_FEATURES=true`` write conditional on any beta
+        sub-flag key being in the options dict."""
+        start_py_text = (
+            Path(__file__).parents[2] / "homeassistant-addon" / "start.py"
+        ).read_text()
+        assert "ENABLE_BETA_FEATURES" in start_py_text, (
+            "start.py must auto-write ENABLE_BETA_FEATURES in dev addon "
+            "mode so the runtime master gate doesn't fight Supervisor "
+            "options (#1164)"
+        )
+
+    def test_stable_addon_still_does_not_carry_beta_keys(self):
+        """Stable addon's ``config.yaml`` must NOT list any of the 5
+        beta sub-flag keys (their Supervisor-options absence is what
+        makes the master gate the sole gate for stable users)."""
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        for key in self._DEV_BETA_KEYS:
+            assert key not in stable_yaml.get("options", {}), (
+                f"{key} must not be in stable addon options (#1164)"
+            )
+            assert key not in stable_yaml.get("schema", {}), (
+                f"{key} must not be in stable addon schema (#1164)"
+            )
