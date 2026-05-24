@@ -8,7 +8,7 @@ import os
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
@@ -336,15 +336,75 @@ def validate_settings() -> tuple[bool, str | None]:
 # the override file, addon mode (SUPERVISOR_TOKEN set) ignores the
 # file entirely (start.py owns env vars from config.yaml in that
 # mode), and the pydantic field default is the fallback.
-FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
-    ("enable_beta_features", "ENABLE_BETA_FEATURES", bool),
-    ("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
-    ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
-    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
-    ("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
-    ("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
-    ("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
-    (
+# ===== Typed registry shapes (#1164 cleanup, type-design recommendation) =====
+#
+# NamedTuples preserve positional-unpack compatibility (existing
+# ``for fname, env, ftype in FEATURE_FLAG_FIELDS:`` iteration sites keep
+# working) AND add attribute access (``f.field`` / ``f.env`` / ``f.ftype``)
+# for new call sites. Literal annotations on closed-set fields (section,
+# python type) give mypy a chance to catch typos at definition time
+# instead of letting them surface as silent runtime no-ops. The
+# ``_validate_registries()`` call at module bottom enforces cross-table
+# invariants at import time (field name exists on Settings, registries
+# are name-disjoint, bounds-on-numeric / choices-on-str).
+
+# Allowed python types for the override-apply machinery in
+# ``_apply_*_overrides``. Anything outside this set silently falls into
+# the ``else: continue`` arm of the type switch and the override is
+# dropped — making the constraint explicit at the type level catches
+# typos like ``ftype=Path`` at definition site.
+RegistryFieldType = type[bool] | type[int] | type[float] | type[str]
+
+# Closed set of UI section names. The advanced renderer in
+# settings_ui.py picks a DOM container per section; a typo would render
+# the row into nothing.
+AdvancedSection = Literal[
+    "connection",
+    "search",
+    "operations",
+    "diagnostics",
+    "tools_surface",
+    "beta_codemode",
+]
+
+
+class FeatureFlagField(NamedTuple):
+    """One row of FEATURE_FLAG_FIELDS."""
+
+    field: str
+    env: str
+    ftype: RegistryFieldType
+
+
+class BackupOverrideField(NamedTuple):
+    """One row of BACKUP_OVERRIDE_FIELDS."""
+
+    field: str
+    env: str
+    ftype: RegistryFieldType
+
+
+class AdvancedField(NamedTuple):
+    """One row of ADVANCED_SETTINGS_FIELDS."""
+
+    field: str
+    env: str
+    ftype: RegistryFieldType
+    section: AdvancedSection
+    editable: bool
+
+
+FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
+    FeatureFlagField("enable_beta_features", "ENABLE_BETA_FEATURES", bool),
+    FeatureFlagField("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
+    FeatureFlagField("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
+    FeatureFlagField(
+        "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
+    ),
+    FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
+    FeatureFlagField("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
+    FeatureFlagField("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
+    FeatureFlagField(
         "enable_custom_component_integration",
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
@@ -353,7 +413,7 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
     # it here is what makes the override file (and the new web UI Server
     # Settings tab) able to write the flag. Without this entry, the UI
     # save logic would have nowhere to land the value.
-    ("enable_code_mode", "ENABLE_CODE_MODE", bool),
+    FeatureFlagField("enable_code_mode", "ENABLE_CODE_MODE", bool),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -401,23 +461,27 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
 #   toggles, beta flags) are intentionally NOT duplicated here — the UI
 #   continues to source them via ``FEATURE_FLAG_FIELDS`` so the per-field
 #   env-pin / addon-Supervisor routing logic stays unchanged for those rows.
-ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
+ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     # Connection — URL/token are display-only (chicken-and-egg: if you
     # could break the connection from the UI you couldn't use the same
     # UI to fix it). timeout / max_retries / verify_ssl are editable.
-    ("homeassistant_url", "HOMEASSISTANT_URL", str, "connection", False),
-    ("homeassistant_token", "HOMEASSISTANT_TOKEN", str, "connection", False),
-    ("timeout", "HA_TIMEOUT", int, "connection", True),
-    ("max_retries", "HA_MAX_RETRIES", int, "connection", True),
-    ("verify_ssl", "HA_VERIFY_SSL", bool, "connection", True),
+    AdvancedField("homeassistant_url", "HOMEASSISTANT_URL", str, "connection", False),
+    AdvancedField(
+        "homeassistant_token", "HOMEASSISTANT_TOKEN", str, "connection", False
+    ),
+    AdvancedField("timeout", "HA_TIMEOUT", int, "connection", True),
+    AdvancedField("max_retries", "HA_MAX_RETRIES", int, "connection", True),
+    AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "connection", True),
     # Search & matching.
-    ("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
-    ("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
+    AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
+    AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
     # Operations.
-    ("backup_hint", "BACKUP_HINT", str, "operations", True),
-    ("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
-    ("enabled_tool_modules", "ENABLED_TOOL_MODULES", str, "tools_surface", True),
-    (
+    AdvancedField("backup_hint", "BACKUP_HINT", str, "operations", True),
+    AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
+    AdvancedField(
+        "enabled_tool_modules", "ENABLED_TOOL_MODULES", str, "tools_surface", True
+    ),
+    AdvancedField(
         "enable_dashboard_partial_tools",
         "ENABLE_DASHBOARD_PARTIAL_TOOLS",
         bool,
@@ -425,11 +489,11 @@ ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
         True,
     ),
     # Diagnostics.
-    ("mcp_server_name", "MCP_SERVER_NAME", str, "diagnostics", True),
-    ("mcp_server_version", "MCP_SERVER_VERSION", str, "diagnostics", True),
-    ("environment", "ENVIRONMENT", str, "diagnostics", True),
-    ("log_level", "LOG_LEVEL", str, "diagnostics", True),
-    ("debug", "DEBUG", bool, "diagnostics", True),
+    AdvancedField("mcp_server_name", "MCP_SERVER_NAME", str, "diagnostics", True),
+    AdvancedField("mcp_server_version", "MCP_SERVER_VERSION", str, "diagnostics", True),
+    AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
+    AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
+    AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
     # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
     # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined
     # below) so they persist to ``backup_settings.json`` alongside the
@@ -437,17 +501,23 @@ ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
     # Code-mode sub-numerics (only meaningful when enable_code_mode is on).
     # editable=True but the UI nests them under the beta section's
     # enable_code_mode row, dimmed and disabled when code mode is off.
-    ("code_mode_max_duration", "CODE_MODE_MAX_DURATION", float, "beta_codemode", True),
-    ("code_mode_max_memory", "CODE_MODE_MAX_MEMORY", int, "beta_codemode", True),
-    ("code_mode_max_recursion", "CODE_MODE_MAX_RECURSION", int, "beta_codemode", True),
-    (
+    AdvancedField(
+        "code_mode_max_duration", "CODE_MODE_MAX_DURATION", float, "beta_codemode", True
+    ),
+    AdvancedField(
+        "code_mode_max_memory", "CODE_MODE_MAX_MEMORY", int, "beta_codemode", True
+    ),
+    AdvancedField(
+        "code_mode_max_recursion", "CODE_MODE_MAX_RECURSION", int, "beta_codemode", True
+    ),
+    AdvancedField(
         "code_mode_max_invocations",
         "CODE_MODE_MAX_INVOCATIONS",
         int,
         "beta_codemode",
         True,
     ),
-    (
+    AdvancedField(
         "code_mode_saved_tools_path",
         "CODE_MODE_SAVED_TOOLS_PATH",
         str,
@@ -870,12 +940,16 @@ _settings: Settings | None = None
 # validate incoming writes. Keep aligned with the matching ``Settings``
 # fields above — adding a fourth runtime-editable setting means a new
 # tuple entry plus matching addon ``config.yaml`` schema mirror.
-BACKUP_OVERRIDE_FIELDS: tuple[tuple[str, str, type], ...] = (
-    ("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
-    ("auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int),
-    ("auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int),
-    ("auto_backup_dir", "HAMCP_BACKUP_DIR", str),
-    (
+BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
+    BackupOverrideField("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
+    BackupOverrideField(
+        "auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int
+    ),
+    BackupOverrideField(
+        "auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int
+    ),
+    BackupOverrideField("auto_backup_dir", "HAMCP_BACKUP_DIR", str),
+    BackupOverrideField(
         "auto_backup_calendar_lookahead_days",
         "HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS",
         int,
@@ -1135,3 +1209,94 @@ def _reset_global_settings() -> None:
     """
     global _settings
     _settings = None
+
+
+# Import-time validator for cross-registry invariants (#1164).
+#
+# Catches a class of silent runtime bugs at module load:
+#  - registry rows referencing fields that don't exist on ``Settings``
+#    (rename / removal drift)
+#  - registries overlapping by name (same field applied by two
+#    ``_apply_*_overrides`` functions with potentially divergent
+#    coercion policies)
+#  - bounds entries pointing at non-numeric fields (would silently
+#    no-op in the apply loop)
+#  - choices entries pointing at non-str fields (same)
+#  - ``BETA_FEATURE_FIELDS`` referencing names not in
+#    ``FEATURE_FLAG_FIELDS`` (master gate would write to phantom
+#    Settings attributes)
+def _validate_registries() -> None:
+    settings_fields = set(Settings.model_fields.keys())
+
+    advanced_names = {f.field for f in ADVANCED_SETTINGS_FIELDS}
+    flag_names = {f.field for f in FEATURE_FLAG_FIELDS}
+    backup_names = {f.field for f in BACKUP_OVERRIDE_FIELDS}
+
+    # Every row must reference a real Settings field.
+    for registry_name, names in (
+        ("ADVANCED_SETTINGS_FIELDS", advanced_names),
+        ("FEATURE_FLAG_FIELDS", flag_names),
+        ("BACKUP_OVERRIDE_FIELDS", backup_names),
+    ):
+        missing = names - settings_fields
+        if missing:
+            raise RuntimeError(
+                f"{registry_name} references fields not on Settings: {sorted(missing)}"
+            )
+
+    # Registries must be name-disjoint to avoid double-apply with
+    # divergent policies.
+    overlaps = {
+        ("advanced", "flags"): advanced_names & flag_names,
+        ("advanced", "backup"): advanced_names & backup_names,
+        ("flags", "backup"): flag_names & backup_names,
+    }
+    for (a, b), shared in overlaps.items():
+        if shared:
+            raise RuntimeError(
+                f"Registry overlap between {a} and {b}: {sorted(shared)}. "
+                "Each field must be applied by exactly one of "
+                "_apply_feature_flag_overrides / _apply_advanced_overrides "
+                "/ _apply_backup_overrides."
+            )
+
+    # _ADVANCED_SETTINGS_BOUNDS keys must be advanced fields AND numeric.
+    advanced_by_name = {f.field: f for f in ADVANCED_SETTINGS_FIELDS}
+    for name in _ADVANCED_SETTINGS_BOUNDS:
+        if name not in advanced_by_name:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_BOUNDS[{name!r}] is not in "
+                "ADVANCED_SETTINGS_FIELDS"
+            )
+        if advanced_by_name[name].ftype not in (int, float):
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_BOUNDS[{name!r}] is on a non-numeric "
+                f"field (type={advanced_by_name[name].ftype.__name__})"
+            )
+
+    # _ADVANCED_SETTINGS_CHOICES keys must be advanced fields AND str.
+    for name in _ADVANCED_SETTINGS_CHOICES:
+        if name not in advanced_by_name:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_CHOICES[{name!r}] is not in "
+                "ADVANCED_SETTINGS_FIELDS"
+            )
+        if advanced_by_name[name].ftype is not str:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_CHOICES[{name!r}] is on a non-str "
+                f"field (type={advanced_by_name[name].ftype.__name__})"
+            )
+
+    # BETA_FEATURE_FIELDS must be a subset of FEATURE_FLAG_FIELDS
+    # (the master gate writes to them via setattr; phantom names would
+    # silently land on extras with no effect on the runtime gate).
+    beta_set = set(BETA_FEATURE_FIELDS)
+    not_in_flags = beta_set - flag_names
+    if not_in_flags:
+        raise RuntimeError(
+            f"BETA_FEATURE_FIELDS contains names not in FEATURE_FLAG_FIELDS: "
+            f"{sorted(not_in_flags)}"
+        )
+
+
+_validate_registries()

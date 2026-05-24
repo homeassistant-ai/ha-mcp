@@ -2128,7 +2128,8 @@ async function loadFeatureFlags() {
   let resp;
   try {
     resp = await fetch('./api/settings/features');
-  } catch (_e) {
+  } catch (err) {
+    console.error('loadFeatureFlags fetch failed:', err);
     // Surface as a row inside the panel rather than the page status —
     // the panel is collapsible and the user can ignore this if they
     // do not care about feature flags right now.
@@ -2147,7 +2148,8 @@ async function loadFeatureFlags() {
   let data;
   try {
     data = await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.error('loadFeatureFlags JSON parse failed:', err);
     document.getElementById('featuresBody').innerHTML =
       '<div class="feature-row"><div class="feature-help">' +
       'Feature flags response was not valid JSON.</div></div>';
@@ -3389,7 +3391,23 @@ async function saveAdvancedSettings() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(_advancedDirty),
     });
-    const data = await resp.json();
+    // JSON parse can fail on a 200 with mangled body (proxy injection,
+    // truncated response). Default to ``{restart_required: true}`` on
+    // success-with-garbage so the user still gets the restart banner;
+    // surface "save returned non-JSON" on non-OK.
+    let data;
+    try {
+      data = await resp.json();
+    } catch (parseErr) {
+      console.error('saveAdvancedSettings JSON parse failed:', parseErr);
+      if (resp.ok) {
+        data = {restart_required: true};
+      } else {
+        btn.disabled = false;
+        statusEl.textContent = `Save failed (HTTP ${resp.status}, non-JSON body)`;
+        return;
+      }
+    }
     btn.disabled = false;
     if (!resp.ok) {
       let msg = 'Save failed';
@@ -3410,8 +3428,16 @@ async function saveAdvancedSettings() {
       }
     }
     _advancedDirty = {};
-    // Refresh display so origins update (default → file, etc.).
-    loadAdvancedSettings();
+    // Refresh display so origins update (default → file, etc.). Await
+    // so a reload failure surfaces in the same status line as the save
+    // — otherwise the user sees "Saved." while the panel silently
+    // reverts to stale data.
+    try {
+      await loadAdvancedSettings();
+    } catch (reloadErr) {
+      console.error('post-save reload failed:', reloadErr);
+      statusEl.textContent = 'Saved (reload failed — refresh to verify).';
+    }
   } catch (err) {
     btn.disabled = false;
     statusEl.textContent = 'Network error: ' + String(err);

@@ -1076,3 +1076,120 @@ class TestBetaMasterToggleLiveRender:
             assert "dimmed" not in row_html, (
                 f"unexpected dimmed on master-on row: {row_html}"
             )
+
+
+class TestCodeModeNesting:
+    """JSDOM coverage for code-mode sub-numerics nested under
+    enable_code_mode in the Beta section (#1164 Chunk 3b)."""
+
+    def _payloads(self, master_on: bool, code_mode_on: bool) -> dict[str, dict]:
+        """Build /api/settings/features + /api/settings/advanced
+        responses for the two-gate matrix."""
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": master_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_code_mode": {
+                            "value": code_mode_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_CODE_MODE",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_code_mode"],
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "code_mode_max_duration",
+                            "env_var": "CODE_MODE_MAX_DURATION",
+                            "value": 30.0,
+                            "type": "float",
+                            "section": "beta_codemode",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1.0,
+                            "max": 300.0,
+                        }
+                    ]
+                },
+            },
+        }
+
+    def test_codemode_subrows_dimmed_when_master_off(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=False, code_mode_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, f"expected codemode-sub row in DOM; tail: {result.dom[-2000:]}"
+        # All code-mode-sub rows must be dimmed when master is off.
+        for row in cm_rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on codemode-sub row with master off: {row}"
+            )
+
+    def test_codemode_subrows_dimmed_when_code_mode_off(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=True, code_mode_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, "expected codemode-sub row"
+        for row in cm_rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on codemode-sub row with code_mode off: {row}"
+            )
+
+    def test_codemode_subrows_enabled_when_both_gates_on(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=True, code_mode_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, "expected codemode-sub row"
+        for row in cm_rows:
+            assert "dimmed" not in row, f"unexpected dimmed when both gates on: {row}"

@@ -333,6 +333,17 @@ def main() -> int:
             )
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
+            # Persistent "you lost your features" line so an operator
+            # who scrolled past the cryptic exception trace still sees
+            # what got silently reset. /data/options.json corruption
+            # would otherwise produce a one-line error followed by a
+            # working-but-defaulted addon and no other signal.
+            log_error(
+                "Addon config defaulted: every option (tool_search, "
+                "auto_backup_*, beta sub-flags, etc.) reverts to its "
+                "addon-schema default this boot. Inspect /data/options.json "
+                "and fix or delete it, then restart the addon."
+            )
 
     # Validate Supervisor token (needed for both ha-mcp auth below and the
     # options-persist call right after secret path resolution)
