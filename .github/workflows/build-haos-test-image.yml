@@ -28,7 +28,13 @@ on:
           to ``:HAOS_VERSION-<suffix>`` instead of ``:HAOS_VERSION-latest``
           — used by perf-iteration branches that need a non-latest tag
           they can point the e2e test workflows at without touching the
-          master-served image.
+          master-served image. Pointing the e2e lanes at the override is
+          a SEPARATE manual edit on the branch: change the ``tag=`` line
+          in the ``Try pulling from GHCR`` step of both
+          ``haos-e2e-tests.yml`` and ``haos-e2e-inaddon-tests.yml``.
+          Allowed character set is ``[A-Za-z0-9._-]+`` (OCI tag rules);
+          the ``Push image to GHCR`` step validates and fails fast on
+          anything else.
         type: string
         required: false
         default: 'latest'
@@ -158,32 +164,58 @@ jobs:
           retention-days: 14
 
       - name: Compress qcow2 in-format (qemu-img convert -c)
-        # Re-pack the qcow2 with in-format zlib compression before upload.
-        # The HAOS image is ~12 GB on disk after the bake, almost all of
-        # which is sparse-zeroed space from the ``qemu-img resize 32G``
-        # in ``fetch_haos_qcow2`` plus addon Docker layers. ``-c`` is the
-        # qcow2-native compression flag — the resulting file stays a
-        # standard qcow2 (same media type, same consumer code path), and
-        # qemu decompresses sectors lazily during VM I/O when the e2e
-        # workflow boots it. No upfront decompress step on the pull side.
+        # Re-pack the qcow2 with qcow2-native zlib *cluster* compression
+        # before upload. The post-bake file is ~12 GB *apparent* size on
+        # disk — sparse, with ~5 GB actually allocated; the rest is
+        # un-allocated holes from ``qemu-img resize 32G`` in
+        # ``fetch_haos_qcow2``. ORAS pushes/pulls
+        # ``application/octet-stream`` as a raw byte stream, so the
+        # sparse holes get serialised over the wire as actual zero bytes
+        # — the *apparent* size, not the allocated size, is what GHCR
+        # pull pays for.
         #
-        # Wins:
-        #   - ``oras push``/``oras pull`` wire bytes scale with the file
-        #     size; a ~3–5 GB compressed qcow2 cuts the 6-minute single-
-        #     stream GHCR pull on cache-miss runs to ~2 min.
-        #   - actions/cache also benefits: the existing zstdmt over a
-        #     compressed qcow2 still wins on the addon Docker layer bytes
-        #     that zstd hasn't already squashed.
+        # ``qemu-img convert -c -O qcow2`` re-encodes the data densely
+        # at the cluster level (default 64 KiB). The output stays a
+        # standard qcow2 (same OCI media-type, same consumer code path);
+        # QEMU decompresses clusters on-demand during VM I/O when the
+        # e2e workflow boots, so no upfront decompress step on the pull
+        # side. Trade-off worth knowing about: qcow2 cluster compression
+        # is read-only — the first write to any compressed cluster makes
+        # QEMU re-allocate it uncompressed in place. The e2e workflow's
+        # boot is read-heavy (HA starts, recorder DB rebuilds, addon
+        # containers come up), so write-side re-allocation cost is small
+        # relative to the pull-time saved, but it's why this convert
+        # pass lives at publish time and not at every consumer.
         #
-        # Cost: one extra ``qemu-img convert`` pass on the publish runner
-        # (~1–2 min on a 12 GB sparse qcow2), which only runs on
-        # master push / weekly cron / manual dispatch — not on PR runs.
+        # Measured at publish run 26361263298 step 11:
+        #   12 GB → 5.1 GB (2.3x ratio), convert pass took 6m 15s.
+        # First e2e run that consumed the result (runs 26361656780 +
+        # 26361656754) saw GHCR pull drop from ~6 min (uncompressed
+        # baseline) to 47–58 s.
+        #
+        # Cost: the convert pass adds ~6 min to the publish runner —
+        # paid only on master push / weekly cron / manual dispatch,
+        # not on PR runs.
         run: |
           orig_bytes=$(stat -c%s haos-test-image.qcow2)
-          qemu-img convert -p -c -O qcow2 \
+          qemu-img convert -c -O qcow2 \
             haos-test-image.qcow2 haos-test-image.qcow2.compressed
           mv haos-test-image.qcow2.compressed haos-test-image.qcow2
+          # Integrity gate before consumers see the file: catch torn
+          # writes (e.g. ``qemu-img convert`` killed mid-run after the
+          # output file already exists, exit-0 from the shell wrapper
+          # but file is truncated) and broken refcount tables.
+          # ``qemu-img check`` reads metadata + L1/L2 tables only — it
+          # does not stream the full image — so this is fast.
+          qemu-img check haos-test-image.qcow2
           new_bytes=$(stat -c%s haos-test-image.qcow2)
+          # Sanity floor: the baked HAOS image is gigabytes; anything
+          # under 1 GiB after compress is corruption ``qemu-img check``
+          # didn't catch. Fail before the moving tag points at bad bytes.
+          if [ "$new_bytes" -lt 1073741824 ]; then
+            echo "::error::compressed qcow2 suspiciously small: ${new_bytes} bytes"
+            exit 1
+          fi
           ratio=$(awk -v o="$orig_bytes" -v n="$new_bytes" 'BEGIN{printf "%.1f", o/n}')
           echo "qcow2 size before: $(numfmt --to=iec "$orig_bytes")"
           echo "qcow2 size after : $(numfmt --to=iec "$new_bytes")"
@@ -210,13 +242,21 @@ jobs:
         env:
           HAOS_VERSION: ${{ steps.haos_version.outputs.version }}
           SHORT_SHA: ${{ github.sha }}
-          # workflow_dispatch lets perf-iteration branches publish to a
-          # non-``latest`` moving tag (e.g. ``:17.3-haose2eefficiency``)
-          # so they can point the e2e test workflows at a candidate image
-          # without disturbing the master-served ``:HAOS_VERSION-latest``
-          # that every other PR pulls from.
+          # See the ``tag_suffix`` workflow_dispatch input at the top of
+          # this file for the override semantics and required edits on
+          # the consumer side. The ``|| 'latest'`` fallback covers the
+          # ``push:`` / ``schedule:`` triggers where
+          # ``github.event.inputs`` is null.
           TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || 'latest' }}
         run: |
+          # Validate the suffix against the OCI tag character set before
+          # building any tag strings — a typo like ``foo/bar``,
+          # ``:evil``, or a trailing space would otherwise surface as a
+          # confusing ``oras push`` error ten lines later.
+          if [[ ! "$TAG_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::TAG_SUFFIX must match [A-Za-z0-9._-]+ (OCI tag chars), got: '$TAG_SUFFIX'"
+            exit 1
+          fi
           short_sha="${SHORT_SHA:0:7}"
           versioned="${IMAGE_REPO}:${HAOS_VERSION}-${short_sha}"
           moving="${IMAGE_REPO}:${HAOS_VERSION}-${TAG_SUFFIX}"

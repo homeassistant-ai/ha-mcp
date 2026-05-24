@@ -162,6 +162,16 @@ jobs:
       # external lane save eliminates the wasted work without
       # changing what gets cached — both lanes still restore from the
       # shared key on the next run.
+      #
+      # The shared-key bet is safe because both lanes consume the SAME
+      # byte-identical qcow2: the cache key hashes the bake-input
+      # paths only, the qcow2 is built once at publish time and
+      # pulled identically by both lanes, and PR-level addon/source
+      # overrides happen *in-VM at test time* (see
+      # ``refresh_dev_addon_source_in_qcow2`` /
+      # ``refresh_recorder_in_qcow2`` in conftest.py) on each
+      # worker's per-worker overlay — never on the base qcow2 that
+      # gets cached.
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

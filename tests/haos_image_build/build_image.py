@@ -1397,11 +1397,18 @@ def build(work_dir: Path, output: Path) -> None:
     # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
     # the testcontainer's seed state into /config/ for the e2e suite.
     bake_test_state(qcow2)
-    # Skip post-build compression for now: empirically qemu-img convert -c
-    # only shrinks ~7 GB → ~7 GB (Docker layer contents don't compress well
-    # with zlib) but adds 9 min, and xz -9 -T0 adds >25 min. Just sparse-copy
-    # the raw qcow2. Image-size optimization (zstd? strip unused docker
-    # layers? slim addons?) is tracked separately as a follow-up.
+    # Output the qcow2 as-is (sparse copy, no compression). qcow2 in-format
+    # compression is a CI publish concern — handled by
+    # ``build-haos-test-image.yml``'s ``Compress qcow2 in-format`` step
+    # before the ``oras push`` (#1428). Local builds skip it deliberately:
+    # nothing downstream of ``build_image.py`` on the developer iteration
+    # path benefits from the smaller file, and the convert pass adds ~6 min
+    # per build. (The older comment here claimed ``~7 GB → ~7 GB`` compress
+    # ratio; that was for a smaller pre-#1379 addon set baked into a
+    # non-resized qcow2. The current image — 12 GB apparent / ~5 GB
+    # allocated after ``qemu-img resize 32G`` — compresses to 5.1 GB at
+    # publish time (measured run 26361263298 step 11, 2.3x ratio), which
+    # is the wire-bytes win the workflow step exists to capture.)
     LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(["cp", "--reflink=auto", str(qcow2), str(output)])
