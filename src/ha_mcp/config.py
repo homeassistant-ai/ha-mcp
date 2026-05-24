@@ -108,13 +108,12 @@ class Settings(BaseSettings):
     )
 
     # Master beta-features toggle (#1164). UI-only — intentionally not in
-    # any addon config.yaml schema. When False (default), the five beta
-    # sub-flags below are force-set to False in
-    # ``_apply_feature_flag_overrides`` regardless of their own env var /
-    # override-file value. When True, the sub-flags follow their own
-    # precedence. Set via the override file or via ENABLE_BETA_FEATURES
-    # env var; the UI surfaces it as a nested-section master in the
-    # Server Settings tab.
+    # any addon config.yaml schema. This field is the on-off switch the
+    # UI saves; the runtime force-set logic that uses ``BETA_FEATURE_FIELDS``
+    # below to gate the five beta sub-flags lives in
+    # ``_apply_feature_flag_overrides`` and is added in a follow-up commit
+    # in this PR. Until then, this field is inert — pydantic-loaded from
+    # the env var / override file but consulted by nothing.
     enable_beta_features: bool = Field(False, alias="ENABLE_BETA_FEATURES")
 
     # Managed YAML config editing — allows ha_config_set_yaml to add,
@@ -349,6 +348,10 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
+    # ``enable_code_mode`` was not in this tuple prior to #1164 — adding
+    # it here is what makes the override file (and the new web UI Server
+    # Settings tab) able to write the flag. Without this entry, the UI
+    # save logic would have nowhere to land the value.
     ("enable_code_mode", "ENABLE_CODE_MODE", bool),
 )
 
@@ -368,11 +371,12 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "tool_search_max_results": (2, 10),
 }
 
-# Beta sub-flags gated by ``enable_beta_features`` (#1164). Each is also
-# in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save logic
-# stays unchanged — this tuple is consulted ONLY by the master gate in
-# ``_apply_feature_flag_overrides`` to force-set them False when the
-# master is off.
+# Beta sub-flags gated by ``enable_beta_features`` (#1164). Consumed
+# by the master gate inside ``_apply_feature_flag_overrides``; that
+# gate logic is added in a follow-up commit in this PR. Each name is
+# also in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save
+# logic stays unchanged — this tuple is consulted ONLY by the master
+# gate, never by the per-field iteration.
 BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_yaml_config_editing",
     "enable_filesystem_tools",
@@ -398,7 +402,9 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
 #   continues to source them via ``FEATURE_FLAG_FIELDS`` so the per-field
 #   env-pin / addon-Supervisor routing logic stays unchanged for those rows.
 ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
-    # Connection — display only.
+    # Connection — URL/token are display-only (chicken-and-egg: if you
+    # could break the connection from the UI you couldn't use the same
+    # UI to fix it). timeout / max_retries / verify_ssl are editable.
     ("homeassistant_url", "HOMEASSISTANT_URL", str, "connection", False),
     ("homeassistant_token", "HOMEASSISTANT_TOKEN", str, "connection", False),
     ("timeout", "HA_TIMEOUT", int, "connection", True),
@@ -826,7 +832,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                 continue
             coerced: bool | int | str = bool(raw)
         elif ftype is int:
-            if not isinstance(raw, bool | int):
+            if isinstance(raw, bool) or not isinstance(raw, int):
                 logger.warning(
                     "backup_settings.json: %s expects int, got %s; ignoring",
                     field_name,
@@ -878,6 +884,12 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     "backup_settings.json: %s expects str, got %s; ignoring",
                     field_name,
                     type(raw).__name__,
+                )
+                continue
+            if "\x00" in raw:
+                logger.warning(
+                    "backup_settings.json: %s contains null byte; ignoring",
+                    field_name,
                 )
                 continue
             coerced = raw
