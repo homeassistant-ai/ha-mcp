@@ -96,6 +96,8 @@ class TestBuildSettingsHandlers:
             "policy_get_pending",
             "policy_post_approve",
             "policy_post_deny",
+            "policy_get_tool_schema",
+            "policy_get_value_source",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(
