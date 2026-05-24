@@ -77,6 +77,13 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
+    # Advanced settings panel (#1164) — Save button + status text in
+    # the Server Settings tab. Section containers (advConnection etc.)
+    # are populated dynamically via innerHTML so they don't bind
+    # top-level handlers; only advSaveBtn does.
+    "advSaveBtn",
+    "advSaveStatus",
+    "advSaveRow",
 ]
 
 

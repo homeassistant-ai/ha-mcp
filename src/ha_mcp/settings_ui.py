@@ -1779,6 +1779,14 @@ const BACKUP_FIELD_LABELS = {
     label: 'Retain per entity',
     help: 'Maximum snapshots kept per entity (1–10000). Older ones rotate out.',
   },
+  auto_backup_dir: {
+    label: 'Backup directory override',
+    help: 'Empty = default (/data/ha_mcp_backups in the add-on, $XDG_DATA_HOME/ha_mcp/backups otherwise). Override with an absolute path.',
+  },
+  auto_backup_calendar_lookahead_days: {
+    label: 'Calendar lookahead (days)',
+    help: 'How far ahead to query for calendar events when capturing pre-edit snapshots. Range 1–365.',
+  },
 };
 
 const BACKUP_ORIGIN_LABELS = {
@@ -1819,9 +1827,14 @@ function renderBackupConfig() {
     let controlHtml;
     if (typeof f.value === 'boolean') {
       controlHtml = `<input type="checkbox" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else if (typeof f.value === 'string') {
+      // Path / freeform string fields (auto_backup_dir).
+      controlHtml = `<input type="text" data-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
-      const min = f.field === 'auto_backup_throttle_minutes' ? 0 : 1;
-      const max = f.field === 'auto_backup_throttle_minutes' ? 1440 : 10000;
+      let min = 1;
+      let max = 10000;
+      if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
+      else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
       controlHtml = `<input type="number" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
@@ -1850,6 +1863,8 @@ async function saveBackupConfig() {
     if (!input) return;
     if (input.type === 'checkbox') {
       payload[f.field] = input.checked;
+    } else if (input.type === 'text') {
+      payload[f.field] = input.value;
     } else {
       const n = parseInt(input.value, 10);
       if (!isNaN(n)) payload[f.field] = n;
@@ -4137,32 +4152,41 @@ def build_settings_handlers(
         # master state would still be off — the runtime gate would force
         # them False anyway and the user should know the save was a
         # no-op rather than learning at next startup.
+        #
+        # Skip in addon mode: ``start.py`` auto-writes
+        # ``ENABLE_BETA_FEATURES=true`` whenever any beta sub-flag key
+        # appears in ``/data/options.json``, so the master will be on
+        # after the next addon boot regardless of what the override
+        # file says. Applying the gate here would block the existing
+        # dev addon save flow for users whose master env var hasn't
+        # been written yet (first save after addon install).
         from .config import BETA_FEATURE_FIELDS as _BETA_SUB
 
-        effective_master = bool(
-            raw_flags.get(
-                "enable_beta_features",
-                getattr(get_global_settings(), "enable_beta_features", False),
+        if not is_running_in_addon():
+            effective_master = bool(
+                raw_flags.get(
+                    "enable_beta_features",
+                    getattr(get_global_settings(), "enable_beta_features", False),
+                )
             )
-        )
-        beta_sub_writes = [
-            k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
-        ]
-        if beta_sub_writes and not effective_master:
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    (
-                        "Cannot enable beta sub-flag(s) "
-                        f"{', '.join(beta_sub_writes)} while the master "
-                        "'Enable beta features' toggle is off. Include "
-                        "enable_beta_features=true in the same save, or "
-                        "flip the master on first."
+            beta_sub_writes = [
+                k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
+            ]
+            if beta_sub_writes and not effective_master:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        (
+                            "Cannot enable beta sub-flag(s) "
+                            f"{', '.join(beta_sub_writes)} while the master "
+                            "'Enable beta features' toggle is off. Include "
+                            "enable_beta_features=true in the same save, or "
+                            "flip the master on first."
+                        ),
+                        context={"rejected": beta_sub_writes},
                     ),
-                    context={"rejected": beta_sub_writes},
-                ),
-                status_code=409,
-            )
+                    status_code=409,
+                )
 
         # Build the validated override dict. Reject unknown fields and
         # env-locked fields up front so the user gets a precise error
@@ -4983,6 +5007,19 @@ def build_settings_handlers(
                     1 <= value <= 10_000
                 ):
                     return {}, "auto_backup_retain_per_entity must be 1..10000"
+                if field_name == "auto_backup_calendar_lookahead_days" and not (
+                    1 <= value <= 365
+                ):
+                    return (
+                        {},
+                        "auto_backup_calendar_lookahead_days must be 1..365",
+                    )
+            elif ftype is str:
+                if not isinstance(raw, str):
+                    return {}, f"Invalid string for {field_name}: {raw!r}"
+                if "\x00" in raw:
+                    return {}, f"{field_name} must not contain null bytes"
+                value = raw
             else:
                 continue
             clean[field_name] = value

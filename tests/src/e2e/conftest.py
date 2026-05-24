@@ -1187,6 +1187,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # ensures the WebSocket pool and settings pick up the HAOS URL.
             os.environ["HOMEASSISTANT_URL"] = base_url
             os.environ["HOMEASSISTANT_TOKEN"] = token
+            # #1164: beta sub-flags now require the master to be on too.
+            os.environ["ENABLE_BETA_FEATURES"] = "true"
             os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
@@ -1575,7 +1577,9 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # Set environment variables for the dynamic URL so WebSocket client uses correct port
         os.environ["HOMEASSISTANT_URL"] = base_url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
-        # Enable feature flags for e2e tests
+        # Enable feature flags for e2e tests. #1164: beta sub-flags now
+        # require the master to also be on.
+        os.environ["ENABLE_BETA_FEATURES"] = "true"
         os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"

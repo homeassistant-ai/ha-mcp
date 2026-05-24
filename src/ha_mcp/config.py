@@ -109,12 +109,12 @@ class Settings(BaseSettings):
     )
 
     # Master beta-features toggle (#1164). UI-only — intentionally not in
-    # any addon config.yaml schema. This field is the on-off switch the
-    # UI saves; the runtime force-set logic that uses ``BETA_FEATURE_FIELDS``
-    # below to gate the five beta sub-flags lives in
-    # ``_apply_feature_flag_overrides`` and is added in a follow-up commit
-    # in this PR. Until then, this field is inert — pydantic-loaded from
-    # the env var / override file but consulted by nothing.
+    # any addon config.yaml schema. Consumed by the master gate in
+    # ``_apply_feature_flag_overrides``, which force-sets the five
+    # ``BETA_FEATURE_FIELDS`` sub-flags to False whenever this master is
+    # off. Dev addon ``start.py`` auto-writes ``ENABLE_BETA_FEATURES=true``
+    # whenever any beta sub-flag key is present in ``/data/options.json``
+    # so the dev-addon UX is unchanged.
     enable_beta_features: bool = Field(False, alias="ENABLE_BETA_FEATURES")
 
     # Managed YAML config editing — allows ha_config_set_yaml to add,
@@ -373,9 +373,8 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
 }
 
 # Beta sub-flags gated by ``enable_beta_features`` (#1164). Consumed
-# by the master gate inside ``_apply_feature_flag_overrides``; that
-# gate logic is added in a follow-up commit in this PR. Each name is
-# also in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save
+# by the master gate inside ``_apply_feature_flag_overrides``. Each name
+# is also in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save
 # logic stays unchanged — this tuple is consulted ONLY by the master
 # gate, never by the per-field iteration.
 BETA_FEATURE_FIELDS: tuple[str, ...] = (
@@ -432,12 +431,12 @@ ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
     ("log_level", "LOG_LEVEL", str, "diagnostics", True),
     ("debug", "DEBUG", bool, "diagnostics", True),
     # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
-    # are NOT in this tuple. They are added to ``BACKUP_OVERRIDE_FIELDS``
-    # (sub-task 1.1.1b below) so they persist to ``backup_settings.json``
-    # alongside the other auto-backup settings.
+    # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined
+    # below) so they persist to ``backup_settings.json`` alongside the
+    # other auto-backup settings.
     # Code-mode sub-numerics (only meaningful when enable_code_mode is on).
     # editable=True but the UI nests them under the beta section's
-    # enable_code_mode row so they're hidden when code mode is off.
+    # enable_code_mode row, dimmed and disabled when code mode is off.
     ("code_mode_max_duration", "CODE_MODE_MAX_DURATION", float, "beta_codemode", True),
     ("code_mode_max_memory", "CODE_MODE_MAX_MEMORY", int, "beta_codemode", True),
     ("code_mode_max_recursion", "CODE_MODE_MAX_RECURSION", int, "beta_codemode", True),
@@ -509,9 +508,11 @@ def get_feature_flag_origin(env_name: str) -> str:
       pydantic field default applies. Web UI edits create the file.
 
     For the five fields in ``BETA_FEATURE_FIELDS`` and the master
-    ``ENABLE_BETA_FEATURES``, ``"addon"`` is never returned — those
-    fields are not in any addon config.yaml schema (#1164). They follow
-    the standalone precedence in either mode.
+    ``ENABLE_BETA_FEATURES``, ``"addon"`` is never returned (#1164). The
+    master is not in any addon schema; the five sub-flags exist in the
+    dev addon schema (where ``start.py`` exports them as env vars, so
+    ``origin='env'`` is returned in dev addon mode). In stable addon
+    and non-addon deployments, they follow the env/file/default chain.
     """
     field_name = next(
         (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
@@ -711,14 +712,14 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
     registry) are NEVER applied — chicken-and-egg safeguard for
     connection settings (#1164).
 
-    Addon-mode behavior: most advanced fields ARE in the addon's
-    ``config.yaml`` schema (e.g. ``backup_hint``, ``verify_ssl``,
-    ``enabled_tool_modules``). For those, ``start.py`` exports the
-    corresponding env var on every boot and the env-var-wins check
-    below correctly skips them — the override file is effectively
-    ignored. For fields not in any addon schema (the ``code_mode_*``
-    sub-numerics and ``mcp_server_version``), the override file is
-    the only authoritative source and applies in either mode.
+    Addon-mode behavior: two advanced fields are in addon ``config.yaml``
+    schemas — ``backup_hint`` and ``verify_ssl`` (both stable and dev).
+    For those, ``start.py`` exports the env var on every boot and the
+    env-var-wins check below correctly skips them. All other advanced
+    fields (code_mode_* sub-numerics, mcp_server_*, log_level, debug,
+    enabled_tool_modules, fuzzy_threshold, etc.) are NOT in any addon
+    schema; the override file is the authoritative source and applies
+    in either deployment mode.
     """
     overrides = _read_feature_flag_override_file()
     if not overrides:
