@@ -1256,7 +1256,9 @@ def _op_delete_where(
             )
         )
     new_working = [
-        it for it in working if not (isinstance(it, dict) and it.get(field) == value)
+        it
+        for it in working
+        if not (isinstance(it, dict) and field in it and it.get(field) == value)
     ]
     removed = len(working) - len(new_working)
     entry: dict[str, Any] = {"field": field, "value": value, "count": removed}
