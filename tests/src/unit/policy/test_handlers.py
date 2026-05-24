@@ -27,19 +27,21 @@ def test_get_config_returns_default(tmp_path):
     c = make_app(tmp_path, ApprovalQueue())
     r = c.get("/api/policy/config")
     assert r.status_code == 200
-    assert r.json()["enabled"] is False
+    assert r.json()["rules"] == []
 
 
 def test_put_config_roundtrip(tmp_path):
     c = make_app(tmp_path, ApprovalQueue())
-    body = Policy(enabled=True, rules=[Rule(tool_name="ha_x")]).model_dump(mode="json")
+    body = Policy(rules=[Rule(tool_name="ha_x")]).model_dump(mode="json")
     assert c.put("/api/policy/config", json=body).status_code == 200
-    assert c.get("/api/policy/config").json()["enabled"] is True
+    rules = c.get("/api/policy/config").json()["rules"]
+    assert len(rules) == 1
+    assert rules[0]["tool_name"] == "ha_x"
 
 
 def test_put_config_validation_error_returns_400(tmp_path):
     c = make_app(tmp_path, ApprovalQueue())
-    r = c.put("/api/policy/config", json={"enabled": "not-a-bool"})
+    r = c.put("/api/policy/config", json={"wait_seconds": "not-an-int"})
     assert r.status_code == 400
 
 
@@ -167,16 +169,18 @@ def test_put_with_stale_version_returns_409(tmp_path):
     """
     c = make_app(tmp_path, ApprovalQueue())
     # First write: starts at version=0 → on-disk becomes 1.
-    body0 = Policy(enabled=True).model_dump(mode="json")
+    body0 = Policy(rules=[Rule(tool_name="ha_first")]).model_dump(mode="json")
     assert c.put("/api/policy/config", json=body0).status_code == 200
     # Second writer carries the old version=0 instead of re-reading.
-    stale = Policy(enabled=False, version=0).model_dump(mode="json")
+    stale = Policy(rules=[Rule(tool_name="ha_second")], version=0).model_dump(
+        mode="json"
+    )
     r = c.put("/api/policy/config", json=stale)
     assert r.status_code == 409
     payload = r.json()
     assert "policy version mismatch" in payload["error"]
     assert payload["current_version"] == 1
-    assert payload["current_policy"]["enabled"] is True
+    assert payload["current_policy"]["rules"][0]["tool_name"] == "ha_first"
 
 
 def test_get_pending_returns_full_shape(tmp_path):

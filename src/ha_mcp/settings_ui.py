@@ -959,9 +959,7 @@ async function loadPolicyState() {
   // policyState.enabled mirrors the addon-config flag
   // (enable_tool_security_policies) — the single source of truth for
   // whether the middleware is active. Read it from /api/settings/features
-  // (where it appears via FEATURE_FLAG_FIELDS) rather than Policy.enabled
-  // in tool_policy.json, which has no UI surface and would always look
-  // false even when the addon-config flag is on.
+  // where it appears via FEATURE_FLAG_FIELDS.
   try {
     const fresp = await fetch('./api/settings/features');
     if (fresp.ok) {

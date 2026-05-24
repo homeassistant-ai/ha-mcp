@@ -92,7 +92,6 @@ class Policy(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    enabled: bool = False
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)

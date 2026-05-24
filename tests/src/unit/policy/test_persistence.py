@@ -31,7 +31,7 @@ def test_save_and_roundtrip(tmp_path: Path):
 
 
 def test_save_writes_atomically(tmp_path: Path):
-    save_policy(tmp_path, Policy(enabled=True))
+    save_policy(tmp_path, Policy())
     assert (tmp_path / POLICY_FILENAME).exists()
     # tmpfile should not survive
     tmp_files = list(tmp_path.glob(f".{POLICY_FILENAME}.*"))
@@ -48,7 +48,6 @@ def test_serialized_shape_is_stable(tmp_path: Path):
     save_policy(tmp_path, Policy())
     data = json.loads((tmp_path / POLICY_FILENAME).read_text())
     assert set(data.keys()) == {
-        "enabled",
         "wait_seconds",
         "approval_ttl_minutes",
         "rules",

@@ -88,7 +88,7 @@ class PolicyMiddleware(Middleware):
         name = context.message.name
         args = context.message.arguments or {}
 
-        if not policy.enabled or name in PROXY_META_TOOLS:
+        if name in PROXY_META_TOOLS:
             return await call_next(context)
 
         if evaluate(name, args, policy) != Verdict.REQUIRE_APPROVAL:

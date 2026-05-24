@@ -33,8 +33,8 @@ def queue():
 
 
 @pytest.mark.anyio
-async def test_disabled_policy_passes_through(queue):
-    mw = PolicyMiddleware(policy_provider=lambda: Policy(enabled=False), queue=queue)
+async def test_empty_policy_passes_through(queue):
+    mw = PolicyMiddleware(policy_provider=lambda: Policy(), queue=queue)
     call_next = AsyncMock(return_value="real_result")
     result = await mw.on_call_tool(
         make_context("ha_call_service", {"domain": "lock"}), call_next
@@ -44,7 +44,7 @@ async def test_disabled_policy_passes_through(queue):
 
 @pytest.mark.anyio
 async def test_proxy_meta_tools_pass_through(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="*")])
+    pol = Policy(rules=[Rule(tool_name="*")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock(return_value="proxy_result")
     for name in PROXY_META_TOOLS:
@@ -54,7 +54,7 @@ async def test_proxy_meta_tools_pass_through(queue):
 
 @pytest.mark.anyio
 async def test_no_matching_rule_passes_through(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_other")])
+    pol = Policy(rules=[Rule(tool_name="ha_other")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock(return_value="ok")
     result = await mw.on_call_tool(make_context("ha_call_service"), call_next)
@@ -63,7 +63,7 @@ async def test_no_matching_rule_passes_through(queue):
 
 @pytest.mark.anyio
 async def test_remembered_approval_passes_through(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     args = {"domain": "lock"}
     queue.remember("ha_call_service", compute_args_hash(args), minutes=5)
@@ -74,7 +74,7 @@ async def test_remembered_approval_passes_through(queue):
 
 @pytest.mark.anyio
 async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     args = {"domain": "lock"}
     entry = queue.create(
@@ -92,9 +92,7 @@ async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
 
 @pytest.mark.anyio
 async def test_block_then_approve_returns_real_result(queue):
-    pol = Policy(
-        enabled=True, wait_seconds=5, rules=[Rule(tool_name="ha_call_service")]
-    )
+    pol = Policy(wait_seconds=5, rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock(return_value="real_result")
 
@@ -114,9 +112,7 @@ async def test_block_then_approve_returns_real_result(queue):
 
 @pytest.mark.anyio
 async def test_block_then_deny_raises_denied(queue):
-    pol = Policy(
-        enabled=True, wait_seconds=5, rules=[Rule(tool_name="ha_call_service")]
-    )
+    pol = Policy(wait_seconds=5, rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock()
 
@@ -149,7 +145,7 @@ async def test_block_then_deny_raises_denied(queue):
 
 @pytest.mark.anyio
 async def test_timeout_raises_pending_error_and_keeps_entry(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     call_next = AsyncMock()
 
@@ -170,7 +166,7 @@ async def test_recall_after_approval_executes(queue):
     """The crucial property: LLM re-calls same tool+args → middleware consumes
     the now-approved entry and proceeds. Strict args-hash binding ensures
     a re-call with mutated args would NOT pick up this approval."""
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     call_next = AsyncMock(return_value="ok")
     args = {"domain": "lock", "service": "unlock"}
@@ -191,7 +187,7 @@ async def test_recall_after_approval_executes(queue):
 
 @pytest.mark.anyio
 async def test_recall_with_mutated_args_creates_new_pending(queue):
-    pol = Policy(enabled=True, rules=[Rule(tool_name="ha_call_service")])
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     call_next = AsyncMock(return_value="ok")
 
@@ -224,7 +220,6 @@ async def test_pending_error_reports_remaining_not_total_ttl(queue):
     from datetime import timedelta
 
     pol = Policy(
-        enabled=True,
         approval_ttl_minutes=5,
         rules=[Rule(tool_name="ha_call_service")],
     )
@@ -281,7 +276,6 @@ async def test_corrupt_policy_fails_closed_with_structured_error(queue):
 @pytest.mark.anyio
 async def test_remember_minutes_caches_for_subsequent_calls(queue):
     pol = Policy(
-        enabled=True,
         rules=[
             Rule(tool_name="ha_call_service", remember_minutes=10),
         ],
@@ -324,9 +318,7 @@ async def test_wait_loop_wakes_on_event_not_polling(queue):
     """
     import time
 
-    pol = Policy(
-        enabled=True, wait_seconds=30, rules=[Rule(tool_name="ha_call_service")]
-    )
+    pol = Policy(wait_seconds=30, rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
     call_next = AsyncMock(return_value="ok")
 
@@ -357,7 +349,6 @@ async def test_multi_rule_first_match_wins_for_remember_minutes(queue):
     and the other tail-first, or one short-circuits on a later rule).
     """
     pol = Policy(
-        enabled=True,
         rules=[
             Rule(tool_name="ha_call_service", remember_minutes=10),  # first match
             Rule(tool_name="ha_call_service", remember_minutes=999),

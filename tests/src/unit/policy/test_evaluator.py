@@ -112,17 +112,12 @@ class TestMatchRule:
 
 # --- evaluate ---
 class TestEvaluate:
-    def test_disabled_policy_allows_everything(self):
-        p = Policy(enabled=False, rules=[Rule(tool_name="*")])
-        assert evaluate("ha_call_service", {}, p) == Verdict.ALLOW
-
     def test_no_rules_returns_allow(self):
-        p = Policy(enabled=True)
+        p = Policy()
         assert evaluate("ha_call_service", {}, p) == Verdict.ALLOW
 
     def test_rule_match_returns_require(self):
         p = Policy(
-            enabled=True,
             rules=[
                 Rule(
                     tool_name="ha_call_service",
@@ -139,7 +134,6 @@ class TestEvaluate:
     def test_first_match_wins(self):
         """Rules evaluated in order; caller finds the matching rule's lifetime via find_matching_rule."""
         p = Policy(
-            enabled=True,
             rules=[
                 Rule(tool_name="ha_call_service", remember_minutes=10),
                 Rule(tool_name="ha_call_service", remember_minutes=999),
