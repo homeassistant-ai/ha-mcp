@@ -1919,7 +1919,7 @@ const FEATURE_META = {
   },
   enable_tool_security_policies: {
     label: "Enable Tool Security Policies",
-    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument predicates are configured in the Tool Security Policies tab. Requires restart to take effect.",
+    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
   },
 };
 
@@ -2152,7 +2152,7 @@ function renderPolicyCard(toolName, rule) {
   )).join('');
   const emptyHint = rule.when.length === 0
     ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
-      '(no predicates — rule matches every call to this tool)</em></li>'
+      '(no conditions — rule matches every call to this tool)</em></li>'
     : '';
   card.innerHTML =
     '<div class="policy-rule-header">' +
@@ -2161,10 +2161,10 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<div class="policy-rule-predicates">' +
       '<label class="features-sub" style="display:block;margin-bottom:4px">' +
-        'Require approval when: (all must match — empty list = always)' +
+        'Require approval when ALL of these conditions match (no conditions = always require approval):' +
       '</label>' +
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
-      '<button class="policy-add-predicate">+ Add predicate</button>' +
+      '<button class="policy-add-predicate">+ Add condition</button>' +
       '<div class="policy-predicate-form" style="display:none;">' +
         '<select class="policy-predicate-op">' +
           '<option value="eq">eq</option>' +
@@ -2177,10 +2177,13 @@ function renderPolicyCard(toolName, rule) {
           '<option value="gt">gt</option>' +
           '<option value="lt">lt</option>' +
         '</select>' +
-        '<input type="text" class="policy-predicate-path" placeholder="args.domain">' +
-        '<input type="text" class="policy-predicate-value" ' +
-          'placeholder="JSON: &quot;lock&quot; or [&quot;lock&quot;,&quot;alarm&quot;]">' +
-        '<button class="policy-predicate-form-save">Save predicate</button>' +
+        '<select class="policy-predicate-path-select">' +
+          '<option value="">(loading paths...)</option>' +
+        '</select>' +
+        '<input type="text" class="policy-predicate-path-custom" ' +
+          'placeholder="args.foo" style="display:none">' +
+        '<span class="policy-predicate-value-slot"></span>' +
+        '<button class="policy-predicate-form-save">Save condition</button>' +
         '<button class="policy-predicate-form-cancel">Cancel</button>' +
         '<div class="policy-predicate-form-error" style="display:none;"></div>' +
       '</div>' +
@@ -2230,32 +2233,209 @@ function renderPolicyCard(toolName, rule) {
 
   const formEl = card.querySelector('.policy-predicate-form');
   const opEl = formEl.querySelector('.policy-predicate-op');
-  const pathEl = formEl.querySelector('.policy-predicate-path');
-  const valueEl = formEl.querySelector('.policy-predicate-value');
+  const pathSelectEl = formEl.querySelector('.policy-predicate-path-select');
+  const pathCustomEl = formEl.querySelector('.policy-predicate-path-custom');
+  const valueSlotEl = formEl.querySelector('.policy-predicate-value-slot');
   const errorEl = formEl.querySelector('.policy-predicate-form-error');
   let editingIdx = -1;
+  // Tool schema is fetched lazily on first form-open and cached on
+  // the card so reopening the form doesn't refetch.
+  let toolSchema = null;
+  // value-source choice cache: { source_key: [values] }
+  const valueChoiceCache = {};
 
-  const updateValueVisibility = () => {
-    valueEl.style.display = (opEl.value === 'exists') ? 'none' : '';
+  const FREE_TEXT_OPT = '__custom__';
+
+  const currentPath = () => (
+    pathSelectEl.value === FREE_TEXT_OPT
+      ? pathCustomEl.value.trim()
+      : pathSelectEl.value
+  );
+
+  const populatePathSelect = (selectedPath) => {
+    const paths = (toolSchema && toolSchema.paths) || [];
+    let html = '';
+    if (paths.length === 0) {
+      html += '<option value="">(no schema — type a path)</option>';
+    } else {
+      html += '<option value="">(pick an argument)</option>';
+      for (const p of paths) {
+        html += '<option value="' + escapeHtml(p.path) + '">' +
+          escapeHtml(p.label) +
+          (p.required ? ' *' : '') +
+          (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
+          '</option>';
+      }
+    }
+    html += '<option value="' + FREE_TEXT_OPT + '">(other — type a path)</option>';
+    pathSelectEl.innerHTML = html;
+
+    // If the existing predicate uses a path the schema doesn't know
+    // about (read-only tool, free-text from earlier, removed arg),
+    // drop into custom mode automatically so we don't silently clobber
+    // the existing value.
+    if (selectedPath) {
+      const match = paths.find(p => p.path === selectedPath);
+      if (match) {
+        pathSelectEl.value = selectedPath;
+        pathCustomEl.style.display = 'none';
+        pathCustomEl.value = '';
+      } else {
+        pathSelectEl.value = FREE_TEXT_OPT;
+        pathCustomEl.style.display = '';
+        pathCustomEl.value = selectedPath;
+      }
+    } else {
+      pathSelectEl.value = '';
+      pathCustomEl.style.display = 'none';
+      pathCustomEl.value = '';
+    }
   };
-  opEl.addEventListener('change', updateValueVisibility);
 
-  const openForm = (idx) => {
+  const loadValueChoices = async (sourceKey) => {
+    if (valueChoiceCache[sourceKey]) return valueChoiceCache[sourceKey];
+    try {
+      const r = await fetch('./api/policy/value-source?source=' +
+        encodeURIComponent(sourceKey));
+      if (!r.ok) return null;
+      const data = await r.json();
+      const values = Array.isArray(data.values) ? data.values : [];
+      valueChoiceCache[sourceKey] = values;
+      return values;
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  // Render the value control inside valueSlotEl based on current op +
+  // path. Calls back with the populated control so the save handler
+  // can read it via valueSlotEl.querySelector(...).
+  const renderValueControl = async (existingValue) => {
+    const op = opEl.value;
+    const path = currentPath();
+    if (op === 'exists') {
+      valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
+        '(no value needed for op=exists)</em>';
+      return;
+    }
+    const sourceKey = (toolSchema && toolSchema.value_sources)
+      ? toolSchema.value_sources[path]
+      : null;
+    const isMulti = (op === 'in' || op === 'not_in');
+    const isSingleChoice = (op === 'eq' || op === 'neq');
+    if (sourceKey && (isMulti || isSingleChoice)) {
+      valueSlotEl.innerHTML = '<em style="color:var(--text-secondary);font-size:0.78rem">' +
+        'Loading choices…</em>';
+      const choices = await loadValueChoices(sourceKey);
+      if (!choices) {
+        // Fall back to free text if the fetch failed — the user can
+        // still author the rule by hand.
+        renderFreeTextValue(existingValue);
+        return;
+      }
+      const existingArr = Array.isArray(existingValue)
+        ? existingValue
+        : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
+      let html = '<select class="policy-predicate-value-control"' +
+        (isMulti ? ' multiple size="6" style="min-width:200px"' : '') +
+        '>';
+      if (!isMulti) {
+        html += '<option value="">(pick a value)</option>';
+      }
+      for (const c of choices) {
+        const selected = existingArr.includes(c) ? ' selected' : '';
+        html += '<option value="' + escapeHtml(String(c)) + '"' + selected + '>' +
+          escapeHtml(String(c)) + '</option>';
+      }
+      html += '</select>';
+      valueSlotEl.innerHTML = html;
+      return;
+    }
+    renderFreeTextValue(existingValue);
+  };
+
+  const renderFreeTextValue = (existingValue) => {
+    const op = opEl.value;
+    const placeholder = (op === 'in' || op === 'not_in')
+      ? 'JSON list: [&quot;lock&quot;,&quot;alarm&quot;]'
+      : 'JSON: &quot;lock&quot; or 100 or true';
+    const initial = (existingValue === undefined || existingValue === null)
+      ? ''
+      : JSON.stringify(existingValue);
+    valueSlotEl.innerHTML = '<input type="text" ' +
+      'class="policy-predicate-value-control policy-predicate-value" ' +
+      'placeholder="' + placeholder + '" ' +
+      'value="' + escapeHtml(initial) + '">';
+  };
+
+  const readValueControl = () => {
+    const ctrl = valueSlotEl.querySelector('.policy-predicate-value-control');
+    if (!ctrl) return {ok: true, value: undefined};
+    if (ctrl.tagName === 'SELECT') {
+      if (ctrl.multiple) {
+        const picked = Array.from(ctrl.selectedOptions).map(o => o.value);
+        if (picked.length === 0) {
+          return {ok: false, error: 'pick at least one value'};
+        }
+        return {ok: true, value: picked};
+      }
+      if (!ctrl.value) {
+        return {ok: false, error: 'pick a value'};
+      }
+      return {ok: true, value: ctrl.value};
+    }
+    const raw = ctrl.value.trim();
+    if (!raw) {
+      return {ok: false, error: 'value is required (use JSON: "lock", ["a","b"], 100, true)'};
+    }
+    try {
+      return {ok: true, value: JSON.parse(raw)};
+    } catch (e) {
+      return {ok: false, error: 'Invalid JSON: ' + e.message};
+    }
+  };
+
+  const fetchToolSchema = async () => {
+    if (toolSchema !== null) return toolSchema;
+    try {
+      const r = await fetch('./api/policy/tool-schema?name=' +
+        encodeURIComponent(toolName));
+      if (r.ok) {
+        toolSchema = await r.json();
+      } else {
+        // 503/404/etc: server can't introspect (sidecar / tool not
+        // found). Use an empty schema so the UI still works via free text.
+        toolSchema = {paths: [], value_sources: {}};
+      }
+    } catch (_e) {
+      toolSchema = {paths: [], value_sources: {}};
+    }
+    return toolSchema;
+  };
+
+  opEl.addEventListener('change', () => renderValueControl(undefined));
+  pathSelectEl.addEventListener('change', () => {
+    pathCustomEl.style.display = (pathSelectEl.value === FREE_TEXT_OPT) ? '' : 'none';
+    renderValueControl(undefined);
+  });
+  pathCustomEl.addEventListener('input', () => renderValueControl(undefined));
+
+  const openForm = async (idx) => {
     editingIdx = idx;
     errorEl.style.display = 'none';
     errorEl.textContent = '';
+    formEl.style.display = '';
+    await fetchToolSchema();
     if (idx >= 0) {
       const p = rule.when[idx];
       opEl.value = p.op || 'eq';
-      pathEl.value = p.path || '';
-      valueEl.value = (p.value === undefined || p.op === 'exists') ? '' : JSON.stringify(p.value);
+      populatePathSelect(p.path || '');
+      await renderValueControl(p.value);
     } else {
       opEl.value = 'eq';
-      pathEl.value = '';
-      valueEl.value = '';
+      populatePathSelect('');
+      await renderValueControl(undefined);
     }
-    updateValueVisibility();
-    formEl.style.display = '';
   };
 
   card.querySelector('.policy-add-predicate').addEventListener('click', () => openForm(-1));
@@ -2280,7 +2460,7 @@ function renderPolicyCard(toolName, rule) {
 
   formEl.querySelector('.policy-predicate-form-save').addEventListener('click', () => {
     const op = opEl.value;
-    const path = pathEl.value.trim();
+    const path = currentPath();
     if (!path) {
       errorEl.textContent = 'path is required';
       errorEl.style.display = '';
@@ -2288,19 +2468,13 @@ function renderPolicyCard(toolName, rule) {
     }
     const predicate = {path: path, op: op};
     if (op !== 'exists') {
-      const raw = valueEl.value.trim();
-      if (!raw) {
-        errorEl.textContent = 'value is required (use JSON: "lock", ["a","b"], 100, true)';
+      const parsed = readValueControl();
+      if (!parsed.ok) {
+        errorEl.textContent = parsed.error;
         errorEl.style.display = '';
         return;
       }
-      try {
-        predicate.value = JSON.parse(raw);
-      } catch (e) {
-        errorEl.textContent = 'Invalid JSON: ' + e.message;
-        errorEl.style.display = '';
-        return;
-      }
+      predicate.value = parsed.value;
     }
     if (editingIdx >= 0) {
       rule.when[editingIdx] = predicate;
@@ -2581,6 +2755,8 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         "policy_get_pending": unavailable,
         "policy_post_approve": unavailable,
         "policy_post_deny": unavailable,
+        "policy_get_tool_schema": unavailable,
+        "policy_get_value_source": unavailable,
     }
 
 
@@ -3902,6 +4078,7 @@ def build_settings_handlers(
             build_policy_handlers(
                 data_dir=get_data_dir(),
                 queue=approval_queue,
+                server=server,
             )
         )
     else:
@@ -4012,6 +4189,12 @@ def register_settings_routes(
         mcp.custom_route("/api/policy/deny", methods=["POST"])(
             handlers["policy_post_deny"]
         )
+        mcp.custom_route("/api/policy/tool-schema", methods=["GET"])(
+            handlers["policy_get_tool_schema"]
+        )
+        mcp.custom_route("/api/policy/value-source", methods=["GET"])(
+            handlers["policy_get_value_source"]
+        )
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
@@ -4079,4 +4262,10 @@ def register_settings_routes(
         )
         mcp.custom_route(f"{secret_prefix}/api/policy/deny", methods=["POST"])(
             handlers["policy_post_deny"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/tool-schema", methods=["GET"])(
+            handlers["policy_get_tool_schema"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/policy/value-source", methods=["GET"])(
+            handlers["policy_get_value_source"]
         )

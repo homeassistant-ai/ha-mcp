@@ -631,6 +631,16 @@ def _build_app(
             handlers["policy_post_deny"],
             methods=["POST"],
         ),
+        Route(
+            f"{secret_prefix}/api/policy/tool-schema",
+            handlers["policy_get_tool_schema"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/value-source",
+            handlers["policy_get_value_source"],
+            methods=["GET"],
+        ),
     ]
 
     # /shutdown — POST endpoint that drops the disable sentinel and
