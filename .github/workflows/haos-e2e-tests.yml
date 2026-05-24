@@ -195,6 +195,10 @@ jobs:
         # local-build path AND a successful GHCR pull. Without saving on
         # the GHCR-served branch, the actions/cache entry stays empty
         # forever and every future run pays the GHCR pull cost again.
+        # This is the sole writer for the shared cache key (#1407 +
+        # #1428) — the inaddon lane intentionally doesn't save, see the
+        # block comment at the same position in
+        # ``haos-e2e-inaddon-tests.yml``.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
