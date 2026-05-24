@@ -785,6 +785,35 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Advanced settings sections (#1164) — one row per
+     ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
+     matches the .feature-row treatment so the Server Settings tab
+     reads as one coherent surface. */
+  .adv-section-title { font-size: 0.85rem; font-weight: 600;
+    color: var(--text-secondary); margin: 20px 0 4px; text-transform: uppercase;
+    letter-spacing: 0.05em; }
+  .adv-section { border-top: 1px solid var(--border); }
+  .adv-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .adv-row:first-child { border-top: none; }
+  .adv-row.locked .adv-name { color: var(--text-secondary); }
+  .adv-info { flex: 1; min-width: 0; }
+  .adv-name { font-size: 0.9rem; font-weight: 500; }
+  .adv-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .adv-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .adv-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .adv-control { flex-shrink: 0; display: flex; align-items: center; }
+  .adv-control input[type="text"],
+  .adv-control input[type="number"],
+  .adv-control select { padding: 4px 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    font-size: 0.85rem; min-width: 120px; }
+  .adv-control input:disabled,
+  .adv-control select:disabled { opacity: 0.4; cursor: not-allowed; }
+  .adv-control input[type="checkbox"]:disabled { opacity: 0.4; cursor: not-allowed; }
   /* Tool Security Policies — per-tool card layout.
      Cards reuse the surface/border variables already in use elsewhere
      so they read consistently with backup-row / group blocks. */
@@ -878,6 +907,23 @@ _SETTINGS_HTML = (
     to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
   </div>
   <div id="featuresBody"></div>
+
+  <!-- Advanced settings sections (#1164) -->
+  <h3 class="adv-section-title">Connection (display only)</h3>
+  <div id="advConnection" class="adv-section"></div>
+  <h3 class="adv-section-title">Search &amp; matching</h3>
+  <div id="advSearch" class="adv-section"></div>
+  <h3 class="adv-section-title">Operations</h3>
+  <div id="advOperations" class="adv-section"></div>
+  <h3 class="adv-section-title">Tool surface</h3>
+  <div id="advToolsSurface" class="adv-section"></div>
+  <h3 class="adv-section-title">Diagnostics</h3>
+  <div id="advDiagnostics" class="adv-section"></div>
+  <div id="advSaveRow" style="display:none; margin: 16px 0;">
+    <button id="advSaveBtn">Save advanced settings</button>
+    <span id="advSaveStatus" class="status"></span>
+  </div>
+
   <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
     <button class="danger-btn" id="stopSidecarBtn"
             title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
@@ -3003,7 +3049,185 @@ document.addEventListener('click', (e) => {
   activateTab(link.dataset.panelLink);
 });
 
+// ===== Advanced settings (#1164) =====
+const ADVANCED_FIELD_META = {
+  homeassistant_url:   { label: "Home Assistant URL",          help: "Display only — set via HOMEASSISTANT_URL env var or addon-managed (Supervisor)." },
+  homeassistant_token: { label: "Home Assistant token",        help: "Display only — set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
+  timeout:             { label: "HA request timeout (s)",      help: "Per-request HTTP timeout. Range 1–600. Restart required." },
+  max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
+  verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
+  fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
+  entity_search_limit: { label: "Entity search result limit",  help: "Max entities returned by ha_search_entities. Range 1–1000." },
+  backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
+  enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling — many tools degrade. Restart required." },
+  enabled_tool_modules: { label: "Enabled tool modules",       help: "Comma-separated module names, or 'all'. Restricts which tool registry modules load at startup. Restart required." },
+  enable_dashboard_partial_tools: { label: "Dashboard partial-update tools", help: "Token-efficient partial dashboard tools. Disable for clients with programmatic tool use." },
+  mcp_server_name:     { label: "MCP server name",             help: "Reported in MCP handshake. Restart required." },
+  mcp_server_version:  { label: "MCP server version",          help: "Defaults to the package version. Overriding can confuse clients that key on this string. Restart required." },
+  environment:         { label: "Environment",                 help: "'development' or 'production'. Affects logging verbosity. Restart required." },
+  log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup — restart required." },
+  debug:               { label: "Debug mode",                  help: "Verbose request logging. Implies sensitive data in logs — do not enable in production. Restart required." },
+  code_mode_max_duration:    { label: "Code-mode max duration (s)",   help: "Wall-clock budget per sandbox run. Range 1–300. Restart required." },
+  code_mode_max_memory:      { label: "Code-mode max memory (bytes)", help: "RSS cap per sandbox run. Range 1 MB–256 MB. Restart required." },
+  code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
+  code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
+  code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
+};
+
+// Fields that require an MCP-host restart to take effect when changed
+// from this surface. Used to surface the restart-required banner on save.
+// REST client construction (timeout / verify_ssl / max_retries) is cached
+// once at startup so those need restart even though the underlying call
+// is per-request.
+const ADVANCED_RESTART_REQUIRED = new Set([
+  "timeout", "max_retries", "verify_ssl",
+  "enabled_tool_modules", "enable_websocket",
+  "log_level", "debug",
+  "mcp_server_name", "mcp_server_version", "environment",
+  "code_mode_max_duration", "code_mode_max_memory",
+  "code_mode_max_recursion", "code_mode_max_invocations",
+  "code_mode_saved_tools_path",
+]);
+
+let _advancedFields = [];
+let _advancedDirty = {};  // {field: newValue} for unsaved edits
+
+async function loadAdvancedSettings() {
+  let resp;
+  try {
+    resp = await fetch('./api/settings/advanced');
+  } catch (_e) {
+    // Sidecar/server may be too old to support this endpoint — silently
+    // hide the section rather than show an error.
+    return;
+  }
+  if (!resp.ok) return;
+  const data = await resp.json();
+  _advancedFields = data.fields || [];
+  _advancedDirty = {};
+  const bySection = {};
+  _advancedFields.forEach(f => {
+    (bySection[f.section] ||= []).push(f);
+  });
+  // Render each section into its dedicated container. Sections from
+  // ADVANCED_SETTINGS_FIELDS that are NOT in the Server Settings tab
+  // (e.g. "beta_codemode" is rendered under the Beta master toggle by
+  // Chunk 3b, not here) are skipped at this surface — they have no
+  // container in panel-server.
+  renderAdvancedSection('advConnection', bySection.connection || []);
+  renderAdvancedSection('advSearch', bySection.search || []);
+  renderAdvancedSection('advOperations', bySection.operations || []);
+  renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
+  renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
+  document.getElementById('advSaveRow').style.display = '';
+  document.getElementById('advSaveStatus').textContent = '';
+}
+
+function renderAdvancedSection(containerId, fields) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  fields.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'adv-row' + (f.editable ? '' : ' locked');
+    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    let controlHtml;
+    if (f.choices) {
+      controlHtml = `<select data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
+        f.choices.map(c =>
+          `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
+        ).join('') +
+        '</select>';
+    } else if (f.type === 'bool') {
+      controlHtml = `<input type="checkbox" data-adv-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else if (f.type === 'int' || f.type === 'float') {
+      controlHtml = `<input type="number" data-adv-field="${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
+        (f.min !== undefined ? `min="${f.min}" ` : '') +
+        (f.max !== undefined ? `max="${f.max}" ` : '') +
+        (f.type === 'float' ? 'step="0.1" ' : '') +
+        (f.editable ? '' : 'disabled') + '>';
+    } else {
+      // str
+      controlHtml = `<input type="text" data-adv-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+    }
+    let originMsg = '';
+    if (f.origin === 'env') {
+      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+    } else if (!f.editable) {
+      originMsg = 'Display only — modify via env var or addon settings.';
+    }
+    row.innerHTML =
+      `<div class="adv-info">` +
+        `<div class="adv-name">${escapeHtml(meta.label)}</div>` +
+        `<div class="adv-help">${escapeHtml(meta.help)}</div>` +
+        (originMsg ? `<div class="adv-locked-note">${originMsg}</div>` : '') +
+      `</div>` +
+      `<div class="adv-control">${controlHtml}</div>`;
+    el.appendChild(row);
+  });
+  // Wire change handlers so we can batch unsaved edits.
+  el.querySelectorAll('[data-adv-field]').forEach(input => {
+    input.addEventListener('change', () => {
+      const fname = input.dataset.advField;
+      const f = _advancedFields.find(x => x.field === fname);
+      if (!f) return;
+      let v;
+      if (input.type === 'checkbox') v = input.checked;
+      else if (input.type === 'number') v = (f.type === 'float') ? parseFloat(input.value) : parseInt(input.value, 10);
+      else v = input.value;
+      _advancedDirty[fname] = v;
+    });
+  });
+}
+
+async function saveAdvancedSettings() {
+  const btn = document.getElementById('advSaveBtn');
+  const statusEl = document.getElementById('advSaveStatus');
+  if (Object.keys(_advancedDirty).length === 0) {
+    statusEl.textContent = 'Nothing to save.';
+    return;
+  }
+  btn.disabled = true;
+  statusEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch('./api/settings/advanced', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_advancedDirty),
+    });
+    const data = await resp.json();
+    btn.disabled = false;
+    if (!resp.ok) {
+      let msg = 'Save failed';
+      if (data && data.error) {
+        if (typeof data.error === 'string') msg = data.error;
+        else if (data.error.message) msg = data.error.message;
+      }
+      statusEl.textContent = msg;
+      return;
+    }
+    statusEl.textContent = 'Saved.';
+    // Surface restart-required banner if any saved field requires it.
+    const needsRestart = Object.keys(_advancedDirty).some(f => ADVANCED_RESTART_REQUIRED.has(f));
+    if (needsRestart) {
+      document.getElementById('restartNotice').classList.add('show');
+      if (typeof restartChannel !== 'undefined' && restartChannel) {
+        restartChannel.postMessage({type: 'restart-required'});
+      }
+    }
+    _advancedDirty = {};
+    // Refresh display so origins update (default → file, etc.).
+    loadAdvancedSettings();
+  } catch (err) {
+    btn.disabled = false;
+    statusEl.textContent = 'Network error: ' + String(err);
+  }
+}
+
+document.getElementById('advSaveBtn').addEventListener('click', saveAdvancedSettings);
+
 loadFeatureFlags();
+loadAdvancedSettings();
 loadTools();
 
 // Auto-activate tab from ?tab=<name> query string (used by approval URLs
