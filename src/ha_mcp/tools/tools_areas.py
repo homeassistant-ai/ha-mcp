@@ -180,14 +180,16 @@ class AreaTools:
 
         Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas — a topology snapshot may diverge from individual list calls if the registries change between reads.
         """
-        # Validate projection params first so a bad shape raises before any
-        # WS round-trips. Matches the pattern in the previous flat list tools.
+        # Validate projection params before any WS round-trips so a bad shape
+        # fails fast without burning two registry reads.
         parsed_fields: list[str] | None = None
         if fields is not None:
             try:
                 parsed_fields = parse_string_list_param(
                     fields, "fields", allow_csv=True
                 )
+                if parsed_fields is not None and len(parsed_fields) == 0:
+                    raise ValueError("fields must contain at least one key")
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_area_fields: list[str] | None = None

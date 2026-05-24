@@ -222,6 +222,11 @@ class TestListFloorsAreasFieldsProjection:
                     "result": [
                         {"area_id": "kitchen", "name": "Kitchen", "floor_id": "ground"},
                         {"area_id": "garage", "name": "Garage", "floor_id": None},
+                        {
+                            "area_id": "ghost",
+                            "name": "Ghost",
+                            "floor_id": "deleted_floor_id",
+                        },
                     ],
                 },
                 "config/floor_registry/list": {
@@ -275,6 +280,14 @@ class TestListFloorsAreasFieldsProjection:
     async def test_bad_json_fields_raises_tool_error(self, tools):
         with pytest.raises(ToolError):
             await tools.ha_list_floors_areas(fields='["')
+
+    async def test_empty_fields_list_raises_tool_error(self, tools):
+        """fields=[] is rejected with VALIDATION_FAILED, mirroring area_fields=[]."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_list_floors_areas(fields=[])
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert error.get("parameter") == "fields"
 
 
 class TestListFloorsAreasAreaFieldsProjection:
@@ -346,8 +359,21 @@ class TestListFloorsAreasAreaFieldsProjection:
             assert set(area.keys()) == {"area_id", "name"}
 
     async def test_area_fields_unknown_key_emits_warning(self, tools):
-        """area_fields with only unknown keys emits the typo-guard warning."""
+        """area_fields with only unknown keys projects records to {} and emits the typo-guard warning across all 3 buckets."""
         result = await tools.ha_list_floors_areas(area_fields=["are_id"])
+        # Every projected area record is empty, regardless of bucket
+        for floor in result["floors"]:
+            for area in floor["areas"]:
+                assert area == {}, (
+                    f"Expected empty record in nested bucket, got: {area}"
+                )
+        for area in result["unassigned_areas"]:
+            assert area == {}, (
+                f"Expected empty record in unassigned bucket, got: {area}"
+            )
+        for area in result["orphaned_areas"]:
+            assert area == {}, f"Expected empty record in orphaned bucket, got: {area}"
+        # Diagnostic warning is present and names the typo'd key
         assert "warnings" in result, (
             "Expected warnings key when all projected records are empty"
         )
