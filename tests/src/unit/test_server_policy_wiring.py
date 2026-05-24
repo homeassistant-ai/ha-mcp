@@ -20,12 +20,10 @@ def _make_server_stub(*, enable_policies: bool) -> MagicMock:
       * ``self.settings.enable_tool_security_policies`` (early return gate)
       * ``self.approval_queue = ApprovalQueue()`` (attribute write)
       * ``self.mcp.add_middleware(...)`` (the wiring side-effect)
-      * ``self._settings_secret_prefix`` (read by the URL-builder closure)
     """
     stub = MagicMock()
     stub.settings = MagicMock(enable_tool_security_policies=enable_policies)
     stub.mcp = MagicMock()
-    stub._settings_secret_prefix = ""
     # Explicitly start without the attribute the method is supposed to
     # set, so the disabled-case assertion is a real signal.
     del stub.approval_queue

@@ -155,7 +155,8 @@ async def test_timeout_raises_pending_error_and_keeps_entry(queue):
         )
     body = json.loads(ei.value.args[0])
     assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
-    assert "approve_url" in body["error"]["context"]
+    assert body["error"]["context"]["token"]
+    assert "Tool Security Policies" in body["error"]["message"]
     call_next.assert_not_called()
     # entry survives for re-call
     assert queue.list_pending()

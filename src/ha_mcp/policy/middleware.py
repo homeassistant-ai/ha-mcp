@@ -44,14 +44,10 @@ class PolicyMiddleware(Middleware):
         *,
         policy_provider: Callable[[], Policy],
         queue: ApprovalQueue,
-        approval_url_builder: Callable[[str], str] | None = None,
         wait_seconds: int | None = None,
     ) -> None:
         self._policy_provider = policy_provider
         self._queue = queue
-        self._approval_url_builder = approval_url_builder or (
-            lambda token: f"/settings?tab=tool-security-policies&token={token}"
-        )
         self._wait_override = wait_seconds
 
     async def on_call_tool(
@@ -117,14 +113,13 @@ class PolicyMiddleware(Middleware):
             args,
             ttl_minutes=policy.approval_ttl_minutes,
         )
-        approval_url = self._approval_url_builder(pending.token)
 
         wait = (
             self._wait_override
             if self._wait_override is not None
             else policy.wait_seconds
         )
-        await self._wait_for_decision(context, pending, approval_url, wait)
+        await self._wait_for_decision(context, pending, wait)
 
         if pending.decision == "approved":
             self._queue.consume_and_maybe_remember(
@@ -136,13 +131,12 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             raise self._denied_error()
 
-        raise self._pending_error(pending, approval_url)
+        raise self._pending_error(pending)
 
     async def _wait_for_decision(
         self,
         context: MiddlewareContext,
         pending: PendingApproval,
-        approval_url: str,
         wait_seconds: int,
     ) -> None:
         deadline = anyio.current_time() + wait_seconds
@@ -153,8 +147,9 @@ class PolicyMiddleware(Middleware):
                 progress=0,
                 total=0,
                 message=(
-                    f"Awaiting user approval — open this URL to review the call "
-                    f"in the Tool Security Policies tab and approve it: {approval_url}"
+                    "Awaiting user approval — open the ha-mcp settings UI, "
+                    "go to the Tool Security Policies tab, and approve or deny "
+                    "the pending request."
                 ),
             )
             remaining = deadline - anyio.current_time()
@@ -180,7 +175,7 @@ class PolicyMiddleware(Middleware):
             )
         )
 
-    def _pending_error(self, pending: PendingApproval, approval_url: str) -> ToolError:
+    def _pending_error(self, pending: PendingApproval) -> ToolError:
         # Time-remaining, not total TTL: an LLM that re-calls a minute
         # before expiry should see "~60s left", not the original 300s.
         remaining = max(
@@ -193,16 +188,17 @@ class PolicyMiddleware(Middleware):
                     "error": {
                         "code": "USER_APPROVAL_REQUIRED",
                         "message": (
-                            f"User approval required. Open this URL to review the call "
-                            f"in the Tool Security Policies tab and approve it: {approval_url}. "
-                            "Re-call this tool with the same arguments after the user approves."
+                            "User approval required. Tell the user to open the "
+                            "ha-mcp settings UI, go to the Tool Security Policies "
+                            "tab, and approve or deny the pending request. Re-call "
+                            "this tool with the same arguments after the user approves."
                         ),
                         "context": {
-                            "approve_url": approval_url,
+                            "token": pending.token,
                             "expires_in_seconds": remaining,
                         },
                         "suggestions": [
-                            "Tell the user to click the approval link.",
+                            "Tell the user to open the Tool Security Policies tab in the ha-mcp settings UI and approve the pending request.",
                             "Re-call this tool with the same arguments after the user approves.",
                         ],
                     },

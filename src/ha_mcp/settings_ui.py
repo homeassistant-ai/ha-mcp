@@ -3939,17 +3939,6 @@ def register_settings_routes(
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     is_addon = is_running_in_addon()
 
-    # Expose the resolved prefix to the server so the tool security policies
-    # middleware can build absolute-looking approval URLs (#966). The
-    # middleware reads this lazily via ``getattr(self,
-    # "_settings_secret_prefix", "")`` so the closure picks up the value
-    # set here, even though ``_apply_tool_security_policies`` ran in __init__
-    # before this function was called. Skip when ``server is None`` (sidecar
-    # / unit-test shape) — the policy middleware isn't registered in that
-    # mode anyway, and a Mock-less ``None`` would raise AttributeError here.
-    if server is not None:
-        server._settings_secret_prefix = secret_prefix
-
     if not is_addon and not secret_prefix:
         logger.warning(
             "register_settings_routes: not in add-on mode and no secret_path "

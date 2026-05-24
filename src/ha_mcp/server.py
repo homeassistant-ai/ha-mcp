@@ -95,11 +95,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Used by _apply_tool_search to remove default-pinned tools from
         # the always_visible set so users can unpin defaults (#966).
         self._user_enabled_tools: set[str] = set()
-        # Set by register_settings_routes (settings_ui.py) when the
-        # settings UI routes are mounted under the secret-prefixed path.
-        # Declared on __init__ so pyright doesn't flag the external
-        # assignment as reportAttributeAccessIssue.
-        self._settings_secret_prefix: str = ""
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -892,23 +887,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             # roundtrip of a gated tool call.
             return load_policy(data_dir)
 
-        # The secret prefix (e.g. ``/private_xxx``) is wired in lazily
-        # by ``settings_ui.register_settings_routes`` after the HTTP
-        # entrypoint resolves ``MCP_SECRET_PATH``. Read at URL-build
-        # time so the closure picks up the value once it's set.
-        # Empty-string fallback (add-on mode + root-mount + stdio) keeps
-        # the existing relative-URL behavior, which already resolves
-        # correctly against the settings page the user navigates to.
-        def _approval_url(token: str) -> str:
-            prefix = getattr(self, "_settings_secret_prefix", "") or ""
-            return f"{prefix}/settings?tab=tool-security-policies&token={token}"
-
         try:
             self.mcp.add_middleware(
                 PolicyMiddleware(
                     policy_provider=_policy_provider,
                     queue=self.approval_queue,
-                    approval_url_builder=_approval_url,
                 )
             )
             logger.info(

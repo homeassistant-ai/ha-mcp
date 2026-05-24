@@ -144,7 +144,6 @@ async def test_blocked_call_then_approve_then_recall(policy_enabled_mcp):
     current_resp = await handlers["policy_get_config"](_make_request())
     current = json.loads(current_resp.body)
     new_policy = {
-        "enabled": True,
         "wait_seconds": 5,
         "approval_ttl_minutes": 5,
         "rules": [

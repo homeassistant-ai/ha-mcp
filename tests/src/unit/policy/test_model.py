@@ -86,7 +86,6 @@ class TestRule:
 class TestPolicy:
     def test_defaults(self):
         p = Policy()
-        assert p.enabled is False
         assert p.wait_seconds == 60
         assert p.approval_ttl_minutes == 5
         assert p.rules == []
@@ -94,7 +93,6 @@ class TestPolicy:
     def test_user_example_from_issue(self):
         """Example from the maintainer: ha_call_service approval when domain is lock or alarm_control_panel."""
         p = Policy(
-            enabled=True,
             rules=[
                 Rule(
                     tool_name="ha_call_service",
