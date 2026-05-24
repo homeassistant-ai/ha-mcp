@@ -371,9 +371,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         path; that keeps the routes inert in stdio mode and behind the
         same auth posture as the MCP endpoint in HTTP mode.
         """
-        from .settings_ui import apply_tool_visibility, load_tool_config
+        from .settings_ui import apply_tool_visibility, effective_tool_config
 
-        config = load_tool_config(self.settings)
+        config = effective_tool_config()
         # When tool_config.json is absent (fresh install), `config` is falsy
         # and we leave self._user_enabled_tools at its __init__ default (empty
         # set). That yields no defaults filtered in _apply_tool_search, which

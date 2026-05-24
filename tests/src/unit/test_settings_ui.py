@@ -2036,3 +2036,125 @@ class TestFeatureGatedToolsCustomCode:
         # Lives in the System group, matching ha_config_set_yaml so the
         # related beta tools render together.
         assert entry["primary_tag"] == "System"
+
+
+class TestEnvPinnedTools:
+    """Tests for per-tool env-pin enforcement (#1164 addendum)."""
+
+    def test_env_pinned_tools_helper_returns_correct_mapping(self, monkeypatch):
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo, ha_bar")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_baz, ha_qux")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import env_pinned_tools
+
+        _reset_global_settings()
+        pinned = env_pinned_tools()
+        assert pinned == {
+            "ha_foo": "disabled",
+            "ha_bar": "disabled",
+            "ha_baz": "pinned",
+            "ha_qux": "pinned",
+        }
+        _reset_global_settings()
+
+    def test_env_pinned_tools_pinned_wins_on_collision(self, monkeypatch):
+        """If a name appears in both DISABLED_TOOLS and PINNED_TOOLS, pinned
+        wins (matches seed semantics in load_tool_config)."""
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_foo")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import env_pinned_tools
+
+        _reset_global_settings()
+        assert env_pinned_tools() == {"ha_foo": "pinned"}
+        _reset_global_settings()
+
+    def test_env_pinned_disabled_tool_stays_disabled_even_after_file_write(
+        self, monkeypatch, tmp_path
+    ):
+        """DISABLED_TOOLS=ha_foo + tool_config.json says ha_foo='enabled' →
+        runtime sees ha_foo as disabled (env wins per-tool)."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_foo": "enabled"}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_foo"] == "disabled"
+        get_data_dir.cache_clear()
+
+    def test_env_pinned_pinned_tool_stays_pinned_even_after_file_write(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("PINNED_TOOLS", "ha_bar")
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_bar": ""}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_bar"] == "pinned"
+        get_data_dir.cache_clear()
+
+    def test_non_env_pinned_tool_remains_freely_editable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_other": "disabled"}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_foo"] == "disabled"  # env-pinned
+        assert cfg["tools"]["ha_other"] == "disabled"  # file-set, still editable in UI
+        get_data_dir.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_rejects_env_pinned_tool_flip(self, monkeypatch, tmp_path):
+        """POST attempting to flip an env-pinned tool returns 409."""
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"states": {"ha_foo": "enabled"}})
+        resp = await handlers["save_tools"](request)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "ha_foo" in str(body)
+        get_data_dir.cache_clear()
+        _reset_global_settings()

@@ -289,6 +289,43 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {}
 
 
+def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
+    """Return {tool_name: "disabled" | "pinned"} for every tool named
+    in the DISABLED_TOOLS or PINNED_TOOLS env vars.
+
+    Used by the UI to render env-pinned rows as read-only and by the
+    save handler to reject flips. PINNED_TOOLS wins ties (matches the
+    existing seed semantics in load_tool_config).
+    """
+    if settings is None:
+        settings = get_global_settings()
+    pinned: dict[str, str] = {}
+    for name in (settings.disabled_tools or "").split(","):
+        name = name.strip()
+        if name:
+            pinned[name] = "disabled"
+    for name in (settings.pinned_tools or "").split(","):
+        name = name.strip()
+        if name:
+            pinned[name] = "pinned"
+    return pinned
+
+
+def effective_tool_config() -> dict[str, Any]:
+    """Return the runtime tool config: file values overlaid by env-
+    pinned tools (the latter always win, never overwritten by file).
+
+    Use this for any "what is the runtime state?" computation. Keep
+    ``load_tool_config`` as the pure file reader (no env overlay) for
+    cases that need just the file's contents (e.g. for displaying
+    "user-set" status separately from "env-pinned" status).
+    """
+    cfg = load_tool_config(get_global_settings())
+    tools = {**cfg.get("tools", {}), **env_pinned_tools()}
+    cfg = {**cfg, "tools": tools}
+    return cfg
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write ``payload`` to ``path`` atomically.
 
@@ -3341,12 +3378,21 @@ def build_settings_handlers(
                     "metadata cache' from ha_mcp.__main__.",
                     _get_tool_metadata_cache_path(),
                 )
-        config = load_tool_config()
+        config = effective_tool_config()
         states = config.get("tools", {})
+        pinned = env_pinned_tools()
         for name in DEFAULT_PINNED_TOOLS:
             if name not in states:
                 states[name] = "pinned"
-        return JSONResponse({"tools": tools, "states": states})
+        tools_with_pin: list[dict[str, Any]] = []
+        for tool_entry in tools:
+            tool_name = tool_entry.get("name", "")
+            entry = dict(tool_entry)
+            entry["env_pinned"] = pinned.get(tool_name)
+            tools_with_pin.append(entry)
+        return JSONResponse(
+            {"tools": tools_with_pin, "states": states, "env_pinned": pinned}
+        )
 
     async def _save_tools(request: Request) -> JSONResponse:
         try:
@@ -3390,6 +3436,22 @@ def build_settings_handlers(
             if state not in _VALID_STATES:
                 continue
             states[name] = state
+
+        # Reject attempts to flip env-pinned tools. DISABLED_TOOLS /
+        # PINNED_TOOLS are operator-level constraints that cannot be
+        # overridden via the UI; callers must unset the env var first.
+        env_pinned = env_pinned_tools()
+        rejected = [name for name in states if name in env_pinned]
+        if rejected:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Refusing to flip env-pinned tools: {rejected}. "
+                    "Unset DISABLED_TOOLS / PINNED_TOOLS first.",
+                    context={"rejected": rejected},
+                ),
+                status_code=409,
+            )
 
         config = load_tool_config()
         config["tools"] = states
