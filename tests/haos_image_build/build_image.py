@@ -1397,11 +1397,11 @@ def build(work_dir: Path, output: Path) -> None:
     # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
     # the testcontainer's seed state into /config/ for the e2e suite.
     bake_test_state(qcow2)
-    # Skip post-build compression for now: empirically qemu-img convert -c
-    # only shrinks ~7 GB → ~7 GB (Docker layer contents don't compress well
-    # with zlib) but adds 9 min, and xz -9 -T0 adds >25 min. Just sparse-copy
-    # the raw qcow2. Image-size optimization (zstd? strip unused docker
-    # layers? slim addons?) is tracked separately as a follow-up.
+    # Output uncompressed: nothing downstream of this script on the
+    # developer iteration path benefits from a smaller file, and the
+    # convert pass adds ~6 min. GHCR-served image is compressed at
+    # publish time by build-haos-test-image.yml's ``Compress qcow2
+    # in-format`` step (#1428, measured 12 GB → 5.1 GB / 2.3x).
     LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(["cp", "--reflink=auto", str(qcow2), str(output)])
