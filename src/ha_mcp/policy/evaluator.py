@@ -93,7 +93,9 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
                 # users can tell their "battery_level < 20" rule isn't
                 # silently never firing because the arg is a string.
                 logger.debug(
-                    "policy: gt type-mismatch (val=%r pv=%r) — predicate skipped", val, pv
+                    "policy: gt type-mismatch (val=%r pv=%r) — predicate skipped",
+                    val,
+                    pv,
                 )
                 return False
         case "lt":
@@ -101,7 +103,9 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
                 return bool(val < pv)
             except TypeError:
                 logger.debug(
-                    "policy: lt type-mismatch (val=%r pv=%r) — predicate skipped", val, pv
+                    "policy: lt type-mismatch (val=%r pv=%r) — predicate skipped",
+                    val,
+                    pv,
                 )
                 return False
     return False
