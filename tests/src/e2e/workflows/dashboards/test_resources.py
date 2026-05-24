@@ -16,7 +16,7 @@ production-level functionality and compatibility.
 import logging
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import (
+from ...utilities.assertions import (
     MCPAssertions,
     safe_call_tool,
 )
@@ -89,7 +89,6 @@ class TestDashboardResourceLifecycle:
         assert update_data["success"] is True
         assert update_data["action"] == "updated"
 
-
         # 5. Verify update was applied
         logger.info("Verifying resource update...")
         list_after_update = await mcp.call_tool_success(
@@ -114,7 +113,6 @@ class TestDashboardResourceLifecycle:
         )
         assert delete_data["success"] is True
         assert delete_data["action"] == "delete"
-
 
         # 7. Verify deletion
         logger.info("Verifying resource deletion...")
@@ -166,7 +164,6 @@ class TestDashboardResourceLifecycle:
             assert css_data["resource_type"] == "css"
             created_ids.append(css_data.get("resource_id"))
 
-
             # Verify by_type categorization
             list_data = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources", {}
@@ -200,7 +197,6 @@ class TestDashboardResourceLifecycle:
             resource_id = add_data.get("resource_id")
             assert resource_id is not None
 
-
             # Update to module type
             update_data = await mcp.call_tool_success(
                 "ha_config_set_dashboard_resource",
@@ -212,7 +208,6 @@ class TestDashboardResourceLifecycle:
             )
             assert update_data["success"] is True
             assert update_data["action"] == "updated"
-
 
             # Verify type was changed
             list_data = await mcp.call_tool_success(
@@ -319,7 +314,6 @@ class TestDashboardResourceList:
         resource_id = add_data.get("resource_id")
 
         try:
-
             list_data = await mcp.call_tool_success(
                 "ha_config_list_dashboard_resources", {}
             )
@@ -528,7 +522,9 @@ class TestInlineDashboardResource:
         )
         assert data["success"] is False
         error = data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "empty" in error_msg.lower()
 
         logger.info("Inline empty content error test completed successfully")
@@ -548,7 +544,6 @@ class TestInlineDashboardResource:
 
         try:
             assert create_data["action"] == "created"
-
 
             # Update with new content
             content_v2 = "const VERSION = 2; // Updated"

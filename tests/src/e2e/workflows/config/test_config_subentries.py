@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
 
 LOG = logging.getLogger(__name__)
 

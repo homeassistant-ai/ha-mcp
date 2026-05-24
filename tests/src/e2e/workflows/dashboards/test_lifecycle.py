@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 # Import test utilities
-from tests.src.e2e.utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -214,7 +214,11 @@ class TestDashboardLifecycle:
         # The key assertion: error must NOT be about hyphens
         if not data.get("success", False):
             error = data.get("error", {})
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
             assert "hyphen" not in error_msg.lower(), (
                 f"'lovelace' should not be rejected by hyphen validation, got: {error_msg}"
             )
@@ -227,7 +231,11 @@ class TestDashboardLifecycle:
         )
         if not data.get("success", False):
             error = data.get("error", {})
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            error_msg = (
+                error.get("message", str(error))
+                if isinstance(error, dict)
+                else str(error)
+            )
             assert "hyphen" not in error_msg.lower(), (
                 f"'default' should not be rejected by hyphen validation, got: {error_msg}"
             )
@@ -240,7 +248,9 @@ class TestDashboardLifecycle:
         )
         assert data["success"] is False
         error = data.get("error", {})
-        error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
         assert "hyphen" in error_msg.lower()
 
         logger.info("Default dashboard hyphen validation test completed successfully")
@@ -405,7 +415,9 @@ class TestDashboardIdentifierResolution:
             {
                 "url_path": "test-981-get-by-id",
                 "title": "Get by id",
-                "config": {"views": [{"cards": [{"type": "markdown", "content": "hi"}]}]},
+                "config": {
+                    "views": [{"cards": [{"type": "markdown", "content": "hi"}]}]
+                },
             },
         )
         internal_id = create_data["dashboard_id"]
@@ -433,7 +445,9 @@ class TestDashboardIdentifierResolution:
             {
                 "url_path": "test-981-set-by-id",
                 "title": "Set by id",
-                "config": {"views": [{"cards": [{"type": "markdown", "content": "v1"}]}]},
+                "config": {
+                    "views": [{"cards": [{"type": "markdown", "content": "v1"}]}]
+                },
             },
         )
         internal_id = create_data["dashboard_id"]
@@ -477,7 +491,9 @@ class TestDashboardIdentifierResolution:
             {
                 "url_path": "test-981-mixed-hash",
                 "title": "Mixed identifier hash",
-                "config": {"views": [{"cards": [{"type": "markdown", "content": "x"}]}]},
+                "config": {
+                    "views": [{"cards": [{"type": "markdown", "content": "x"}]}]
+                },
             },
         )
         internal_id = create_data["dashboard_id"]
@@ -640,4 +656,3 @@ class TestFindCard:
                 "ha_config_delete_dashboard",
                 {"url_path": "test-find-type"},
             )
-
