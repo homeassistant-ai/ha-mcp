@@ -341,6 +341,24 @@ def main() -> int:
     ).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    # Dev-addon mode: master beta toggle auto-on (#1164). The dev addon's
+    # config.yaml is the only addon schema that exposes the 5 beta
+    # sub-flags above; the stable addon's options.json never carries any
+    # of them, so this presence check distinguishes dev from stable
+    # cleanly without needing a separate addon-channel marker. With
+    # ENABLE_BETA_FEATURES=true set, the runtime master gate in
+    # ``_apply_feature_flag_overrides`` becomes a no-op for the dev addon
+    # — Supervisor options remain the authoritative source for the 5
+    # sub-flags, exactly as before this PR.
+    _dev_beta_keys = (
+        "enable_yaml_config_editing",
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        "enable_code_mode",
+        "enable_lite_docstrings",
+    )
+    if any(key in config for key in _dev_beta_keys):
+        os.environ["ENABLE_BETA_FEATURES"] = "true"
     os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
     os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
     os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)
