@@ -276,7 +276,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent receives an approval URL and the call is held until the user clicks **Approve** in the **Tool Security Policies** tab of the web UI. Per-tool rules — with optional argument predicates — are configured from the same Tool Security Policies tab.
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent is told to ask the user to open the Tool Security Policies tab in the web UI, and the call is held until the user clicks **Approve** there. Per-tool rules — with optional argument conditions — are configured from the same Tool Security Policies tab.
 
 **When to enable:**
 - Shared installations where you want a human in the loop for destructive or security-relevant operations
@@ -287,7 +287,7 @@ Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behin
 - Single-user setups where you're comfortable with the LLM acting autonomously
 - You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
 
-The policy engine is in beta. Off by default. Requires add-on restart to take effect.
+Off by default. Requires add-on restart to take effect.
 
 **Example Configuration:**
 
@@ -295,7 +295,7 @@ The policy engine is in beta. Off by default. Requires add-on restart to take ef
 enable_tool_security_policies: true
 ```
 
-Per-tool rules (including argument predicates like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
+Per-tool rules (including argument conditions like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
 
 *Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
