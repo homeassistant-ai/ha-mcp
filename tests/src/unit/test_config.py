@@ -121,3 +121,14 @@ class TestConfigErrorHandling:
 
         assert result.returncode == 0
         assert "SMOKE TEST PASSED" in result.stdout
+
+
+def test_enable_beta_features_default_false(monkeypatch) -> None:
+    """Master beta toggle is opt-in. Without env var or override file,
+    Settings.enable_beta_features stays False (matches existing beta
+    sub-flag defaults)."""
+    monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+    from ha_mcp.config import Settings
+
+    s = Settings()
+    assert s.enable_beta_features is False

@@ -107,6 +107,16 @@ class Settings(BaseSettings):
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
 
+    # Master beta-features toggle (#1164). UI-only — intentionally not in
+    # any addon config.yaml schema. When False (default), the five beta
+    # sub-flags below are force-set to False in
+    # ``_apply_feature_flag_overrides`` regardless of their own env var /
+    # override-file value. When True, the sub-flags follow their own
+    # precedence. Set via the override file or via ENABLE_BETA_FEATURES
+    # env var; the UI surfaces it as a nested-section master in the
+    # Server Settings tab.
+    enable_beta_features: bool = Field(False, alias="ENABLE_BETA_FEATURES")
+
     # Managed YAML config editing — allows ha_config_set_yaml to add,
     # replace, or remove top-level keys in configuration.yaml and package
     # files. Disabled by default; only for YAML-only features with no UI/API path.
@@ -327,8 +337,10 @@ def validate_settings() -> tuple[bool, str | None]:
 # file entirely (start.py owns env vars from config.yaml in that
 # mode), and the pydantic field default is the fallback.
 FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
+    ("enable_beta_features", "ENABLE_BETA_FEATURES", bool),
     ("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
     ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
+    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
     ("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
     ("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
     ("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
@@ -337,7 +349,7 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
-    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
+    ("enable_code_mode", "ENABLE_CODE_MODE", bool),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -354,6 +366,113 @@ _FEATURE_FLAG_OVERRIDE_FILENAME = "feature_flags.json"
 # push values out of range.
 _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "tool_search_max_results": (2, 10),
+}
+
+# Beta sub-flags gated by ``enable_beta_features`` (#1164). Each is also
+# in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save logic
+# stays unchanged — this tuple is consulted ONLY by the master gate in
+# ``_apply_feature_flag_overrides`` to force-set them False when the
+# master is off.
+BETA_FEATURE_FIELDS: tuple[str, ...] = (
+    "enable_yaml_config_editing",
+    "enable_filesystem_tools",
+    "enable_custom_component_integration",
+    "enable_code_mode",
+    "enable_lite_docstrings",
+)
+
+# ===== Advanced settings panel registry (#1164) =====
+#
+# Each entry: (field_name, env_var_name, python_type, section, editable).
+#
+# - ``section`` groups fields in the Advanced section of the Server Settings
+#   tab: "connection", "search", "operations", "diagnostics", "tools_surface".
+#   The 5 beta sub-flags + the master live in a separate "beta" section that
+#   the UI renders below the Advanced section.
+# - ``editable=False`` marks display-only rows. Connection fields are
+#   non-editable from the running server (#1164 chicken-and-egg footgun);
+#   ``MCP_SERVER_VERSION`` is editable (it has an env alias) but the UI
+#   warns that overriding it can confuse clients.
+# - Fields that already appear in ``FEATURE_FLAG_FIELDS`` (e.g. tool search
+#   toggles, beta flags) are intentionally NOT duplicated here — the UI
+#   continues to source them via ``FEATURE_FLAG_FIELDS`` so the per-field
+#   env-pin / addon-Supervisor routing logic stays unchanged for those rows.
+ADVANCED_SETTINGS_FIELDS: tuple[tuple[str, str, type, str, bool], ...] = (
+    # Connection — display only.
+    ("homeassistant_url", "HOMEASSISTANT_URL", str, "connection", False),
+    ("homeassistant_token", "HOMEASSISTANT_TOKEN", str, "connection", False),
+    ("timeout", "HA_TIMEOUT", int, "connection", True),
+    ("max_retries", "HA_MAX_RETRIES", int, "connection", True),
+    ("verify_ssl", "HA_VERIFY_SSL", bool, "connection", True),
+    # Search & matching.
+    ("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
+    ("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
+    # Operations.
+    ("backup_hint", "BACKUP_HINT", str, "operations", True),
+    ("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
+    ("enabled_tool_modules", "ENABLED_TOOL_MODULES", str, "tools_surface", True),
+    (
+        "enable_dashboard_partial_tools",
+        "ENABLE_DASHBOARD_PARTIAL_TOOLS",
+        bool,
+        "tools_surface",
+        True,
+    ),
+    # Diagnostics.
+    ("mcp_server_name", "MCP_SERVER_NAME", str, "diagnostics", True),
+    ("mcp_server_version", "MCP_SERVER_VERSION", str, "diagnostics", True),
+    ("environment", "ENVIRONMENT", str, "diagnostics", True),
+    ("log_level", "LOG_LEVEL", str, "diagnostics", True),
+    ("debug", "DEBUG", bool, "diagnostics", True),
+    # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
+    # are NOT in this tuple. They are added to ``BACKUP_OVERRIDE_FIELDS``
+    # (sub-task 1.1.1b below) so they persist to ``backup_settings.json``
+    # alongside the other auto-backup settings.
+    # Code-mode sub-numerics (only meaningful when enable_code_mode is on).
+    # editable=True but the UI nests them under the beta section's
+    # enable_code_mode row so they're hidden when code mode is off.
+    ("code_mode_max_duration", "CODE_MODE_MAX_DURATION", float, "beta_codemode", True),
+    ("code_mode_max_memory", "CODE_MODE_MAX_MEMORY", int, "beta_codemode", True),
+    ("code_mode_max_recursion", "CODE_MODE_MAX_RECURSION", int, "beta_codemode", True),
+    (
+        "code_mode_max_invocations",
+        "CODE_MODE_MAX_INVOCATIONS",
+        int,
+        "beta_codemode",
+        True,
+    ),
+    (
+        "code_mode_saved_tools_path",
+        "CODE_MODE_SAVED_TOOLS_PATH",
+        str,
+        "beta_codemode",
+        True,
+    ),
+)
+
+
+# Per-field validation bounds for non-bool advanced fields.
+# Bounds present on the Settings field today (mirrored):
+#   fuzzy_threshold (validator 0-100), code_mode_* (Field ge/le).
+# Bounds added purely as UI/POST guardrails (no Field constraint):
+#   timeout, max_retries, entity_search_limit.
+_ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
+    "timeout": (1, 600),
+    "max_retries": (0, 20),
+    "fuzzy_threshold": (0, 100),
+    "entity_search_limit": (1, 1000),
+    "code_mode_max_duration": (1.0, 300.0),
+    "code_mode_max_memory": (1_048_576, 268_435_456),
+    "code_mode_max_recursion": (1, 10_000),
+    "code_mode_max_invocations": (1, 10_000),
+}
+
+
+# Allowed-values for enum-like string fields (renders as <select> in UI).
+_ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
+    "backup_hint": ("strong", "normal", "weak", "auto"),
+    "log_level": ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+    "environment": ("development", "production"),
 }
 
 
@@ -554,6 +673,12 @@ BACKUP_OVERRIDE_FIELDS: tuple[tuple[str, str, type], ...] = (
     ("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
     ("auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int),
     ("auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int),
+    ("auto_backup_dir", "HAMCP_BACKUP_DIR", str),
+    (
+        "auto_backup_calendar_lookahead_days",
+        "HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS",
+        int,
+    ),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -699,7 +824,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     type(raw).__name__,
                 )
                 continue
-            coerced: bool | int = bool(raw)
+            coerced: bool | int | str = bool(raw)
         elif ftype is int:
             if not isinstance(raw, bool | int):
                 logger.warning(
@@ -737,6 +862,25 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     coerced,
                 )
                 continue
+            if (
+                field_name == "auto_backup_calendar_lookahead_days"
+                and not 1 <= coerced <= 365
+            ):
+                logger.warning(
+                    "backup_settings.json: auto_backup_calendar_lookahead_days=%d out of "
+                    "range 1..365; ignoring",
+                    coerced,
+                )
+                continue
+        elif ftype is str:
+            if not isinstance(raw, str):
+                logger.warning(
+                    "backup_settings.json: %s expects str, got %s; ignoring",
+                    field_name,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = raw
         else:
             continue
         try:
