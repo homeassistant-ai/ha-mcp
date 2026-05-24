@@ -506,15 +506,23 @@ def get_feature_flag_origin(env_name: str) -> str:
       file in place.
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
+
+    For the five fields in ``BETA_FEATURE_FIELDS`` and the master
+    ``ENABLE_BETA_FEATURES``, ``"addon"`` is never returned — those
+    fields are not in any addon config.yaml schema (#1164). They follow
+    the standalone precedence in either mode.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
-        return "addon"
-    if os.environ.get(env_name) is not None:
-        return "env"
     field_name = next(
         (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
         None,
     )
+    beta_fields = {"enable_beta_features", *BETA_FEATURE_FIELDS}
+    is_beta = field_name in beta_fields
+
+    if os.environ.get("SUPERVISOR_TOKEN") and not is_beta:
+        return "addon"
+    if os.environ.get(env_name) is not None:
+        return "env"
     if field_name is None:
         return "default"
     overrides = _read_feature_flag_override_file()
@@ -592,24 +600,42 @@ def _read_feature_flag_override_file() -> dict[str, object]:
 
 
 def _apply_feature_flag_overrides(settings: "Settings") -> None:
-    """Patch ``settings`` with values from the override file, in place.
+    """Patch ``settings`` with override-file values + apply the master beta gate.
 
-    Honors the "env var wins" contract: a field whose env var is set
-    in the process environment is never overwritten. Addon mode
-    short-circuits — ``start.py`` already wrote env vars from
-    ``config.yaml`` and the override file is ignored. Range / type
-    coercion mirrors the pydantic Field bounds so a corrupt file
-    can't push values out of range; out-of-range or untypable
-    entries are logged at WARNING and skipped rather than crashing
-    every consumer of ``get_global_settings()``.
+    Two behaviors interleave:
+
+    1. **Per-field override-file application** (existing PR #1381 behavior):
+       reads ``feature_flags.json`` and applies values for each
+       FEATURE_FLAG_FIELDS entry, subject to: explicit env var wins over
+       file; addon mode (SUPERVISOR_TOKEN set) normally short-circuits
+       this branch because start.py owns env vars from config.yaml.
+
+       EXCEPTION: the beta-master + beta-sub-flag fields skip the
+       addon-mode short-circuit. They are not in any addon config.yaml
+       schema (#1164), so the override file is the only authoritative
+       source for them in either mode.
+
+    2. **Beta master gate** (#1164): after the per-field pass, if
+       ``enable_beta_features`` is False on the resolved Settings,
+       force-set the five BETA_FEATURE_FIELDS to False regardless of
+       how they currently look. This is the "master toggle" semantics —
+       even a power user who sets ENABLE_YAML_CONFIG_EDITING=true via
+       env var still needs to flip the master before the flag takes
+       effect.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
-        return
+    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
     overrides = _read_feature_flag_override_file()
-    if not overrides:
-        return
-    for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
+
+    known = {fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS}
+    beta_fields = {"enable_beta_features", *BETA_FEATURE_FIELDS}
+
+    for field_name, (env_name, ftype) in known.items():
+        is_beta = field_name in beta_fields
+        if in_addon and not is_beta:
+            # Non-beta addon mode: start.py owns it. Skip.
+            continue
         if os.environ.get(env_name) is not None:
+            # Explicit env var wins over file for that field.
             continue
         if field_name not in overrides:
             continue
@@ -626,9 +652,6 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
             coerced = bool(raw)
         elif ftype is int:
             if isinstance(raw, bool) or not isinstance(raw, int):
-                # Reject bool-typed ints (since ``bool`` subclasses
-                # ``int``, a stray ``true`` would otherwise coerce to
-                # ``1``).
                 logger.warning(
                     "Override for %r is %s; expected int — ignoring.",
                     field_name,
@@ -651,15 +674,131 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
         try:
             setattr(settings, field_name, coerced)
         except Exception:
-            # Pydantic field validators may raise types other than the
-            # ones we expect (ValidationError is a ValueError subclass
-            # but mode='before' validators can route weird shapes
-            # through arbitrary code). Log at WARNING and skip rather
-            # than letting a malformed override crash every consumer of
-            # ``get_global_settings()``.
             logger.warning(
                 "Override for %r could not be applied to Settings; ignoring.",
                 field_name,
+                exc_info=True,
+            )
+
+    # === Master beta gate ===
+    if not getattr(settings, "enable_beta_features", False):
+        for sub in BETA_FEATURE_FIELDS:
+            current = getattr(settings, sub, False)
+            if current:
+                logger.info(
+                    "Beta master toggle is off; forcing %s=False "
+                    "(was True via env/file).",
+                    sub,
+                )
+            try:
+                setattr(settings, sub, False)
+            except Exception:
+                logger.warning(
+                    "Could not force %s=False via master gate; ignoring.",
+                    sub,
+                    exc_info=True,
+                )
+
+
+def _apply_advanced_overrides(settings: "Settings") -> None:
+    """Patch ``settings`` with advanced-section override values from
+    ``feature_flags.json`` (#1164).
+
+    Mirrors ``_apply_feature_flag_overrides`` but iterates
+    ``ADVANCED_SETTINGS_FIELDS`` and supports float / str in addition
+    to bool / int. Display-only fields (``editable=False`` in the
+    registry) are NEVER applied — chicken-and-egg safeguard for
+    connection settings (#1164).
+
+    Addon-mode short-circuit: advanced fields are not in any addon
+    config.yaml schema, so reading the override file here in addon
+    mode is the only authoritative source — same carve-out as the
+    beta gate above.
+    """
+    from typing import Any
+
+    overrides = _read_feature_flag_override_file()
+    if not overrides:
+        return
+    for fname, env_name, ftype, _section, editable in ADVANCED_SETTINGS_FIELDS:
+        if not editable:
+            continue
+        if os.environ.get(env_name) is not None:
+            continue
+        if fname not in overrides:
+            continue
+        raw = overrides[fname]
+        coerced: Any
+        if ftype is bool:
+            if not isinstance(raw, bool | int):
+                logger.warning(
+                    "Advanced override for %r is %s; expected bool — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = bool(raw)
+        elif ftype is int:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                logger.warning(
+                    "Advanced override for %r is %s; expected int — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = int(raw)
+        elif ftype is float:
+            if isinstance(raw, bool) or not isinstance(raw, int | float):
+                logger.warning(
+                    "Advanced override for %r is %s; expected float — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = float(raw)
+        elif ftype is str:
+            if not isinstance(raw, str):
+                logger.warning(
+                    "Advanced override for %r is %s; expected str — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            if "\x00" in raw:
+                logger.warning(
+                    "Advanced override for %r contains null byte; ignoring.",
+                    fname,
+                )
+                continue
+            coerced = raw
+        else:
+            continue
+
+        bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+        if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+            logger.warning(
+                "Advanced override for %r is %s, outside %s-%s — ignoring.",
+                fname,
+                coerced,
+                bounds[0],
+                bounds[1],
+            )
+            continue
+        choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+        if choices is not None and coerced not in choices:
+            logger.warning(
+                "Advanced override for %r is %r, not in %s — ignoring.",
+                fname,
+                coerced,
+                choices,
+            )
+            continue
+        try:
+            setattr(settings, fname, coerced)
+        except Exception:
+            logger.warning(
+                "Advanced override for %r could not be applied; ignoring.",
+                fname,
                 exc_info=True,
             )
 
@@ -923,6 +1062,7 @@ def get_global_settings() -> Settings:
         _settings = get_settings()
         _apply_feature_flag_overrides(_settings)
         _apply_backup_overrides(_settings)
+        _apply_advanced_overrides(_settings)
     return _settings
 
 
