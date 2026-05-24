@@ -208,106 +208,146 @@ class TestSetAreaOrFloorCrossKindRejection:
         tools._client.send_websocket_message.assert_not_called()
 
 
-class TestHaConfigListAreasFieldsProjection:
-    """Unit tests for fields= projection in ha_config_list_areas."""
+class TestListFloorsAreasFieldsProjection:
+    """Unit tests for fields= top-level projection in ha_list_floors_areas."""
 
     @pytest.fixture
     def tools(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"area_id": "kitchen", "name": "Kitchen"},
-                    {"area_id": "bedroom", "name": "Bedroom"},
-                ],
-            }
-        )
+
+        def _route(msg):
+            return {
+                "config/area_registry/list": {
+                    "success": True,
+                    "result": [
+                        {"area_id": "kitchen", "name": "Kitchen", "floor_id": "ground"},
+                        {"area_id": "garage", "name": "Garage", "floor_id": None},
+                    ],
+                },
+                "config/floor_registry/list": {
+                    "success": True,
+                    "result": [{"floor_id": "ground", "name": "Ground", "level": 0}],
+                },
+            }[msg["type"]]
+
+        client.send_websocket_message = AsyncMock(side_effect=_route)
         return AreaTools(client)
 
     async def test_no_fields_returns_full_response(self, tools):
-        result = await tools.ha_config_list_areas()
-        assert set(result.keys()) == {"success", "count", "areas", "message"}
+        result = await tools.ha_list_floors_areas()
+        assert set(result.keys()) == {
+            "success",
+            "floor_count",
+            "area_count",
+            "unassigned_count",
+            "orphaned_count",
+            "floors",
+            "unassigned_areas",
+            "orphaned_areas",
+            "message",
+        }
 
-    async def test_single_field_projects_to_that_key_plus_success(self, tools):
-        result = await tools.ha_config_list_areas(fields=["areas"])
-        assert set(result.keys()) == {"success", "areas"}
-        assert len(result["areas"]) == 2
+    async def test_fields_projects_top_level(self, tools):
+        result = await tools.ha_list_floors_areas(fields=["floors"])
+        assert set(result.keys()) == {"success", "floors"}
 
     async def test_multiple_fields_projects_correctly(self, tools):
-        result = await tools.ha_config_list_areas(fields=["count", "areas"])
-        assert set(result.keys()) == {"success", "count", "areas"}
-        assert result["count"] == 2
+        result = await tools.ha_list_floors_areas(fields=["floor_count", "area_count"])
+        assert set(result.keys()) == {"success", "floor_count", "area_count"}
 
-    async def test_success_always_included_regardless_of_fields(self, tools):
-        result = await tools.ha_config_list_areas(fields=["count"])
-        assert "success" in result
+    async def test_success_always_retained(self, tools):
+        result = await tools.ha_list_floors_areas(fields=["floor_count"])
         assert result["success"] is True
 
     async def test_unknown_field_emits_warning(self, tools):
-        """Unknown fields key emits a diagnostic warning instead of being silently dropped."""
-        result = await tools.ha_config_list_areas(fields=["nonexistent_key"])
+        result = await tools.ha_list_floors_areas(fields=["nonexistent_key"])
         assert result["success"] is True
         assert "warnings" in result
         assert any("nonexistent_key" in w for w in result["warnings"])
 
     async def test_bad_fields_integer_raises_tool_error(self, tools):
-        """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.
-
-        Covers the early-validate raise path in ``ha_config_list_areas`` so a
-        regression dropping the try/except still surfaces.
-        """
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_list_areas(fields=123)
+            await tools.ha_list_floors_areas(fields=123)
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert error.get("parameter") == "fields"
 
     async def test_bad_json_fields_raises_tool_error(self, tools):
-        """fields='[\"' (malformed JSON) raises ToolError."""
         with pytest.raises(ToolError):
-            await tools.ha_config_list_areas(fields='["')
+            await tools.ha_list_floors_areas(fields='["')
 
 
-class TestHaConfigListAreasAreaFieldsProjection:
-    """Unit tests for area_fields= per-record projection in ha_config_list_areas."""
+class TestListFloorsAreasAreaFieldsProjection:
+    """Unit tests for area_fields= per-record projection across all 3 area buckets."""
 
     @pytest.fixture
     def tools(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"area_id": "kitchen", "name": "Kitchen", "icon": "mdi:home"},
-                    {"area_id": "bedroom", "name": "Bedroom", "icon": None},
-                ],
-            }
-        )
+
+        def _route(msg):
+            return {
+                "config/area_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "area_id": "kitchen",
+                            "name": "Kitchen",
+                            "icon": "mdi:silverware",
+                            "floor_id": "ground",
+                        },
+                        {
+                            "area_id": "garage",
+                            "name": "Garage",
+                            "icon": None,
+                            "floor_id": None,
+                        },
+                        {
+                            "area_id": "ghost",
+                            "name": "Ghost",
+                            "icon": None,
+                            "floor_id": "deleted_floor_id",
+                        },
+                    ],
+                },
+                "config/floor_registry/list": {
+                    "success": True,
+                    "result": [{"floor_id": "ground", "name": "Ground", "level": 0}],
+                },
+            }[msg["type"]]
+
+        client.send_websocket_message = AsyncMock(side_effect=_route)
         return AreaTools(client)
 
-    async def test_area_fields_projects_each_record(self, tools):
-        """area_fields=['area_id'] returns records with only that key."""
-        result = await tools.ha_config_list_areas(area_fields=["area_id"])
-        assert all(set(a.keys()) == {"area_id"} for a in result["areas"])
+    async def test_area_fields_projects_nested_areas(self, tools):
+        """Areas nested under floors are projected to only the requested keys."""
+        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
+        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
+        assert all(set(a.keys()) == {"area_id"} for a in ground["areas"])
+
+    async def test_area_fields_projects_unassigned_areas(self, tools):
+        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
+        assert all(set(a.keys()) == {"area_id"} for a in result["unassigned_areas"])
+
+    async def test_area_fields_projects_orphaned_areas(self, tools):
+        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
+        assert all(set(a.keys()) == {"area_id"} for a in result["orphaned_areas"])
+
+    async def test_area_fields_does_not_affect_floor_records(self, tools):
+        """Floor metadata (name, level, etc.) is untouched — only area records project."""
+        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
+        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
+        assert "name" in ground
+        assert "level" in ground
 
     async def test_area_fields_multiple_keys(self, tools):
-        """area_fields=['area_id','name'] returns both keys per record."""
-        result = await tools.ha_config_list_areas(area_fields=["area_id", "name"])
-        for area in result["areas"]:
+        result = await tools.ha_list_floors_areas(area_fields=["area_id", "name"])
+        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
+        for area in ground["areas"]:
             assert set(area.keys()) == {"area_id", "name"}
 
     async def test_area_fields_unknown_key_emits_warning(self, tools):
-        """area_fields with only unknown keys emits a diagnostic in warnings[].
-
-        Pins the typo-footgun guard: area_fields=["are_id"] (typo for "area_id")
-        silently produced [{}, {}] before this fix.
-        """
-        result = await tools.ha_config_list_areas(area_fields=["are_id"])
-        # Every projected record is empty
-        for area in result["areas"]:
-            assert area == {}
-        # Diagnostic warning is present and names the wrong parameter
+        """area_fields with only unknown keys emits the typo-guard warning."""
+        result = await tools.ha_list_floors_areas(area_fields=["are_id"])
         assert "warnings" in result, (
             "Expected warnings key when all projected records are empty"
         )
@@ -316,8 +356,11 @@ class TestHaConfigListAreasAreaFieldsProjection:
         )
 
     async def test_area_fields_does_not_affect_outer_response_keys(self, tools):
-        """area_fields only projects inside areas[]; top-level keys are unchanged."""
-        result = await tools.ha_config_list_areas(area_fields=["area_id"])
+        """area_fields only projects inside area records; top-level keys are unchanged."""
+        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
         assert "success" in result
-        assert "count" in result
-        assert "areas" in result
+        assert "floor_count" in result
+        assert "area_count" in result
+        assert "floors" in result
+        assert "unassigned_areas" in result
+        assert "orphaned_areas" in result

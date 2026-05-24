@@ -389,7 +389,7 @@ class SmartSearchTools:
             # Two-pass area resolution. Pass 1 collects exact id / name /
             # alias matches; if any are found, fuzzy aggregation is
             # skipped entirely. This makes ``area_filter`` honor a
-            # literal area_id from ``ha_config_list_areas`` — pre-fix a
+            # literal area_id from ``ha_list_floors_areas`` — pre-fix a
             # query like ``"bedroom_kids"`` would also fuzzy-match its
             # parent ``"bedroom"`` (partial_ratio=100) and aggregate
             # sibling areas' entities. Aliases (per-area registry, used

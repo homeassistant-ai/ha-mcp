@@ -1362,7 +1362,7 @@ async def test_exact_area_id_short_circuits_fuzzy_aggregation(
     mcp_client, two_areas_with_shared_prefix
 ):
     """When ``area_filter`` is a literal area_id from
-    ``ha_config_list_areas``, exact match wins — fuzzy aggregation of
+    ``ha_list_floors_areas``, exact match wins — fuzzy aggregation of
     sibling areas is suppressed. Pre-fix a query like
     ``bedroom_y_<suffix>`` would also partial_ratio-match its sibling
     ``bedroom_x_<suffix>`` (and the seeded ``bedroom`` area), surfacing
