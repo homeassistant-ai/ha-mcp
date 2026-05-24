@@ -872,3 +872,207 @@ class TestEnvPinnedToolRows:
             f"expected disabled attribute on pin-toggle input; got: "
             f"{pin_input_match.group(0)}"
         )
+
+
+class TestAdvancedSectionRender:
+    """JSDOM coverage for the new Advanced Settings sections (#1164 Chunk 2b)."""
+
+    def test_locked_field_shows_env_var_name_in_banner(
+        self, settings_script: str
+    ) -> None:
+        """Env-pinned advanced field renders with a banner naming the env var."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "timeout",
+                            "env_var": "HA_TIMEOUT",
+                            "value": 60,
+                            "type": "int",
+                            "section": "connection",
+                            "origin": "env",
+                            "editable": False,
+                            "min": 1,
+                            "max": 600,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "HA_TIMEOUT" in result.dom, (
+            f"expected env var name in locked-row banner; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+        assert "adv-row" in result.dom and "locked" in result.dom, (
+            "expected .adv-row.locked class"
+        )
+
+    def test_log_level_renders_as_select_with_choices(
+        self, settings_script: str
+    ) -> None:
+        """str field with choices renders as <select>, not <input>."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "log_level",
+                            "env_var": "LOG_LEVEL",
+                            "value": "INFO",
+                            "type": "str",
+                            "section": "diagnostics",
+                            "origin": "default",
+                            "editable": True,
+                            "choices": [
+                                "DEBUG",
+                                "INFO",
+                                "WARNING",
+                                "ERROR",
+                                "CRITICAL",
+                            ],
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        select_match = re.search(
+            r'<select[^>]*data-adv-field="log_level"[^>]*>(.*?)</select>',
+            result.dom,
+            re.DOTALL,
+        )
+        assert select_match is not None, "expected <select> for log_level"
+        assert "DEBUG" in select_match.group(1)
+        assert "CRITICAL" in select_match.group(1)
+
+    def test_int_field_emits_min_max_attrs(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "timeout",
+                            "env_var": "HA_TIMEOUT",
+                            "value": 30,
+                            "type": "int",
+                            "section": "connection",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 600,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        m = re.search(
+            r'<input[^>]*data-adv-field="timeout"[^>]*>',
+            result.dom,
+        )
+        assert m is not None, "expected number input for timeout"
+        assert 'min="1"' in m.group(0)
+        assert 'max="600"' in m.group(0)
+
+
+class TestBetaMasterToggleLiveRender:
+    """JSDOM coverage for live re-render on master flip (#1164 Chunk 3a)."""
+
+    def _flags_payload(self, master_value: bool) -> dict:
+        return {
+            "flags": {
+                "enable_beta_features": {
+                    "value": master_value,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_BETA_FEATURES",
+                },
+                "enable_yaml_config_editing": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                },
+            },
+            "beta_sub_flags": ["enable_yaml_config_editing"],
+        }
+
+    def test_master_off_renders_subrow_dimmed(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": self._flags_payload(master_value=False),
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # The yaml-editing row must carry both beta-sub AND dimmed classes.
+        assert "beta-sub dimmed" in result.dom or (
+            "beta-sub" in result.dom and "dimmed" in result.dom
+        ), f"expected dimmed beta-sub row; dom tail: {result.dom[-3000:]}"
+
+    def test_master_on_renders_subrow_not_dimmed(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": self._flags_payload(master_value=True),
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # Row has beta-sub class but NOT dimmed.
+        import re
+
+        beta_sub_rows = re.findall(
+            r'<div[^>]*class="[^"]*beta-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert beta_sub_rows, "expected at least one beta-sub row"
+        for row_html in beta_sub_rows:
+            assert "dimmed" not in row_html, (
+                f"unexpected dimmed on master-on row: {row_html}"
+            )

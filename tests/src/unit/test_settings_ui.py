@@ -2299,10 +2299,17 @@ class TestAdvancedSettingsEndpoints:
         assert "HA_TIMEOUT" in str(body)
 
     @pytest.mark.asyncio
-    async def test_save_advanced_rejects_out_of_bounds(self, monkeypatch):
+    async def test_save_advanced_rejects_out_of_bounds(self, monkeypatch, tmp_path):
+        """Out-of-bounds POST returns 400 AND must NOT write to the
+        override file. A regression that returns 400 while still
+        mutating the file would silently persist bad values."""
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
 
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
         monkeypatch.delenv("HA_TIMEOUT", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         _reset_global_settings()
@@ -2311,6 +2318,9 @@ class TestAdvancedSettingsEndpoints:
         req.json = AsyncMock(return_value={"timeout": -5})
         resp = await handlers["save_advanced_settings"](req)
         assert resp.status_code == 400
+        # File untouched — no -5 in feature_flags.json.
+        assert not (tmp_path / "feature_flags.json").exists()
+        get_data_dir.cache_clear()
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_invalid_choice(self, monkeypatch):
