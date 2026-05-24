@@ -101,6 +101,10 @@ def build_policy_handlers(
                 status_code=409,
             )
         save_policy(data_dir, new_policy)
+        # Drop the remember-cache so a tightened rule takes effect
+        # immediately — without this, an approval remembered before the
+        # save still grants pass-through until its window expires.
+        queue.clear_remember_cache()
         return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def get_pending(_: Request) -> JSONResponse:

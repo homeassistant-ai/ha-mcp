@@ -109,6 +109,13 @@ class ApprovalQueue:
             return False
         return True
 
+    def clear_remember_cache(self) -> None:
+        """Drop every remembered approval. Called when the policy is
+        saved so a tightened rule takes effect immediately instead of
+        being silently bypassed by an in-flight remembered approval
+        until its window expires."""
+        self._remember.clear()
+
     # --- pending entries lifecycle ---
     def create(
         self,

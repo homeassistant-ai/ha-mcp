@@ -876,6 +876,23 @@ _SETTINGS_HTML = (
     <h3 style="font-size:1rem;margin-bottom:8px">Global settings</h3>
     <div class="feature-row">
       <div class="feature-info">
+        <div class="feature-name">Enable Tool Security Policies</div>
+        <div class="feature-help">
+          Master switch. Mirrors the toggle in Server Settings. Off by
+          default — toggle on and restart the addon to activate the
+          gating middleware. While off, the rules below persist but
+          aren't enforced.
+        </div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-master-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
         <div class="feature-name">Wait seconds (5-600)</div>
         <div class="feature-help">How long the middleware waits for an approval before timing out.</div>
       </div>
@@ -2089,7 +2106,20 @@ async function saveFeatureFlag(fieldName, value) {
 // This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
 let policyRuleEdits = {};
 
+async function syncPolicyMasterToggle() {
+  // The master toggle on this tab is just a UI mirror of the same
+  // `enable_tool_security_policies` feature flag the Server Settings
+  // tab exposes — the addon-config flag is the single source of truth.
+  // We rely on loadPolicyState() to have populated policyState.enabled
+  // (it fetches /api/settings/features) so the only work here is to
+  // reflect that bit into the checkbox.
+  await loadPolicyState();
+  const cb = document.getElementById('policy-master-toggle');
+  if (cb) cb.checked = !!policyState.enabled;
+}
+
 async function policyLoadConfig() {
+  await syncPolicyMasterToggle();
   const errEl = document.getElementById('policy-load-error');
   if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   let resp;
@@ -2739,7 +2769,20 @@ async function policyLoadPending() {
     resp = await fetch('./api/policy/pending');
   } catch (_e) { return; }
   if (resp.status === 503) {
-    list.innerHTML = '<em>Live approvals unavailable in this mode (sidecar). Use the main settings UI.</em>';
+    // 503 has three causes — give the right message based on what we
+    // already know from /api/settings/features.
+    if (!policyState.enabled) {
+      list.innerHTML = '<em>Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the addon to enable gating.</em>';
+    } else {
+      // Feature is on but the queue isn't reachable — sidecar mode, or
+      // a startup ImportError on the policy package.
+      let msg = 'Live approvals unavailable. Check the addon log for ImportError / RuntimeError details.';
+      try {
+        const body = await resp.json();
+        if (body && body.error) msg = body.error;
+      } catch (_e) { /* keep default */ }
+      list.innerHTML = '<em>' + escapeHtml(msg) + '</em>';
+    }
     return;
   }
   if (!resp.ok) return;
@@ -2797,6 +2840,17 @@ async function policyDecide(token, action) {
 }
 
 document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
+
+// Master toggle on this tab mirrors the Server Settings checkbox.
+// Persist via the same /api/settings/features endpoint so a save here
+// shows up in Server Settings (and the addon's config.yaml) on reload.
+document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
+  await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  // Refresh the mirror so the local cache (policyState.enabled) tracks
+  // what we just wrote — restart still required for the middleware to
+  // pick it up, which the saveFeatureFlag status message already says.
+  await loadPolicyState();
+});
 
 // Poll for pending approvals every 3s when Tool Security Policies tab is visible.
 setInterval(() => {
@@ -2920,11 +2974,25 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def unavailable(_: Request) -> JSONResponse:
+        # 503 fires in two distinct situations:
+        #   1. The Tool Security Policies feature is turned off in
+        #      addon config — the middleware never registered, so no
+        #      approval queue exists.
+        #   2. The settings UI is running via the stdio sidecar — the
+        #      in-memory queue lives in the main server process which
+        #      isn't reachable from the sidecar.
+        # Either way, point users at the addon log for the real reason
+        # (a startup ImportError on the policy package surfaces here as
+        # the same 503 with a "ModuleNotFoundError" in the log).
         return JSONResponse(
             {
                 "error": (
-                    "Live Tool Security Policies approvals are only available "
-                    "from the main settings UI, not the stdio sidecar."
+                    "Tool security policies live approvals are not active. "
+                    "Either the feature is turned off in addon config, the "
+                    "settings UI is running in stdio-sidecar mode, or the "
+                    "policy package failed to import at startup. Check the "
+                    "addon log for ImportError / RuntimeError details if you "
+                    "expected gating to be on."
                 )
             },
             status_code=503,
