@@ -2107,16 +2107,11 @@ const FEATURE_META = {
   },
 };
 
-// The 5 beta sub-flag fields gated by the master beta toggle. Mirrors
-// config.py:BETA_FEATURE_FIELDS. Used by renderFeatureFlags to apply
-// nesting + dimming, and by saveFeatureFlag to short-circuit on master-off.
-const BETA_SUB_FLAGS = new Set([
-  "enable_yaml_config_editing",
-  "enable_filesystem_tools",
-  "enable_custom_component_integration",
-  "enable_code_mode",
-  "enable_lite_docstrings",
-]);
+// The 5 beta sub-flag fields gated by the master beta toggle. Populated
+// from the ``beta_sub_flags`` array in the /api/settings/features
+// response so the JS stays in sync with Python's
+// ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.
+let BETA_SUB_FLAGS = new Set();
 
 const ORIGIN_LOCKED_NOTE = {
   env: 'Set via environment variable — unset it to edit here.',
@@ -2157,6 +2152,9 @@ async function loadFeatureFlags() {
       '<div class="feature-row"><div class="feature-help">' +
       'Feature flags response was not valid JSON.</div></div>';
     return;
+  }
+  if (Array.isArray(data.beta_sub_flags)) {
+    BETA_SUB_FLAGS = new Set(data.beta_sub_flags);
   }
   renderFeatureFlags(data.flags || {});
 }
@@ -3260,16 +3258,38 @@ let _advancedFields = [];
 let _advancedDirty = {};  // {field: newValue} for unsaved edits
 
 async function loadAdvancedSettings() {
+  // Mirrors loadFeatureFlags' 3-arm error handling: surface network /
+  // HTTP / parse failures in the first section container so the user
+  // (and field debuggers reading the page) can see what went wrong.
+  // Console-log too so devtools has a stack.
+  const errSlot = document.getElementById('advConnection');
   let resp;
   try {
     resp = await fetch('./api/settings/advanced');
-  } catch (_e) {
-    // Sidecar/server may be too old to support this endpoint — silently
-    // hide the section rather than show an error.
+  } catch (err) {
+    console.error('loadAdvancedSettings fetch failed:', err);
+    if (errSlot) errSlot.innerHTML =
+      '<div class="adv-row"><div class="adv-help">' +
+      'Advanced settings unavailable (network error reaching ' +
+      '/api/settings/advanced).</div></div>';
     return;
   }
-  if (!resp.ok) return;
-  const data = await resp.json();
+  if (!resp.ok) {
+    if (errSlot) errSlot.innerHTML =
+      `<div class="adv-row"><div class="adv-help">` +
+      `Advanced settings unavailable (HTTP ${resp.status}).</div></div>`;
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    console.error('loadAdvancedSettings JSON parse failed:', err);
+    if (errSlot) errSlot.innerHTML =
+      '<div class="adv-row"><div class="adv-help">' +
+      'Advanced settings response was not valid JSON.</div></div>';
+    return;
+  }
   _advancedFields = data.fields || [];
   _advancedDirty = {};
   const bySection = {};
@@ -4083,7 +4103,11 @@ def build_settings_handlers(
                 if bounds is not None:
                     entry["min"], entry["max"] = bounds
             flags[field_name] = entry
-        return JSONResponse({"flags": flags})
+        from .config import BETA_FEATURE_FIELDS
+
+        return JSONResponse(
+            {"flags": flags, "beta_sub_flags": list(BETA_FEATURE_FIELDS)}
+        )
 
     async def _save_feature_flags(request: Request) -> JSONResponse:
         """Persist UI-edited feature-flag values.
@@ -4902,14 +4926,10 @@ def build_settings_handlers(
                 existing = parsed
         existing.update(new_overrides)
 
-        tmp = path.with_suffix(path.suffix + ".tmp")
         try:
-            tmp.write_text(json.dumps(existing, indent=2))
-            os.replace(tmp, path)
+            _atomic_write_json(path, existing)
         except OSError as exc:
             logger.warning("Could not write %s", path, exc_info=True)
-            with contextlib.suppress(FileNotFoundError, OSError):
-                tmp.unlink()
             return JSONResponse(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
