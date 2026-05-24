@@ -1884,7 +1884,7 @@ class TestSaveFeatureFlagsStandaloneMode:
         assert body["success"] is True
         assert body["mode"] == "file"
         assert body["restart_required"] is True
-        assert body["applied"] == {"enable_yaml_config_editing": True}
+        assert body["applied"] == {"enable_tool_search": True}
         # Legacy field names from earlier iterations must not creep
         # back in alongside the new shape.
         assert "restarting" not in body

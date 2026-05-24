@@ -77,13 +77,19 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
-    # Advanced settings panel (#1164) — Save button + status text in
-    # the Server Settings tab. Section containers (advConnection etc.)
-    # are populated dynamically via innerHTML so they don't bind
-    # top-level handlers; only advSaveBtn does.
+    # Advanced settings panel (#1164) — Save button + status text +
+    # the 5 section containers that loadAdvancedSettings() writes to
+    # via innerHTML. Without container divs in MIN_DOM, renderSection
+    # silently no-ops (getElementById returns null) and the
+    # behavioural tests find an empty body.
     "advSaveBtn",
     "advSaveStatus",
     "advSaveRow",
+    "advConnection",
+    "advSearch",
+    "advOperations",
+    "advToolsSurface",
+    "advDiagnostics",
 ]
 
 
