@@ -8,6 +8,7 @@ import os
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
@@ -710,13 +711,15 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
     registry) are NEVER applied — chicken-and-egg safeguard for
     connection settings (#1164).
 
-    Addon-mode short-circuit: advanced fields are not in any addon
-    config.yaml schema, so reading the override file here in addon
-    mode is the only authoritative source — same carve-out as the
-    beta gate above.
+    Addon-mode behavior: most advanced fields ARE in the addon's
+    ``config.yaml`` schema (e.g. ``backup_hint``, ``verify_ssl``,
+    ``enabled_tool_modules``). For those, ``start.py`` exports the
+    corresponding env var on every boot and the env-var-wins check
+    below correctly skips them — the override file is effectively
+    ignored. For fields not in any addon schema (the ``code_mode_*``
+    sub-numerics and ``mcp_server_version``), the override file is
+    the only authoritative source and applies in either mode.
     """
-    from typing import Any
-
     overrides = _read_feature_flag_override_file()
     if not overrides:
         return

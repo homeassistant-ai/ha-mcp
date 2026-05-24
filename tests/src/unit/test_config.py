@@ -371,6 +371,23 @@ def test_advanced_override_rejects_invalid_choice(
     assert get_global_settings().log_level == "INFO"
 
 
+def test_advanced_override_str_field_with_null_byte_rejected(
+    isolated_data_dir, monkeypatch
+) -> None:
+    """str-typed advanced fields with embedded null bytes are rejected
+    (defensive guard against filesystem-API confusion)."""
+    _clear_all_feature_envs(monkeypatch)
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({"mcp_server_name": "foo\x00bar"})
+    )
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    s = get_global_settings()
+    # Null-byte value silently ignored, field stays at default ("ha-mcp").
+    assert s.mcp_server_name == "ha-mcp"
+
+
 # Backward-compat tests (#1164 task 6.2b) — file from older version.
 
 
