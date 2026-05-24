@@ -2272,13 +2272,10 @@ function renderPolicyCard(toolName, rule) {
   const populatePathSelect = (selectedPath) => {
     const paths = (toolSchema && toolSchema.paths) || [];
     let html = '';
-    if (paths.length === 0) {
-      html += '<option value="">(no schema — type a path)</option>';
-    } else {
-      html += '<option value="">(pick an argument)</option>';
-    }
     // Wildcard: match the predicate against EVERY argument of the call.
-    // Useful for catch-all rules like "block if any arg equals lock".
+    // Always first AND default, so the form has a sensible value out of
+    // the box and users never hit "argument is required" by saving an
+    // empty placeholder.
     html += '<option value="args.*" ' +
       'title="Match against every argument of the call. Combine with op=equals/is one of to gate on any arg having a given value.">' +
       '(any argument)</option>';
@@ -2298,8 +2295,9 @@ function renderPolicyCard(toolName, rule) {
     // drop into custom mode automatically so we don't silently clobber
     // the existing value.
     if (selectedPath) {
+      const isWildcard = selectedPath === 'args.*';
       const match = paths.find(p => p.path === selectedPath);
-      if (match) {
+      if (isWildcard || match) {
         pathSelectEl.value = selectedPath;
         pathCustomEl.style.display = 'none';
         pathCustomEl.value = '';
@@ -2309,7 +2307,9 @@ function renderPolicyCard(toolName, rule) {
         pathCustomEl.value = selectedPath;
       }
     } else {
-      pathSelectEl.value = '';
+      // New condition: default to "(any argument)" so the form is
+      // immediately submittable once the user fills in a value.
+      pathSelectEl.value = 'args.*';
       pathCustomEl.style.display = 'none';
       pathCustomEl.value = '';
     }
@@ -2580,7 +2580,7 @@ function renderPolicyCard(toolName, rule) {
     const op = opEl.value;
     const path = currentPath();
     if (!path) {
-      errorEl.textContent = 'path is required';
+      errorEl.textContent = 'argument is required';
       errorEl.style.display = '';
       return;
     }
