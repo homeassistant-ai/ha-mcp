@@ -311,7 +311,7 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     return pinned
 
 
-def effective_tool_config() -> dict[str, Any]:
+def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Return the runtime tool config: file values overlaid by env-
     pinned tools (the latter always win, never overwritten by file).
 
@@ -320,10 +320,11 @@ def effective_tool_config() -> dict[str, Any]:
     cases that need just the file's contents (e.g. for displaying
     "user-set" status separately from "env-pinned" status).
     """
-    cfg = load_tool_config(get_global_settings())
-    tools = {**cfg.get("tools", {}), **env_pinned_tools()}
-    cfg = {**cfg, "tools": tools}
-    return cfg
+    if settings is None:
+        settings = get_global_settings()
+    cfg = load_tool_config(settings)
+    tools = {**cfg.get("tools", {}), **env_pinned_tools(settings)}
+    return {**cfg, "tools": tools}
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -3384,15 +3385,7 @@ def build_settings_handlers(
         for name in DEFAULT_PINNED_TOOLS:
             if name not in states:
                 states[name] = "pinned"
-        tools_with_pin: list[dict[str, Any]] = []
-        for tool_entry in tools:
-            tool_name = tool_entry.get("name", "")
-            entry = dict(tool_entry)
-            entry["env_pinned"] = pinned.get(tool_name)
-            tools_with_pin.append(entry)
-        return JSONResponse(
-            {"tools": tools_with_pin, "states": states, "env_pinned": pinned}
-        )
+        return JSONResponse({"tools": tools, "states": states, "env_pinned": pinned})
 
     async def _save_tools(request: Request) -> JSONResponse:
         try:
@@ -3446,7 +3439,7 @@ def build_settings_handlers(
             return JSONResponse(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Refusing to flip env-pinned tools: {rejected}. "
+                    f"Refusing to flip env-pinned tools: {', '.join(rejected)}. "
                     "Unset DISABLED_TOOLS / PINNED_TOOLS first.",
                     context={"rejected": rejected},
                 ),

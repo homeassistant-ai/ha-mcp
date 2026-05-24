@@ -373,7 +373,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         """
         from .settings_ui import apply_tool_visibility, effective_tool_config
 
-        config = effective_tool_config()
+        config = effective_tool_config(self.settings)
         # When tool_config.json is absent (fresh install), `config` is falsy
         # and we leave self._user_enabled_tools at its __init__ default (empty
         # set). That yields no defaults filtered in _apply_tool_search, which

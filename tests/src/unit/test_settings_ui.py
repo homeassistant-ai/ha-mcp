@@ -2077,12 +2077,12 @@ class TestEnvPinnedTools:
         """DISABLED_TOOLS=ha_foo + tool_config.json says ha_foo='enabled' →
         runtime sees ha_foo as disabled (env wins per-tool)."""
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
-        monkeypatch.delenv("PINNED_TOOLS", raising=False)
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         from ha_mcp.utils.data_paths import get_data_dir
 
         get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_foo": "enabled"}})
         )
@@ -2098,12 +2098,12 @@ class TestEnvPinnedTools:
         self, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("PINNED_TOOLS", "ha_bar")
-        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         from ha_mcp.utils.data_paths import get_data_dir
 
         get_data_dir.cache_clear()
+        monkeypatch.setenv("PINNED_TOOLS", "ha_bar")
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_bar": ""}})
         )
@@ -2117,12 +2117,12 @@ class TestEnvPinnedTools:
 
     def test_non_env_pinned_tool_remains_freely_editable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
-        monkeypatch.delenv("PINNED_TOOLS", raising=False)
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         from ha_mcp.utils.data_paths import get_data_dir
 
         get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_other": "disabled"}})
         )
@@ -2138,12 +2138,12 @@ class TestEnvPinnedTools:
     @pytest.mark.asyncio
     async def test_save_tools_rejects_env_pinned_tool_flip(self, monkeypatch, tmp_path):
         """POST attempting to flip an env-pinned tool returns 409."""
-        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         from ha_mcp.utils.data_paths import get_data_dir
 
         get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
@@ -2157,4 +2157,23 @@ class TestEnvPinnedTools:
         assert body["success"] is False
         assert "ha_foo" in str(body)
         get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_get_tools_includes_env_pinned_map(self, monkeypatch):
+        """GET /api/settings/tools advertises env_pinned status so UI can
+        render locked rows in Chunk 5b."""
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_tools"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["env_pinned"] == {"ha_foo": "disabled"}
+        # Also confirm the overlay is reflected in states / tools.
+        assert body["states"].get("ha_foo") == "disabled"
         _reset_global_settings()
