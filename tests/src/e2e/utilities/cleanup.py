@@ -95,8 +95,7 @@ class TestEntityCleaner:
         """Clean up an automation entity."""
         try:
             delete_result = await self.client.call_tool(
-                "ha_config_remove_automation",
-                { "identifier": entity_id}
+                "ha_config_remove_automation", {"identifier": entity_id}
             )
 
             delete_data = parse_mcp_result(delete_result)
@@ -113,8 +112,7 @@ class TestEntityCleaner:
             script_id = entity_id.replace("script.", "")
 
             delete_result = await self.client.call_tool(
-                "ha_config_remove_script",
-                { "script_id": script_id}
+                "ha_config_remove_script", {"script_id": script_id}
             )
 
             delete_data = parse_mcp_result(delete_result)
@@ -131,7 +129,7 @@ class TestEntityCleaner:
             helper_id = entity_id.replace(f"{helper_type}.", "")
 
             delete_result = await self.client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "helper_type": helper_type,
                     "target": helper_id,
@@ -294,8 +292,7 @@ async def verify_entity_cleanup(mcp_client, entity_id: str, entity_type: str) ->
         if entity_type == "automation":
             # Try to get automation config
             result = await mcp_client.call_tool(
-                "ha_config_get_automation",
-                { "identifier": entity_id}
+                "ha_config_get_automation", {"identifier": entity_id}
             )
 
             result_data = parse_mcp_result(result)
@@ -305,8 +302,7 @@ async def verify_entity_cleanup(mcp_client, entity_id: str, entity_type: str) ->
             # Try to get script config
             script_id = entity_id.replace("script.", "")
             result = await mcp_client.call_tool(
-                "ha_config_get_script",
-                { "script_id": script_id}
+                "ha_config_get_script", {"script_id": script_id}
             )
 
             result_data = parse_mcp_result(result)

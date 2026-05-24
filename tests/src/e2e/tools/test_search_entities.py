@@ -649,7 +649,7 @@ async def area_with_mixed_domains(mcp_client):
     ):
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "target": entity_id,
                     "helper_type": helper_type,
@@ -957,7 +957,7 @@ async def two_areas_fuzzy_match(mcp_client):
                 )
             else:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {"target": oid, "helper_type": kind, "confirm": True},
                 )
         except Exception as exc:  # pragma: no cover — cleanup best-effort
@@ -1130,7 +1130,7 @@ async def populated_area_for_shape_test(mcp_client):
     yield {"area_id": area_id, "boolean_id": boolean_id}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": boolean_id, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover — cleanup best-effort
@@ -1347,7 +1347,7 @@ async def two_areas_with_shared_prefix(mcp_client):
     for h in helpers:
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": h, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1455,7 +1455,7 @@ async def helper_with_alias(mcp_client):
     yield {"entity_id": eid, "alias": alias}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover
@@ -1526,7 +1526,7 @@ async def area_with_alias(mcp_client):
     finally:
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1598,7 +1598,7 @@ async def hidden_helper(mcp_client):
     yield {"entity_id": eid, "distinctive": distinctive}
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": eid, "helper_type": "input_boolean", "confirm": True},
         )
     except Exception as exc:  # pragma: no cover
@@ -1776,7 +1776,7 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
         # Cleanup
         try:
             await mcp_client.call_tool(
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": eid, "helper_type": "input_boolean", "confirm": True},
             )
         except Exception as exc:  # pragma: no cover
@@ -1883,7 +1883,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
         for eid in (v_eid, h_eid):
             try:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {
                         "target": eid,
                         "helper_type": "input_boolean",
@@ -1967,7 +1967,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
         for eid in (v_eid, h_eid):
             try:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {
                         "target": eid,
                         "helper_type": "input_boolean",

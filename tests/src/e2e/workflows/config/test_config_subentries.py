@@ -125,7 +125,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         )
 
         delete_raw = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "target": entry_id,
                 "helper_type": "config_subentry",
@@ -153,7 +153,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         if entry_id and subentry_id:
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {
                     "target": entry_id,
                     "helper_type": "config_subentry",
@@ -164,7 +164,7 @@ async def test_forecast_solar_config_subentry_create_list_delete(
         if entry_id:
             await safe_call_tool(
                 mcp_client,
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": entry_id, "confirm": True},
             )
             LOG.info("Cleaned up forecast_solar entry %s", entry_id)

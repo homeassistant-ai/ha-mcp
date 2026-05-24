@@ -443,7 +443,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
 - `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
-- `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
+- `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
