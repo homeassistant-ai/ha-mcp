@@ -2177,3 +2177,188 @@ class TestEnvPinnedTools:
         # Also confirm the overlay is reflected in states / tools.
         assert body["states"].get("ha_foo") == "disabled"
         _reset_global_settings()
+
+
+class TestAdvancedSettingsEndpoints:
+    """/api/settings/advanced GET+POST handlers (#1164 Chunk 2a)."""
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_returns_all_registered_fields(self, monkeypatch):
+        from ha_mcp.config import (
+            ADVANCED_SETTINGS_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        # Clear every advanced env var so origins resolve cleanly.
+        for _fname, ename, *_ in ADVANCED_SETTINGS_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        field_names = {f["field"] for f in body["fields"]}
+        assert "homeassistant_url" in field_names
+        assert "log_level" in field_names
+        assert "verify_ssl" in field_names
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_marks_connection_fields_display_only(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        url_row = next(f for f in body["fields"] if f["field"] == "homeassistant_url")
+        assert url_row["editable"] is False
+        assert url_row["section"] == "connection"
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_log_level_has_choices(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        log_row = next(f for f in body["fields"] if f["field"] == "log_level")
+        assert log_row["choices"] == ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_masks_token_when_set(self, monkeypatch, tmp_path):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("HOMEASSISTANT_TOKEN", "real-secret-jwt-value")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        token_row = next(
+            f for f in body["fields"] if f["field"] == "homeassistant_token"
+        )
+        assert token_row["value"] == "*****"
+        assert "real-secret-jwt-value" not in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_unknown_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"made_up_field": 42})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert "made_up_field" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_display_only_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"homeassistant_url": "http://attacker"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_env_pinned_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("HA_TIMEOUT", "60")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "HA_TIMEOUT" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_out_of_bounds(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": -5})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_invalid_choice(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"log_level": "BANANAS"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_happy_path(self, monkeypatch, tmp_path):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["applied"] == {"timeout": 90}
+        assert body["restart_required"] is True
+        # File written and re-readable by Settings on next construct.
+        from ha_mcp.config import get_global_settings
+
+        assert get_global_settings().timeout == 90
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_null_byte_in_str(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("MCP_SERVER_NAME", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"mcp_server_name": "evil\x00name"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400

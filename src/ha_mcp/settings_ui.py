@@ -4205,6 +4205,296 @@ def build_settings_handlers(
             }
         )
 
+    async def _get_advanced_settings(_: Request) -> JSONResponse:
+        """Return advanced (non-feature-flag, non-backup) settings + per-field
+        origin + editable flag (#1164).
+
+        Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for the
+        ``ADVANCED_SETTINGS_FIELDS`` registry. Advanced fields are never
+        addon-routed: even when an entry is in the addon ``config.yaml``
+        schema (e.g. ``backup_hint``, ``verify_ssl``), the addon-mode
+        env-var-wins check skips them server-side, so the UI surfaces them
+        as ``origin="env"`` (locked) in addon mode. Standalone-mode edits
+        write to ``feature_flags.json`` via the same shared override file
+        used by feature flags.
+        """
+        from .config import (
+            _ADVANCED_SETTINGS_BOUNDS,
+            _ADVANCED_SETTINGS_CHOICES,
+            ADVANCED_SETTINGS_FIELDS,
+            OAUTH_MODE_TOKEN,
+            get_global_settings,
+        )
+
+        settings = get_global_settings()
+        fields: list[dict[str, Any]] = []
+        for (
+            fname,
+            env_name,
+            ftype,
+            section,
+            registry_editable,
+        ) in ADVANCED_SETTINGS_FIELDS:
+            origin = _origin_for_advanced_field(env_name)
+            value: Any = getattr(settings, fname, None)
+            # Mask the token: never echo the actual long-lived access
+            # token to the UI. The OAuth-mode sentinel survives so
+            # operators can tell connection mode at a glance.
+            if fname == "homeassistant_token":
+                value = "*****" if value and value != OAUTH_MODE_TOKEN else value
+            row: dict[str, Any] = {
+                "field": fname,
+                "env_var": env_name,
+                "value": value,
+                "type": ftype.__name__,
+                "section": section,
+                "origin": origin,
+                # Env-pin makes the field read-only regardless of the
+                # registry's ``editable`` flag. Display-only rows from
+                # the registry (homeassistant_url / _token) stay locked
+                # forever.
+                "editable": registry_editable and origin != "env",
+            }
+            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            if bounds is not None:
+                row["min"], row["max"] = bounds
+            choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+            if choices is not None:
+                row["choices"] = list(choices)
+            fields.append(row)
+        return JSONResponse({"fields": fields})
+
+    def _origin_for_advanced_field(env_name: str) -> str:
+        """Origin for an ADVANCED_SETTINGS_FIELDS entry.
+
+        Returns ``'env' | 'file' | 'default'`` — advanced fields are
+        never addon-routed (their POST writes land in the override
+        file in either deployment mode).
+        """
+        from .config import (
+            ADVANCED_SETTINGS_FIELDS,
+            _read_feature_flag_override_file,
+        )
+
+        if os.environ.get(env_name) is not None:
+            return "env"
+        overrides = _read_feature_flag_override_file()
+        fname = next(
+            (f for f, e, *_ in ADVANCED_SETTINGS_FIELDS if e == env_name), None
+        )
+        if fname is not None and fname in overrides:
+            return "file"
+        return "default"
+
+    async def _save_advanced_settings(request: Request) -> JSONResponse:
+        """Persist UI-edited advanced settings to the shared override file.
+
+        Validation chain per field:
+        - Unknown field → 400 ``VALIDATION_INVALID_PARAMETER``.
+        - ``editable=False`` registry entry → 409 (display-only).
+        - Env-pinned (``origin=='env'``) → 409 with env var name.
+        - Type mismatch → 400.
+        - Bounds violation → 400.
+        - Choices violation → 400.
+
+        Successful writes merge into the override file via atomic write,
+        reset the global Settings cache, and respond with
+        ``restart_required=True`` so the UI shows the banner (most
+        advanced fields gate one-time startup paths — REST client
+        construction, logging setup, MCP handshake metadata, tool-module
+        filtering, etc.).
+        """
+        from .config import (
+            _ADVANCED_SETTINGS_BOUNDS,
+            _ADVANCED_SETTINGS_CHOICES,
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            ADVANCED_SETTINGS_FIELDS,
+        )
+        from .utils.data_paths import get_data_dir
+
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "Invalid JSON body",
+                ),
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Request body must be a JSON object",
+                ),
+                status_code=400,
+            )
+
+        registry = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
+        new_overrides: dict[str, Any] = {}
+        for fname, raw in body.items():
+            if fname not in registry:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown advanced field: {fname!r}",
+                    ),
+                    status_code=400,
+                )
+            env_name, ftype, _section, registry_editable = registry[fname]
+            if not registry_editable:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} is display-only — modify via env var "
+                        "or addon configuration.",
+                    ),
+                    status_code=409,
+                )
+            if os.environ.get(env_name) is not None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} is set via {env_name} env var — "
+                        "unset it to edit here.",
+                        context={"env_var": env_name},
+                    ),
+                    status_code=409,
+                )
+
+            coerced: Any
+            if ftype is bool:
+                if not isinstance(raw, bool):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = raw
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = int(raw)
+            elif ftype is float:
+                if isinstance(raw, bool) or not isinstance(raw, int | float):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = float(raw)
+            elif ftype is str:
+                if not isinstance(raw, str):
+                    return _bad_advanced_type(fname, ftype, raw)
+                if "\x00" in raw:
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{fname!r} contains a null byte; rejected.",
+                        ),
+                        status_code=400,
+                    )
+                coerced = raw
+            else:
+                return _bad_advanced_type(fname, ftype, raw)
+
+            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} must be between {bounds[0]} and "
+                        f"{bounds[1]} (got {coerced}).",
+                    ),
+                    status_code=400,
+                )
+            choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+            if choices is not None and coerced not in choices:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} must be one of {list(choices)} (got {coerced!r}).",
+                    ),
+                    status_code=400,
+                )
+            new_overrides[fname] = coerced
+
+        if not new_overrides:
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": {},
+                    "mode": "file",
+                    "restart_required": False,
+                }
+            )
+
+        # Merge into the existing override file via atomic write (same
+        # path used by _save_feature_flags so a single file holds both
+        # advanced + feature-flag overrides).
+        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+        existing: dict[str, Any] = {}
+        try:
+            existing_raw = path.read_text()
+        except FileNotFoundError:
+            existing_raw = None
+        except OSError as exc:
+            logger.warning("Cannot read %s", path, exc_info=True)
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Could not read existing override file "
+                    f"({type(exc).__name__}: {exc}); refusing to "
+                    "overwrite to avoid losing prior toggles.",
+                ),
+                status_code=500,
+            )
+        if existing_raw is not None:
+            try:
+                parsed = json.loads(existing_raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Existing override file at {path} is not "
+                        f"valid JSON ({exc}); refusing to overwrite. "
+                        "Inspect or delete the file manually and retry.",
+                    ),
+                    status_code=409,
+                )
+            if isinstance(parsed, dict):
+                existing = parsed
+        existing.update(new_overrides)
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(json.dumps(existing, indent=2))
+            os.replace(tmp, path)
+        except OSError as exc:
+            logger.warning("Could not write %s", path, exc_info=True)
+            with contextlib.suppress(FileNotFoundError, OSError):
+                tmp.unlink()
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"Could not persist advanced settings: {exc}",
+                ),
+                status_code=500,
+            )
+
+        _reset_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": new_overrides,
+                "mode": "file",
+                "restart_required": True,
+            }
+        )
+
+    def _bad_advanced_type(fname: str, ftype: type, raw: Any) -> JSONResponse:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{fname!r} expects {ftype.__name__}, got {type(raw).__name__}.",
+            ),
+            status_code=400,
+        )
+
     async def _get_backup_config(_: Request) -> JSONResponse:
         """Return live auto-backup config + per-field origin + editable flag.
 
@@ -4427,6 +4717,8 @@ def build_settings_handlers(
         "settings_info": _settings_info,
         "get_feature_flags": _get_feature_flags,
         "save_feature_flags": _save_feature_flags,
+        "get_advanced_settings": _get_advanced_settings,
+        "save_advanced_settings": _save_advanced_settings,
         "list_backups": _list_backups,
         "view_backup": _view_backup,
         "diff_backup": _diff_backup,
@@ -4523,6 +4815,13 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
+        # Advanced settings endpoints (#1164)
+        mcp.custom_route("/api/settings/advanced", methods=["GET"])(
+            handlers["get_advanced_settings"]
+        )
+        mcp.custom_route("/api/settings/advanced", methods=["POST"])(
+            handlers["save_advanced_settings"]
+        )
         # Auto-backup endpoints (#1288)
         mcp.custom_route("/api/settings/backups", methods=["GET"])(
             handlers["list_backups"]
@@ -4596,6 +4895,13 @@ def register_settings_routes(
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
+        )
+        # Advanced settings endpoints (#1164)
+        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["GET"])(
+            handlers["get_advanced_settings"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["POST"])(
+            handlers["save_advanced_settings"]
         )
         # Auto-backup endpoints (#1288)
         mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(
