@@ -6,11 +6,11 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import (
+from ...utilities.assertions import (
     assert_mcp_success,
     safe_call_tool,
 )
-from tests.src.e2e.utilities.wait_helpers import wait_for_tool_result
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 

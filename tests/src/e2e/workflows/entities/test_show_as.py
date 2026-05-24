@@ -7,7 +7,7 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success
+from ...utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 

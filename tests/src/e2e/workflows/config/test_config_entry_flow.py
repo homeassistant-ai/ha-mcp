@@ -13,8 +13,8 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
-from tests.src.e2e.utilities.wait_helpers import wait_for_tool_result
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +58,20 @@ class TestConfigEntryFlow:
         """Create a min_max helper (single form step, no menu)."""
         config = {
             "name": "test_min_max_e2e",
-            "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
+            "entity_ids": [
+                "sensor.demo_temperature",
+                "sensor.demo_outside_temperature",
+            ],
             "type": "min",
         }
-        entry_id = await _create_config_entry_helper(mcp_client, "min_max", config, "min_max helper")
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "min_max", config, "min_max helper"
+        )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
+            mcp_client,
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_create_group_helper_light(self, mcp_client):
@@ -75,10 +82,14 @@ class TestConfigEntryFlow:
             "entities": [],  # empty list is valid
             "hide_members": False,
         }
-        entry_id = await _create_config_entry_helper(mcp_client, "group", config, "light group helper")
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "group", config, "light group helper"
+        )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
+            mcp_client,
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_create_template_sensor(self, mcp_client):
@@ -88,10 +99,14 @@ class TestConfigEntryFlow:
             "name": "test_template_sensor_e2e",
             "state": "{{ states('sun.sun') }}",
         }
-        entry_id = await _create_config_entry_helper(mcp_client, "template", config, "template sensor")
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "template", config, "template sensor"
+        )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
+            mcp_client,
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_create_template_binary_sensor(self, mcp_client):
@@ -106,7 +121,9 @@ class TestConfigEntryFlow:
         )
 
         await safe_call_tool(
-            mcp_client, "ha_delete_helpers_integrations", {"target": entry_id, "confirm": True}
+            mcp_client,
+            "ha_delete_helpers_integrations",
+            {"target": entry_id, "confirm": True},
         )
 
     async def test_update_min_max_helper(self, mcp_client):
@@ -122,7 +139,10 @@ class TestConfigEntryFlow:
 
         # Update via options flow
         updated_config = {
-            "entity_ids": ["sensor.demo_temperature", "sensor.demo_outside_temperature"],
+            "entity_ids": [
+                "sensor.demo_temperature",
+                "sensor.demo_outside_temperature",
+            ],
             "type": "max",
         }
         update_result = await mcp_client.call_tool(
@@ -154,7 +174,9 @@ class TestConfigEntryFlow:
             None,
         )
         if entry is None:
-            pytest.skip("No config entries with supports_options=true in test environment")
+            pytest.skip(
+                "No config entries with supports_options=true in test environment"
+            )
 
         result = await mcp_client.call_tool(
             "ha_get_integration",
@@ -164,7 +186,9 @@ class TestConfigEntryFlow:
         assert "options_schema" in data, "Expected options_schema in response"
         schema = data["options_schema"]
         assert schema.get("flow_type") in ("form", "menu")
-        logger.info(f"options_schema flow_type={schema['flow_type']} for {entry['domain']}")
+        logger.info(
+            f"options_schema flow_type={schema['flow_type']} for {entry['domain']}"
+        )
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
         """Creating a group helper without group_type returns a helpful error
