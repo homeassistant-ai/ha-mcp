@@ -2929,6 +2929,174 @@ class TestBetaMasterGateInSave:
         _reset_global_settings()
 
     @pytest.mark.asyncio
+    async def test_save_features_acquires_override_file_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """F.5 — pin the lock-acquire site so a regression that removes
+        ``async with _get_override_file_lock():`` from the file-mode
+        write path lands as a test failure. The lock is the only thing
+        preventing two concurrent saves from clobbering each other's
+        persisted state, but the protection is invisible to other
+        tests — they'd still pass without it.
+        """
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Wrap _get_override_file_lock so we can count entries.
+        import ha_mcp.settings_ui as ui_mod
+
+        real_get_lock = ui_mod._get_override_file_lock
+        entries = {"count": 0}
+
+        class CountingLock:
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __aenter__(self):
+                entries["count"] += 1
+                return await self._inner.__aenter__()
+
+            async def __aexit__(self, *args):
+                return await self._inner.__aexit__(*args)
+
+        def patched_get_lock():
+            return CountingLock(real_get_lock())
+
+        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_tool_search": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        assert entries["count"] == 1, (
+            "save_feature_flags must acquire _OVERRIDE_FILE_LOCK exactly once "
+            "in the file-mode write path — regression would silently bypass "
+            "concurrent-save serialisation"
+        )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_acquires_override_file_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """F.5 — same lock-acquire pin for the advanced-settings file
+        write path. Both handlers must share the same lock so they
+        can't race against each other on the shared
+        ``feature_flags.json``.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        import ha_mcp.settings_ui as ui_mod
+
+        real_get_lock = ui_mod._get_override_file_lock
+        entries = {"count": 0}
+
+        class CountingLock:
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __aenter__(self):
+                entries["count"] += 1
+                return await self._inner.__aenter__()
+
+            async def __aexit__(self, *args):
+                return await self._inner.__aexit__(*args)
+
+        def patched_get_lock():
+            return CountingLock(real_get_lock())
+
+        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        assert entries["count"] == 1, (
+            "save_advanced_settings must acquire _OVERRIDE_FILE_LOCK in the "
+            "file-mode write path — regression would silently bypass "
+            "concurrent-save serialisation"
+        )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_on_restores_subflag_values_in_addon_mode(
+        self, monkeypatch, tmp_path
+    ):
+        """F.7 — round-trip restore is exercised in standalone mode by
+        ``test_save_features_master_on_restores_runtime_subflag_values``.
+        Mirror for addon mode: the Supervisor merge-and-post must NOT
+        zero out sub-flag values when the user POSTs only the master
+        flip-on. The preserve-on-master-off → restore-on-master-on UX
+        only works in addon mode if Supervisor keeps the merged options
+        intact.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # Dev-addon options.json shape: master + sub-flag both true,
+        # then user flipped master off (sub-flag value preserved).
+        # Supervisor's current options state at fetch time reflects
+        # that shape.
+        current_options = {
+            "enable_beta_features": False,
+            "enable_yaml_config_editing": True,
+            "enable_filesystem_tools": True,
+            "backup_hint": "normal",
+        }
+        # Mock the fetch+post path so we can inspect what gets POSTed.
+        fetch_mock = AsyncMock(return_value=(current_options, None))
+        merge_mock = AsyncMock(return_value=(True, None))
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fetch_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options",
+            merge_mock,
+        )
+        # Mark the master env var as set so get_feature_flag_origin
+        # returns 'addon' for it and the save handler picks the
+        # addon-route branch.
+        monkeypatch.setenv("ENABLE_BETA_FEATURES", "false")
+        _reset_global_settings()
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        # The Supervisor POST got only the master flip. Sub-flag
+        # values are NOT in the call — Supervisor's merge layer
+        # preserves the existing options.json entries for keys not
+        # mentioned in the POST body.
+        merge_mock.assert_awaited_once()
+        posted_args = merge_mock.await_args.args
+        assert posted_args[1] == {"enable_beta_features": True}, (
+            f"addon-route POST must NOT clobber sub-flag values; "
+            f"posted: {posted_args[1]}"
+        )
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
     async def test_save_features_master_off_applied_dict_contains_only_master(
         self, monkeypatch, tmp_path
     ):

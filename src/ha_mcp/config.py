@@ -814,12 +814,20 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 )
                 continue
             current = getattr(settings, sub, False)
-            if current:
+            if current and sub not in _BETA_GATE_LOGGED:
+                # Dedup per-process: cascade-clear was removed so the
+                # file now holds truthy sub-flag values long-term and
+                # this gate runs on every Settings rebuild. Logging
+                # the force-False line every time would spam addon
+                # logs (#1164 follow-up review). First-time-per-process
+                # is enough to leave an audit trail for operators
+                # debugging "why is my beta tool off?".
                 logger.info(
                     "Beta master toggle is off; forcing %s=False "
                     "(was True via env/file).",
                     sub,
                 )
+                _BETA_GATE_LOGGED.add(sub)
             try:
                 setattr(settings, sub, False)
             except (ValueError, TypeError) as err:
@@ -953,6 +961,14 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
 
 # Global settings instance
 _settings: Settings | None = None
+
+# Names of beta sub-flags the master gate has already logged a
+# force-False line for in this process. Used to dedup the gate's
+# INFO log so we don't spam addon logs on every Settings rebuild
+# now that the cascade-clear is gone and the file may carry truthy
+# sub-flag values long-term (#1164 follow-up review). Reset alongside
+# the Settings singleton in ``_reset_global_settings``.
+_BETA_GATE_LOGGED: set[str] = set()
 
 
 # Auto-backup runtime-editable fields (#1288 web UI editor). Each entry
@@ -1231,6 +1247,11 @@ def _reset_global_settings() -> None:
     """
     global _settings
     _settings = None
+    # Drop the gate-log dedup set too — once Settings has been
+    # rebuilt, an operator who's re-investigating "why is my beta
+    # tool off?" should see the next gate fire logged. This keeps
+    # the dedup tight to the lifetime of one cached Settings.
+    _BETA_GATE_LOGGED.clear()
 
 
 # Import-time validator for cross-registry invariants (#1164).

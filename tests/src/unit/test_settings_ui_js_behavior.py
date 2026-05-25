@@ -1486,6 +1486,208 @@ class TestBetaBlockRendersAtBottom:
             f"top button not disabled mid-save; probe: {probe_attrs}"
         )
 
+    def test_dual_save_buttons_mirror_disabled_and_status_on_post_failure(
+        self, settings_script: str
+    ) -> None:
+        """F.6 — failed-POST branch of the dual-save mirror. After a
+        500 response, both buttons must be re-enabled and both
+        status els must carry the error message — a regression that
+        broke either helper for the error path would still pass the
+        existing success-path mirror test.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    # Initial GET load.
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                    # POST → 500 with structured error.
+                    {
+                        "status": 500,
+                        "json": {
+                            "success": False,
+                            "error": {
+                                "code": "INTERNAL_ERROR",
+                                "message": "save failed for test",
+                            },
+                        },
+                    },
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              document.getElementById('advSaveBtn').click();
+              // Wait for the POST + error-handling to settle.
+              await new Promise(r => setTimeout(r, 250));
+              const probe = document.createElement('div');
+              probe.id = '__failed_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              probe.dataset.bottomDisabled =
+                String(document.getElementById('advSaveBtn').disabled);
+              probe.dataset.topDisabled =
+                String(document.getElementById('advSaveBtnTop').disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(
+            r'<div[^>]*id="__failed_save_probe"[^>]*>',
+            result.dom,
+        )
+        assert probe_match, (
+            f"failed-save probe div missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Both buttons must be re-enabled after the error response.
+        assert 'data-bottom-disabled="false"' in probe_attrs, (
+            f"bottom button stuck disabled after failed save; probe: {probe_attrs}"
+        )
+        assert 'data-top-disabled="false"' in probe_attrs, (
+            f"top button stuck disabled after failed save; probe: {probe_attrs}"
+        )
+        # Both status els must carry the server's error message.
+        assert "save failed for test" in probe_attrs, (
+            f"error message did not reach both status els; probe: {probe_attrs}"
+        )
+        # Match on both data-* attrs explicitly.
+        assert 'data-bottom-status="save failed for test"' in probe_attrs, (
+            f"bottom status missing error; probe: {probe_attrs}"
+        )
+        assert 'data-top-status="save failed for test"' in probe_attrs, (
+            f"top status missing error; probe: {probe_attrs}"
+        )
+
+    def test_save_button_nothing_to_save_when_no_dirty_and_no_restart(
+        self, settings_script: str
+    ) -> None:
+        """F.8 — fall-through branch: nothing dirty, no restart pending.
+        Status text reads exactly "Nothing to save."
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.getElementById('advSaveBtn').click();
+              await new Promise(r => setTimeout(r, 50));
+              const probe = document.createElement('div');
+              probe.id = '__nothing_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(r'<div[^>]*id="__nothing_save_probe"[^>]*>', result.dom)
+        assert probe_match, (
+            f"nothing-save probe missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        assert 'data-bottom-status="Nothing to save."' in probe_attrs, (
+            f"expected 'Nothing to save.' on bottom status; probe: {probe_attrs}"
+        )
+        assert 'data-top-status="Nothing to save."' in probe_attrs, (
+            f"expected 'Nothing to save.' on top status; probe: {probe_attrs}"
+        )
+
+    def test_save_button_restart_pending_hint_when_dirty_empty_but_restart_showing(
+        self, settings_script: str
+    ) -> None:
+        """F.8 — restart-pending branch: nothing dirty, restartNotice
+        showing. Status hints the user at the Restart button rather
+        than saying nothing changed. Copy is source-blind (doesn't
+        claim a specific source for the pending restart) per the
+        review pass — same banner can be raised by any save in the
+        UI or by a cross-tab broadcast.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              // Simulate a prior save raising the restart banner.
+              document.getElementById('restartNotice').classList.add('show');
+              document.getElementById('advSaveBtn').click();
+              await new Promise(r => setTimeout(r, 50));
+              const probe = document.createElement('div');
+              probe.id = '__restart_pending_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(
+            r'<div[^>]*id="__restart_pending_probe"[^>]*>', result.dom
+        )
+        assert probe_match, (
+            f"restart-pending probe missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Hint must mention restart, must NOT use the plain
+        # "Nothing to save." fall-through.
+        assert "restart is pending" in probe_attrs, (
+            f"hint did not call out the pending restart; probe: {probe_attrs}"
+        )
+        assert 'data-bottom-status="Nothing to save."' not in probe_attrs, (
+            f"fell through to plain 'Nothing to save.'; probe: {probe_attrs}"
+        )
+        # Hint must be source-blind: NOT claim feature-flag toggles
+        # specifically (could have been a tool-pin or backup save).
+        assert "feature-flag toggles already saved" not in probe_attrs, (
+            f"hint hardcoded the source; should be source-blind: {probe_attrs}"
+        )
+
     def test_two_step_save_note_present(self) -> None:
         """The two-step save → restart note must render at the top of
         the Server Settings panel so users know one click is not enough.
@@ -1610,10 +1812,12 @@ class TestBetaMasterToggleLiveRender:
         """F.37 — dispatch a real change event on the master toggle and
         assert the sub-row goes dimmed + disabled in the same tick,
         WITHOUT visually flipping the sub-flag's checked state. The
-        server-side cascade still clears the value on disk; the live
-        UI preserves the user's prior sub-flag selection until the
-        next refresh so they don't lose context on master-off
-        (#1164 follow-up review — A.8).
+        live UI preserves the user's prior sub-flag selection (the
+        server-side cascade-clear was removed in c030148a; the
+        persisted file keeps the truthy values, and the runtime
+        master gate forces sub-flags off at the Settings layer
+        without touching the file) — re-enabling the master later
+        restores the sub-flag values automatically (#1164 follow-up).
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -1669,8 +1873,15 @@ class TestBetaMasterToggleLiveRender:
               );
               const probe = document.createElement('div');
               probe.id = '__sub_state_probe';
-              probe.dataset.subChecked = String(subInput && subInput.checked);
-              probe.dataset.subDisabled = String(subInput && subInput.disabled);
+              if (!subInput) {
+                // Distinguish "selector missed" from "checkbox value
+                // flipped" so the failure message in the harness
+                // points at the right root cause.
+                probe.dataset.error = 'beta-sub input not in DOM';
+              } else {
+                probe.dataset.subChecked = String(subInput.checked);
+                probe.dataset.subDisabled = String(subInput.disabled);
+              }
               document.body.appendChild(probe);
             """,
         )
@@ -1689,8 +1900,11 @@ class TestBetaMasterToggleLiveRender:
         probe_match = re.search(r'<div[^>]*id="__sub_state_probe"[^>]*>', result.dom)
         assert probe_match, f"sub-state probe missing; dom tail: {result.dom[-2000:]}"
         probe_attrs = probe_match.group(0)
+        assert "data-error" not in probe_attrs, (
+            f"selector missed beta-sub input — DOM structure changed: {probe_attrs}"
+        )
         # The checkbox VALUE must stay checked — user's prior
-        # sub-flag selection is preserved until refresh.
+        # sub-flag selection is preserved.
         assert 'data-sub-checked="true"' in probe_attrs, (
             f"sub-row checkbox flipped off — should stay checked: {probe_attrs}"
         )

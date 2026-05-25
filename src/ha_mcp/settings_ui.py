@@ -3547,18 +3547,17 @@ async function saveAdvancedSettings() {
   if (Object.keys(_advancedDirty).length === 0) {
     // Feature-flag toggles (master beta, Tool Search, etc.) auto-save
     // on click via ``saveFeatureFlag`` — they don't pass through
-    // ``_advancedDirty``. If a feature-flag save just landed,
-    // ``restartNotice`` is showing and the user should click Restart,
-    // not Save again. Tell them that explicitly so the big Save
-    // button doesn't look broken when they were toggling beta flags
-    // (#1164 follow-up).
+    // ``_advancedDirty``. Tool-config pins and backup-config edits
+    // also auto-save. Any of those raise ``restartNotice``, but this
+    // tab can't tell which one. Keep the hint source-blind: just
+    // point at the Restart button (#1164 follow-up review).
     const restartNotice = document.getElementById('restartNotice');
     const restartShowing =
       restartNotice && restartNotice.classList.contains('show');
     if (restartShowing) {
       _setAdvSaveStatus(
-        'No advanced changes to save — your feature-flag toggles already ' +
-        'saved on click. Click Restart above to apply them.'
+        'No advanced changes to save — a restart is pending. Click ' +
+        'Restart above to apply your prior changes.'
       );
     } else {
       _setAdvSaveStatus('Nothing to save.');
@@ -3945,10 +3944,15 @@ _OVERRIDE_FILE_LOCK: asyncio.Lock | None = None
 
 
 def _get_override_file_lock() -> asyncio.Lock:
-    """Lazy lock construction — ``asyncio.Lock()`` at module load
-    binds the event loop that's current AT IMPORT, which doesn't exist
-    yet for handlers invoked under uvicorn/starlette. Construct on
-    first use under the live loop instead.
+    """Lazy lock construction. ``asyncio.Lock()`` on Python 3.10+ no
+    longer takes a ``loop=`` argument and only binds to a loop on
+    first ``acquire()`` via ``asyncio.get_event_loop()``. Either eager
+    or lazy module-level construction works for this project's
+    single-uvicorn-loop deployment; we keep the lazy pattern so a
+    future test fixture that spins up its own loop doesn't lock in
+    the import-time loop. Assumes a single asyncio event loop for the
+    process lifetime — a multi-loop deployment (e.g. threaded handler
+    dispatch) would race here.
     """
     global _OVERRIDE_FILE_LOCK
     if _OVERRIDE_FILE_LOCK is None:
@@ -4466,8 +4470,13 @@ def build_settings_handlers(
         # Applied in BOTH standalone and addon mode (#1164 follow-up).
         # The earlier "skip in addon mode" carve-out existed because
         # start.py used to auto-write ENABLE_BETA_FEATURES=true from
-        # any beta sub-flag presence; now start.py writes the master
-        # env from its own options key, so the gate applies uniformly.
+        # any beta sub-flag presence; that path is now demoted to a
+        # one-cycle legacy bridge. On dev addon, start.py writes the
+        # master env var from the schema-bound options key. On stable
+        # addon, the master is not in schema and the standalone
+        # web-UI master path remains the gate (the gate read below
+        # falls through to the override-file value). Either way the
+        # gate is sound to apply uniformly.
         from .config import (
             BETA_FEATURE_FIELDS as _BETA_SUB,
         )
