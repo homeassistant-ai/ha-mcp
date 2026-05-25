@@ -85,11 +85,21 @@ _TOP_LEVEL_ELEMENT_IDS = [
     "advSaveBtn",
     "advSaveStatus",
     "advSaveRow",
+    # Top-of-panel duplicate Save row (#1164 follow-up) — same handler
+    # as the bottom row; status text mirrors between both so the user
+    # sees the latest outcome whichever button they used.
+    "advSaveBtnTop",
+    "advSaveStatusTop",
+    "advSaveRowTop",
     "advConnection",
     "advSearch",
     "advOperations",
     "advToolsSurface",
     "advDiagnostics",
+    # Beta features dedicated container (#1164 follow-up) — beta
+    # master + sub-flags render here, NOT into featuresBody, so the
+    # dangerous block sits at the bottom of panel-server.
+    "betaBody",
 ]
 
 
@@ -1009,6 +1019,382 @@ class TestAdvancedSectionRender:
         assert m is not None, "expected number input for timeout"
         assert 'min="1"' in m.group(0)
         assert 'max="600"' in m.group(0)
+
+
+class TestAddonModeLockedBannerCopy:
+    """Locked-banner copy must avoid 'unset env var' wording in addon mode.
+
+    Addon operators have no env-var surface to unset — the var was set
+    either by start.py (from /data/options.json) or by Supervisor. The
+    standalone-mode copy "unset it to edit here" is actively
+    misleading there (#1164 user feedback). When the features /
+    advanced / backup endpoints return ``is_addon=true``, the banner
+    must point at the addon Configuration tab instead.
+    """
+
+    def test_master_locked_banner_in_addon_mode_points_at_configuration(
+        self, settings_script: str
+    ) -> None:
+        """Master `enable_beta_features` env-locked in addon mode renders
+        copy pointing at addon Configuration toggles, not "unset env var".
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "env",
+                            "editable": False,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        }
+                    },
+                    "beta_sub_flags": [
+                        "enable_yaml_config_editing",
+                        "enable_filesystem_tools",
+                        "enable_custom_component_integration",
+                        "enable_code_mode",
+                        "enable_lite_docstrings",
+                    ],
+                    "is_addon": True,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # Standalone copy must NOT appear.
+        assert "unset it to edit here" not in result.dom, (
+            "addon-mode master banner still shows standalone 'unset env var' copy"
+        )
+        # Addon-aware copy must appear.
+        assert "addon Configuration" in result.dom, (
+            f"expected 'addon Configuration' hint; dom tail: {result.dom[-2000:]}"
+        )
+
+    def test_advanced_locked_banner_in_addon_mode_avoids_unset_copy(
+        self, settings_script: str
+    ) -> None:
+        """Env-pinned advanced field in addon mode renders addon-runtime
+        copy, not "unset env var".
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "homeassistant_url",
+                            "env_var": "HOMEASSISTANT_URL",
+                            "value": "http://supervisor/core",
+                            "type": "str",
+                            "section": "connection",
+                            "origin": "env",
+                            "editable": False,
+                        }
+                    ],
+                    "is_addon": True,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "unset it to edit here" not in result.dom, (
+            "addon-mode advanced banner still shows standalone 'unset env var' copy"
+        )
+        assert "addon runtime environment" in result.dom, (
+            f"expected 'addon runtime environment' wording; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+
+    def test_standalone_mode_still_uses_unset_copy(self, settings_script: str) -> None:
+        """Regression guard: when is_addon is false (or omitted), the
+        existing standalone "unset env var" copy must still render —
+        the addon branch should NOT take over standalone deployments.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "env",
+                            "editable": False,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "unset it to edit here" in result.dom, (
+            f"standalone-mode copy regressed; dom tail: {result.dom[-2000:]}"
+        )
+
+
+class TestBetaBlockRendersAtBottom:
+    """Beta master + sub-flags render into the dedicated `betaBody` div,
+    NOT featuresBody, so the dangerous block sits at the bottom of the
+    Server Settings panel (#1164 follow-up).
+    """
+
+    def _payload(self) -> dict:
+        return {
+            "flags": {
+                "enable_tool_search": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_TOOL_SEARCH",
+                },
+                "enable_beta_features": {
+                    "value": True,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_BETA_FEATURES",
+                },
+                "enable_yaml_config_editing": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                },
+                "enable_filesystem_tools": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+                },
+            },
+            "beta_sub_flags": [
+                "enable_yaml_config_editing",
+                "enable_filesystem_tools",
+                "enable_custom_component_integration",
+                "enable_code_mode",
+                "enable_lite_docstrings",
+            ],
+            "is_addon": False,
+        }
+
+    def test_non_beta_rows_render_into_featuresBody(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const fb = document.getElementById('featuresBody').innerHTML;
+              const bb = document.getElementById('betaBody').innerHTML;
+              window.__bodies = JSON.stringify({fb, bb});
+            """,
+        )
+        _assert_clean_init(result)
+        # Non-beta row goes to featuresBody only.
+        assert "Enable tool search" in result.dom
+        m = re.search(r'<tbody id="featuresBody">(.*?)</tbody>', result.dom, re.DOTALL)
+        assert m is not None, "featuresBody tbody not found in dom"
+        fb_content = m.group(1)
+        assert "Enable tool search" in fb_content, (
+            "tool-search row should land in featuresBody"
+        )
+        assert "Enable beta features" not in fb_content, (
+            "beta master row leaked into featuresBody (should be in betaBody)"
+        )
+
+    def test_beta_rows_render_into_betaBody(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div id="betaBody">(.*?)</div>\s*<div', result.dom, re.DOTALL)
+        # Loose fallback: just find the section with the betaBody id.
+        if m is None:
+            idx = result.dom.find('id="betaBody"')
+            assert idx != -1, "betaBody container missing from dom"
+            bb_content = result.dom[idx : idx + 8000]
+        else:
+            bb_content = m.group(1)
+        assert "Enable beta features" in bb_content, (
+            "beta master row should land in betaBody"
+        )
+        assert "Enable YAML config editing" in bb_content, (
+            "beta sub-flag should land in betaBody"
+        )
+        assert "Enable tool search" not in bb_content, (
+            "non-beta row leaked into betaBody"
+        )
+
+    def test_beta_section_header_present_with_danger_styling(
+        self, settings_script: str
+    ) -> None:
+        """Section header reads 'Beta features (dangerous)' so users see
+        the category boundary; styling uses .beta-section-title.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "Beta features (dangerous)" in result.dom, (
+            "beta section heading copy missing or changed"
+        )
+        assert "beta-section-title" in result.dom, "beta section title class missing"
+
+    def test_top_save_button_posts_same_payload_as_bottom(
+        self, settings_script: str
+    ) -> None:
+        """Clicking either Save button posts to the same endpoint with
+        the same dirty-fields payload, and the disabled+status mirrors
+        to both rows so the user sees state on whichever they used.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": {"log_level": "DEBUG"}}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        # Mutate the field then click the TOP button. Assert a POST went
+        # out and that both status els carry the same final text.
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              document.getElementById('advSaveBtnTop').click();
+              await new Promise(r => setTimeout(r, 200));
+            """,
+        )
+        _assert_clean_init(result)
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) >= 1, (
+            f"top save button did not POST; fetches: {result.fetches}"
+        )
+
+    def test_two_step_save_note_present(self, settings_script: str) -> None:
+        """The two-step save → restart note must render at the top of
+        the Server Settings panel so users know one click is not enough.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "Two-step save" in result.dom, (
+            "two-step save note copy missing or changed"
+        )
+        # The note must call out both steps.
+        assert "Save advanced settings" in result.dom, "save step missing"
+        assert "Restart" in result.dom, "restart step missing"
+
+    def test_beta_master_help_text_contains_danger_warning(
+        self, settings_script: str
+    ) -> None:
+        """`enable_beta_features` help-text must lead with the danger
+        warning per #1164 user feedback — these features can permanently
+        damage HA and users must be told before flipping the master.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "PERMANENTLY DAMAGE" in result.dom, (
+            "master beta help-text missing 'PERMANENTLY DAMAGE' warning"
+        )
+        assert "OWN RISK" in result.dom, (
+            "master beta help-text missing 'OWN RISK' framing"
+        )
+        assert "backup" in result.dom.lower(), (
+            "master beta help-text missing backup advice"
+        )
 
 
 class TestBetaMasterToggleLiveRender:

@@ -815,6 +815,32 @@ _SETTINGS_HTML = (
   .adv-section-title { font-size: 0.85rem; font-weight: 600;
     color: var(--text-secondary); margin: 20px 0 4px; text-transform: uppercase;
     letter-spacing: 0.05em; }
+  /* Beta section header is visually distinct (warning color, slightly
+     larger) so the dangerous-features block at the bottom is impossible
+     to miss as a category boundary (#1164 follow-up). */
+  .adv-section-title.beta-section-title { color: var(--warning);
+    font-size: 0.95rem; margin-top: 32px;
+    border-top: 1px solid var(--warning); padding-top: 16px; }
+  /* Two-step save note + primary-CTA save button (#1164 follow-up).
+     The default <button> in this UI is intentionally small/neutral
+     because most surfaces have many of them; the Save row gets a
+     dedicated, larger primary style so users don't miss the action.
+     Duplicated at top and bottom so scrolling either way reaches it. */
+  .adv-save-note { background: rgba(255, 152, 0, 0.08);
+    border-left: 3px solid var(--warning); padding: 10px 14px;
+    border-radius: 6px; margin: 12px 0; color: var(--text);
+    font-size: 0.85rem; line-height: 1.4; }
+  .adv-save-note strong { color: var(--warning); }
+  .adv-save-row { display: flex; align-items: center; gap: 12px;
+    margin: 16px 0; padding: 8px 0; }
+  .adv-save-btn { padding: 10px 22px; font-size: 1rem; font-weight: 600;
+    border: none; border-radius: 8px; background: var(--accent);
+    color: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    transition: background 0.15s ease, transform 0.05s ease; }
+  .adv-save-btn:hover { background: var(--accent-hover); }
+  .adv-save-btn:active { transform: translateY(1px); }
+  .adv-save-btn:disabled { opacity: 0.55; cursor: not-allowed;
+    box-shadow: none; }
   .adv-section { border-top: 1px solid var(--border); }
   .adv-row { display: flex; align-items: flex-start; justify-content: space-between;
     gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
@@ -926,8 +952,24 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel" id="panel-server">
   <div class="features-sub">
-    Tool Search, beta-flagged features. Changes require an MCP-host restart
+    Tool Search, advanced settings. Changes require an MCP-host restart
     to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
+  </div>
+
+  <!-- Two-step note + top Save button (#1164 follow-up). The Save +
+       Restart workflow is non-obvious — users have hit the page,
+       toggled, and then wondered why nothing took effect because they
+       skipped one of the two steps. Display the note prominently and
+       duplicate the Save button at the top so a user scrolling either
+       end of the panel can hit it. -->
+  <div class="adv-save-note">
+    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
+    to persist your changes, then <strong>(2) click "Restart"</strong>
+    above to apply them. Neither step alone is enough.
+  </div>
+  <div id="advSaveRowTop" class="adv-save-row" style="display:none;">
+    <button id="advSaveBtnTop" class="adv-save-btn">💾 Save advanced settings</button>
+    <span id="advSaveStatusTop" class="status"></span>
   </div>
   <div id="featuresBody"></div>
 
@@ -942,10 +984,16 @@ _SETTINGS_HTML = (
   <div id="advToolsSurface" class="adv-section"></div>
   <h3 class="adv-section-title">Diagnostics</h3>
   <div id="advDiagnostics" class="adv-section"></div>
-  <div id="advSaveRow" style="display:none; margin: 16px 0;">
-    <button id="advSaveBtn">Save advanced settings</button>
+  <div id="advSaveRow" class="adv-save-row" style="display:none;">
+    <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
     <span id="advSaveStatus" class="status"></span>
   </div>
+
+  <!-- Beta features moved to bottom of the panel (#1164 follow-up) —
+       these can damage the HA system, so they sit last so the user
+       sees safer settings first. -->
+  <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
+  <div id="betaBody"></div>
 
   <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
     <button class="danger-btn" id="stopSidecarBtn"
@@ -1808,6 +1856,9 @@ async function loadBackupConfig() {
     }
     const data = await resp.json();
     backupConfigFields = data.fields || [];
+    if (typeof data.is_addon === 'boolean') {
+      IS_ADDON_MODE = data.is_addon;
+    }
   } catch (_e) {
     formEl.innerHTML = '<div class="backup-empty">Backup settings unavailable.</div>';
     actionsEl.style.display = 'none';
@@ -1839,7 +1890,7 @@ function renderBackupConfig() {
     }
     let originMsg;
     if (f.origin === 'env') {
-      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+      originMsg = envLockedNoteHtml(f.env_var, f.field);
     } else {
       originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
     }
@@ -2083,7 +2134,7 @@ const FEATURE_META = {
   // dims sub-rows when this is off and re-renders live on flip.
   enable_beta_features: {
     label: "Enable beta features",
-    help: "Master toggle for the experimental tools below (YAML editing, filesystem, custom-component install, code mode, lite docstrings). Off by default. Sub-toggles are dimmed and ignored at runtime while this is off — even a sub-flag set via env var is forced off until this master is enabled. Requires restart to take effect.",
+    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
   },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",
@@ -2113,6 +2164,13 @@ const FEATURE_META = {
 // ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.
 let BETA_SUB_FLAGS = new Set();
 
+// Cached add-on flag. Each settings endpoint (/api/settings/features,
+// /api/settings/advanced, /api/settings/backup-config) returns
+// ``is_addon`` so the env-locked banner copy can adapt — the addon
+// Configuration UI cannot "unset env vars," so the standalone-mode
+// "unset env var" copy is actively misleading there (#1164).
+let IS_ADDON_MODE = false;
+
 const ORIGIN_LOCKED_NOTE = {
   env: 'Set via environment variable — unset it to edit here.',
   // addon-origin fields are editable: save POSTs through Supervisor
@@ -2123,6 +2181,32 @@ const ORIGIN_LOCKED_NOTE = {
 const ORIGIN_INFO_NOTE = {
   addon: 'Synced to the add-on Configuration tab — restart required after save.',
 };
+
+// Compose the env-locked banner text for one field. Addon-mode copy
+// avoids the misleading "unset it to edit here" — operators in HA
+// addon mode have no env-var surface to unset; the var was set
+// either by start.py from /data/options.json or by Supervisor itself
+// (and in either case the addon Configuration tab is the place to
+// change it). The master `enable_beta_features` row gets an extra
+// hint pointing at the addon-Configuration beta toggles, which is
+// what auto-enables the master in the dev addon.
+function envLockedNoteHtml(envVar, fieldName) {
+  const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
+  if (!IS_ADDON_MODE) {
+    return `Set via env var ${envVarTag} — unset it to edit here.`;
+  }
+  if (fieldName === 'enable_beta_features') {
+    return (
+      `Auto-enabled in addon mode when at least one beta toggle is on in the ` +
+      `addon Configuration tab. To disable the master, turn off every beta ` +
+      `toggle there and restart the addon. (env: ${envVarTag})`
+    );
+  }
+  return (
+    `Set by the addon runtime environment — managed by Home Assistant ` +
+    `Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
+  );
+}
 
 async function loadFeatureFlags() {
   let resp;
@@ -2158,6 +2242,9 @@ async function loadFeatureFlags() {
   if (Array.isArray(data.beta_sub_flags)) {
     BETA_SUB_FLAGS = new Set(data.beta_sub_flags);
   }
+  if (typeof data.is_addon === 'boolean') {
+    IS_ADDON_MODE = data.is_addon;
+  }
   renderFeatureFlags(data.flags || {});
 }
 
@@ -2169,7 +2256,9 @@ let _lastFeatureFlags = {};
 function renderFeatureFlags(flags) {
   _lastFeatureFlags = flags;
   const body = document.getElementById('featuresBody');
+  const betaBody = document.getElementById('betaBody');
   body.innerHTML = '';
+  if (betaBody) betaBody.innerHTML = '';
   // Master beta state — drives the .dimmed class on sub-rows. Read
   // from the live cache so we get the post-flip value if the user
   // just toggled the master.
@@ -2184,6 +2273,11 @@ function renderFeatureFlags(flags) {
     const meta = FEATURE_META[fieldName];
     const isMaster = fieldName === 'enable_beta_features';
     const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
+    // Beta rows render into the dedicated bottom-of-panel betaBody
+    // container so the dangerous block sits below the safer
+    // settings. Fallback to the main body if the dedicated container
+    // is missing (tests that don't include it in MIN_DOM).
+    const targetBody = (isMaster || isBetaSub) && betaBody ? betaBody : body;
     const row = document.createElement('div');
     let cls = 'feature-row' + (f.editable ? '' : ' locked');
     if (isMaster) cls += ' beta-master-row';
@@ -2192,12 +2286,11 @@ function renderFeatureFlags(flags) {
 
     const info = document.createElement('div');
     info.className = 'feature-info';
-    const envVarSuffix = f.origin === 'env'
-      ? ` (<code>${escapeHtml(f.env_var)}</code>)`
-      : '';
     const lockedNote = !f.editable
       ? `<div class="feature-locked-note">` +
-        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')}${envVarSuffix}` +
+        (f.origin === 'env'
+          ? envLockedNoteHtml(f.env_var, fieldName)
+          : escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')) +
         `</div>`
       : '';
     const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
@@ -2259,16 +2352,18 @@ function renderFeatureFlags(flags) {
 
     row.appendChild(info);
     row.appendChild(control);
-    body.appendChild(row);
+    targetBody.appendChild(row);
 
     // Chunk 3b — after rendering the enable_code_mode row, inject the
     // 5 code_mode_* sub-numeric rows from the advanced cache. These
     // are second-level-nested (under enable_code_mode, which is itself
     // beta-sub-nested under the master), dimmed when either the master
-    // is off or code_mode itself is off.
+    // is off or code_mode itself is off. Sub-rows go into the same
+    // target body as the parent so the beta block stays grouped at
+    // bottom.
     if (fieldName === 'enable_code_mode') {
       const codeModeOn = !!f.value;
-      renderCodeModeSubRows(body, masterOn, codeModeOn);
+      renderCodeModeSubRows(targetBody, masterOn, codeModeOn);
     }
   });
 }
@@ -2318,12 +2413,21 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
       if (typeof v === 'number' && Number.isNaN(v)) return;
       _advancedDirty[f.field] = v;
       // Surface a hint that there are unsaved code-mode-numeric
-      // changes — they share the advSaveBtn under the Advanced
-      // sections.
+      // changes — they share the Save button(s) under the Advanced
+      // sections. Mirror to both top and bottom rows.
       const status = document.getElementById('advSaveStatus');
-      if (status) status.textContent = 'Unsaved changes — click "Save advanced settings".';
+      if (status) {
+        status.textContent = 'Unsaved changes — click "Save advanced settings".';
+      }
+      const statusTop = document.getElementById('advSaveStatusTop');
+      if (statusTop) {
+        statusTop.textContent =
+          'Unsaved changes — click "Save advanced settings".';
+      }
       const saveRow = document.getElementById('advSaveRow');
       if (saveRow) saveRow.style.display = '';
+      const saveRowTop = document.getElementById('advSaveRowTop');
+      if (saveRowTop) saveRowTop.style.display = '';
     });
     control.appendChild(inputEl);
 
@@ -3293,6 +3397,9 @@ async function loadAdvancedSettings() {
     return;
   }
   _advancedFields = data.fields || [];
+  if (typeof data.is_addon === 'boolean') {
+    IS_ADDON_MODE = data.is_addon;
+  }
   _advancedDirty = {};
   const bySection = {};
   _advancedFields.forEach(f => {
@@ -3309,7 +3416,11 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
   document.getElementById('advSaveRow').style.display = '';
+  const topRow = document.getElementById('advSaveRowTop');
+  if (topRow) topRow.style.display = '';
   document.getElementById('advSaveStatus').textContent = '';
+  const topStatus = document.getElementById('advSaveStatusTop');
+  if (topStatus) topStatus.textContent = '';
   // Re-render feature flags so the code_mode sub-numerics show up
   // beneath enable_code_mode (race: loadFeatureFlags may have run
   // before _advancedFields was populated). Cheap no-op if feature
@@ -3348,7 +3459,7 @@ function renderAdvancedSection(containerId, fields) {
     }
     let originMsg = '';
     if (f.origin === 'env') {
-      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+      originMsg = envLockedNoteHtml(f.env_var, f.field);
     } else if (!f.editable) {
       originMsg = 'Display only — modify via env var or addon settings.';
     }
@@ -3376,15 +3487,42 @@ function renderAdvancedSection(containerId, fields) {
   });
 }
 
+// Top + bottom save buttons share state — the user can hit either,
+// status text mirrors to both so the one they're looking at always
+// reflects the latest outcome (#1164 follow-up).
+function _advSaveBtns() {
+  return [
+    document.getElementById('advSaveBtn'),
+    document.getElementById('advSaveBtnTop'),
+  ].filter(Boolean);
+}
+function _advSaveStatusEls() {
+  return [
+    document.getElementById('advSaveStatus'),
+    document.getElementById('advSaveStatusTop'),
+  ].filter(Boolean);
+}
+function _setAdvSaveStatus(text) {
+  _advSaveStatusEls().forEach(el => { el.textContent = text; });
+}
+function _setAdvSaveDisabled(disabled) {
+  _advSaveBtns().forEach(b => { b.disabled = disabled; });
+}
+
 async function saveAdvancedSettings() {
-  const btn = document.getElementById('advSaveBtn');
-  const statusEl = document.getElementById('advSaveStatus');
+  const btns = _advSaveBtns();
+  if (!btns.length) return;
+  const statusEl = _advSaveStatusEls()[0];
   if (Object.keys(_advancedDirty).length === 0) {
-    statusEl.textContent = 'Nothing to save.';
+    _setAdvSaveStatus('Nothing to save.');
     return;
   }
-  btn.disabled = true;
-  statusEl.textContent = 'Saving…';
+  _setAdvSaveDisabled(true);
+  _setAdvSaveStatus('Saving…');
+  // ``btn`` and ``statusEl`` are kept as aliases so the rest of the
+  // function body reads naturally; writes go through the helpers so
+  // both copies stay in sync.
+  const btn = btns[0];
   try {
     const resp = await fetch('./api/settings/advanced', {
       method: 'POST',
@@ -3403,22 +3541,22 @@ async function saveAdvancedSettings() {
       if (resp.ok) {
         data = {restart_required: true};
       } else {
-        btn.disabled = false;
-        statusEl.textContent = `Save failed (HTTP ${resp.status}, non-JSON body)`;
+        _setAdvSaveDisabled(false);
+        _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`);
         return;
       }
     }
-    btn.disabled = false;
+    _setAdvSaveDisabled(false);
     if (!resp.ok) {
       let msg = 'Save failed';
       if (data && data.error) {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;
       }
-      statusEl.textContent = msg;
+      _setAdvSaveStatus(msg);
       return;
     }
-    statusEl.textContent = 'Saved.';
+    _setAdvSaveStatus('Saved.');
     // Surface restart-required banner if any saved field requires it.
     const needsRestart = Object.keys(_advancedDirty).some(f => ADVANCED_RESTART_REQUIRED.has(f));
     if (needsRestart) {
@@ -3436,15 +3574,19 @@ async function saveAdvancedSettings() {
       await loadAdvancedSettings();
     } catch (reloadErr) {
       console.error('post-save reload failed:', reloadErr);
-      statusEl.textContent = 'Saved (reload failed — refresh to verify).';
+      _setAdvSaveStatus('Saved (reload failed — refresh to verify).');
     }
   } catch (err) {
-    btn.disabled = false;
-    statusEl.textContent = 'Network error: ' + String(err);
+    _setAdvSaveDisabled(false);
+    _setAdvSaveStatus('Network error: ' + String(err));
   }
 }
 
 document.getElementById('advSaveBtn').addEventListener('click', saveAdvancedSettings);
+{
+  const topBtn = document.getElementById('advSaveBtnTop');
+  if (topBtn) topBtn.addEventListener('click', saveAdvancedSettings);
+}
 
 loadFeatureFlags();
 loadAdvancedSettings();
@@ -4132,7 +4274,14 @@ def build_settings_handlers(
         from .config import BETA_FEATURE_FIELDS
 
         return JSONResponse(
-            {"flags": flags, "beta_sub_flags": list(BETA_FEATURE_FIELDS)}
+            {
+                "flags": flags,
+                "beta_sub_flags": list(BETA_FEATURE_FIELDS),
+                # Drives addon-aware locked-banner copy in the JS —
+                # "unset env var" is misleading where HA Supervisor
+                # owns the env (#1164).
+                "is_addon": is_running_in_addon(),
+            }
         )
 
     async def _save_feature_flags(request: Request) -> JSONResponse:
@@ -4759,7 +4908,7 @@ def build_settings_handlers(
             if choices is not None:
                 row["choices"] = list(choices)
             fields.append(row)
-        return JSONResponse({"fields": fields})
+        return JSONResponse({"fields": fields, "is_addon": is_running_in_addon()})
 
     def _origin_for_advanced_field(
         env_name: str, overrides: dict[str, Any] | None = None

@@ -28,6 +28,8 @@ The dev add-on uses the same configuration as the stable version. See the main a
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
 
+> ⚠️ **DANGER — beta toggles can permanently damage your Home Assistant installation.** They write to your YAML config, your filesystem, install custom components, and run arbitrary sandboxed Python. There is no warranty and no support guarantee — you enable these at your **own risk**. Take a Home Assistant backup before turning any of them on, and never enable in production without one.
+
 ### Permissions
 
 Like the stable add-on, the dev add-on requests `hassio_role: manager` to
