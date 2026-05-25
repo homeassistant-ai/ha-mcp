@@ -321,6 +321,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@julienld](https://github.com/julienld)** — Project creator.
 - **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
 - **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
+- **[@Patch76](https://github.com/Patch76)** — Core maintainer.
 
 ### Contributors
 
@@ -345,7 +346,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 - **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard; replaced placeholder logo SVGs with real brand icons on the documentation site.
-- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
