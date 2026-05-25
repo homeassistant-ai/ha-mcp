@@ -509,6 +509,72 @@ class TestSaveToolsValidation:
         assert body["success"] is False
         assert "HA_MCP_CONFIG_DIR" in str(body)
 
+    @pytest.mark.asyncio
+    async def test_env_pinned_noop_resend_does_not_409(self, monkeypatch, tmp_path):
+        """The JS saveConfig() POSTs the entire ``toolStates`` map on every
+        change, including env-pinned rows whose values match what the env
+        var dictates. Pre-#1164-follow-up the handler 409'd on any env-
+        pinned name in the payload, breaking every save when
+        DISABLED_TOOLS / PINNED_TOOLS was non-empty. Accept matches; only
+        reject true value mismatches.
+        """
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_pinned_on")
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        save = self._capture_handler(monkeypatch)
+        # Payload re-sends the env-pinned values verbatim AND flips an
+        # unrelated tool — must succeed.
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        "ha_pinned_off": "disabled",
+                        "ha_pinned_on": "pinned",
+                        "ha_unrelated_tool": "disabled",
+                    }
+                }
+            )
+        )
+        assert resp.status_code == 200, json.loads(resp.body)
+        # Env-pinned rows are dropped from the persisted file so env
+        # stays the single source of truth.
+        saved = json.loads(config_path.read_text())
+        assert saved["tools"] == {"ha_unrelated_tool": "disabled"}
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_env_pinned_value_mismatch_still_409s(self, monkeypatch, tmp_path):
+        """Actual attempt to flip an env-pinned tool's value must still
+        be rejected — accepting it would let the UI override DISABLED_TOOLS
+        / PINNED_TOOLS, which is operator-level intent.
+        """
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        save = self._capture_handler(monkeypatch)
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        # Try to enable a tool DISABLED_TOOLS pinned off.
+                        "ha_pinned_off": "enabled",
+                    }
+                }
+            )
+        )
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "ha_pinned_off" in str(body)
+        _reset_global_settings()
+
 
 class TestRestartAddon:
     """Tests for the `/api/settings/restart` handler — pins the previously
@@ -2626,6 +2692,122 @@ class TestBetaMasterGateInSave:
             assert on_disk[sub] is False, (
                 f"cascade missed {sub} — stays {on_disk.get(sub)!r} after master-off save"
             )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_cascade_clears_subflag_even_when_payload_says_true(
+        self, monkeypatch, tmp_path
+    ):
+        """In-payload ``{master: false, sub: true}`` would land an
+        inconsistent persisted state — runtime gate forces sub False
+        but the file still says True, looking on the UI like the
+        cascade didn't run. The cascade now force-clears any sub
+        explicitly set True in the same payload as master=false
+        (#1164 follow-up review).
+        """
+        from ha_mcp.config import (
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: master on, both sub-flags on.
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_beta_features": True,
+                    "enable_yaml_config_editing": True,
+                    "enable_filesystem_tools": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        # Caller's payload tries the inconsistent state — master off
+        # but yaml_config still asserted true. Master-gate check
+        # rejects this first (because beta sub-flag write is gated
+        # behind effective_master), so the response should 409 with
+        # the gate message, NOT silently land the inconsistent state.
+        req.json = AsyncMock(
+            return_value={
+                "flags": {
+                    "enable_beta_features": False,
+                    "enable_yaml_config_editing": True,
+                }
+            }
+        )
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 409, json.loads(resp.body)
+        # Sanity check: file unchanged.
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_yaml_config_editing"] is True
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_cascade_reads_override_file_not_post_gate_settings(
+        self, monkeypatch, tmp_path
+    ):
+        """Cascade-clear must read the persisted override file directly,
+        not ``get_global_settings()`` — the master gate already forced
+        sub-flags to False on the resolved Settings, so a read of
+        Settings would think there's nothing to clear and miss the
+        stale-true override (#1164 follow-up review).
+
+        Scenario: master was previously off in the override file but a
+        sub-flag was True (perhaps written via a manual edit before
+        the cascade-clear feature landed). User saves master=false.
+        After save, the file must show the sub-flag = False.
+        """
+        from ha_mcp.config import (
+            BETA_FEATURE_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Master previously off, sub-flag True on disk (the master
+        # gate would force sub_X to False on the live Settings, so
+        # the old cascade impl reading Settings would miss this).
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_beta_features": False,
+                    "enable_filesystem_tools": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_filesystem_tools"] is False, (
+            f"cascade missed stale-true override; file: {on_disk}"
+        )
+        # Other sub-flags untouched (no stale-true to clear).
+        for sub in BETA_FEATURE_FIELDS:
+            if sub == "enable_filesystem_tools":
+                continue
+            assert sub not in on_disk or on_disk[sub] is False
         get_data_dir.cache_clear()
         _reset_global_settings()
 

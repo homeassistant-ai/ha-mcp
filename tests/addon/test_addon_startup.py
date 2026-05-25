@@ -653,3 +653,64 @@ class TestBetaMasterAutoEnableInDevAddon:
             assert key not in stable_yaml.get("schema", {}), (
                 f"{key} must not be in stable addon schema (#1164)"
             )
+
+    def test_stable_addon_does_not_declare_enable_beta_features(self):
+        """Stable's ``config.yaml`` must NOT declare the master toggle
+        either — the master is web-UI-only on stable (#1164 follow-up).
+        Schema-declaring it on stable would auto-fill options.json with
+        the default on first start, locking the master to env-mode and
+        the standalone web UI master path would no longer be the gate.
+        """
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        assert "enable_beta_features" not in stable_yaml.get("options", {}), (
+            "enable_beta_features must not be in stable addon options"
+        )
+        assert "enable_beta_features" not in stable_yaml.get("schema", {}), (
+            "enable_beta_features must not be in stable addon schema"
+        )
+
+    def test_dev_addon_declares_enable_beta_features_master_in_schema(self):
+        """Dev addon's ``config.yaml`` must declare ``enable_beta_features``
+        in both ``options:`` (default true) and ``schema:`` (bool?), so
+        start.py reads it and writes the env var on every boot. The web
+        UI then surfaces the master row as origin='addon' (editable)
+        and saves route through Supervisor.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        assert dev_yaml.get("options", {}).get("enable_beta_features") is True, (
+            "dev addon options must default enable_beta_features=true"
+        )
+        assert "enable_beta_features" in dev_yaml.get("schema", {}), (
+            "dev addon schema must declare enable_beta_features"
+        )
+
+    def test_dev_addon_defaults_every_beta_subflag_to_false(self):
+        """Beta sub-tools default OFF on a fresh dev install — only the
+        master defaults on. Shipping them on would risk damaging fresh
+        installs out of the box.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        opts = dev_yaml.get("options", {})
+        for key in self._DEV_BETA_KEYS:
+            assert key in opts, f"dev addon must declare {key} in options"
+            assert opts[key] is False, (
+                f"dev addon must default {key} to False (got {opts[key]!r})"
+            )
