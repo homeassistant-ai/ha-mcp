@@ -40,6 +40,13 @@ secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
 [OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
 [AGENTS.md → Docker](AGENTS.md#docker).
 
+By default the HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`,
+`ha-mcp-oauth`) bind to `0.0.0.0` so they are reachable from other
+machines on the LAN. To restrict the server to the local machine, set
+`MCP_HOST=127.0.0.1` before launching (the Docker snippet in AGENTS.md
+uses `-p 127.0.0.1:8086:8086` to achieve the same effect at the
+container level — either approach works).
+
 ## OAuth Mode — Beta Warning
 
 The OAuth consent-flow mode (`ha-mcp-oauth` entrypoint) is **experimental**

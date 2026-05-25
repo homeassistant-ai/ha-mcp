@@ -421,11 +421,18 @@ def main() -> int:
         StatelessSessionLogFilter()
     )
 
+    # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
+    # reach it inside the container; MCP_HOST override is provided for
+    # parity with the standard CLI entry points (see issue #1434).
+    bind_host = os.getenv("MCP_HOST", "0.0.0.0")
+
     try:
         log_info("Starting MCP server...")
+        if bind_host != "0.0.0.0":
+            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
         mcp.run(
             transport="http",
-            host="0.0.0.0",
+            host=bind_host,
             port=port,
             path=secret_path,
             stateless_http=True,
