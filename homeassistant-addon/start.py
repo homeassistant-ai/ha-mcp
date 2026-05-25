@@ -427,7 +427,9 @@ def main() -> int:
     bind_host = os.getenv("MCP_HOST", "0.0.0.0")
 
     try:
-        log_info(f"Starting MCP server on {bind_host}:{port}...")
+        log_info("Starting MCP server...")
+        if bind_host != "0.0.0.0":
+            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
         mcp.run(
             transport="http",
             host=bind_host,
