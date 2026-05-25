@@ -3922,6 +3922,31 @@ async def _supervisor_merge_and_post_options(
 # Tasks remove themselves via ``add_done_callback`` when they finish.
 _BACKGROUND_RESTART_TASKS: set[asyncio.Task[None]] = set()
 
+# Serialises read-modify-write on the shared override file
+# (``feature_flags.json``) so two concurrent saves can't interleave
+# their reads and clobber each other's persisted state (#1164
+# follow-up). Both ``_save_feature_flags`` and ``_save_advanced_settings``
+# touch the same file; without this lock, request A reading before
+# request B's ``os.replace`` lands would write back a merged dict that
+# misses B's changes. The runtime master gate kept functionality
+# correct even when this raced, but the persisted state lied about the
+# user's intent — surfacing as "I set the flag and it came back off"
+# after a restart.
+_OVERRIDE_FILE_LOCK: asyncio.Lock | None = None
+
+
+def _get_override_file_lock() -> asyncio.Lock:
+    """Lazy lock construction — ``asyncio.Lock()`` at module load
+    binds the event loop that's current AT IMPORT, which doesn't exist
+    yet for handlers invoked under uvicorn/starlette. Construct on
+    first use under the live loop instead.
+    """
+    global _OVERRIDE_FILE_LOCK
+    if _OVERRIDE_FILE_LOCK is None:
+        _OVERRIDE_FILE_LOCK = asyncio.Lock()
+    return _OVERRIDE_FILE_LOCK
+
+
 # Delay (seconds) before the background self-restart task fires the
 # supervisor POST. Picked to give Starlette + uvicorn time to serialize
 # the JSONResponse onto the socket and have HA ingress flush it to the
@@ -4698,68 +4723,78 @@ def build_settings_handlers(
         #   Return a clear error so the user can inspect / delete
         #   the file manually.
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        existing: dict[str, Any] = {}
-        try:
-            existing_raw = path.read_text()
-        except FileNotFoundError:
-            existing_raw = None
-        except OSError as exc:
-            logger.warning("Cannot read %s", path, exc_info=True)
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    (
-                        f"Could not read existing feature flags "
-                        f"({type(exc).__name__}: {exc}); refusing to "
-                        "overwrite to avoid losing prior toggles. "
-                        "Check filesystem permissions and retry."
-                    ),
-                ),
-                status_code=500,
-            )
-        if existing_raw is not None:
+        # Serialise concurrent saves on the shared override file so
+        # two overlapping requests can't interleave their RMW
+        # (#1164 follow-up review — A.2). Lock is held only for the
+        # read+merge+atomic-write window; pure validation above does
+        # not need it.
+        async with _get_override_file_lock():
+            existing: dict[str, Any] = {}
             try:
-                parsed = json.loads(existing_raw)
-            except json.JSONDecodeError as exc:
-                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                existing_raw = path.read_text()
+            except FileNotFoundError:
+                existing_raw = None
+            except OSError as exc:
+                logger.warning("Cannot read %s", path, exc_info=True)
                 return JSONResponse(
                     create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        ErrorCode.INTERNAL_ERROR,
                         (
-                            f"Existing override file at {path} is not "
-                            f"valid JSON ({exc}); refusing to overwrite "
-                            "to avoid losing prior toggles. Inspect or "
-                            "delete the file manually and retry."
+                            f"Could not read existing feature flags "
+                            f"({type(exc).__name__}: {exc}); refusing to "
+                            "overwrite to avoid losing prior toggles. "
+                            "Check filesystem permissions and retry."
                         ),
                     ),
-                    status_code=409,
+                    status_code=500,
                 )
-            if isinstance(parsed, dict):
-                existing = parsed
-            # else: non-dict JSON (list, scalar) — treat as empty;
-            # we're about to write a dict either way and there's no
-            # prior toggle state to preserve from a non-object root.
-        existing.update(new_overrides)
+            if existing_raw is not None:
+                try:
+                    parsed = json.loads(existing_raw)
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "Existing %s is corrupt: %s", path, exc, exc_info=True
+                    )
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            (
+                                f"Existing override file at {path} is not "
+                                f"valid JSON ({exc}); refusing to overwrite "
+                                "to avoid losing prior toggles. Inspect or "
+                                "delete the file manually and retry."
+                            ),
+                        ),
+                        status_code=409,
+                    )
+                if isinstance(parsed, dict):
+                    existing = parsed
+                # else: non-dict JSON (list, scalar) — treat as empty;
+                # we're about to write a dict either way and there's
+                # no prior toggle state to preserve from a non-object
+                # root.
+            existing.update(new_overrides)
 
-        # Atomic write: tmp + rename. ``path.write_text`` is O_TRUNC +
-        # write — a crash mid-write leaves an empty/truncated file
-        # that the next ``_read_feature_flag_override_file`` call
-        # would refuse, losing every prior toggle.
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        try:
-            tmp.write_text(json.dumps(existing, indent=2))
-            os.replace(tmp, path)
-        except OSError as exc:
-            logger.warning("Could not write %s", path, exc_info=True)
-            with contextlib.suppress(FileNotFoundError, OSError):
-                tmp.unlink()
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Could not persist feature flags: {exc}",
-                ),
-                status_code=500,
-            )
+            # Atomic write: tmp + rename. ``path.write_text`` is
+            # O_TRUNC + write — a crash mid-write leaves an empty /
+            # truncated file that the next
+            # ``_read_feature_flag_override_file`` call would refuse,
+            # losing every prior toggle.
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            try:
+                tmp.write_text(json.dumps(existing, indent=2))
+                os.replace(tmp, path)
+            except OSError as exc:
+                logger.warning("Could not write %s", path, exc_info=True)
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    tmp.unlink()
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not persist feature flags: {exc}",
+                    ),
+                    status_code=500,
+                )
 
         # Publish the change so the same process picks it up on the
         # next ``get_global_settings()`` call. The cached singleton
@@ -5324,53 +5359,58 @@ def build_settings_handlers(
 
         # Merge into the existing override file via atomic write (same
         # path used by _save_feature_flags so a single file holds both
-        # advanced + feature-flag overrides).
+        # advanced + feature-flag overrides). Lock-serialised against
+        # concurrent feature-flag saves on the same file (#1164
+        # follow-up review — A.2).
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        existing: dict[str, Any] = {}
-        try:
-            existing_raw = path.read_text()
-        except FileNotFoundError:
-            existing_raw = None
-        except OSError as exc:
-            logger.warning("Cannot read %s", path, exc_info=True)
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Could not read existing override file "
-                    f"({type(exc).__name__}: {exc}); refusing to "
-                    "overwrite to avoid losing prior toggles.",
-                ),
-                status_code=500,
-            )
-        if existing_raw is not None:
+        async with _get_override_file_lock():
+            existing: dict[str, Any] = {}
             try:
-                parsed = json.loads(existing_raw)
-            except json.JSONDecodeError as exc:
-                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                existing_raw = path.read_text()
+            except FileNotFoundError:
+                existing_raw = None
+            except OSError as exc:
+                logger.warning("Cannot read %s", path, exc_info=True)
                 return JSONResponse(
                     create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Existing override file at {path} is not "
-                        f"valid JSON ({exc}); refusing to overwrite. "
-                        "Inspect or delete the file manually and retry.",
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not read existing override file "
+                        f"({type(exc).__name__}: {exc}); refusing to "
+                        "overwrite to avoid losing prior toggles.",
                     ),
-                    status_code=409,
+                    status_code=500,
                 )
-            if isinstance(parsed, dict):
-                existing = parsed
-        existing.update(new_overrides)
+            if existing_raw is not None:
+                try:
+                    parsed = json.loads(existing_raw)
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "Existing %s is corrupt: %s", path, exc, exc_info=True
+                    )
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Existing override file at {path} is not "
+                            f"valid JSON ({exc}); refusing to overwrite. "
+                            "Inspect or delete the file manually and retry.",
+                        ),
+                        status_code=409,
+                    )
+                if isinstance(parsed, dict):
+                    existing = parsed
+            existing.update(new_overrides)
 
-        try:
-            _atomic_write_json(path, existing)
-        except OSError as exc:
-            logger.warning("Could not write %s", path, exc_info=True)
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Could not persist advanced settings: {exc}",
-                ),
-                status_code=500,
-            )
+            try:
+                _atomic_write_json(path, existing)
+            except OSError as exc:
+                logger.warning("Could not write %s", path, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not persist advanced settings: {exc}",
+                    ),
+                    status_code=500,
+                )
 
         _reset_global_settings()
         return JSONResponse(

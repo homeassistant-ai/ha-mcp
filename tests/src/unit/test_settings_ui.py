@@ -2490,6 +2490,126 @@ class TestAdvancedSettingsEndpoints:
         _reset_global_settings()
 
     @pytest.mark.asyncio
+    async def test_save_advanced_addon_synced_routes_through_supervisor(
+        self, monkeypatch
+    ):
+        """``backup_hint`` and ``verify_ssl`` are addon-synced (#1164
+        follow-up). In addon mode, their saves must POST to Supervisor
+        via ``_supervisor_merge_and_post_options`` and return
+        ``mode='addon'``, NOT write to the override file. Without this
+        the addon-Configuration ↔ web-UI sync the PR promises would be
+        silently file-only.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")
+        _reset_global_settings()
+        merge_mock = AsyncMock(return_value=(True, None))
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        body = json.loads(resp.body)
+        assert body["mode"] == "addon"
+        assert body["applied"] == {"backup_hint": "weak"}
+        assert body["restart_required"] is True
+        merge_mock.assert_awaited_once_with(True, {"backup_hint": "weak"})
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_addon_synced_supervisor_4xx_surfaces_validation_failed(
+        self, monkeypatch
+    ):
+        """Supervisor schema rejection of an addon-synced advanced
+        write must propagate as ``CONFIG_VALIDATION_FAILED`` with the
+        actual Supervisor status code preserved, not a generic 502.
+        Mirrors the feature-flag addon-route behaviour.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import (
+            _SupervisorOptionsError,
+            build_settings_handlers,
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        _reset_global_settings()
+        merge_mock = AsyncMock(
+            return_value=(
+                False,
+                _SupervisorOptionsError(
+                    kind="validation",
+                    message="Supervisor rejected (400): bad value",
+                    status_code=400,
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_origin_for_addon_synced_field_is_addon_in_addon_mode(
+        self, monkeypatch
+    ):
+        """``_origin_for_advanced_field`` returns 'addon' for fields
+        listed in ``ADDON_SYNCED_ADVANCED_FIELDS`` whenever
+        ``SUPERVISOR_TOKEN`` is set, regardless of env-var presence.
+        Standalone mode falls through to env/file/default as usual.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        # backup_hint + verify_ssl come back addon-routed (editable).
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
+        assert backup_row["origin"] == "addon", (
+            f"expected addon-routed backup_hint, got {backup_row}"
+        )
+        assert backup_row["editable"] is True
+        assert verify_row["origin"] == "addon", (
+            f"expected addon-routed verify_ssl, got {verify_row}"
+        )
+        assert verify_row["editable"] is True
+        # A non-addon-synced env-pinned field (e.g. timeout) stays env-locked.
+        monkeypatch.setenv("HA_TIMEOUT", "60")
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        timeout_row = next(f for f in body["fields"] if f["field"] == "timeout")
+        assert timeout_row["origin"] == "env"
+        assert timeout_row["editable"] is False
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
     async def test_save_advanced_preserves_prior_feature_flag_entries(
         self, monkeypatch, tmp_path
     ):
