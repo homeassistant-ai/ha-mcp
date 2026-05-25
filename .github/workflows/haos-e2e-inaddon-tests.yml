@@ -265,7 +265,7 @@ jobs:
 
       - name: Upload HAOS inaddon diagnostics
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: haos-inaddon-diagnostics
           path: |
