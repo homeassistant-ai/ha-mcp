@@ -247,7 +247,7 @@ def _build_success_response_if_found(
     if not fresh:
         return None
 
-    target_id = last_event.get("backup_id") or last_event.get("backup_job_id")
+    target_id = last_event.get("backup_id")
     authoritative = (
         next((b for b in fresh if b.get("backup_id") == target_id), None)
         if target_id

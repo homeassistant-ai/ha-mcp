@@ -372,7 +372,12 @@ class TestPollBackupCompletionPostTimeout:
                 poll_interval=1,
                 agent_id="backup.local",
             )
-        assert ErrorCode.TIMEOUT_OPERATION.value in str(exc_info.value)
+        msg = str(exc_info.value)
+        assert ErrorCode.TIMEOUT_OPERATION.value in msg
+        # Pin negative side of `likely_in_progress`: clean idle+completed-no-
+        # match must NOT surface the flag, else a future refactor that merges
+        # the in-progress and no-match branches could silently mislead callers.
+        assert "likely_in_progress" not in msg
 
     @pytest.mark.asyncio
     async def test_post_timeout_state_still_active_keeps_timeout_with_in_progress_flag(
