@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 
 # Testcontainer-only: in HAOS mode the webhook-proxy addon is installed
 # and ``start.py`` overwrites ``/config/.mcp_proxy_config.json`` whenever
-# the addon runs (rotating the webhook_id to a fresh value). These tests
-# rely on the deterministic bake-injected webhook_id
-# ``mcp_e2e_test_webhook_proxy``; the HAOS-tier equivalents live in
-# ``tests/src/e2e/haos_only/test_webhook_proxy_addon.py`` and use the
-# addon's actual runtime webhook_id.
+# the addon runs (replacing the bake's ``mcp_e2e_test_webhook_proxy`` id
+# with the addon's persisted id from ``/data/webhook_id.txt``). These
+# tests rely on the bake-injected deterministic id; the HAOS-tier
+# equivalents live in ``tests/src/e2e/haos_only/test_webhook_proxy_addon.py``
+# and read the addon's actual runtime id from its log on each run.
 pytestmark = [pytest.mark.container_only]
 
 

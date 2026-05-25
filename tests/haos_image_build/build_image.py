@@ -983,22 +983,29 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
             f"checkout is incomplete; the image cannot be built."
         )
 
-    # Defensive guard against ``image:`` re-appearing in config.yaml.
-    # If addon-publish.yml ever starts writing one back (the production
-    # release sets ``image: ghcr.io/...`` and per-PR versions 404 from
-    # GHCR), the bake must strip it the same way ``stage_dev_addon_source``
-    # does. Fail fast here so the breakage is obvious rather than surfacing
-    # as a 5-minute install timeout downstream.
+    # Defensive guard against a TOP-LEVEL ``image:`` re-appearing in
+    # config.yaml. If addon-publish.yml ever starts writing one back
+    # (the production release sets ``image: ghcr.io/...`` and per-PR
+    # version bumps then 404 from GHCR), the bake must strip it the
+    # same way ``stage_dev_addon_source`` does. Fail fast here so the
+    # breakage is obvious rather than surfacing as a 5-minute install
+    # timeout downstream. Uses the same top-level-only test as
+    # ``stage_dev_addon_source``'s post-strip verification
+    # (``"\nimage:" in text or text.startswith("image:")``) so an
+    # indented nested key named ``image`` (e.g. under ``translations``)
+    # doesn't falsely trigger the guard.
     config_yaml = src_dir / "config.yaml"
     cfg_text = config_yaml.read_text()
-    if any(
-        ln.startswith("image:") or ln.lstrip().startswith("image:")
-        for ln in cfg_text.splitlines()
-    ):
+    if "\nimage:" in cfg_text or cfg_text.startswith("image:"):
+        offending = next(
+            (ln for ln in cfg_text.splitlines() if ln.startswith("image:")),
+            "<line not found>",
+        )
         raise RuntimeError(
-            f"{config_yaml} now declares an ``image:`` field. Supervisor "
-            f"will try to pull from GHCR instead of building locally, and "
-            f"per-PR version bumps will 404. Add an image-strip patch to "
+            f"{config_yaml} now declares a top-level ``image:`` field "
+            f"({offending!r}). Supervisor will try to pull from GHCR "
+            f"instead of building locally, and per-PR version bumps "
+            f"will 404. Add an image-strip patch to "
             f"stage_webhook_proxy_addon_source (mirror the one in "
             f"stage_dev_addon_source)."
         )
@@ -1198,11 +1205,14 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     set to ``manual`` so the cached qcow2 doesn't auto-start it on
     resume. Two reasons:
 
-    1. ``start.py`` writes ``/config/.mcp_proxy_config.json`` on every
-       run (target_url + a freshly-generated webhook_id). If the addon
-       runs during bake or on resume, it clobbers the deterministic
-       config the bake injected via ``bake_test_state`` and breaks
-       sibling tests that rely on the bake's webhook_id
+    1. ``start.py`` overwrites ``/config/.mcp_proxy_config.json`` on
+       every run with target_url + the addon's persisted webhook_id
+       (``/data/webhook_id.txt`` — generated on first-ever start,
+       reused on every subsequent run). The persisted id differs from
+       the deterministic value the bake injected via
+       ``bake_test_state``. If the addon runs during bake or on
+       resume, the overwrite clobbers the deterministic config and
+       breaks sibling tests that rely on the bake's webhook_id
        (``test_webhook_proxy.py`` in particular).
     2. On resume, the dev MCP addon and the webhook-proxy both
        auto-start in parallel; webhook-proxy's auto-discovery races

@@ -10,12 +10,15 @@ tests only run once per session against a known-good container.
 
 Why boot=manual + session fixture rather than boot=auto:
 
-- ``start.py`` writes ``/config/.mcp_proxy_config.json`` on every run
-  with a freshly-generated webhook_id. If the addon auto-started on
-  qcow2 resume, it would clobber the deterministic config that the
-  bake's ``bake_test_state`` step injected for sibling tests
-  (testcontainer-only ``test_webhook_proxy.py`` relies on the bake's
-  webhook_id ``mcp_e2e_test_webhook_proxy``).
+- ``start.py`` overwrites ``/config/.mcp_proxy_config.json`` on every
+  run with the addon's persisted webhook_id (read from
+  ``/data/webhook_id.txt`` — generated on first-ever start, reused on
+  every subsequent run). That persisted id differs from the
+  deterministic value the bake's ``bake_test_state`` step injected
+  (``mcp_e2e_test_webhook_proxy``). If the addon auto-started on
+  qcow2 resume, the overwrite would happen before any test runs and
+  the testcontainer-only ``test_webhook_proxy.py`` (which still
+  expects the bake's id) would fail on identical-content checks.
 - The dev MCP addon and the webhook-proxy both have ``startup:
   application`` and would race on parallel auto-start; webhook-proxy's
   Supervisor auto-discovery is faster than the dev addon's MCP server
@@ -54,6 +57,7 @@ import pytest
 import requests
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
 
@@ -143,7 +147,16 @@ async def _get_addon_logs(mcp_client: Any, slug: str) -> str:
 
 
 def _extract_webhook_id(log_text: str) -> str | None:
-    """Pull the most recent webhook ID start.py logged on startup."""
+    """Pull the most recent webhook ID start.py logged on startup.
+
+    Returns the LAST match in the supplied text. start.py logs the
+    webhook path once per run from ``_register_webhook``; on a
+    multi-start log (fixture start + intra-test restarts) every match
+    is the same persisted id (from ``/data/webhook_id.txt``), so
+    last-match is equivalent to any-match. Callers that need the id
+    from a SPECIFIC run (e.g. post-restart-only) should slice the log
+    before calling — see ``test_webhook_id_persists_across_restart``.
+    """
     matches = _WEBHOOK_PATH_RE.findall(log_text)
     return matches[-1] if matches else None
 
@@ -181,13 +194,30 @@ async def webhook_proxy_started(mcp_client: Any) -> Any:
     )
     await _wait_for_state(mcp_client, WEBHOOK_PROXY_SLUG, "started")
     # start.py writes the webhook path to stdout on first start; give
-    # it a moment so the first test reads a populated log.
+    # it a moment so the first test reads a populated log. Catch
+    # _POLLING_TRANSIENT_ERRORS so a momentary MCP transport blip
+    # during addon boot doesn't abort the fixture before the addon
+    # has had a chance to log the path.
     deadline = time.monotonic() + _STATE_POLL_TIMEOUT
+    seen_webhook = False
     while time.monotonic() < deadline:
-        log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
+        try:
+            log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
+        except _POLLING_TRANSIENT_ERRORS as exc:
+            LOG.debug("Transient ha_get_logs error during fixture wait: %s", exc)
+            await asyncio.sleep(_STATE_POLL_INTERVAL)
+            continue
         if _extract_webhook_id(log_text):
+            seen_webhook = True
             break
         await asyncio.sleep(_STATE_POLL_INTERVAL)
+    assert seen_webhook, (
+        f"Webhook-proxy did not log ``/api/webhook/<id>`` within "
+        f"{_STATE_POLL_TIMEOUT}s of start. Either start.py failed to "
+        f"reach _register_webhook or it crashed before emitting the "
+        f"line. Check /tmp/haos-diagnostics/webhook-proxy-addon.log on "
+        f"the runner."
+    )
     try:
         yield
     finally:
@@ -196,7 +226,7 @@ async def webhook_proxy_started(mcp_client: Any) -> Any:
             await _wait_for_state(
                 mcp_client, WEBHOOK_PROXY_SLUG, STOPPED_STATES, timeout=30.0
             )
-        except Exception:
+        except Exception:  # pragma: no cover - cleanup best-effort
             LOG.exception("Teardown stop of webhook-proxy addon failed")
 
 
@@ -314,7 +344,7 @@ async def test_addon_remote_url_round_trip(
         restore["remote_url"] = original_remote
         try:
             await _set_options(mcp_client, slug, restore)
-        except Exception:
+        except Exception:  # pragma: no cover - cleanup best-effort
             LOG.exception("Failed to restore remote_url to %s", original_remote)
 
 
@@ -355,7 +385,16 @@ async def test_auto_discovery_finds_dev_addon_when_url_blank(
         deadline = time.monotonic() + _STATE_POLL_TIMEOUT
         discovered: list[str] = []
         while time.monotonic() < deadline:
-            log_text = await _get_addon_logs(mcp_client, slug)
+            try:
+                log_text = await _get_addon_logs(mcp_client, slug)
+            except _POLLING_TRANSIENT_ERRORS as exc:
+                LOG.debug(
+                    "Transient ha_get_logs error during discovery poll (slug=%s): %s",
+                    slug,
+                    exc,
+                )
+                await asyncio.sleep(_STATE_POLL_INTERVAL)
+                continue
             discovered = _DISCOVERY_RE.findall(log_text)
             if discovered:
                 break
@@ -376,7 +415,7 @@ async def test_auto_discovery_finds_dev_addon_when_url_blank(
             await _set_options(mcp_client, slug, restore)
             await _addon_action(mcp_client, slug, "restart")
             await _wait_for_state(mcp_client, slug, "started")
-        except Exception:
+        except Exception:  # pragma: no cover - cleanup best-effort
             LOG.exception("Failed to restore mcp_server_url + restart")
 
 
@@ -414,7 +453,16 @@ async def test_webhook_id_persists_across_restart(
     deadline = time.monotonic() + _STATE_POLL_TIMEOUT
     post_id: str | None = None
     while time.monotonic() < deadline:
-        post_log = await _get_addon_logs(mcp_client, slug)
+        try:
+            post_log = await _get_addon_logs(mcp_client, slug)
+        except _POLLING_TRANSIENT_ERRORS as exc:
+            LOG.debug(
+                "Transient ha_get_logs error during webhook-id poll (slug=%s): %s",
+                slug,
+                exc,
+            )
+            await asyncio.sleep(_STATE_POLL_INTERVAL)
+            continue
         # Only consider log lines emitted after the pre-restart snapshot.
         new_section = post_log[len(pre_log) :]
         post_id = _extract_webhook_id(new_section)
@@ -484,6 +532,17 @@ async def test_webhook_endpoint_registered_in_ha_core(
         f"{len(unregistered_resp.content)}). mcp_proxy may not have "
         "registered the webhook on first start."
     )
+    # Additional positive-signal check: HA's default-for-unregistered
+    # returns 200 with an empty body. If a future HA change starts
+    # returning a non-empty body for unknown webhooks (e.g. echoing the
+    # path), ``differs`` above could pass on incidental content drift
+    # without proving the integration actually handled the request.
+    # Anchor on registered-has-content as the positive signal.
+    assert len(registered_resp.content) > 0, (
+        f"Registered webhook returned an empty body ({registered_resp.status_code}). "
+        "mcp_proxy's handler should produce a response — empty body "
+        "suggests the integration's webhook isn't actually serving."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +584,18 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
         f"Baseline (OAuth off) POST should not be auth-rejected; "
         f"got {baseline_resp.status_code}: {baseline_resp.text[:300]!r}"
     )
+    # The "gated" check below treats 404 as evidence the addon
+    # unregistered the webhook in response to enable_oauth=True. If the
+    # webhook were already unregistered at baseline (mcp_proxy never
+    # registered it on first start, say), the gate check would falsely
+    # pass with no actual contrast — pin the baseline as "registered"
+    # by requiring a non-404 here.
+    assert baseline_resp.status_code != 404, (
+        f"Baseline POST returned 404 — webhook is not registered before "
+        f"OAuth toggle. The gate test cannot distinguish gate-engaged "
+        f"from "
+        f"never-registered. Body: {baseline_resp.text[:300]!r}"
+    )
 
     probe_options = dict(current_options)
     probe_options["enable_oauth"] = True
@@ -540,9 +611,20 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
         last_status: int | None = None
         gated = False
         while time.monotonic() < deadline:
-            resp = await asyncio.to_thread(
-                requests.post, webhook_url, headers=headers, timeout=10
-            )
+            try:
+                resp = await asyncio.to_thread(
+                    requests.post, webhook_url, headers=headers, timeout=10
+                )
+            except requests.exceptions.RequestException as exc:
+                # Transient connection/timeout during addon restart and
+                # OAuth gate activation. Retry until the deadline.
+                LOG.debug(
+                    "Transient requests error during OAuth gate poll (url=%s): %s",
+                    webhook_url,
+                    exc,
+                )
+                await asyncio.sleep(_STATE_POLL_INTERVAL)
+                continue
             last_status = resp.status_code
             if last_status in (401, 403, 404):
                 gated = True
@@ -560,5 +642,5 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
             await _set_options(mcp_client, slug, current_options)
             await _addon_action(mcp_client, slug, "restart")
             await _wait_for_state(mcp_client, slug, "started")
-        except Exception:
+        except Exception:  # pragma: no cover - cleanup best-effort
             LOG.exception("OAuth cleanup restart failed")
