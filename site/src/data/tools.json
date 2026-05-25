@@ -852,7 +852,7 @@
   {
     "name": "ha_remove_device",
     "title": "Remove Device",
-    "description": "Remove an orphaned device from the Home Assistant device registry.\n\nWARNING: This removes the device entry from the registry.\n- Use only for orphaned devices that are no longer connected\n- Active devices will typically be re-added by their integration\n- Associated entities may also be removed\n\nThis uses the config entry removal which is the safe way to remove devices.\nIf the device has multiple config entries, they must all be removed.\n\nEXAMPLES:\n- Remove orphaned device: ha_remove_device(\"abc123def456\")\n\nNOTE: For most use cases, consider disabling the device instead:\nha_update_device(device_id=\"abc123\", disabled_by=\"user\")",
+    "description": "Remove an orphaned device from the Home Assistant device registry.\n\nWARNING: This removes the device entry from the registry.\n- Use only for orphaned devices that are no longer connected\n- Active devices will typically be re-added by their integration\n- Associated entities may also be removed\n\nThis uses the config entry removal which is the safe way to remove devices.\nIf the device has multiple config entries, they must all be removed.\n\nEXAMPLES:\n- Remove orphaned device: ha_remove_device(\"abc123def456\")\n\nNOTE: For most use cases, consider disabling the device instead:\nha_set_device(device_id=\"abc123\", disabled_by=\"user\")",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -873,9 +873,9 @@
     "source_file": "tools_registry.py"
   },
   {
-    "name": "ha_update_device",
-    "title": "Update Device",
-    "description": "Update device properties such as name, area, disabled state, or labels.\n\nIMPORTANT: Renaming a device does NOT rename its entities!\nDevice and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).\n\nCommon workflow for full rename:\n1. ha_update_device(device_id=\"abc\", name=\"Living Room Sensor\")  # Rename device\n2. ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.living_room\")  # Rename entities separately\n\nPARAMETERS:\n- name: Sets the user-defined display name (name_by_user)\n- area_id: Assigns device to an area/room. Use '' to remove from area.\n- disabled_by: Set to 'user' to disable, or empty to enable\n- labels: List of labels (replaces existing labels)\n\nEXAMPLES:\n- Rename device: ha_update_device(\"abc123\", name=\"Living Room Hub\")\n- Move to area: ha_update_device(\"abc123\", area_id=\"living_room\")\n- Disable device: ha_update_device(\"abc123\", disabled_by=\"user\")\n- Enable device: ha_update_device(\"abc123\", disabled_by=\"\")\n- Add labels: ha_update_device(\"abc123\", labels=[\"important\", \"sensor\"])",
+    "name": "ha_set_device",
+    "title": "Set Device",
+    "description": "Update device properties such as name, area, disabled state, or labels.\n\nIMPORTANT: Renaming a device does NOT rename its entities!\nDevice and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).\n\nCommon workflow for full rename:\n1. ha_set_device(device_id=\"abc\", name=\"Living Room Sensor\")  # Rename device\n2. ha_set_entity(\"sensor.old\", new_entity_id=\"sensor.living_room\")  # Rename entities separately\n\nPARAMETERS:\n- name: Sets the user-defined display name (name_by_user)\n- area_id: Assigns device to an area/room. Use '' to remove from area.\n- disabled_by: Set to 'user' to disable, or empty to enable\n- labels: List of labels (replaces existing labels)\n\nEXAMPLES:\n- Rename device: ha_set_device(\"abc123\", name=\"Living Room Hub\")\n- Move to area: ha_set_device(\"abc123\", area_id=\"living_room\")\n- Disable device: ha_set_device(\"abc123\", disabled_by=\"user\")\n- Enable device: ha_set_device(\"abc123\", disabled_by=\"\")\n- Add labels: ha_set_device(\"abc123\", labels=[\"important\", \"sensor\"])",
     "inputSchema": {
       "properties": {
         "device_id": {

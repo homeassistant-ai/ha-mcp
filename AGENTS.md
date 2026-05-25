@@ -650,7 +650,7 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 
 **Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
 - `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
-- `ha_report_issue`, `ha_import_blueprint`, `ha_update_device`
+- `ha_report_issue`, `ha_import_blueprint`
 - `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
 - `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
 - `ha_hacs_*` family (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`, `ha_hacs_repository_info`) — grandfathered; pre-dates this convention
