@@ -67,13 +67,15 @@ _saved_tools: dict[str, dict[str, str]] = {}
 # ``CategorizedSearchTransform`` (excludes pinned tools from category sets
 # when code mode is on); this set is the defense-in-depth that closes the
 # inner-call path even if the proxy is reachable some other way.
-_BLOCKED_TOOLS = frozenset({
-    "ha_manage_custom_tool",
-    "ha_search_tools",
-    "ha_call_read_tool",
-    "ha_call_write_tool",
-    "ha_call_delete_tool",
-})
+_BLOCKED_TOOLS = frozenset(
+    {
+        "ha_manage_custom_tool",
+        "ha_search_tools",
+        "ha_call_read_tool",
+        "ha_call_write_tool",
+        "ha_call_delete_tool",
+    }
+)
 
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
@@ -119,83 +121,87 @@ _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
 # listening for ``state_changed`` / ``automation_reloaded`` / etc. without
 # the real subsystem ever having fired. Custom event types stay allowed —
 # only the names HA Core itself emits are blocked.
-_BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset({
-    "state_changed",
-    "service_registered",
-    "service_removed",
-    "service_executed",
-    "automation_reloaded",
-    "script_started",
-    "script_finished",
-    "homeassistant_start",
-    "homeassistant_started",
-    "homeassistant_stop",
-    "homeassistant_close",
-    "homeassistant_final_write",
-    "core_config_updated",
-    "device_registry_updated",
-    "entity_registry_updated",
-    "area_registry_updated",
-    "category_registry_updated",
-    "floor_registry_updated",
-    "label_registry_updated",
-    # ``logbook_entry`` is the documented logbook write API — the Logbook
-    # integration consumes it to render rows. Sandbox code firing this
-    # event would inject attacker-fabricated rows directly into the
-    # user's primary investigation tool, which is a data-integrity issue.
-    "logbook_entry",
-    "lovelace_updated",
-    "panels_updated",
-    "themes_updated",
-    "component_loaded",
-    "recorder_5min_statistics_generated",
-    "recorder_hourly_statistics_generated",
-})
+_BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset(
+    {
+        "state_changed",
+        "service_registered",
+        "service_removed",
+        "service_executed",
+        "automation_reloaded",
+        "script_started",
+        "script_finished",
+        "homeassistant_start",
+        "homeassistant_started",
+        "homeassistant_stop",
+        "homeassistant_close",
+        "homeassistant_final_write",
+        "core_config_updated",
+        "device_registry_updated",
+        "entity_registry_updated",
+        "area_registry_updated",
+        "category_registry_updated",
+        "floor_registry_updated",
+        "label_registry_updated",
+        # ``logbook_entry`` is the documented logbook write API — the Logbook
+        # integration consumes it to render rows. Sandbox code firing this
+        # event would inject attacker-fabricated rows directly into the
+        # user's primary investigation tool, which is a data-integrity issue.
+        "logbook_entry",
+        "lovelace_updated",
+        "panels_updated",
+        "themes_updated",
+        "component_loaded",
+        "recorder_5min_statistics_generated",
+        "recorder_hourly_statistics_generated",
+    }
+)
 
 # WebSocket commands the sandbox must not send. Each one either changes
 # persistent state in a way that bypasses a wrapping tool's validation
 # (lovelace, registry mutations) or has no sandbox-appropriate use case
 # at all (``config/core/update`` rewrites the HA installation's location/
 # timezone/currency/lat-long).
-_BLOCKED_WS_COMMANDS: frozenset[str] = frozenset({
-    "config/core/update",
-    "lovelace/config/save",
-    "lovelace/dashboards/create",
-    "lovelace/dashboards/delete",
-    "lovelace/dashboards/update",
-    "config/area_registry/delete",
-    "config/area_registry/disable",
-    "config/area_registry/update",
-    "config/device_registry/delete",
-    "config/device_registry/disable",
-    "config/device_registry/update",
-    # Device registry deletion is registered as ``remove_config_entry`` on
-    # HA Core, not ``delete`` — see ``tools_registry.py:753`` for the
-    # actually-emitted command. ``ha_remove_device`` wraps it; raw
-    # ``ws_send`` would skip those checks.
-    "config/device_registry/remove_config_entry",
-    "config/entity_registry/delete",
-    "config/entity_registry/disable",
-    "config/entity_registry/update",
-    # Entity registry deletion is registered as ``remove`` on HA Core,
-    # not ``delete`` — see ``tools_entities.py:1130`` for the
-    # actually-emitted command. ``ha_remove_entity`` wraps it.
-    "config/entity_registry/remove",
-    # Floor / label / category registries follow the same rationale as
-    # area / device / entity above: each has a wrapping MCP tool
-    # (``ha_set_area_or_floor``, ``ha_config_set_label``,
-    # ``ha_config_set_category``) that performs invariant checks the
-    # raw WS command skips.
-    "config/floor_registry/create",
-    "config/floor_registry/delete",
-    "config/floor_registry/update",
-    "config/label_registry/create",
-    "config/label_registry/delete",
-    "config/label_registry/update",
-    "config/category_registry/create",
-    "config/category_registry/delete",
-    "config/category_registry/update",
-})
+_BLOCKED_WS_COMMANDS: frozenset[str] = frozenset(
+    {
+        "config/core/update",
+        "lovelace/config/save",
+        "lovelace/dashboards/create",
+        "lovelace/dashboards/delete",
+        "lovelace/dashboards/update",
+        "config/area_registry/delete",
+        "config/area_registry/disable",
+        "config/area_registry/update",
+        "config/device_registry/delete",
+        "config/device_registry/disable",
+        "config/device_registry/update",
+        # Device registry deletion is registered as ``remove_config_entry`` on
+        # HA Core, not ``delete`` — see ``tools_registry.py:753`` for the
+        # actually-emitted command. ``ha_remove_device`` wraps it; raw
+        # ``ws_send`` would skip those checks.
+        "config/device_registry/remove_config_entry",
+        "config/entity_registry/delete",
+        "config/entity_registry/disable",
+        "config/entity_registry/update",
+        # Entity registry deletion is registered as ``remove`` on HA Core,
+        # not ``delete`` — see ``tools_entities.py:1130`` for the
+        # actually-emitted command. ``ha_remove_entity`` wraps it.
+        "config/entity_registry/remove",
+        # Floor / label / category registries follow the same rationale as
+        # area / device / entity above: each has a wrapping MCP tool
+        # (``ha_set_area_or_floor``, ``ha_config_set_label``,
+        # ``ha_config_set_category``) that performs invariant checks the
+        # raw WS command skips.
+        "config/floor_registry/create",
+        "config/floor_registry/delete",
+        "config/floor_registry/update",
+        "config/label_registry/create",
+        "config/label_registry/delete",
+        "config/label_registry/update",
+        "config/category_registry/create",
+        "config/category_registry/delete",
+        "config/category_registry/update",
+    }
+)
 
 
 def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
@@ -297,10 +303,8 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
             f"Exception type: {exc_type}",
             "Some Python builtins behave differently in Monty (e.g. "
             "next() requires an iterator, not a list).",
-            "Check the values you're passing to api_get/api_post/"
-            "ws_send/call_tool.",
-            "Use 'await' before any call to api_get/api_post/ws_send/"
-            "call_tool.",
+            "Check the values you're passing to api_get/api_post/ws_send/call_tool.",
+            "Use 'await' before any call to api_get/api_post/ws_send/call_tool.",
         ],
     )
 
@@ -317,7 +321,7 @@ def _check_api_post_blocked(normalized: str) -> str | None:
         if normalized.startswith(prefix) or normalized == prefix.rstrip("/"):
             return f"{what} are blocked from the sandbox; {alternative}."
     if normalized.startswith("events/"):
-        event_name = normalized[len("events/"):]
+        event_name = normalized[len("events/") :]
         if event_name in _BLOCKED_HA_INTERNAL_EVENTS:
             return (
                 f"Firing HA-internal event {event_name!r} from the sandbox "
@@ -326,6 +330,7 @@ def _check_api_post_blocked(normalized: str) -> str | None:
                 "event ever happening. Custom event types are allowed."
             )
     return None
+
 
 # Cap on the number of saved tools to prevent runaway growth. A buggy
 # LLM loop could otherwise fill the on-disk file with unique save_as
@@ -444,9 +449,7 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     valid: dict[str, dict[str, str]] = {}
     for name, info in tools_raw.items():
         if not (isinstance(name, str) and _SAVE_NAME_PATTERN.match(name)):
-            logger.warning(
-                "Skipping saved tool with invalid name %r in %s", name, path
-            )
+            logger.warning("Skipping saved tool with invalid name %r in %s", name, path)
             continue
         if not isinstance(info, dict):
             logger.warning(
@@ -477,9 +480,7 @@ def _load_saved_tools(path_str: str) -> dict[str, dict[str, str]]:
     return valid
 
 
-def _save_saved_tools(
-    path_str: str, tools: dict[str, dict[str, str]]
-) -> bool:
+def _save_saved_tools(path_str: str, tools: dict[str, dict[str, str]]) -> bool:
     """Persist the saved-tools cache to a JSON file atomically.
 
     Returns ``True`` if persistence succeeded (or was disabled because
@@ -594,9 +595,7 @@ def _extract_tool_result(result: Any) -> Any:
             except (json.JSONDecodeError, TypeError):
                 payload = combined
             if is_error:
-                message = (
-                    payload if isinstance(payload, str) else json.dumps(payload)
-                )
+                message = payload if isinstance(payload, str) else json.dumps(payload)
                 return {"error": message}
             return payload
 
@@ -690,9 +689,7 @@ async def _run_sandboxed_code(
             )
         first_slash = endpoint.find("/")
         userinfo_marker = endpoint.find("@")
-        if userinfo_marker >= 0 and (
-            first_slash < 0 or userinfo_marker < first_slash
-        ):
+        if userinfo_marker >= 0 and (first_slash < 0 or userinfo_marker < first_slash):
             raise ValueError("endpoint must not contain userinfo")
         ep = endpoint.lstrip("/")
         if ep.startswith("api/"):
@@ -716,7 +713,9 @@ async def _run_sandboxed_code(
         nonlocal call_count
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
-            return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
+            return {
+                "error": f"API call limit exceeded ({settings.code_mode_max_invocations})"
+            }
         try:
             normalized = _normalize_endpoint(endpoint)
         except ValueError as exc:
@@ -737,7 +736,9 @@ async def _run_sandboxed_code(
         nonlocal call_count
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
-            return {"error": f"API call limit exceeded ({settings.code_mode_max_invocations})"}
+            return {
+                "error": f"API call limit exceeded ({settings.code_mode_max_invocations})"
+            }
         try:
             normalized = _normalize_endpoint(endpoint)
         except ValueError as exc:
@@ -770,7 +771,9 @@ async def _run_sandboxed_code(
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await client.httpx_client.request("POST", normalized, **post_kwargs)
+            response = await client.httpx_client.request(
+                "POST", normalized, **post_kwargs
+            )
             try:
                 return response.json()
             except json.JSONDecodeError:
@@ -800,7 +803,9 @@ async def _run_sandboxed_code(
         nonlocal call_count
         call_count += 1
         if call_count > settings.code_mode_max_invocations:
-            return {"error": f"WebSocket call limit exceeded ({settings.code_mode_max_invocations})"}
+            return {
+                "error": f"WebSocket call limit exceeded ({settings.code_mode_max_invocations})"
+            }
         if not isinstance(message, dict):
             return {"error": "ws_send(message) requires a dict with a 'type' field"}
         msg_type = message.get("type")
@@ -821,9 +826,7 @@ async def _run_sandboxed_code(
         try:
             return await client.send_websocket_message(message)
         except Exception as exc:
-            logger.warning(
-                "ws_send(type=%r) failed", msg_type, exc_info=True
-            )
+            logger.warning("ws_send(type=%r) failed", msg_type, exc_info=True)
             return {"error": str(exc)[:200]}
 
     async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
@@ -855,9 +858,7 @@ async def _run_sandboxed_code(
             except (json.JSONDecodeError, TypeError):
                 return _sandbox_error(ErrorCode.INTERNAL_ERROR, str(te))
         except Exception as exc:
-            logger.warning(
-                "call_tool(%r) failed", tool_name, exc_info=True
-            )
+            logger.warning("call_tool(%r) failed", tool_name, exc_info=True)
             return _sandbox_error(
                 ErrorCode.INTERNAL_ERROR,
                 f"Tool call failed: {str(exc)[:200]}",
@@ -894,9 +895,7 @@ async def _run_sandboxed_code(
         # entry the LLM already saw "deleted").
         previous = _saved_tools[name]
         del _saved_tools[name]
-        if not _save_saved_tools(
-            settings.code_mode_saved_tools_path, _saved_tools
-        ):
+        if not _save_saved_tools(settings.code_mode_saved_tools_path, _saved_tools):
             _saved_tools[name] = previous
             return {
                 "error": (
@@ -1077,7 +1076,8 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # ``save_as`` and ``justification`` are modifiers for the ``code``
         # mode and don't count as a "mode" on their own.
         modes_active = sum(
-            1 for v in (
+            1
+            for v in (
                 bool(code and code.strip()),
                 bool(run_saved is not None),
                 bool(list_saved),
@@ -1166,7 +1166,10 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            return {"success": True, "data": {"result": result, "saved_tool": run_saved}}
+            return {
+                "success": True,
+                "data": {"result": result, "saved_tool": run_saved},
+            }
 
         # --- Mode: execute code ---
         if not code or not code.strip():
@@ -1247,10 +1250,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         }
 
         if save_as:
-            if (
-                save_as not in _saved_tools
-                and len(_saved_tools) >= _MAX_SAVED_TOOLS
-            ):
+            if save_as not in _saved_tools and len(_saved_tools) >= _MAX_SAVED_TOOLS:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_FAILED,
