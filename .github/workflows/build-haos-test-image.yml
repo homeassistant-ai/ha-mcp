@@ -45,7 +45,7 @@ on:
       - 'tests/haos_image_build/**'
       - 'tests/initial_test_state/**'
       - 'custom_components/ha_mcp_tools/**'
-      - 'homeassistant-addon-webhook-proxy/mcp_proxy/**'
+      - 'homeassistant-addon-webhook-proxy/**'
       # The workflow itself — bumping the build script or env triggers a republish.
       - '.github/workflows/build-haos-test-image.yml'
   schedule:
