@@ -272,17 +272,30 @@ jobs:
 
             ${requirements}
 
-            **Decision Criteria**:
-            - If this is a support/docs question (not a bug): Output "COMPLETE" (we can still provide guidance)
-            - If 70%+ of required items present: Output "COMPLETE"
-            - If there's a clear, specific error message (even if other details missing): Output "COMPLETE"
-            - If issue provides diagnostic value (stack trace, logs, specific symptoms): Output "COMPLETE"
-            - If the issue is too vague: Output a helpful missing info message
+            **Classification** — pick exactly one:
+            - \`bug\` — reports broken/incorrect behavior (error, crash, wrong output)
+            - \`enhancement\` — requests a new feature or improvement that doesn't exist yet
+            - \`question\` — asking how to do something; no clear bug or feature request
+            - \`invalid\` — off-topic, spam, or not actionable
 
-            **Your response**:
-            - If complete enough: Output exactly "COMPLETE" (nothing else)
-            - If missing info: Output a bulleted list of what's missing with instructions:
-              * **[Missing item]** - [How to get it]
+            **Decision Criteria**:
+            - If this is a support/docs question (not a bug): treat as COMPLETE (guidance is still possible)
+            - If 70%+ of required items present: COMPLETE
+            - If there's a clear, specific error message (even if other details missing): COMPLETE
+            - If issue provides diagnostic value (stack trace, logs, specific symptoms): COMPLETE
+            - If the issue is too vague: output the missing info list
+
+            **Your response format**:
+
+            If complete enough:
+              Output exactly one line: \`COMPLETE:<classification>\`
+              Examples: \`COMPLETE:bug\` / \`COMPLETE:enhancement\` / \`COMPLETE:question\` / \`COMPLETE:invalid\`
+
+            If missing info:
+              Output a bulleted list of what's missing with instructions:
+                * **[Missing item]** - [How to get it]
+              Then on the very last line: \`<!-- CLASSIFY:<classification> -->\`
+              Example last line: \`<!-- CLASSIFY:bug -->\`
 
             Be concise. Focus only on what's actually missing.
 
@@ -369,10 +382,19 @@ jobs:
 
             const trimmed = evaluateResult.trim();
 
-            // COMPLETE path — issue has enough info; add triaged label silently
-            if (trimmed === 'COMPLETE') {
-              core.info('Issue is complete; adding triaged label.');
-              await addLabels(['triaged']);
+            const VALID_CLASSIFICATIONS = ['bug', 'enhancement', 'question', 'invalid'];
+            const parseClassification = (text) => {
+              const m = text.match(/^COMPLETE:(\w+)$/i) || text.match(/<!--\s*CLASSIFY:(\w+)\s*-->/i);
+              const label = m ? m[1].toLowerCase() : null;
+              return VALID_CLASSIFICATIONS.includes(label) ? label : null;
+            };
+
+            // COMPLETE path — issue has enough info; add triaged + classification label silently
+            if (trimmed.toUpperCase().startsWith('COMPLETE')) {
+              const classification = parseClassification(trimmed);
+              const labels = ['triaged', ...(classification ? [classification] : [])];
+              core.info(`Issue is complete; adding labels: ${labels.join(', ')}`);
+              await addLabels(labels);
               await removeLabel('triage-failed');
               return;
             }
@@ -413,17 +435,21 @@ jobs:
             }
 
             // Missing-info path — post "Information Needed" comment
-            const matchesMissingInfoShape = trimmed.split('\n').some(line => {
+            const classification = parseClassification(trimmed);
+            const visibleText = trimmed.replace(/\n?<!--\s*CLASSIFY:\w+\s*-->\s*$/i, '').trimEnd();
+
+            const matchesMissingInfoShape = visibleText.split('\n').some(line => {
               const l = line.trimStart();
               return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
                      l.startsWith('**') || /^\d+\.\s/.test(l);
             });
             if (!matchesMissingInfoShape) {
-              core.warning(`Evaluate output didn't match expected list shape (length=${trimmed.length}); posting verbatim.`);
+              core.warning(`Evaluate output didn't match expected list shape (length=${visibleText.length}); posting verbatim.`);
             }
 
-            const body = `## ℹ️ Information Needed\n\n${trimmed}\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n*🤖 Automated triage by Issue Bot*`;
+            const body = `## ℹ️ Information Needed\n\n${visibleText}\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n*🤖 Automated triage by Issue Bot*`;
             await postComment(body);
+            if (classification) await addLabels([classification]);
             await removeLabel('triage-failed');
 
       - name: Fail job if evaluate step failed
