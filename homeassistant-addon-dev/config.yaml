@@ -27,17 +27,18 @@ options:
   enable_tool_security_policies: false
   # Master beta gate — also dev-only (stable's schema does not declare
   # this key; the stable web UI master remains the gate there). Default
-  # ON in dev so a fresh install exposes the channel's beta tooling
-  # without an extra round-trip to the web UI.
+  # ON in dev so the master is pre-unlocked; the user only has to
+  # opt into individual sub-tools below to activate them.
   enable_beta_features: true
-  # Beta sub-flags default to ON in the dev addon (#1164) — gated by
-  # the master above; flip master to false to disable the whole block
-  # without having to toggle each sub-flag individually.
-  enable_yaml_config_editing: true
-  enable_filesystem_tools: true
-  enable_custom_component_integration: true
-  enable_code_mode: true
-  enable_lite_docstrings: true
+  # Beta sub-flags default OFF — each one is a separate opt-in that
+  # writes to the user's HA system, and shipping them on by default
+  # would risk damage on a fresh install. The master above being on
+  # just means "you can enable these from here," not "they are on."
+  enable_yaml_config_editing: false
+  enable_filesystem_tools: false
+  enable_custom_component_integration: false
+  enable_code_mode: false
+  enable_lite_docstrings: false
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100

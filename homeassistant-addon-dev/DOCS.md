@@ -17,9 +17,9 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — their built-in tool search conflicts with ha-mcp's. Disable one or the other. | `false` |
 | `enable_tool_security_policies` | Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. Guarded calls block until the user clicks Approve in the Tool Security Policies tab of the web UI. Per-tool rules with optional argument conditions are configured in that same tab. | `false` |
 | `enable_beta_features` *(master)* | Master gate for the 5 beta sub-flags below. Sub-flags are ignored at runtime while this is off — even when explicitly set to true. Mirrored to the web settings UI under "Beta features (dangerous)". | `true` |
-| `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. Gated by the master above. | `true` |
-| `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. Gated by the master above. | `true` |
-| `enable_custom_component_integration` *(beta)* | Enables `ha_install_mcp_tools` installer tool for the `ha_mcp_tools` custom component. Gated by the master above. | `true` |
+| `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
+| `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
+| `enable_custom_component_integration` *(beta)* | Enables `ha_install_mcp_tools` installer tool for the `ha_mcp_tools` custom component. Gated by the master above. | `false` |
 | `tool_search_max_results` | Max results from `ha_search_tools` (range 2-10) | `5` |
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary) | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
