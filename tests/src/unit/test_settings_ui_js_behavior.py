@@ -1434,12 +1434,17 @@ class TestBetaBlockRendersAtBottom:
                 sel.value = 'DEBUG';
                 sel.dispatchEvent(new Event('change'));
               }
+              // Synchronously probe the mid-save state. ``click()``
+              // begins running saveAdvancedSettings up to its first
+              // await: the helpers ``_setAdvSaveDisabled(true)`` and
+              // ``_setAdvSaveStatus('Saving…')`` both run BEFORE that
+              // await, so right after click() returns the DOM should
+              // show both buttons disabled + both status els reading
+              // "Saving…". Probing post-completion would catch the
+              // post-reload state where loadAdvancedSettings() blanks
+              // the status text — not the mirror property we want to
+              // lock here.
               document.getElementById('advSaveBtn').click();
-              // Let the save chain settle (POST + post-save reload).
-              await new Promise(r => setTimeout(r, 250));
-              // Snapshot both status elements + both buttons' disabled
-              // state into a hidden div so the harness sees them in
-              // the serialised dom.
               const probe = document.createElement('div');
               probe.id = '__dual_save_probe';
               probe.dataset.bottomStatus =
@@ -1451,10 +1456,12 @@ class TestBetaBlockRendersAtBottom:
               probe.dataset.topDisabled =
                 String(document.getElementById('advSaveBtnTop').disabled);
               document.body.appendChild(probe);
+              // Drain pending microtasks so other in-flight work
+              // doesn't leak into the next test's state.
+              await new Promise(r => setTimeout(r, 250));
             """,
         )
         _assert_clean_init(result)
-        # Both status els must contain the final "Saved." text.
         probe_match = re.search(
             r'<div[^>]*id="__dual_save_probe"[^>]*>',
             result.dom,
@@ -1463,19 +1470,20 @@ class TestBetaBlockRendersAtBottom:
             f"dual-save probe div missing from dom; dom tail: {result.dom[-2000:]}"
         )
         probe_attrs = probe_match.group(0)
-        # Final state after save completes: both should read "Saved."
-        assert 'data-bottom-status="Saved."' in probe_attrs, (
-            f"bottom status text mismatch; probe: {probe_attrs}"
+        # Mid-save state: both status els show "Saving…", both
+        # buttons disabled. The mirror invariant is locked even
+        # before the POST resolves.
+        assert (
+            "Saving" in probe_attrs and 'data-bottom-status="Saving' in probe_attrs
+        ), f"bottom status didn't mirror Saving…; probe: {probe_attrs}"
+        assert 'data-top-status="Saving' in probe_attrs, (
+            f"top status didn't mirror Saving…; probe: {probe_attrs}"
         )
-        assert 'data-top-status="Saved."' in probe_attrs, (
-            f"top status text mismatch; probe: {probe_attrs}"
+        assert 'data-bottom-disabled="true"' in probe_attrs, (
+            f"bottom button not disabled mid-save; probe: {probe_attrs}"
         )
-        # Both buttons must be re-enabled after the save completes.
-        assert 'data-bottom-disabled="false"' in probe_attrs, (
-            f"bottom button stuck disabled; probe: {probe_attrs}"
-        )
-        assert 'data-top-disabled="false"' in probe_attrs, (
-            f"top button stuck disabled; probe: {probe_attrs}"
+        assert 'data-top-disabled="true"' in probe_attrs, (
+            f"top button not disabled mid-save; probe: {probe_attrs}"
         )
 
     def test_two_step_save_note_present(self) -> None:
@@ -1651,30 +1659,44 @@ class TestBetaMasterToggleLiveRender:
               masterInput.checked = false;
               masterInput.dispatchEvent(new Event('change'));
               await new Promise(r => setTimeout(r, 50));
+              // Probe via JS — JSDOM serialises attributes, not
+              // properties, so input.checked never shows up in the
+              // serialised dom. Stash the .checked property of the
+              // sub-row's checkbox into a probe div for the test to
+              // read.
+              const subInput = document.querySelector(
+                '.feature-row.beta-sub input[type="checkbox"]'
+              );
+              const probe = document.createElement('div');
+              probe.id = '__sub_state_probe';
+              probe.dataset.subChecked = String(subInput && subInput.checked);
+              probe.dataset.subDisabled = String(subInput && subInput.disabled);
+              document.body.appendChild(probe);
             """,
         )
         _assert_clean_init(result)
-        # Find the sub-row in the post-flip DOM.
         sub_row_match = re.search(
-            r'<div[^>]*class="feature-row beta-sub[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+            r'<div[^>]*class="feature-row beta-sub[^"]*"[^>]*>',
             result.dom,
-            re.DOTALL,
         )
         assert sub_row_match, (
-            f"could not locate beta-sub row after master flip; dom: {result.dom[-3000:]}"
+            f"beta-sub row missing after master flip; dom: {result.dom[-3000:]}"
         )
-        sub_row = sub_row_match.group(0)
-        assert "dimmed" in sub_row, (
-            f"sub-row should be dimmed after master-off: {sub_row}"
+        assert "dimmed" in sub_row_match.group(0), (
+            f"sub-row should be dimmed after master-off: {sub_row_match.group(0)}"
         )
-        # The checkbox visual state must STAY checked — the user's prior
+        # Read probe div for the .checked / .disabled property values.
+        probe_match = re.search(r'<div[^>]*id="__sub_state_probe"[^>]*>', result.dom)
+        assert probe_match, f"sub-state probe missing; dom tail: {result.dom[-2000:]}"
+        probe_attrs = probe_match.group(0)
+        # The checkbox VALUE must stay checked — user's prior
         # sub-flag selection is preserved until refresh.
-        assert "checked" in sub_row, (
-            f"sub-row checkbox flipped off — should stay checked: {sub_row}"
+        assert 'data-sub-checked="true"' in probe_attrs, (
+            f"sub-row checkbox flipped off — should stay checked: {probe_attrs}"
         )
         # Input must be disabled so the user can't fight the master gate.
-        assert "disabled" in sub_row, (
-            f"sub-row input should be disabled when master off: {sub_row}"
+        assert 'data-sub-disabled="true"' in probe_attrs, (
+            f"sub-row input should be disabled when master off: {probe_attrs}"
         )
 
 
