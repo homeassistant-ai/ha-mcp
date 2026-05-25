@@ -437,27 +437,37 @@ class TestHTTPEntryPoints:
         assert transport_used == "sse"
 
     def test_http_runtime_uses_env_vars(self):
-        """HTTP runtime should read port and path from environment."""
+        """HTTP runtime should read host, port, and path from environment."""
         from ha_mcp.__main__ import _get_http_runtime
 
-        with patch.dict(os.environ, {"MCP_PORT": "9000", "MCP_SECRET_PATH": "/custom"}):
-            port, path = _get_http_runtime()
+        with patch.dict(
+            os.environ,
+            {"MCP_HOST": "127.0.0.1", "MCP_PORT": "9000", "MCP_SECRET_PATH": "/custom"},
+        ):
+            host, port, path = _get_http_runtime()
 
+        assert host == "127.0.0.1"
         assert port == 9000
         assert path == "/custom"
 
     def test_http_runtime_uses_defaults(self):
-        """HTTP runtime should use defaults when env vars not set."""
+        """HTTP runtime should use defaults when env vars not set.
+
+        Default host is 0.0.0.0 (preserves prior behavior — FastMCP's own
+        default is 127.0.0.1, so the explicit fallback is load-bearing).
+        """
         from ha_mcp.__main__ import _get_http_runtime
 
         # Clear any existing env vars
         env = os.environ.copy()
+        env.pop("MCP_HOST", None)
         env.pop("MCP_PORT", None)
         env.pop("MCP_SECRET_PATH", None)
 
         with patch.dict(os.environ, env, clear=True):
-            port, path = _get_http_runtime()
+            host, port, path = _get_http_runtime()
 
+        assert host == "0.0.0.0"
         assert port == 8086
         assert path == "/mcp"
 
@@ -469,23 +479,3 @@ class TestHTTPEntryPoints:
             _get_http_runtime()
 
         assert exc_info.value.code == 1
-
-    def test_http_run_kwargs_default_host(self):
-        """Without MCP_HOST set, host defaults to 0.0.0.0 (preserves prior behavior)."""
-        from ha_mcp.__main__ import _http_run_kwargs
-
-        env = os.environ.copy()
-        env.pop("MCP_HOST", None)
-        with patch.dict(os.environ, env, clear=True):
-            kwargs = _http_run_kwargs("http", 8086, "/mcp")
-
-        assert kwargs["host"] == "0.0.0.0"
-
-    def test_http_run_kwargs_honors_mcp_host(self):
-        """MCP_HOST env var overrides the default bind host."""
-        from ha_mcp.__main__ import _http_run_kwargs
-
-        with patch.dict(os.environ, {"MCP_HOST": "127.0.0.1"}):
-            kwargs = _http_run_kwargs("http", 8086, "/mcp")
-
-        assert kwargs["host"] == "127.0.0.1"

@@ -288,20 +288,11 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports.
-
-    The bind host is read from the ``MCP_HOST`` env var, defaulting to
-    ``0.0.0.0`` so existing LAN/Docker deployments are unaffected. Set
-    ``MCP_HOST=127.0.0.1`` to restrict the server to loopback when running
-    the standard CLI entry points (``ha-mcp-web`` / ``ha-mcp-sse`` /
-    ``ha-mcp-oauth``) on a workstation. The fallback is kept explicit
-    because FastMCP's own default is ``127.0.0.1``; dropping the literal
-    would silently change behavior for existing users.
-    """
+def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
+    """Build common run_async kwargs for HTTP-based transports."""
     return {
         "transport": transport,
-        "host": os.getenv("MCP_HOST", "0.0.0.0"),
+        "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
@@ -733,13 +724,26 @@ def main_dev() -> None:
 
 
 # HTTP entry point for web clients
-def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
+def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     """Return runtime configuration shared by HTTP transports.
 
     Args:
         default_port: Default port to use if MCP_PORT env var is not set.
+
+    The bind host comes from ``MCP_HOST`` and defaults to ``0.0.0.0``. The
+    explicit literal default is load-bearing: FastMCP's own ``Settings.host``
+    defaults to ``127.0.0.1``, so dropping the fallback would silently flip
+    the default and break existing LAN deployments. Set ``MCP_HOST=127.0.0.1``
+    to bind to loopback on workstation deployments.
+
+    Note: FastMCP also honors a ``FASTMCP_HOST`` env var natively, but
+    because ``_http_run_kwargs`` passes ``host=`` explicitly to
+    ``run_async``, any ``FASTMCP_HOST`` value in the environment is
+    ignored — ``MCP_HOST`` is the only env var that affects bind host
+    for ha-mcp's CLI entry points.
     """
 
+    host = os.getenv("MCP_HOST", "0.0.0.0")
     port_str = os.getenv("MCP_PORT", str(default_port))
     try:
         port = int(port_str)
@@ -747,17 +751,18 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
         logger.error(f"Invalid MCP_PORT value: {port_str!r}. Must be an integer.")
         sys.exit(1)
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
-    return port, path
+    return host, port, path
 
 
 async def _run_http_with_graceful_shutdown(
     transport: str,
+    host: str,
     port: int,
     path: str,
 ) -> None:
     """Run HTTP server with graceful shutdown support."""
     await _run_with_shutdown(
-        _get_mcp().run_async(**_http_run_kwargs(transport, port, path))
+        _get_mcp().run_async(**_http_run_kwargs(transport, host, port, path))
     )
 
 
@@ -829,12 +834,12 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """
     from ha_mcp.settings_ui import register_settings_routes
 
-    port, path = _get_http_runtime(default_port)
+    host, port, path = _get_http_runtime(default_port)
     register_browser_landing(_get_mcp(), path)
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
 
     _run_entrypoint(
-        _run_http_with_graceful_shutdown(transport, port, path),
+        _run_http_with_graceful_shutdown(transport, host, port, path),
         "HTTP server",
     )
 
@@ -845,6 +850,7 @@ def main_web() -> None:
     Environment:
     - HOMEASSISTANT_URL (required)
     - HOMEASSISTANT_TOKEN (required)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
@@ -858,6 +864,7 @@ def main_sse() -> None:
     Environment:
     - HOMEASSISTANT_URL (required)
     - HOMEASSISTANT_TOKEN (required)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8087)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
@@ -875,6 +882,7 @@ def main_oauth() -> None:
     Environment:
     - HOMEASSISTANT_URL (required): URL of the Home Assistant instance
     - MCP_BASE_URL (required): Public URL where this server is accessible (e.g., https://your-tunnel.com)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
@@ -900,7 +908,7 @@ def main_oauth() -> None:
     logger.info(f"OAuth mode logging configured at {log_level} level")
     _log_startup_version()
 
-    port, path = _get_http_runtime(default_port=8086)
+    host, port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")
     ha_url = os.getenv("HOMEASSISTANT_URL")
 
@@ -933,15 +941,20 @@ For setup instructions, see:
     # Type narrowing: ha_url and base_url are guaranteed non-None after the check above
     assert ha_url is not None
     assert base_url is not None
-    _run_entrypoint(_run_oauth_server(ha_url, base_url, port, path), "OAuth server")
+    _run_entrypoint(
+        _run_oauth_server(ha_url, base_url, host, port, path), "OAuth server"
+    )
 
 
-async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) -> None:
+async def _run_oauth_server(
+    ha_url: str, base_url: str, host: str, port: int, path: str
+) -> None:
     """Run the OAuth-authenticated MCP server.
 
     Args:
         ha_url: Home Assistant instance URL (server-side config)
         base_url: Public URL where this server is accessible (required)
+        host: Bind host (typically 0.0.0.0; override via MCP_HOST)
         port: Port to listen on
         path: MCP endpoint path
     """
@@ -977,7 +990,9 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
         f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
-    await _run_with_shutdown(mcp.run_async(**_http_run_kwargs("http", port, path)))
+    await _run_with_shutdown(
+        mcp.run_async(**_http_run_kwargs("http", host, port, path))
+    )
 
 
 if __name__ == "__main__":
