@@ -289,10 +289,19 @@ def _setup_standard_mode() -> None:
 
 
 def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports."""
+    """Build common run_async kwargs for HTTP-based transports.
+
+    The bind host is read from the ``MCP_HOST`` env var, defaulting to
+    ``0.0.0.0`` so existing LAN/Docker deployments are unaffected. Set
+    ``MCP_HOST=127.0.0.1`` to restrict the server to loopback when running
+    the standard CLI entry points (``ha-mcp-web`` / ``ha-mcp-sse`` /
+    ``ha-mcp-oauth``) on a workstation. The fallback is kept explicit
+    because FastMCP's own default is ``127.0.0.1``; dropping the literal
+    would silently change behavior for existing users.
+    """
     return {
         "transport": transport,
-        "host": "0.0.0.0",
+        "host": os.getenv("MCP_HOST", "0.0.0.0"),
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),

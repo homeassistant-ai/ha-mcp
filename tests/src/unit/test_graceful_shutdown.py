@@ -469,3 +469,23 @@ class TestHTTPEntryPoints:
             _get_http_runtime()
 
         assert exc_info.value.code == 1
+
+    def test_http_run_kwargs_default_host(self):
+        """Without MCP_HOST set, host defaults to 0.0.0.0 (preserves prior behavior)."""
+        from ha_mcp.__main__ import _http_run_kwargs
+
+        env = os.environ.copy()
+        env.pop("MCP_HOST", None)
+        with patch.dict(os.environ, env, clear=True):
+            kwargs = _http_run_kwargs("http", 8086, "/mcp")
+
+        assert kwargs["host"] == "0.0.0.0"
+
+    def test_http_run_kwargs_honors_mcp_host(self):
+        """MCP_HOST env var overrides the default bind host."""
+        from ha_mcp.__main__ import _http_run_kwargs
+
+        with patch.dict(os.environ, {"MCP_HOST": "127.0.0.1"}):
+            kwargs = _http_run_kwargs("http", 8086, "/mcp")
+
+        assert kwargs["host"] == "127.0.0.1"
