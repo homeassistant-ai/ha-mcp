@@ -58,6 +58,15 @@ jobs:
               return;
             }
 
+            // Skip maintainer-created issues in production (not in the dev/test repo)
+            const MAINTAINERS = ['julienld', 'sergeykad', 'Patch76', 'kingpanther13'];
+            const isDevRepo = context.repo.repo === 'ha-mcp-workflows-dev';
+            if (!isDevRepo && MAINTAINERS.includes(issue.user.login) && context.eventName !== 'workflow_dispatch') {
+              core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
             // Check if already triaged (has triaged label)
             const hasTriagedLabel = issue.labels.some(l => l.name === 'triaged');
             if (hasTriagedLabel && context.eventName !== 'workflow_dispatch') {
