@@ -2767,16 +2767,17 @@ class TestBetaMasterGateInSave:
         _reset_global_settings()
 
     @pytest.mark.asyncio
-    async def test_save_features_cascade_clears_subflags_when_master_off(
+    async def test_save_features_master_off_preserves_subflag_values(
         self, monkeypatch, tmp_path
     ):
-        """Master-off cascade clear (#1164 follow-up).
+        """Master-off does NOT cascade into sub-flag values (#1164
+        follow-up update). The runtime master gate forces sub-flags off
+        at runtime, but the persisted values stay so flipping the
+        master back on restores the user's prior sub-flag selections.
 
-        Flipping the master OFF in isolation must also write False for
-        every beta sub-flag currently truthy. Without the cascade,
-        sub-flags stay True in the override file and resume the
-        moment the master is flipped back on — UX bug the user
-        reported as "having to turn off every toggle individually."
+        The previous cascade-clear behavior forced users to re-check
+        every sub-flag after every master-off/on cycle, which is the
+        wrong UX trade for an opt-in beta surface.
         """
         from ha_mcp.config import (
             BETA_FEATURE_FIELDS,
@@ -2804,27 +2805,81 @@ class TestBetaMasterGateInSave:
         req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 200, json.loads(resp.body)
-        # Verify the cascade landed in the override file: every beta
-        # sub-flag must now read False.
+        # Master is now off in the file.
         on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
         assert on_disk["enable_beta_features"] is False
+        # Sub-flag values are PRESERVED so toggling the master back on
+        # later restores them automatically.
         for sub in BETA_FEATURE_FIELDS:
-            assert on_disk[sub] is False, (
-                f"cascade missed {sub} — stays {on_disk.get(sub)!r} after master-off save"
+            assert on_disk[sub] is True, (
+                f"sub-flag {sub} was clobbered on master-off — should have stayed True"
             )
         get_data_dir.cache_clear()
         _reset_global_settings()
 
     @pytest.mark.asyncio
-    async def test_save_features_cascade_clears_subflag_even_when_payload_says_true(
+    async def test_save_features_master_on_restores_runtime_subflag_values(
         self, monkeypatch, tmp_path
     ):
-        """In-payload ``{master: false, sub: true}`` would land an
-        inconsistent persisted state — runtime gate forces sub False
-        but the file still says True, looking on the UI like the
-        cascade didn't run. The cascade now force-clears any sub
-        explicitly set True in the same payload as master=false
-        (#1164 follow-up review).
+        """Round-trip: master off → master on → previously-truthy sub-flags
+        come back through the runtime master gate (no manual re-toggle).
+        """
+        from ha_mcp.config import (
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+            get_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # File: master off + sub-flags true. Runtime gate forces sub
+        # to False on read.
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_beta_features": False,
+                    "enable_yaml_config_editing": True,
+                    "enable_filesystem_tools": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        settings = get_global_settings()
+        assert settings.enable_beta_features is False
+        assert settings.enable_yaml_config_editing is False  # gated off
+        assert settings.enable_filesystem_tools is False  # gated off
+        # User flips master back on.
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        _reset_global_settings()
+        settings = get_global_settings()
+        # Sub-flags resume their prior True state because the file
+        # still has them.
+        assert settings.enable_beta_features is True
+        assert settings.enable_yaml_config_editing is True
+        assert settings.enable_filesystem_tools is True
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_payload_master_false_sub_true_rejected_by_gate(
+        self, monkeypatch, tmp_path
+    ):
+        """In-payload ``{master: false, sub: true}`` is rejected by the
+        master-gate check (effective_master=false → sub-flag write
+        not allowed). The persisted file is unchanged. Sub-flag values
+        are no longer cascade-cleared, so the gate rejection is the
+        only thing preventing the user from landing an inconsistent
+        "sub true while master will be false at runtime" state.
         """
         from ha_mcp.config import (
             FEATURE_FLAG_FIELDS,
@@ -2874,19 +2929,13 @@ class TestBetaMasterGateInSave:
         _reset_global_settings()
 
     @pytest.mark.asyncio
-    async def test_save_features_cascade_reads_override_file_not_post_gate_settings(
+    async def test_save_features_master_off_applied_dict_contains_only_master(
         self, monkeypatch, tmp_path
     ):
-        """Cascade-clear must read the persisted override file directly,
-        not ``get_global_settings()`` — the master gate already forced
-        sub-flags to False on the resolved Settings, so a read of
-        Settings would think there's nothing to clear and miss the
-        stale-true override (#1164 follow-up review).
-
-        Scenario: master was previously off in the override file but a
-        sub-flag was True (perhaps written via a manual edit before
-        the cascade-clear feature landed). User saves master=false.
-        After save, the file must show the sub-flag = False.
+        """Master-off save's ``applied`` dict carries only the master
+        change — no synthetic sub-flag entries from a cascade. Pins
+        the no-cascade behavior so a future regression that re-adds
+        cascade-clear shows up in this test's diff.
         """
         from ha_mcp.config import (
             BETA_FEATURE_FIELDS,
@@ -2902,58 +2951,6 @@ class TestBetaMasterGateInSave:
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        # Master previously off, sub-flag True on disk (the master
-        # gate would force sub_X to False on the live Settings, so
-        # the old cascade impl reading Settings would miss this).
-        (tmp_path / "feature_flags.json").write_text(
-            json.dumps(
-                {
-                    "enable_beta_features": False,
-                    "enable_filesystem_tools": True,
-                }
-            )
-        )
-        _reset_global_settings()
-        handlers = build_settings_handlers(server=None)
-        req = MagicMock()
-        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
-        resp = await handlers["save_feature_flags"](req)
-        assert resp.status_code == 200, json.loads(resp.body)
-        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
-        assert on_disk["enable_filesystem_tools"] is False, (
-            f"cascade missed stale-true override; file: {on_disk}"
-        )
-        # Other sub-flags untouched (no stale-true to clear).
-        for sub in BETA_FEATURE_FIELDS:
-            if sub == "enable_filesystem_tools":
-                continue
-            assert sub not in on_disk or on_disk[sub] is False
-        get_data_dir.cache_clear()
-        _reset_global_settings()
-
-    @pytest.mark.asyncio
-    async def test_save_features_master_off_does_not_clobber_already_false_subflags(
-        self, monkeypatch, tmp_path
-    ):
-        """Cascade only flips truthy sub-flags. False ones are left
-        alone (no redundant writes that would cause the response
-        ``applied`` dict to balloon).
-        """
-        from ha_mcp.config import (
-            BETA_FEATURE_FIELDS,
-            FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
-        )
-        from ha_mcp.settings_ui import build_settings_handlers
-        from ha_mcp.utils.data_paths import get_data_dir
-
-        get_data_dir.cache_clear()
-        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        get_data_dir.cache_clear()
-        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
-            monkeypatch.delenv(ename, raising=False)
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        # Master + one sub-flag on; rest at default (False).
         (tmp_path / "feature_flags.json").write_text(
             json.dumps(
                 {"enable_beta_features": True, "enable_yaml_config_editing": True}
@@ -2967,14 +2964,11 @@ class TestBetaMasterGateInSave:
         assert resp.status_code == 200, json.loads(resp.body)
         body = json.loads(resp.body)
         applied = body.get("applied", {})
-        # Master flipped + one sub-flag cleared. No noise for already-
-        # False sub-flags.
-        assert applied.get("enable_beta_features") is False
-        assert applied.get("enable_yaml_config_editing") is False
+        assert applied == {"enable_beta_features": False}, (
+            f"expected applied to contain only the master flip; got {applied}"
+        )
+        # Sub-flag values are NOT touched.
         for sub in BETA_FEATURE_FIELDS:
-            if sub != "enable_yaml_config_editing":
-                assert sub not in applied, (
-                    f"cascade clobbered already-False {sub} — wasted write"
-                )
+            assert sub not in applied
         get_data_dir.cache_clear()
         _reset_global_settings()

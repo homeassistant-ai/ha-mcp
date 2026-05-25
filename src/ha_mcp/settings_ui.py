@@ -2338,15 +2338,14 @@ function renderFeatureFlags(flags) {
         // sub-row dimming reflects the new state immediately. The
         // save POST still proceeds in the background.
         //
-        // Sub-flag VALUES are intentionally NOT flipped here. The
-        // server-side cascade in ``_save_feature_flags`` clears them
-        // on disk, but the live UI keeps the user's prior sub-flag
-        // selections visible (checked-but-dimmed-with-disabled-input)
-        // until the next page load so flipping master off doesn't
-        // visually wipe state the user might want context on. After
-        // refresh, the cascaded-cleared values show through. If save
-        // fails (CONNECTION_FAILED etc.), the visible checked state
-        // matches the actual on-disk state, which is the right UX.
+        // Sub-flag VALUES are intentionally NOT flipped here. Neither
+        // is the server's persisted state — the runtime gate in
+        // ``_apply_feature_flag_overrides`` is the only thing that
+        // forces sub-flags off when master is off, and it does so
+        // without mutating the saved values. Result: turning the
+        // master off then back on restores the user's prior sub-flag
+        // selections automatically, which is the intended UX for an
+        // opt-in beta surface.
         if (isMaster) {
           if (_lastFeatureFlags[fieldName]) {
             _lastFeatureFlags[fieldName] = {
@@ -3546,7 +3545,24 @@ async function saveAdvancedSettings() {
     return;
   }
   if (Object.keys(_advancedDirty).length === 0) {
-    _setAdvSaveStatus('Nothing to save.');
+    // Feature-flag toggles (master beta, Tool Search, etc.) auto-save
+    // on click via ``saveFeatureFlag`` — they don't pass through
+    // ``_advancedDirty``. If a feature-flag save just landed,
+    // ``restartNotice`` is showing and the user should click Restart,
+    // not Save again. Tell them that explicitly so the big Save
+    // button doesn't look broken when they were toggling beta flags
+    // (#1164 follow-up).
+    const restartNotice = document.getElementById('restartNotice');
+    const restartShowing =
+      restartNotice && restartNotice.classList.contains('show');
+    if (restartShowing) {
+      _setAdvSaveStatus(
+        'No advanced changes to save — your feature-flag toggles already ' +
+        'saved on click. Click Restart above to apply them.'
+      );
+    } else {
+      _setAdvSaveStatus('Nothing to save.');
+    }
     return;
   }
   _setAdvSaveDisabled(true);
@@ -4455,9 +4471,6 @@ def build_settings_handlers(
         from .config import (
             BETA_FEATURE_FIELDS as _BETA_SUB,
         )
-        from .config import (
-            _read_feature_flag_override_file,
-        )
 
         effective_master = bool(
             raw_flags.get(
@@ -4571,38 +4584,23 @@ def build_settings_handlers(
                     status_code=400,
                 )
 
-        # Master-off cascade clear (#1164 follow-up): flipping the master
-        # OFF also writes False for every beta sub-flag in the same
-        # save. Without this, sub-flags stay True in the override file
-        # (or in addon options) and resume the prior state the moment
-        # the master is flipped back on — the user would have to
-        # uncheck each sub-flag individually to "really" disable the
-        # beta block.
+        # Master-off no longer cascades into sub-flag values (#1164
+        # follow-up). The runtime master gate in
+        # ``_apply_feature_flag_overrides`` continues to force every
+        # beta sub-flag to False whenever the master is off, so the
+        # tools stay disabled at runtime regardless of file state.
+        # Leaving the sub-flag values in the override file means
+        # re-enabling the master restores the user's prior sub-flag
+        # selections automatically — without it the user had to
+        # re-check each sub-flag individually after every
+        # master-off / master-on cycle, which is the wrong UX trade
+        # for an opt-in beta surface.
         #
-        # Read the persisted override file directly here (NOT
-        # get_global_settings() — the master gate in
-        # _apply_feature_flag_overrides already forced sub-flags to
-        # False on the resolved Settings object, so we'd miss stale-
-        # true override values). Cascade writes False for every
-        # sub-flag that's not already False at the persistence layer.
-        #
-        # ALSO force False even if the payload set the sub-flag to True
-        # — accepting an explicit ``{master: false, sub: true}`` would
-        # land an inconsistent persisted state that the runtime gate
-        # then ignores, leaving a "true-but-ignored" trap on the UI.
-        if new_overrides.get("enable_beta_features") is False:
-            overrides_on_disk = _read_feature_flag_override_file()
-            for sub in _BETA_SUB:
-                explicit = new_overrides.get(sub)
-                if explicit is False:
-                    continue  # already correctly False in this payload
-                # Persisted truthy OR payload-explicit-True both get
-                # force-cleared. Inspect both sources so the file
-                # cascade doesn't miss an override the user set
-                # earlier in standalone mode.
-                file_truthy = bool(overrides_on_disk.get(sub, False))
-                if explicit is True or file_truthy:
-                    new_overrides[sub] = False
+        # The master-gate check above still rejects payloads that try
+        # to enable a sub-flag while the effective master is off, so
+        # users can't land a "sub=true while master=false in same
+        # payload" inconsistency. Pre-existing sub-flag truthy values
+        # in the file are kept verbatim.
 
         # Addon-mode writes go to Supervisor instead of the override file:
         # ``start.py`` reads ``config.yaml`` options on every boot and

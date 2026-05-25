@@ -71,3 +71,10 @@ configuration:
       certificate or hostname mismatch. Disabling weakens transport
       security — leave on unless you know you need it. Requires restart
       to take effect.
+  advanced_debug_logging:
+    name: Advanced debug logging
+    description: >-
+      Captures extra diagnostic info on kill/shutdown — sender PID
+      and memory state. Useful when reporting unexplained add-on
+      stops or crash loops. Off by default to keep logs concise.
+      Requires restart to take effect.
