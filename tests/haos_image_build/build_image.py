@@ -188,6 +188,19 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 # in homeassistant-addon/start.py).
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+
+# Webhook-proxy addon baked into the qcow2 from local source so the addon's
+# ``start.py`` runtime (Supervisor auto-discovery of the MCP addon, webhook
+# registration, OAuth gate, webhook-ID persistence) gets real HAOS-tier
+# coverage. The addon's config.yaml lives at
+# ``homeassistant-addon-webhook-proxy/`` in the repo; we stage it under
+# ``/supervisor/addons/local/ha_mcp_webhook_proxy/`` and Supervisor picks it up
+# as a local addon (slug becomes ``local_<config-slug>`` → ``local_ha_mcp_webhook_proxy``).
+#
+# Auto-discovery in the webhook-proxy ``start.py`` matches slug suffixes
+# ``_ha_mcp`` / ``_ha_mcp_dev``, so the dev addon installed just before this
+# one (slug=``local_ha_mcp_dev``) is the discovery target.
+HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
 # Advanced SSH addon user/password set at install time so the runtime
 # helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
 # CI-test-only credential — overridable via env so the value never has
@@ -949,6 +962,105 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
+    """Bake the webhook-proxy addon source into the qcow2 under /supervisor/addons/local/.
+
+    Mirrors ``stage_dev_addon_source`` but for the in-tree webhook-proxy
+    addon at ``homeassistant-addon-webhook-proxy/``. The webhook-proxy
+    Dockerfile is self-contained — ``COPY start.py /`` and
+    ``COPY mcp_proxy /opt/mcp_proxy`` both resolve inside the addon dir —
+    so no out-of-dir file copies and no Dockerfile patching are needed
+    (unlike the ha-mcp dev addon, which needs uv.lock / src/ pulled in
+    from the repo root). The addon also has no ``image:`` field in its
+    config.yaml, so Supervisor builds locally from the Dockerfile by
+    default and no strip is necessary.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    src_dir = repo_root / "homeassistant-addon-webhook-proxy"
+    if not src_dir.exists():
+        raise RuntimeError(
+            f"homeassistant-addon-webhook-proxy not found at {src_dir} — "
+            f"checkout is incomplete; the image cannot be built."
+        )
+
+    # Defensive guard against a TOP-LEVEL ``image:`` re-appearing in
+    # config.yaml. If addon-publish.yml ever starts writing one back
+    # (the production release sets ``image: ghcr.io/...`` and per-PR
+    # version bumps then 404 from GHCR), the bake must strip it the
+    # same way ``stage_dev_addon_source`` does. Fail fast here so the
+    # breakage is obvious rather than surfacing as a 5-minute install
+    # timeout downstream. Uses the same top-level-only test as
+    # ``stage_dev_addon_source``'s post-strip verification
+    # (``"\nimage:" in text or text.startswith("image:")``) so an
+    # indented nested key named ``image`` (e.g. under ``translations``)
+    # doesn't falsely trigger the guard.
+    config_yaml = src_dir / "config.yaml"
+    cfg_text = config_yaml.read_text()
+    if "\nimage:" in cfg_text or cfg_text.startswith("image:"):
+        offending = next(
+            (ln for ln in cfg_text.splitlines() if ln.startswith("image:")),
+            "<line not found>",
+        )
+        raise RuntimeError(
+            f"{config_yaml} now declares a top-level ``image:`` field "
+            f"({offending!r}). Supervisor will try to pull from GHCR "
+            f"instead of building locally, and per-PR version bumps "
+            f"will 404. Add an image-strip patch to "
+            f"stage_webhook_proxy_addon_source (mirror the one in "
+            f"stage_dev_addon_source)."
+        )
+
+    LOG.info(
+        "Staging webhook-proxy addon source into qcow2 "
+        "/supervisor/addons/local/ha_mcp_webhook_proxy/"
+    )
+    workdir = Path(tempfile.mkdtemp(prefix="haos-webhook-proxy-addon-"))
+    try:
+        staging = workdir / "ha_mcp_webhook_proxy"
+        shutil.copytree(src_dir, staging)
+
+        seed_tar = workdir / "ha_mcp_webhook_proxy.tar"
+        _run(
+            [
+                "tar",
+                "--numeric-owner",
+                "--owner=0",
+                "--group=0",
+                "-C",
+                str(workdir),
+                "-cf",
+                str(seed_tar),
+                "ha_mcp_webhook_proxy",
+            ]
+        )
+        _run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(qcow2),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "mkdir-p",
+                "/supervisor/addons/local",
+                ":",
+                "tar-in",
+                str(seed_tar),
+                "/supervisor/addons/local",
+            ]
+        )
+        LOG.info(
+            "Webhook-proxy addon source staged at "
+            "/supervisor/addons/local/ha_mcp_webhook_proxy/"
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def install_advanced_ssh(ws: HAWebSocket) -> str:
     """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
 
@@ -1080,6 +1192,85 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     LOG.info("Starting ha-mcp dev addon")
     ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
     LOG.info("ha-mcp dev addon installed + started; slug=%s", slug)
+    return slug
+
+
+def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
+    """Install the local webhook-proxy addon during the bake's running phase.
+
+    Assumes ``stage_webhook_proxy_addon_source`` ran before start_qemu so
+    the source is at ``/supervisor/addons/local/ha_mcp_webhook_proxy/``.
+
+    Install-only — the addon is NOT started during bake and ``boot`` is
+    set to ``manual`` so the cached qcow2 doesn't auto-start it on
+    resume. Two reasons:
+
+    1. ``start.py`` overwrites ``/config/.mcp_proxy_config.json`` on
+       every run with target_url + the addon's persisted webhook_id
+       (``/data/webhook_id.txt`` — generated on first-ever start,
+       reused on every subsequent run). The persisted id differs from
+       the deterministic value the bake injected via
+       ``bake_test_state``. If the addon runs during bake or on
+       resume, the overwrite clobbers the deterministic config and
+       breaks sibling tests that rely on the bake's webhook_id
+       (``test_webhook_proxy.py`` in particular).
+    2. On resume, the dev MCP addon and the webhook-proxy both
+       auto-start in parallel; webhook-proxy's auto-discovery races
+       the dev addon's startup and fails on first attempt, then
+       Supervisor escalates to ``boot_fail`` before the dev addon is
+       ready.
+
+    A session-scoped pytest fixture in
+    ``tests/src/e2e/haos_only/test_webhook_proxy_addon.py`` starts the
+    addon for the duration of its tests, then stops it. Sibling test
+    files don't see the addon running.
+
+    ``mcp_server_url`` is pinned to the dev addon's host-network URL so
+    the addon-runtime tests don't depend on auto-discovery timing.
+    Auto-discovery itself remains in the start.py code path; a dedicated
+    test in the haos_only module clears this field, restarts, and
+    asserts the discovery log appears.
+
+    Returns the installed slug (``local_ha_mcp_webhook_proxy``).
+    """
+    _reload_store(ws)
+    slug = HA_MCP_WEBHOOK_PROXY_ADDON_SLUG
+    LOG.info(
+        "Installing webhook-proxy addon (slug=%s) — building Docker image...", slug
+    )
+    # 900s matches the dev-addon timeout. Webhook-proxy build is much
+    # cheaper (no uv sync, stdlib-only start.py) but keep the headroom in
+    # case the python:3.13-slim base layer pull is slow on first install.
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+
+    # Pin mcp_server_url to the dev addon's host-network URL so the
+    # addon skips auto-discovery on subsequent starts (no race against
+    # dev-addon startup on resume / restart). Both addons run on
+    # host_network so 127.0.0.1 is reachable from the webhook-proxy
+    # container to the dev MCP server's listening port.
+    pinned_mcp_url = f"http://127.0.0.1:9583{HA_MCP_TEST_SECRET_PATH}"
+    LOG.info(
+        "Setting webhook-proxy addon options (mcp_server_url=%s, boot=manual)",
+        pinned_mcp_url,
+    )
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            "options": {
+                "remote_url": "",
+                "mcp_server_url": pinned_mcp_url,
+                "mcp_port": 9583,
+                "enable_oauth": False,
+                "oauth_client_id": "",
+                "oauth_client_secret": "",
+                "regenerate_oauth_creds": False,
+            },
+            "boot": "manual",
+        },
+        timeout=60.0,
+    )
+    LOG.info("webhook-proxy addon installed (not started); slug=%s", slug)
     return slug
 
 
@@ -1364,6 +1555,11 @@ def build(work_dir: Path, output: Path) -> None:
     # Docker image while HAOS is up — that built image stays in the cached
     # qcow2 so subsequent CI runs only need a quick ``addons/{slug}/update``.
     stage_dev_addon_source(qcow2)
+    # Stage the webhook-proxy addon source alongside the dev addon. Order
+    # within the staging phase doesn't matter (guestfish tar-in is
+    # independent), but the install order below DOES — the webhook-proxy's
+    # auto-discovery needs the dev addon present at first start.
+    stage_webhook_proxy_addon_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -1375,6 +1571,10 @@ def build(work_dir: Path, output: Path) -> None:
             install_addons(ws)
             install_hacs(ws, base_url)
             install_ha_mcp_dev_addon(ws)
+            # Webhook-proxy must install AFTER the dev addon so its
+            # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
+            # finds a target on first start.
+            install_webhook_proxy_addon(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
