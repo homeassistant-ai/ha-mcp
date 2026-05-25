@@ -293,6 +293,55 @@ def test_get_feature_flag_origin_beta_master_default_in_addon(monkeypatch) -> No
     assert get_feature_flag_origin("ENABLE_BETA_FEATURES") == "default"
 
 
+def test_get_feature_flag_origin_beta_master_env_set_in_addon_returns_addon(
+    monkeypatch,
+) -> None:
+    """F.38 — dev addon path. start.py wrote ENABLE_BETA_FEATURES from
+    /data/options.json (key is present in dev schema). The env-var-set
+    + in-addon signal tells the web UI this is Supervisor-managed.
+    """
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+    monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
+
+    from ha_mcp.config import get_feature_flag_origin
+
+    assert get_feature_flag_origin("ENABLE_BETA_FEATURES") == "addon"
+
+
+def test_get_feature_flag_origin_beta_master_env_set_standalone_returns_env(
+    monkeypatch,
+) -> None:
+    """F.38 — standalone path. No SUPERVISOR_TOKEN, env var explicitly
+    set (e.g. via docker -e or .env). Returns env-locked so the web UI
+    surfaces "unset env var to edit here" copy."""
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
+
+    from ha_mcp.config import get_feature_flag_origin
+
+    assert get_feature_flag_origin("ENABLE_BETA_FEATURES") == "env"
+
+
+def test_get_feature_flag_origin_beta_master_file_override_in_addon(
+    isolated_data_dir, monkeypatch
+) -> None:
+    """F.38 — stable addon path. Master not in stable schema, so
+    start.py doesn't write the env var. With SUPERVISOR_TOKEN set but
+    env unset, an override file value should win → origin='file'.
+    """
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({"enable_beta_features": True})
+    )
+
+    from ha_mcp.config import get_feature_flag_origin
+
+    assert get_feature_flag_origin("ENABLE_BETA_FEATURES") == "file"
+
+
 def test_advanced_override_applies_int_field(isolated_data_dir, monkeypatch) -> None:
     _clear_all_feature_envs(monkeypatch)
     (isolated_data_dir / "feature_flags.json").write_text(json.dumps({"timeout": 90}))

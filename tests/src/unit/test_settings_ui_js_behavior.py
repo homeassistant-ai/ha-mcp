@@ -1381,6 +1381,103 @@ class TestBetaBlockRendersAtBottom:
             f"top save button did not POST; fetches: {result.fetches}"
         )
 
+    def test_dual_save_buttons_mirror_disabled_and_status_state(
+        self, settings_script: str
+    ) -> None:
+        """F.42 — clicking either save button must disable both
+        buttons during the in-flight POST and mirror the success
+        status text to both `advSaveStatus` and `advSaveStatusTop`.
+        Without this, the user sees stale state on whichever button
+        they're looking at after clicking the other.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                    {
+                        "status": 200,
+                        "json": {"applied": {"log_level": "DEBUG"}},
+                    },
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              document.getElementById('advSaveBtn').click();
+              // Let the save chain settle (POST + post-save reload).
+              await new Promise(r => setTimeout(r, 250));
+              // Snapshot both status elements + both buttons' disabled
+              // state into a hidden div so the harness sees them in
+              // the serialised dom.
+              const probe = document.createElement('div');
+              probe.id = '__dual_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              probe.dataset.bottomDisabled =
+                String(document.getElementById('advSaveBtn').disabled);
+              probe.dataset.topDisabled =
+                String(document.getElementById('advSaveBtnTop').disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        # Both status els must contain the final "Saved." text.
+        probe_match = re.search(
+            r'<div[^>]*id="__dual_save_probe"[^>]*>',
+            result.dom,
+        )
+        assert probe_match, (
+            f"dual-save probe div missing from dom; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Final state after save completes: both should read "Saved."
+        assert 'data-bottom-status="Saved."' in probe_attrs, (
+            f"bottom status text mismatch; probe: {probe_attrs}"
+        )
+        assert 'data-top-status="Saved."' in probe_attrs, (
+            f"top status text mismatch; probe: {probe_attrs}"
+        )
+        # Both buttons must be re-enabled after the save completes.
+        assert 'data-bottom-disabled="false"' in probe_attrs, (
+            f"bottom button stuck disabled; probe: {probe_attrs}"
+        )
+        assert 'data-top-disabled="false"' in probe_attrs, (
+            f"top button stuck disabled; probe: {probe_attrs}"
+        )
+
     def test_two_step_save_note_present(self) -> None:
         """The two-step save → restart note must render at the top of
         the Server Settings panel so users know one click is not enough.
@@ -1498,6 +1595,87 @@ class TestBetaMasterToggleLiveRender:
             assert "dimmed" not in row_html, (
                 f"unexpected dimmed on master-on row: {row_html}"
             )
+
+    def test_master_off_click_dims_subrow_live_without_clobbering_value(
+        self, settings_script: str
+    ) -> None:
+        """F.37 — dispatch a real change event on the master toggle and
+        assert the sub-row goes dimmed + disabled in the same tick,
+        WITHOUT visually flipping the sub-flag's checked state. The
+        server-side cascade still clears the value on disk; the live
+        UI preserves the user's prior sub-flag selection until the
+        next refresh so they don't lose context on master-off
+        (#1164 follow-up review — A.8).
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                # Master ON, sub-flag ON — flipping master off should
+                # dim the sub-row but leave its checkbox checked.
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_yaml_config_editing": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_yaml_config_editing"],
+                    "is_addon": False,
+                },
+            },
+            "/save-features": {"status": 200, "json": {"success": True}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              // Wait for the initial render.
+              await new Promise(r => setTimeout(r, 200));
+              // Find the master checkbox and flip it off.
+              const beta = document.getElementById('betaBody');
+              const masterInput = beta.querySelector(
+                '.beta-master-row input[type="checkbox"]'
+              );
+              masterInput.checked = false;
+              masterInput.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 50));
+            """,
+        )
+        _assert_clean_init(result)
+        # Find the sub-row in the post-flip DOM.
+        sub_row_match = re.search(
+            r'<div[^>]*class="feature-row beta-sub[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+            result.dom,
+            re.DOTALL,
+        )
+        assert sub_row_match, (
+            f"could not locate beta-sub row after master flip; dom: {result.dom[-3000:]}"
+        )
+        sub_row = sub_row_match.group(0)
+        assert "dimmed" in sub_row, (
+            f"sub-row should be dimmed after master-off: {sub_row}"
+        )
+        # The checkbox visual state must STAY checked — the user's prior
+        # sub-flag selection is preserved until refresh.
+        assert "checked" in sub_row, (
+            f"sub-row checkbox flipped off — should stay checked: {sub_row}"
+        )
+        # Input must be disabled so the user can't fight the master gate.
+        assert "disabled" in sub_row, (
+            f"sub-row input should be disabled when master off: {sub_row}"
+        )
 
 
 class TestCodeModeNesting:

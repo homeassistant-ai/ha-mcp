@@ -2337,29 +2337,22 @@ function renderFeatureFlags(flags) {
         // Master flip → re-render the panel synchronously so the
         // sub-row dimming reflects the new state immediately. The
         // save POST still proceeds in the background.
+        //
+        // Sub-flag VALUES are intentionally NOT flipped here. The
+        // server-side cascade in ``_save_feature_flags`` clears them
+        // on disk, but the live UI keeps the user's prior sub-flag
+        // selections visible (checked-but-dimmed-with-disabled-input)
+        // until the next page load so flipping master off doesn't
+        // visually wipe state the user might want context on. After
+        // refresh, the cascaded-cleared values show through. If save
+        // fails (CONNECTION_FAILED etc.), the visible checked state
+        // matches the actual on-disk state, which is the right UX.
         if (isMaster) {
           if (_lastFeatureFlags[fieldName]) {
             _lastFeatureFlags[fieldName] = {
               ..._lastFeatureFlags[fieldName],
               value: input.checked,
             };
-            // Master-off cascade clear (#1164 follow-up): also flip
-            // every beta sub-flag visually to False so the user sees
-            // the same state the server will land on after the save
-            // (the server-side cascade in _save_feature_flags writes
-            // False for every truthy sub-flag in the same call).
-            // Avoids the visual flicker where sub-rows stay
-            // "checked but dimmed" until the page reloads.
-            if (input.checked === false) {
-              BETA_SUB_FLAGS.forEach(sub => {
-                if (_lastFeatureFlags[sub]) {
-                  _lastFeatureFlags[sub] = {
-                    ..._lastFeatureFlags[sub],
-                    value: false,
-                  };
-                }
-              });
-            }
             renderFeatureFlags(_lastFeatureFlags);
           }
         }
