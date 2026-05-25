@@ -18,7 +18,7 @@ HA restore path. Each call must explicitly pick its scope.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 from fastmcp.exceptions import ToolError
@@ -41,8 +41,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BACKUP_MAX_WAIT_S = 120
+# Default poll window for full HA backups. The 120s prior default underfit
+# slow HA instances (#1433: poll loop exited while HA was still in
+# state="create_backup", the wrapper treated that as failure, retried, and
+# produced duplicate backups). 300s covers the long tail without making the
+# happy-path wait noticeable.
+_BACKUP_MAX_WAIT_S = 300
 _BACKUP_POLL_INTERVAL_S = 2
+# Clock-skew tolerance when filtering backup entries by date vs job-start.
+_BACKUP_DATE_FILTER_TOLERANCE_S = 5
 
 
 def _get_backup_hint_text() -> str:
@@ -171,6 +178,21 @@ async def _get_backup_password(
     return cast(str, default_password)
 
 
+def _parse_backup_date(raw: Any) -> datetime | None:
+    """Parse an HA backup `date` (ISO-8601, may use `Z` suffix) to a tz-aware
+    datetime, returning None on missing/malformed input. Naive timestamps are
+    treated as UTC."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
 def _build_success_response_if_found(
     info_result: dict[str, Any],
     *,
@@ -178,27 +200,71 @@ def _build_success_response_if_found(
     backup_job_id: str,
     agent_id: str,
     duration_seconds: int,
+    job_start_ts: datetime,
 ) -> dict[str, Any] | None:
-    """Return the canonical success-response dict if a backup with ``name``
-    is present in ``info_result['result']['backups']``, else None.
+    """Return the canonical success-response dict, or None.
 
-    Single source of truth for the success shape — called both from the
-    in-loop branch (when state=idle+completed is observed) and from the
-    post-timeout final check (#1433).
+    Single source of truth for "did this backup actually complete cleanly?".
+    Called from both the in-loop branch and the post-timeout final check.
+
+    Returns None unless ALL of:
+
+    * `result.state == "idle"` AND `result.last_action_event.state == "completed"`
+      — list-membership alone is insufficient because HA registers the entry in
+      `backups` before compression/encryption finish; claiming success on a
+      half-written entry would let callers immediately attempt restore on a
+      partial file. The state-gate enforces "fully finalized".
+    * The match resolves to *this* job, not a stale prior-run entry with the
+      same name (HA does not enforce unique backup names, and the post-timeout
+      window is exactly when collisions are likely after a retry). Filters to
+      entries with `name == name` AND `date >= job_start_ts - tolerance`,
+      then within that fresh set prefers a `last_action_event.backup_id`
+      match if HA exposes one, otherwise picks the newest by date.
     """
-    backups = info_result.get("result", {}).get("backups") or []
-    created_backup = next((b for b in backups if b.get("name") == name), None)
-    if created_backup is None:
+    result_block = info_result.get("result") or {}
+    state = result_block.get("state")
+    last_event = result_block.get("last_action_event") or {}
+    if state != "idle" or last_event.get("state") != "completed":
         return None
+
+    backups = result_block.get("backups") or []
+
+    # Freshness gate applies uniformly — both the `last_action_event.backup_id`
+    # path and the name-only fallback are constrained to entries dated
+    # at-or-after the job start. Without this, a concurrent backup (e.g. UI-
+    # triggered) updating `last_action_event` between our last in-loop poll
+    # and the post-timeout lookup could let us match its entry as if it were
+    # ours.
+    tolerance = timedelta(seconds=_BACKUP_DATE_FILTER_TOLERANCE_S)
+    cutoff = job_start_ts - tolerance
+    fresh = [
+        b
+        for b in backups
+        if b.get("name") == name
+        and (entry_date := _parse_backup_date(b.get("date"))) is not None
+        and entry_date >= cutoff
+    ]
+    if not fresh:
+        return None
+
+    target_id = last_event.get("backup_id") or last_event.get("backup_job_id")
+    authoritative = (
+        next((b for b in fresh if b.get("backup_id") == target_id), None)
+        if target_id
+        else None
+    )
+    match = authoritative or max(
+        fresh,
+        key=lambda b: _parse_backup_date(b.get("date")) or job_start_ts,
+    )
+
     return {
         "success": True,
-        "backup_id": created_backup.get("backup_id"),
+        "backup_id": match.get("backup_id"),
         "backup_job_id": backup_job_id,
         "name": name,
-        "date": created_backup.get("date"),
-        "size_bytes": (created_backup.get("agents") or {})
-        .get(agent_id, {})
-        .get("size"),
+        "date": match.get("date"),
+        "size_bytes": (match.get("agents") or {}).get(agent_id, {}).get("size"),
         "status": "Backup completed successfully",
         "duration_seconds": duration_seconds,
         "note": "Backup uses your Home Assistant's default backup password",
@@ -219,17 +285,18 @@ async def _poll_backup_completion(
     ``hassio.local`` on Supervised, ``backup.local`` on Core); used to look
     up the per-agent size in the backup-info payload.
 
-    On timeout, performs one final ``backup/info`` lookup before raising:
-    if a backup matching ``name`` is in the list, returns the success
-    response with a ``warnings`` entry noting the late detection (#1433).
-    The polling loop can exit before observing ``state=idle`` even when
-    HA is producing the backup successfully — slow disks, slow HA core,
-    or congestion can stretch a real backup past ``max_wait_seconds``.
-    Raising ``TIMEOUT_OPERATION`` in that case is silent-failure-as-failure;
-    callers wrapping ``ha_manage_backup`` retry and produce duplicates.
+    On timeout, performs one final ``backup/info`` lookup before raising. If
+    that lookup confirms `state=idle` + `event_state=completed` AND finds a
+    backup belonging to *this* job (by ``last_action_event.backup_id`` or
+    fresh date-window name-match), returns the success response with a
+    ``warnings`` entry noting the late detection (#1433). Otherwise raises
+    ``TIMEOUT_OPERATION`` — and if the entry exists but state still indicates
+    creation in progress, surfaces ``likely_in_progress=true`` in the error
+    context so callers can back off retries instead of compounding duplicates.
 
     Raises ToolError on backup failure or final timeout with no completion.
     """
+    job_start_ts = datetime.now(UTC)
     waited = 0
 
     while waited < max_wait_seconds:
@@ -237,65 +304,74 @@ async def _poll_backup_completion(
         waited += poll_interval
 
         info_result = await ws_client.send_command("backup/info")
-        if info_result.get("success"):
-            state = info_result.get("result", {}).get("state")
-            last_event = info_result.get("result", {}).get("last_action_event", {})
-            event_state = last_event.get("state")
-
+        if not info_result.get("success"):
             logger.debug(
-                f"Backup state: {state}, event_state: {event_state}, waited: {waited}s"
+                f"backup/info returned success=False at waited={waited}s; retrying"
+            )
+            continue
+
+        result_block = info_result.get("result") or {}
+        last_event = result_block.get("last_action_event") or {}
+        event_state = last_event.get("state")
+        logger.debug(
+            f"Backup state: {result_block.get('state')}, "
+            f"event_state: {event_state}, waited: {waited}s"
+        )
+
+        if event_state == "failed":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Backup creation failed",
+                    context={"backup_job_id": backup_job_id},
+                )
             )
 
-            if state == "idle" and event_state == "completed":
-                response = _build_success_response_if_found(
-                    info_result,
-                    name=name,
-                    backup_job_id=backup_job_id,
-                    agent_id=agent_id,
-                    duration_seconds=waited,
-                )
-                if response is not None:
-                    logger.info(
-                        f"Backup completed successfully: {response['backup_id']}"
-                    )
-                    return response
-                logger.warning(
-                    "Backup completed but not found in backup list yet, waiting..."
-                )
-                continue
-
-            elif event_state == "failed":
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "Backup creation failed",
-                        context={"backup_job_id": backup_job_id},
-                    )
-                )
+        response = _build_success_response_if_found(
+            info_result,
+            name=name,
+            backup_job_id=backup_job_id,
+            agent_id=agent_id,
+            duration_seconds=waited,
+            job_start_ts=job_start_ts,
+        )
+        if response is not None:
+            logger.info(f"Backup completed successfully: {response['backup_id']}")
+            return response
+        # state=idle+completed observed but entry not yet (or not freshly) in
+        # the list — same bug class as #1433 one tick earlier; continue polling.
 
     logger.info(
-        f"Backup did not reach state=idle within {max_wait_seconds}s; "
+        f"Backup did not complete within {max_wait_seconds}s; "
         "performing final backup-list lookup before raising timeout"
     )
-    # send_command raises on failure rather than returning success=false; treat
-    # any HA-side error during this best-effort verification as "couldn't
-    # verify" and fall through to the original timeout signal rather than
-    # letting an unrelated WebSocket error mask it. Programming errors
-    # (AttributeError, TypeError, KeyError) intentionally propagate.
+    # send_command raises on HA-side failure rather than returning
+    # success=false. Treat any `HomeAssistantError` (incl. AuthError,
+    # ConnectionError, CommandError) during this best-effort verification
+    # as "couldn't verify"; surface the failure in the error context via
+    # `verification_error` so the auth-case stops being invisible behind a
+    # misleading TIMEOUT_OPERATION. Programming errors (AttributeError,
+    # TypeError, KeyError) intentionally propagate.
+    verification_error: str | None = None
+    likely_in_progress = False
+    final_info: dict[str, Any] | None = None
     try:
         final_info = await ws_client.send_command("backup/info")
     except HomeAssistantError as e:
+        verification_error = repr(e)
         logger.warning(
             f"Post-timeout backup/info lookup failed ({e!r}); "
             "falling through to TIMEOUT_OPERATION"
         )
-    else:
+
+    if final_info is not None and final_info.get("success"):
         response = _build_success_response_if_found(
             final_info,
             name=name,
             backup_job_id=backup_job_id,
             agent_id=agent_id,
             duration_seconds=max_wait_seconds,
+            job_start_ts=job_start_ts,
         )
         if response is not None:
             response["warnings"] = [
@@ -307,13 +383,41 @@ async def _poll_backup_completion(
                 f"Backup found in post-timeout list lookup: {response['backup_id']}"
             )
             return response
+        # Helper returned None. Three cases distinguishable from the raw
+        # final_info: (a) backup failed in the gap between last in-loop poll
+        # and the final lookup → raise SERVICE_CALL_FAILED, the failure mode
+        # is known and unambiguous; (b) state still indicates creation in
+        # progress → surface `likely_in_progress` so callers back off retries
+        # rather than compounding duplicates; (c) state idle+completed but no
+        # fresh matching entry → genuine TIMEOUT_OPERATION, nothing extra to
+        # add.
+        result_block = final_info.get("result") or {}
+        last_event = result_block.get("last_action_event") or {}
+        state = result_block.get("state")
+        event_state = last_event.get("state")
+        if event_state == "failed":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Backup creation failed (observed at post-timeout lookup)",
+                    context={"backup_job_id": backup_job_id, "name": name},
+                )
+            )
+        if state != "idle":
+            likely_in_progress = True
 
     logger.warning(f"Backup did not complete within {max_wait_seconds} seconds")
+    error_context: dict[str, Any] = {"backup_job_id": backup_job_id, "name": name}
+    if verification_error is not None:
+        error_context["verification_error"] = verification_error
+    if likely_in_progress:
+        error_context["likely_in_progress"] = True
+
     raise_tool_error(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
             f"Backup creation timed out after {max_wait_seconds} seconds",
-            context={"backup_job_id": backup_job_id, "name": name},
+            context=error_context,
             suggestions=[
                 "Backup may still be in progress. Check Home Assistant backup status."
             ],
