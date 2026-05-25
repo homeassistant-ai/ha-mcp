@@ -432,7 +432,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
-- `ha_set_device` — Set device properties such as name, area, disabled state, or labels.
+- `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
 - `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences.

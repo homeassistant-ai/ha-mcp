@@ -631,7 +631,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
     ) -> dict[str, Any]:
         """
-        Set device properties such as name, area, disabled state, or labels.
+        Update device properties such as name, area, disabled state, or labels.
 
         IMPORTANT: Renaming a device does NOT rename its entities!
         Device and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).
