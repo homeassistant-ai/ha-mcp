@@ -1,34 +1,45 @@
 """Webhook-proxy addon runtime E2E for the HAOS test tier.
 
-The webhook-proxy addon (``homeassistant-addon-webhook-proxy/``) is now
-baked + installed during the HAOS image build (see
-``stage_webhook_proxy_addon_source`` and ``install_webhook_proxy_addon``
-in ``tests/haos_image_build/build_image.py``). The addon's ``start.py``
-runtime — Supervisor auto-discovery of the ha-mcp dev addon, webhook
-registration into HA Core, ``/data/webhook_id.txt`` persistence (#1020),
-the OAuth fail-closed gate (#1184), and the addon-options round-trip —
-cannot be exercised by the testcontainer suite (no Supervisor) and gets
-its first real coverage here.
+The webhook-proxy addon (``homeassistant-addon-webhook-proxy/``) is baked
+into the qcow2 with ``boot: manual`` (see
+``tests/haos_image_build/build_image.py::install_webhook_proxy_addon``).
+The bake validates that the addon installs cleanly and pre-builds its
+Docker image; tests in this module start the addon via a session
+fixture so the build's success acts as install coverage and the runtime
+tests only run once per session against a known-good container.
 
-Slugs:
+Why boot=manual + session fixture rather than boot=auto:
 
-- Webhook-proxy: ``local_ha_mcp_webhook_proxy`` (constant
-  ``HA_MCP_WEBHOOK_PROXY_ADDON_SLUG`` in build_image.py).
-- Dev addon (the discovery target): ``local_ha_mcp_dev``.
+- ``start.py`` writes ``/config/.mcp_proxy_config.json`` on every run
+  with a freshly-generated webhook_id. If the addon auto-started on
+  qcow2 resume, it would clobber the deterministic config that the
+  bake's ``bake_test_state`` step injected for sibling tests
+  (testcontainer-only ``test_webhook_proxy.py`` relies on the bake's
+  webhook_id ``mcp_e2e_test_webhook_proxy``).
+- The dev MCP addon and the webhook-proxy both have ``startup:
+  application`` and would race on parallel auto-start; webhook-proxy's
+  Supervisor auto-discovery is faster than the dev addon's MCP server
+  reaching ready, so auto-discovery returns "not running" and the
+  addon exits 1 → Supervisor escalates to boot_fail before the dev
+  addon stabilises.
 
-Tests interact with the addon through three observable surfaces:
+``mcp_server_url`` is pinned to ``http://127.0.0.1:9583<secret_path>``
+in the bake's options so the session fixture's start doesn't go through
+auto-discovery (both addons run on host_network so 127.0.0.1 reaches the
+dev addon's MCP server port from inside the webhook-proxy container).
+A dedicated test (``test_auto_discovery_finds_dev_addon_when_url_blank``)
+clears that option, restarts, and asserts auto-discovery still works —
+that path is exercised deliberately rather than relied on for setup.
+
+Tests exercise the addon's runtime through three observable surfaces:
 
 1. Supervisor / MCP tools (``ha_get_addon``, ``ha_manage_addon``,
-   ``ha_call_service`` with the ``hassio.addon_*`` services,
-   ``ha_get_logs``). Same shape as ``test_addon_lifecycle.py``.
-2. The HA Core webhook endpoint (``/api/webhook/<webhook_id>``) via
-   direct HTTP using the bearer token the conftest yields. The addon
-   registers this endpoint via the ``mcp_proxy`` custom integration
-   it installs into HA on first start.
-3. Addon stdout logs via ``ha_get_logs(source='supervisor', slug=...)``
-   — start.py logs the discovered MCP slug and the registered webhook
-   path on startup, which is what we pattern-match for the discovery
-   and webhook-ID persistence checks.
+   ``ha_call_service`` with ``hassio.addon_*``, ``ha_get_logs``).
+2. The HA Core webhook endpoint (``/api/webhook/<webhook_id>``) over
+   HTTP using the bearer token the conftest yields.
+3. Addon stdout via ``ha_get_logs(source='supervisor', slug=...)`` —
+   start.py logs the registered webhook path and the discovered MCP
+   slug on startup.
 """
 
 from __future__ import annotations
@@ -52,28 +63,22 @@ WEBHOOK_PROXY_NAME = "Nabu Casa / Webhook Proxy for HA MCP"
 WEBHOOK_PROXY_SLUG = "local_ha_mcp_webhook_proxy"
 DEV_ADDON_SLUG = "local_ha_mcp_dev"
 
-# Mirrors test_addon_lifecycle.py — Supervisor's "addon not running"
-# family. Used by lifecycle round-trip assertions.
 STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "error"})
 
-_STATE_POLL_TIMEOUT = 30.0
+_STATE_POLL_TIMEOUT = 60.0
 _STATE_POLL_INTERVAL = 0.5
 
 # start.py logs the registered webhook path as ``/api/webhook/<id>`` on
-# every startup (see homeassistant-addon-webhook-proxy/start.py:853 and
-# log lines around the proxy_config write). The ID is alphanumeric +
-# underscore + hyphen — match liberally rather than coupling to a
-# specific length, since the addon picks the format.
+# every startup. The ID is alphanumeric + underscore + hyphen; match
+# liberally rather than couple to a specific length.
 _WEBHOOK_PATH_RE = re.compile(r"/api/webhook/([A-Za-z0-9_-]+)")
-# start.py:247 logs "Discovered running MCP addon: <slug> at <ip>" on
-# successful auto-discovery. The MCP slug suffix match accepts
-# ``_ha_mcp_dev`` so the dev-channel addon is the expected target.
+# start.py logs "Discovered running MCP addon: <slug> at <ip>" on
+# successful auto-discovery.
 _DISCOVERY_RE = re.compile(r"Discovered running MCP addon:\s*(\S+)")
 
 
 # ---------------------------------------------------------------------------
-# Helpers — mirror test_addon_lifecycle.py shapes so future drift between
-# this module and the lifecycle suite stays visible.
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -124,24 +129,7 @@ async def _wait_for_state(
     )
 
 
-async def _ensure_started(mcp_client: Any, slug: str) -> None:
-    try:
-        detail = await _get_addon_detail(mcp_client, slug)
-        if detail.get("state") == "started":
-            return
-        result = await _addon_action(mcp_client, slug, "start")
-        if not result.get("success"):
-            LOG.warning(
-                "Cleanup: hassio.addon_start(%s) returned failure: %s", slug, result
-            )
-    except Exception:
-        LOG.exception(
-            "Cleanup of addon %s failed; original test exception preserved", slug
-        )
-
-
 async def _get_addon_logs(mcp_client: Any, slug: str) -> str:
-    """Fetch addon container stdout via ha_get_logs(source='supervisor')."""
     raw = await mcp_client.call_tool(
         "ha_get_logs", {"source": "supervisor", "slug": slug}
     )
@@ -155,104 +143,85 @@ async def _get_addon_logs(mcp_client: Any, slug: str) -> str:
 
 
 def _extract_webhook_id(log_text: str) -> str | None:
-    """Pull the most recent webhook ID start.py logged on startup, or None."""
+    """Pull the most recent webhook ID start.py logged on startup."""
     matches = _WEBHOOK_PATH_RE.findall(log_text)
     return matches[-1] if matches else None
 
 
-async def _restore_options(mcp_client: Any, slug: str, options: dict[str, Any]) -> None:
-    """Restore an options dict via ha_manage_addon. Logs and swallows failures."""
+async def _set_options(mcp_client: Any, slug: str, options: dict[str, Any]) -> None:
+    """Update addon options via ha_manage_addon, asserting success."""
+    raw = await mcp_client.call_tool(
+        "ha_manage_addon", {"slug": slug, "options": dict(options)}
+    )
+    payload = parse_mcp_result(raw)
+    ok = payload.get("success") is True or payload.get("status") == "pending_restart"
+    assert ok, f"ha_manage_addon options write failed: {payload}"
+
+
+# ---------------------------------------------------------------------------
+# Module-scope fixture: start the addon for this module's lifetime.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+async def webhook_proxy_started(mcp_client: Any) -> Any:
+    """Start the webhook-proxy addon for the duration of this module's tests.
+
+    The bake leaves the addon installed but not started (boot=manual).
+    This fixture brings it up at module scope so the per-test overhead
+    is bounded to "send hassio.addon_start once". On teardown, stop the
+    addon so sibling test modules that share the HAOS instance (only
+    a concern in inaddon-tier dispatch) see the addon back in stopped
+    state — preventing state contamination from start.py's writes to
+    /config/.mcp_proxy_config.json across module boundaries.
+    """
+    result = await _addon_action(mcp_client, WEBHOOK_PROXY_SLUG, "start")
+    assert result.get("success"), (
+        f"Fixture failed to start webhook-proxy addon: {result}"
+    )
+    await _wait_for_state(mcp_client, WEBHOOK_PROXY_SLUG, "started")
+    # start.py writes the webhook path to stdout on first start; give
+    # it a moment so the first test reads a populated log.
+    deadline = time.monotonic() + _STATE_POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
+        if _extract_webhook_id(log_text):
+            break
+        await asyncio.sleep(_STATE_POLL_INTERVAL)
     try:
-        await mcp_client.call_tool(
-            "ha_manage_addon", {"slug": slug, "options": dict(options)}
-        )
-    except Exception:
-        LOG.exception("Failed to restore webhook-proxy options to %s", options)
+        yield
+    finally:
+        try:
+            await _addon_action(mcp_client, WEBHOOK_PROXY_SLUG, "stop")
+            await _wait_for_state(
+                mcp_client, WEBHOOK_PROXY_SLUG, STOPPED_STATES, timeout=30.0
+            )
+        except Exception:
+            LOG.exception("Teardown stop of webhook-proxy addon failed")
 
 
 # ---------------------------------------------------------------------------
-# Installation + first-start contract
+# Post-start contract
 # ---------------------------------------------------------------------------
 
 
-async def test_addon_installed_and_running(mcp_client: Any) -> None:
-    """The bake-installed webhook-proxy addon resolves and is in ``started``."""
+async def test_addon_started_after_fixture(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
+    """Fixture brought the bake-installed addon to ``started``."""
     detail = await _get_addon_detail(mcp_client, WEBHOOK_PROXY_SLUG)
     assert detail.get("name") == WEBHOOK_PROXY_NAME, (
         f"Expected name {WEBHOOK_PROXY_NAME!r}, got {detail.get('name')!r}"
     )
     assert detail.get("state") == "started", (
-        f"Webhook-proxy addon should be ``started`` after bake; "
-        f"got state={detail.get('state')!r}. Full detail: {detail}"
+        f"Webhook-proxy addon should be ``started`` after fixture; "
+        f"got state={detail.get('state')!r}"
     )
 
 
-async def test_addon_supervisor_auto_discovery_logs_dev_slug(
-    mcp_client: Any,
+async def test_addon_logs_fetch_shape(
+    mcp_client: Any, webhook_proxy_started: Any
 ) -> None:
-    """``start.py`` auto-discovery finds and logs the dev MCP addon slug.
-
-    start.py:188-249 lists installed addons via the Supervisor API, matches
-    slug suffixes ``_ha_mcp`` / ``_ha_mcp_dev``, and logs the discovered
-    target before continuing. With ``mcp_server_url`` left empty in the
-    bake's options POST (see ``install_webhook_proxy_addon``), this is the
-    code path that runs on first start. A regression that breaks the slug
-    suffix match or the addon-listing call would show up here as the dev
-    slug failing to appear in the log.
-    """
-    log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
-    discovered = _DISCOVERY_RE.findall(log_text)
-    assert discovered, (
-        "Webhook-proxy logs do not contain "
-        '"Discovered running MCP addon: <slug>". Either the auto-discovery '
-        "code path regressed or the addon failed to reach it. "
-        f"Log tail: ...{log_text[-2000:]!r}"
-    )
-    assert DEV_ADDON_SLUG in discovered, (
-        f"Expected webhook-proxy to discover the dev addon "
-        f"({DEV_ADDON_SLUG!r}); observed discoveries: {discovered}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle round-trip — mirror Matter Server's stop/start/restart test
-# ---------------------------------------------------------------------------
-
-
-async def test_addon_start_stop_restart_roundtrip(mcp_client: Any) -> None:
-    """Stop → start → restart cycles the webhook-proxy via Supervisor.
-
-    Mirrors ``test_matter_server_start_stop_restart_roundtrip``. Webhook-
-    proxy's startup is heavier than Matter Server (writes ``/data/webhook_id.txt``,
-    installs the mcp_proxy custom integration, registers the webhook with HA
-    Core) so the ``_STATE_POLL_TIMEOUT`` headroom matters more here than for
-    the lighter addons. Cleanup leaves it running so later tests observe a
-    started addon.
-    """
-    slug = WEBHOOK_PROXY_SLUG
-    try:
-        stop_result = await _addon_action(mcp_client, slug, "stop")
-        assert stop_result.get("success"), (
-            f"hassio.addon_stop({slug}) failed: {stop_result}"
-        )
-        await _wait_for_state(mcp_client, slug, STOPPED_STATES)
-
-        start_result = await _addon_action(mcp_client, slug, "start")
-        assert start_result.get("success"), (
-            f"hassio.addon_start({slug}) failed: {start_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-
-        restart_result = await _addon_action(mcp_client, slug, "restart")
-        assert restart_result.get("success"), (
-            f"hassio.addon_restart({slug}) failed: {restart_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
-    finally:
-        await _ensure_started(mcp_client, slug)
-
-
-async def test_addon_logs_fetch_shape(mcp_client: Any) -> None:
     """``ha_get_logs(source='supervisor')`` returns substantial log text."""
     log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
     assert len(log_text.strip()) >= 100, (
@@ -261,12 +230,9 @@ async def test_addon_logs_fetch_shape(mcp_client: Any) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Options round-trip — mirror Node-RED's options-persist pattern.
-# ---------------------------------------------------------------------------
-
-
-async def test_addon_options_get_returns_dict(mcp_client: Any) -> None:
+async def test_addon_options_get_returns_dict(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
     """``ha_get_addon`` exposes webhook-proxy options as a dict."""
     detail = await _get_addon_detail(mcp_client, WEBHOOK_PROXY_SLUG)
     options = detail.get("options")
@@ -276,14 +242,55 @@ async def test_addon_options_get_returns_dict(mcp_client: Any) -> None:
     )
 
 
-async def test_addon_remote_url_round_trip(mcp_client: Any) -> None:
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_addon_start_stop_restart_roundtrip(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
+    """Stop → start → restart cycles via Supervisor.
+
+    Mirrors ``test_matter_server_start_stop_restart_roundtrip`` in
+    test_addon_lifecycle.py. Cleanup leaves the addon in ``started`` so
+    sibling tests in this module see it running. The fixture's teardown
+    is the durable stop.
+    """
+    slug = WEBHOOK_PROXY_SLUG
+    stop_result = await _addon_action(mcp_client, slug, "stop")
+    assert stop_result.get("success"), (
+        f"hassio.addon_stop({slug}) failed: {stop_result}"
+    )
+    await _wait_for_state(mcp_client, slug, STOPPED_STATES)
+
+    start_result = await _addon_action(mcp_client, slug, "start")
+    assert start_result.get("success"), (
+        f"hassio.addon_start({slug}) failed: {start_result}"
+    )
+    await _wait_for_state(mcp_client, slug, "started")
+
+    restart_result = await _addon_action(mcp_client, slug, "restart")
+    assert restart_result.get("success"), (
+        f"hassio.addon_restart({slug}) failed: {restart_result}"
+    )
+    await _wait_for_state(mcp_client, slug, "started")
+
+
+# ---------------------------------------------------------------------------
+# Options round-trip — mirror Node-RED's options-persist pattern.
+# ---------------------------------------------------------------------------
+
+
+async def test_addon_remote_url_round_trip(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
     """``remote_url`` written via ha_manage_addon persists in Supervisor options.
 
     The addon's schema declares ``remote_url: str?``. Tests assert the
     write path round-trips through Supervisor; whether the addon actually
-    reaches the URL is a downstream concern (the addon doesn't try to
-    contact ``remote_url`` until something hits the webhook). Restored to
-    empty in ``finally`` so sibling tests aren't observably mutated.
+    reaches the URL is a downstream concern. Restored to empty in
+    ``finally`` so sibling tests aren't observably mutated.
     """
     slug = WEBHOOK_PROXY_SLUG
     detail = await _get_addon_detail(mcp_client, slug)
@@ -295,15 +302,7 @@ async def test_addon_remote_url_round_trip(mcp_client: Any) -> None:
     probe_options = dict(current_options)
     probe_options["remote_url"] = probe
     try:
-        write_raw = await mcp_client.call_tool(
-            "ha_manage_addon", {"slug": slug, "options": probe_options}
-        )
-        write_payload = parse_mcp_result(write_raw)
-        ok = write_payload.get("success") is True or (
-            write_payload.get("status") == "pending_restart"
-        )
-        assert ok, f"ha_manage_addon remote_url write failed: {write_payload}"
-
+        await _set_options(mcp_client, slug, probe_options)
         detail_after = await _get_addon_detail(mcp_client, slug)
         options_after = detail_after.get("options") or {}
         assert options_after.get("remote_url") == probe, (
@@ -313,8 +312,72 @@ async def test_addon_remote_url_round_trip(mcp_client: Any) -> None:
     finally:
         restore = dict(current_options)
         restore["remote_url"] = original_remote
-        await _restore_options(mcp_client, slug, restore)
-        await _ensure_started(mcp_client, slug)
+        try:
+            await _set_options(mcp_client, slug, restore)
+        except Exception:
+            LOG.exception("Failed to restore remote_url to %s", original_remote)
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery — deliberately exercised by clearing mcp_server_url + restart.
+# ---------------------------------------------------------------------------
+
+
+async def test_auto_discovery_finds_dev_addon_when_url_blank(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
+    """Clearing ``mcp_server_url`` forces start.py's auto-discovery.
+
+    The bake pins ``mcp_server_url`` to the dev addon's host-network URL
+    so the addon doesn't depend on auto-discovery timing during setup.
+    This test exercises the auto-discovery code path explicitly: clear
+    the field, restart the addon, assert the discovery log line names
+    the dev addon slug, then restore the pinned URL so subsequent tests
+    in this module use the reliable target.
+    """
+    slug = WEBHOOK_PROXY_SLUG
+    detail = await _get_addon_detail(mcp_client, slug)
+    current_options = detail.get("options") or {}
+    assert isinstance(current_options, dict)
+    pinned_url = current_options.get("mcp_server_url", "")
+
+    cleared_options = dict(current_options)
+    cleared_options["mcp_server_url"] = ""
+    try:
+        await _set_options(mcp_client, slug, cleared_options)
+        restart_result = await _addon_action(mcp_client, slug, "restart")
+        assert restart_result.get("success"), (
+            f"hassio.addon_restart({slug}) failed: {restart_result}"
+        )
+        await _wait_for_state(mcp_client, slug, "started")
+
+        # Poll the log until the discovery line appears in the new run.
+        deadline = time.monotonic() + _STATE_POLL_TIMEOUT
+        discovered: list[str] = []
+        while time.monotonic() < deadline:
+            log_text = await _get_addon_logs(mcp_client, slug)
+            discovered = _DISCOVERY_RE.findall(log_text)
+            if discovered:
+                break
+            await asyncio.sleep(_STATE_POLL_INTERVAL)
+        assert discovered, (
+            "Webhook-proxy did not log "
+            '"Discovered running MCP addon: <slug>" within '
+            f"{_STATE_POLL_TIMEOUT}s after restart with blank "
+            "mcp_server_url. Auto-discovery code path regressed."
+        )
+        assert DEV_ADDON_SLUG in discovered, (
+            f"Expected discovery target {DEV_ADDON_SLUG!r}; observed: {discovered}"
+        )
+    finally:
+        restore = dict(current_options)
+        restore["mcp_server_url"] = pinned_url
+        try:
+            await _set_options(mcp_client, slug, restore)
+            await _addon_action(mcp_client, slug, "restart")
+            await _wait_for_state(mcp_client, slug, "started")
+        except Exception:
+            LOG.exception("Failed to restore mcp_server_url + restart")
 
 
 # ---------------------------------------------------------------------------
@@ -322,85 +385,73 @@ async def test_addon_remote_url_round_trip(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_id_persists_across_restart(mcp_client: Any) -> None:
+async def test_webhook_id_persists_across_restart(
+    mcp_client: Any, webhook_proxy_started: Any
+) -> None:
     """The webhook ID survives an addon restart (PR #1020 regression).
 
-    start.py reads/writes ``/data/webhook_id.txt`` (see
-    ``_get_or_create_webhook_id``). ``/data`` is the Supervisor-mounted
-    persistent volume, so an ``addon_restart`` keeps the file and the URL
-    stays the same. A regression that re-generated the ID on every start
-    would break the contract that an MCP client's saved webhook URL
-    doesn't change unless the user explicitly rotates it.
-
-    Reads the most recent ``/api/webhook/<id>`` from the addon log,
-    restarts the addon, reads again, asserts the IDs match. ``-n2``
-    pytest-xdist scope is fine here because Supervisor logs accumulate
-    over the addon's whole life; each restart appends new lines without
-    truncating the file we read.
+    start.py reads/writes ``/data/webhook_id.txt`` — the Supervisor-
+    mounted persistent volume — so an ``addon_restart`` keeps the file
+    and the URL stays the same. A regression that re-generated the ID
+    on every start would break the contract that an MCP client's saved
+    webhook URL doesn't change unless the user explicitly rotates it.
     """
     slug = WEBHOOK_PROXY_SLUG
-    try:
-        pre_log = await _get_addon_logs(mcp_client, slug)
-        pre_id = _extract_webhook_id(pre_log)
-        assert pre_id, (
-            "Could not find ``/api/webhook/<id>`` line in webhook-proxy "
-            "logs before restart — start.py either didn't log it or the "
-            "log fetch returned an incomplete tail. "
-            f"Log tail: ...{pre_log[-2000:]!r}"
-        )
+    pre_log = await _get_addon_logs(mcp_client, slug)
+    pre_id = _extract_webhook_id(pre_log)
+    assert pre_id, (
+        "Could not find ``/api/webhook/<id>`` line in webhook-proxy "
+        "logs before restart. "
+        f"Log tail: ...{pre_log[-2000:]!r}"
+    )
 
-        restart_result = await _addon_action(mcp_client, slug, "restart")
-        assert restart_result.get("success"), (
-            f"hassio.addon_restart({slug}) failed: {restart_result}"
-        )
-        await _wait_for_state(mcp_client, slug, "started")
+    restart_result = await _addon_action(mcp_client, slug, "restart")
+    assert restart_result.get("success"), (
+        f"hassio.addon_restart({slug}) failed: {restart_result}"
+    )
+    await _wait_for_state(mcp_client, slug, "started")
 
-        # start.py logs the webhook path on every startup, but the
-        # Supervisor log endpoint races the addon's stdout buffer. Poll
-        # the log until a webhook-path line appears AFTER the restart.
-        deadline = time.monotonic() + _STATE_POLL_TIMEOUT
-        post_id: str | None = None
-        while time.monotonic() < deadline:
-            post_log = await _get_addon_logs(mcp_client, slug)
-            # Look at the suffix beyond pre_log's length so we only match
-            # lines emitted in the new (post-restart) run.
-            new_section = post_log[len(pre_log) :]
-            post_id = _extract_webhook_id(new_section)
-            if post_id:
-                break
-            await asyncio.sleep(_STATE_POLL_INTERVAL)
+    deadline = time.monotonic() + _STATE_POLL_TIMEOUT
+    post_id: str | None = None
+    while time.monotonic() < deadline:
+        post_log = await _get_addon_logs(mcp_client, slug)
+        # Only consider log lines emitted after the pre-restart snapshot.
+        new_section = post_log[len(pre_log) :]
+        post_id = _extract_webhook_id(new_section)
+        if post_id:
+            break
+        await asyncio.sleep(_STATE_POLL_INTERVAL)
 
-        assert post_id, (
-            "Webhook-proxy did not re-log the webhook path within "
-            f"{_STATE_POLL_TIMEOUT}s of restart. Either the addon failed "
-            "to reach _register_webhook or stdout buffering is hiding "
-            "the line."
-        )
-        assert post_id == pre_id, (
-            f"Webhook ID changed across restart (pre={pre_id!r}, "
-            f"post={post_id!r}). #1020 regression — /data/webhook_id.txt "
-            "is no longer persisting the ID."
-        )
-    finally:
-        await _ensure_started(mcp_client, slug)
+    assert post_id, (
+        "Webhook-proxy did not re-log the webhook path within "
+        f"{_STATE_POLL_TIMEOUT}s of restart."
+    )
+    assert post_id == pre_id, (
+        f"Webhook ID changed across restart (pre={pre_id!r}, "
+        f"post={post_id!r}). #1020 regression — /data/webhook_id.txt "
+        "is no longer persisting the ID."
+    )
 
 
 # ---------------------------------------------------------------------------
-# Webhook endpoint reachability — addon-registered, not bake-injected.
+# Webhook endpoint registered in HA Core
 # ---------------------------------------------------------------------------
 
 
 async def test_webhook_endpoint_registered_in_ha_core(
-    mcp_client: Any, ha_container_with_fresh_config: dict[str, Any]
+    mcp_client: Any,
+    webhook_proxy_started: Any,
+    ha_container_with_fresh_config: dict[str, Any],
 ) -> None:
     """The webhook the addon registered is reachable on HA Core's HTTP API.
 
-    The addon's first-start flow installs the ``mcp_proxy`` custom
-    integration and creates a config entry that calls
-    ``webhook.async_register`` with the persisted webhook ID. A reachable
-    endpoint should NOT 404 — the integration replies with a structured
-    error or proxy response, not the generic HA "no such webhook" 404
-    that an unregistered ID returns.
+    The addon's start.py installs the ``mcp_proxy`` custom integration
+    and creates a config entry that calls ``webhook.async_register``
+    with the persisted webhook ID. HA returns 200 with an empty body
+    for any unregistered webhook ID (this is by design — webhook auth
+    is URL-secrecy). We assert the integration's response to the
+    registered URL differs from the unregistered baseline in at least
+    one of (status, body, content-type).
     """
     base_url = ha_container_with_fresh_config["base_url"]
     token = ha_container_with_fresh_config["token"]
@@ -408,62 +459,50 @@ async def test_webhook_endpoint_registered_in_ha_core(
 
     pre_log = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
     webhook_id = _extract_webhook_id(pre_log)
-    assert webhook_id, (
-        "Could not extract registered webhook ID from addon log. "
-        "test_webhook_id_persists_across_restart should be passing too — "
-        "fix that first if both fail."
-    )
+    assert webhook_id, "Could not extract registered webhook ID from addon log."
 
     registered_url = f"{base_url}/api/webhook/{webhook_id}"
-    unregistered_url = f"{base_url}/api/webhook/definitely-not-registered"
+    unregistered_url = f"{base_url}/api/webhook/definitely-not-registered-xyz"
 
-    # The HA Core webhook endpoint accepts POST without auth (webhooks
-    # are auth-by-URL-secrecy by design). GET with auth is also accepted
-    # for HA's own webhook handlers; mcp_proxy registers POST + GET. The
-    # raw status code suffices to distinguish "registered" (anything but
-    # 404) from "unregistered" (404). Failure mode we care about: a
-    # registration regression silently drops the webhook and BOTH URLs
-    # return 404 identically.
     registered_resp = await asyncio.to_thread(
         requests.post, registered_url, headers=headers, timeout=10
     )
     unregistered_resp = await asyncio.to_thread(
         requests.post, unregistered_url, headers=headers, timeout=10
     )
-    assert registered_resp.status_code != 404, (
-        f"Registered webhook URL returned 404 — addon's webhook "
-        f"registration did not take effect. "
-        f"URL: {registered_url}, body: {registered_resp.text[:300]!r}"
+
+    differs = (
+        registered_resp.status_code != unregistered_resp.status_code
+        or registered_resp.content != unregistered_resp.content
+        or registered_resp.headers.get("Content-Type")
+        != unregistered_resp.headers.get("Content-Type")
     )
-    # Sanity check: unknown ID returns the generic 404. If HA changes
-    # this to e.g. 401 for all webhook IDs the assertion above would
-    # pass falsely; pin the discrimination here.
-    assert unregistered_resp.status_code == 404, (
-        f"Unregistered webhook URL should return 404, got "
-        f"{unregistered_resp.status_code}: {unregistered_resp.text[:300]!r}"
+    assert differs, (
+        "Registered webhook response is identical to unregistered "
+        f"({registered_resp.status_code} == {unregistered_resp.status_code}, "
+        f"len={len(registered_resp.content)} == "
+        f"{len(unregistered_resp.content)}). mcp_proxy may not have "
+        "registered the webhook on first start."
     )
 
 
 # ---------------------------------------------------------------------------
-# OAuth gate (#1184): enabling enable_oauth must close the webhook to
-# unauthenticated callers.
+# OAuth gate (#1184)
 # ---------------------------------------------------------------------------
 
 
 async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
-    mcp_client: Any, ha_container_with_fresh_config: dict[str, Any]
+    mcp_client: Any,
+    webhook_proxy_started: Any,
+    ha_container_with_fresh_config: dict[str, Any],
 ) -> None:
     """Enabling ``enable_oauth`` makes the webhook reject unauth requests.
 
     PR #1184 added an OAuth fail-closed gate: when ``enable_oauth=true``
     the addon refuses to register the webhook (or unregisters it) until
-    the OAuth integration is verified loaded. The user-facing effect is
-    that previously-working POSTs to the webhook URL stop succeeding
-    with the same plain-status response. The exact failure mode depends
-    on whether the integration was successfully reloaded — accept either
-    a 4xx response OR an outright 404 (webhook unregistered while the
-    OAuth check ran), as long as it differs from the un-gated POST's
-    status. Restored to ``enable_oauth=false`` in ``finally``.
+    the OAuth integration is verified loaded. Accept either auth-
+    rejection (401/403) or unregistered-404 as evidence the gate
+    engaged. Restored to ``enable_oauth=false`` in ``finally``.
     """
     slug = WEBHOOK_PROXY_SLUG
     base_url = ha_container_with_fresh_config["base_url"]
@@ -479,7 +518,6 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
     assert webhook_id, "Could not extract webhook ID from addon log."
     webhook_url = f"{base_url}/api/webhook/{webhook_id}"
 
-    # Baseline: OAuth off, webhook endpoint accepts POST (status != 401/403).
     baseline_resp = await asyncio.to_thread(
         requests.post, webhook_url, headers=headers, timeout=10
     )
@@ -491,29 +529,13 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
     probe_options = dict(current_options)
     probe_options["enable_oauth"] = True
     try:
-        write_raw = await mcp_client.call_tool(
-            "ha_manage_addon", {"slug": slug, "options": probe_options}
-        )
-        write_payload = parse_mcp_result(write_raw)
-        ok = write_payload.get("success") is True or (
-            write_payload.get("status") == "pending_restart"
-        )
-        assert ok, f"enable_oauth=true write failed: {write_payload}"
-
-        # ha_manage_addon's options write reports ``pending_restart`` when
-        # the addon needs a restart to pick up runtime changes — the
-        # OAuth gate is a runtime concern, so kick the restart ourselves.
+        await _set_options(mcp_client, slug, probe_options)
         restart_result = await _addon_action(mcp_client, slug, "restart")
         assert restart_result.get("success"), (
             f"hassio.addon_restart({slug}) for OAuth toggle failed: {restart_result}"
         )
         await _wait_for_state(mcp_client, slug, "started")
 
-        # Poll until the post-restart webhook behavior diverges from
-        # baseline. start.py's OAuth gate is async (probes the
-        # /api/mcp_proxy/oauth endpoint with retries), so the close-down
-        # may not be observable for several seconds after the addon
-        # reports ``started``.
         deadline = time.monotonic() + _STATE_POLL_TIMEOUT
         last_status: int | None = None
         gated = False
@@ -522,9 +544,6 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
                 requests.post, webhook_url, headers=headers, timeout=10
             )
             last_status = resp.status_code
-            # Gate kicked in: either OAuth-rejected (401/403) or webhook
-            # unregistered (404). Anything else means the gate hasn't
-            # taken effect yet.
             if last_status in (401, 403, 404):
                 gated = True
                 break
@@ -537,12 +556,9 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
             "PR #1184 fail-closed gate may have regressed."
         )
     finally:
-        await _restore_options(mcp_client, slug, current_options)
-        # Restart so the restored OAuth-off state takes effect for sibling
-        # tests, then leave the addon running.
         try:
+            await _set_options(mcp_client, slug, current_options)
             await _addon_action(mcp_client, slug, "restart")
             await _wait_for_state(mcp_client, slug, "started")
         except Exception:
             LOG.exception("OAuth cleanup restart failed")
-        await _ensure_started(mcp_client, slug)

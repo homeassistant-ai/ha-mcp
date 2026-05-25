@@ -1193,18 +1193,33 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
 
     Assumes ``stage_webhook_proxy_addon_source`` ran before start_qemu so
     the source is at ``/supervisor/addons/local/ha_mcp_webhook_proxy/``.
-    Must run AFTER ``install_ha_mcp_dev_addon`` so the webhook-proxy's
-    Supervisor auto-discovery (slug-suffix match on ``_ha_mcp_dev``) has
-    a target to find when it first starts.
 
-    All option fields are optional in the schema (every entry is
-    ``str?`` / ``bool?`` / ``port?``), so the options POST below can pass
-    only the fields we care to seed; missing fields fall back to the
-    config.yaml defaults. We leave ``mcp_server_url`` empty deliberately
-    so the addon exercises the auto-discovery code path on first boot
-    (which is the production happy path), and we leave OAuth off so the
-    addon starts cleanly — individual e2e tests flip OAuth on when
-    exercising the gate.
+    Install-only — the addon is NOT started during bake and ``boot`` is
+    set to ``manual`` so the cached qcow2 doesn't auto-start it on
+    resume. Two reasons:
+
+    1. ``start.py`` writes ``/config/.mcp_proxy_config.json`` on every
+       run (target_url + a freshly-generated webhook_id). If the addon
+       runs during bake or on resume, it clobbers the deterministic
+       config the bake injected via ``bake_test_state`` and breaks
+       sibling tests that rely on the bake's webhook_id
+       (``test_webhook_proxy.py`` in particular).
+    2. On resume, the dev MCP addon and the webhook-proxy both
+       auto-start in parallel; webhook-proxy's auto-discovery races
+       the dev addon's startup and fails on first attempt, then
+       Supervisor escalates to ``boot_fail`` before the dev addon is
+       ready.
+
+    A session-scoped pytest fixture in
+    ``tests/src/e2e/haos_only/test_webhook_proxy_addon.py`` starts the
+    addon for the duration of its tests, then stops it. Sibling test
+    files don't see the addon running.
+
+    ``mcp_server_url`` is pinned to the dev addon's host-network URL so
+    the addon-runtime tests don't depend on auto-discovery timing.
+    Auto-discovery itself remains in the start.py code path; a dedicated
+    test in the haos_only module clears this field, restarts, and
+    asserts the discovery log appears.
 
     Returns the installed slug (``local_ha_mcp_webhook_proxy``).
     """
@@ -1218,27 +1233,34 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     # case the python:3.13-slim base layer pull is slow on first install.
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
 
-    LOG.info("Setting webhook-proxy addon options (defaults; OAuth off)")
+    # Pin mcp_server_url to the dev addon's host-network URL so the
+    # addon skips auto-discovery on subsequent starts (no race against
+    # dev-addon startup on resume / restart). Both addons run on
+    # host_network so 127.0.0.1 is reachable from the webhook-proxy
+    # container to the dev MCP server's listening port.
+    pinned_mcp_url = f"http://127.0.0.1:9583{HA_MCP_TEST_SECRET_PATH}"
+    LOG.info(
+        "Setting webhook-proxy addon options (mcp_server_url=%s, boot=manual)",
+        pinned_mcp_url,
+    )
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
         data={
             "options": {
                 "remote_url": "",
-                "mcp_server_url": "",
+                "mcp_server_url": pinned_mcp_url,
                 "mcp_port": 9583,
                 "enable_oauth": False,
                 "oauth_client_id": "",
                 "oauth_client_secret": "",
                 "regenerate_oauth_creds": False,
             },
-            "boot": "auto",
+            "boot": "manual",
         },
         timeout=60.0,
     )
-    LOG.info("Starting webhook-proxy addon")
-    ws.supervisor_api(f"/addons/{slug}/start", method="post", timeout=120.0)
-    LOG.info("webhook-proxy addon installed + started; slug=%s", slug)
+    LOG.info("webhook-proxy addon installed (not started); slug=%s", slug)
     return slug
 
 

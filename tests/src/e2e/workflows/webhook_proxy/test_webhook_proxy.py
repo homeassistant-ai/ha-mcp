@@ -17,9 +17,19 @@ infrastructure. We test the core integration mechanics only.
 import asyncio
 import logging
 
+import pytest
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Testcontainer-only: in HAOS mode the webhook-proxy addon is installed
+# and ``start.py`` overwrites ``/config/.mcp_proxy_config.json`` whenever
+# the addon runs (rotating the webhook_id to a fresh value). These tests
+# rely on the deterministic bake-injected webhook_id
+# ``mcp_e2e_test_webhook_proxy``; the HAOS-tier equivalents live in
+# ``tests/src/e2e/haos_only/test_webhook_proxy_addon.py`` and use the
+# addon's actual runtime webhook_id.
+pytestmark = [pytest.mark.container_only]
 
 
 class TestWebhookProxyIntegration:

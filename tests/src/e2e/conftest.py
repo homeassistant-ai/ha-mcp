@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_run
 from fastmcp import Client
 from haos_runtime import (
     HA_MCP_DEV_ADDON_SLUG,
+    HA_MCP_WEBHOOK_PROXY_ADDON_SLUG,
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     is_haos_backend_selected,
@@ -1377,6 +1378,20 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                             f"{base_url}/api/hassio/addons/{HA_MCP_DEV_ADDON_SLUG}/logs?lines=20000",
                         ),
                     )
+                # Always grab the webhook-proxy addon's stdout — it's
+                # installed by the bake (boot=manual) and started by the
+                # haos_only test module's session fixture. When tests in
+                # that module fail, the addon's own logs are the only
+                # place start.py's failure mode is visible (Supervisor's
+                # log only shows container lifecycle events, not addon
+                # stdout).
+                log_endpoints.append(
+                    (
+                        "webhook-proxy-addon.log",
+                        f"{base_url}/api/hassio/addons/"
+                        f"{HA_MCP_WEBHOOK_PROXY_ADDON_SLUG}/logs?lines=20000",
+                    ),
+                )
                 # Narrow except: any non-network error (NameError, KeyError
                 # from a future refactor) should propagate instead of being
                 # misreported as "Failed to dump". Per-endpoint network
