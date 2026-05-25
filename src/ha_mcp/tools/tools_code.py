@@ -813,7 +813,7 @@ async def _run_sandboxed_code(
                     f"WebSocket command {msg_type!r} is blocked from the "
                     "sandbox. Use the corresponding wrapping tool via "
                     "call_tool (e.g. ha_config_set_dashboard, "
-                    "ha_set_area_or_floor, ha_update_device, ha_set_entity) "
+                    "ha_set_area_or_floor, ha_set_device, ha_set_entity) "
                     "so validation runs."
                 )
             }
