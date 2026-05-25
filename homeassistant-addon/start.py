@@ -216,9 +216,26 @@ def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     fresh dev-addon install even when every sub-flag was False —
     locking the master to "on" in the web UI with origin=env, which
     the user could not unset from anywhere (#1164 follow-up bug).
+
+    REMOVAL CANDIDATE: this helper is only called on the legacy
+    fallback path in ``main()`` (``beta_master_in_config`` False
+    branch). Once every dev-addon user has saved their addon
+    Configuration tab at least once after the master-in-schema
+    rollout, ``options.json`` will always carry the
+    ``enable_beta_features`` key and this function becomes
+    unreachable. Delete after one stable release cycle (track via
+    the changelog entry that introduces this helper).
     """
-    if any(config.get(key) is True for key in _DEV_ADDON_BETA_KEYS):
+    truthy = [key for key in _DEV_ADDON_BETA_KEYS if config.get(key) is True]
+    if truthy:
         os.environ["ENABLE_BETA_FEATURES"] = "true"
+        log_info(
+            "Legacy-bridge auto-enable: writing ENABLE_BETA_FEATURES=true "
+            f"because options.json carries truthy sub-flag(s) {', '.join(truthy)} "
+            "but no explicit enable_beta_features key. Save the addon "
+            "Configuration tab once to materialise the schema default and "
+            "this branch will no-op on subsequent boots."
+        )
 
 
 _STALE_MIGRATION_MARKER = ".skills_as_tools_default_migration_v1"
@@ -257,10 +274,15 @@ def main() -> int:
     enable_tool_search = False  # default
     enable_tool_security_policies = False  # default
     enable_yaml_config_editing = False  # default
+    yaml_config_in_config = False  # presence flag (#1164 follow-up)
     enable_filesystem_tools = False  # default
+    filesystem_tools_in_config = False  # presence flag (#1164 follow-up)
     enable_custom_component_integration = False  # default
+    custom_component_in_config = False  # presence flag (#1164 follow-up)
     enable_code_mode = False  # default
+    code_mode_in_config = False  # presence flag (#1164 follow-up)
     enable_lite_docstrings = False  # default
+    lite_docstrings_in_config = False  # presence flag (#1164 follow-up)
     # Master beta toggle: present only in the dev addon's schema
     # (#1164 follow-up). Default to False (stable behaviour); when
     # the dev schema-default merges in, ``beta_master_in_config``
@@ -296,16 +318,29 @@ def main() -> int:
                 if isinstance(raw_tool_security_policies, bool)
                 else False
             )
+            # Beta sub-flag presence tracking (#1164 follow-up). On
+            # stable-addon, the 5 beta keys are NOT in config.yaml
+            # schema — options.json carries none of them. If we wrote
+            # ENABLE_YAML_CONFIG_EDITING=false (etc.) unconditionally,
+            # get_feature_flag_origin would see env-var-set + in_addon
+            # → origin='addon' → UI labels editable. The user toggles,
+            # save POSTs to Supervisor, schema rejects (key not in
+            # stable schema). Track presence and skip the env write
+            # below when absent so stable falls through to the
+            # standalone file/default origin chain.
+            yaml_config_in_config = "enable_yaml_config_editing" in config
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = (
                 raw_yaml_config if isinstance(raw_yaml_config, bool) else False
             )
+            filesystem_tools_in_config = "enable_filesystem_tools" in config
             raw_filesystem_tools = config.get("enable_filesystem_tools", False)
             enable_filesystem_tools = (
                 raw_filesystem_tools
                 if isinstance(raw_filesystem_tools, bool)
                 else False
             )
+            custom_component_in_config = "enable_custom_component_integration" in config
             raw_custom_component = config.get(
                 "enable_custom_component_integration", False
             )
@@ -314,10 +349,12 @@ def main() -> int:
                 if isinstance(raw_custom_component, bool)
                 else False
             )
+            code_mode_in_config = "enable_code_mode" in config
             raw_code_mode = config.get("enable_code_mode", False)
             enable_code_mode = (
                 raw_code_mode if isinstance(raw_code_mode, bool) else False
             )
+            lite_docstrings_in_config = "enable_lite_docstrings" in config
             raw_lite_docstrings = config.get("enable_lite_docstrings", False)
             enable_lite_docstrings = (
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
@@ -399,13 +436,72 @@ def main() -> int:
     os.environ["ENABLE_TOOL_SECURITY_POLICIES"] = str(
         enable_tool_security_policies
     ).lower()
-    os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(enable_yaml_config_editing).lower()
-    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(enable_filesystem_tools).lower()
-    os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
-        enable_custom_component_integration
-    ).lower()
-    os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
-    os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    # Beta sub-flags: only write env vars when the key is actually in
+    # the addon's options.json (#1164 follow-up). On stable addon,
+    # none of these keys are in schema, so config.get(...) returned
+    # the default False — but explicitly writing the env would mark
+    # the field as origin='addon' (Supervisor-managed) in the web UI,
+    # and Supervisor would reject the eventual save because the key
+    # is not in stable's schema. Skip the write so the standalone
+    # file/default origin chain applies.
+    if yaml_config_in_config:
+        os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(
+            enable_yaml_config_editing
+        ).lower()
+    if filesystem_tools_in_config:
+        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
+            enable_filesystem_tools
+        ).lower()
+    if custom_component_in_config:
+        os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
+            enable_custom_component_integration
+        ).lower()
+    if code_mode_in_config:
+        os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
+    if lite_docstrings_in_config:
+        os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    # Dev-upgrade silent-disable warning (#1164 follow-up): if the
+    # master is in options.json and is False, but any sub-flag is
+    # truthy, the runtime gate will force the sub-flag off. Log
+    # loudly so an operator who pre-#1164 had beta tools on, then
+    # toggled the master off after the schema update, can see why
+    # their tools went away.
+    if beta_master_in_config and enable_beta_features is False:
+        gated_off = [
+            name
+            for name, present, value in (
+                (
+                    "enable_yaml_config_editing",
+                    yaml_config_in_config,
+                    enable_yaml_config_editing,
+                ),
+                (
+                    "enable_filesystem_tools",
+                    filesystem_tools_in_config,
+                    enable_filesystem_tools,
+                ),
+                (
+                    "enable_custom_component_integration",
+                    custom_component_in_config,
+                    enable_custom_component_integration,
+                ),
+                ("enable_code_mode", code_mode_in_config, enable_code_mode),
+                (
+                    "enable_lite_docstrings",
+                    lite_docstrings_in_config,
+                    enable_lite_docstrings,
+                ),
+            )
+            if present and value
+        ]
+        if gated_off:
+            log_info(
+                "Master beta toggle is OFF but these sub-flags are set "
+                f"to true in options.json — they will be force-disabled "
+                f"at runtime by the master gate: {', '.join(gated_off)}. "
+                "Re-enable the master toggle in the addon Configuration "
+                "tab (or the web settings UI) to use them."
+            )
     # Master beta toggle: write env var only when the key exists in
     # the addon's options.json. Dev addon's schema declares it (so
     # the key is always present, value follows the user's toggle).
@@ -500,11 +596,18 @@ def main() -> int:
         StatelessSessionLogFilter()
     )
 
+    # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
+    # reach it inside the container; MCP_HOST override is provided for
+    # parity with the standard CLI entry points (see issue #1434).
+    bind_host = os.getenv("MCP_HOST", "0.0.0.0")
+
     try:
         log_info("Starting MCP server...")
+        if bind_host != "0.0.0.0":
+            log_info(f"Bind host overridden via MCP_HOST: {bind_host}")
         mcp.run(
             transport="http",
-            host="0.0.0.0",
+            host=bind_host,
             port=port,
             path=secret_path,
             stateless_http=True,

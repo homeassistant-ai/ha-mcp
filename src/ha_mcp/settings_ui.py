@@ -989,16 +989,25 @@ _SETTINGS_HTML = (
   <div id="advToolsSurface" class="adv-section"></div>
   <h3 class="adv-section-title">Diagnostics</h3>
   <div id="advDiagnostics" class="adv-section"></div>
-  <div id="advSaveRow" class="adv-save-row" style="display:none;">
-    <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
-    <span id="advSaveStatus" class="status"></span>
-  </div>
 
   <!-- Beta features moved to bottom of the panel (#1164 follow-up) —
        these can damage the HA system, so they sit last so the user
        sees safer settings first. -->
   <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
   <div id="betaBody"></div>
+
+  <!-- Bottom Save row sits AFTER the beta block (and any nested
+       code-mode sub-numerics) so a user editing those doesn't have
+       to scroll back up past their own changes (#1164 follow-up). -->
+  <div class="adv-save-note">
+    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
+    to persist your changes, then <strong>(2) click "Restart"</strong>
+    above to apply them. Neither step alone is enough.
+  </div>
+  <div id="advSaveRow" class="adv-save-row" style="display:none;">
+    <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
+    <span id="advSaveStatus" class="status"></span>
+  </div>
 
   <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
     <button class="danger-btn" id="stopSidecarBtn"
@@ -2192,9 +2201,11 @@ const ORIGIN_INFO_NOTE = {
 // addon mode have no env-var surface to unset; the var was set
 // either by start.py from /data/options.json or by Supervisor itself
 // (and in either case the addon Configuration tab is the place to
-// change it). The master `enable_beta_features` row gets an extra
-// hint pointing at the addon-Configuration beta toggles, which is
-// what auto-enables the master in the dev addon.
+// change it). The master `enable_beta_features` row uses different
+// copy because it's now schema-bound on dev — origin='env' there
+// only fires on the legacy-bridge path (a pre-#1164 install whose
+// options.json doesn't carry the master key yet, where start.py's
+// truthy-sub-flag fallback wrote ENABLE_BETA_FEATURES=true).
 function envLockedNoteHtml(envVar, fieldName) {
   const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
   if (!IS_ADDON_MODE) {
@@ -2202,9 +2213,10 @@ function envLockedNoteHtml(envVar, fieldName) {
   }
   if (fieldName === 'enable_beta_features') {
     return (
-      `Auto-enabled in addon mode when at least one beta toggle is on in the ` +
-      `addon Configuration tab. To disable the master, turn off every beta ` +
-      `toggle there and restart the addon. (env: ${envVarTag})`
+      `Auto-enabled in addon mode (legacy bridge — your options.json ` +
+      `predates the master toggle schema entry). Set ` +
+      `<code>enable_beta_features</code> explicitly in the addon ` +
+      `Configuration tab to take direct control. (env: ${envVarTag})`
     );
   }
   return (
@@ -3536,54 +3548,77 @@ function _setAdvSaveDisabled(disabled) {
 
 async function saveAdvancedSettings() {
   const btns = _advSaveBtns();
-  if (!btns.length) return;
-  const statusEl = _advSaveStatusEls()[0];
+  if (!btns.length) {
+    console.error('saveAdvancedSettings: no save buttons in DOM');
+    return;
+  }
   if (Object.keys(_advancedDirty).length === 0) {
     _setAdvSaveStatus('Nothing to save.');
     return;
   }
   _setAdvSaveDisabled(true);
   _setAdvSaveStatus('Saving…');
-  // ``btn`` and ``statusEl`` are kept as aliases so the rest of the
-  // function body reads naturally; writes go through the helpers so
-  // both copies stay in sync.
-  const btn = btns[0];
+  // Partition the dirty fields into addon-routed and file-routed
+  // batches (#1164 follow-up). The server rejects mixed batches with
+  // 500 so the UI splits them client-side: addon-synced fields go in
+  // their own POST (routes through Supervisor /addons/self/options),
+  // file-mode fields go in a separate POST (writes the override file).
+  // Both batches must succeed for the save to count.
+  const addonDirty = {};
+  const fileDirty = {};
+  Object.entries(_advancedDirty).forEach(([fname, val]) => {
+    const f = _advancedFields.find(x => x.field === fname);
+    if (f && f.origin === 'addon') {
+      addonDirty[fname] = val;
+    } else {
+      fileDirty[fname] = val;
+    }
+  });
+  const batches = [];
+  if (Object.keys(fileDirty).length) batches.push(fileDirty);
+  if (Object.keys(addonDirty).length) batches.push(addonDirty);
+  const restartFields = Object.keys(_advancedDirty);
   try {
-    const resp = await fetch('./api/settings/advanced', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(_advancedDirty),
-    });
-    // JSON parse can fail on a 200 with mangled body (proxy injection,
-    // truncated response). Default to ``{restart_required: true}`` on
-    // success-with-garbage so the user still gets the restart banner;
-    // surface "save returned non-JSON" on non-OK.
-    let data;
-    try {
-      data = await resp.json();
-    } catch (parseErr) {
-      console.error('saveAdvancedSettings JSON parse failed:', parseErr);
-      if (resp.ok) {
-        data = {restart_required: true};
-      } else {
+    for (const payload of batches) {
+      const resp = await fetch('./api/settings/advanced', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      // JSON parse can fail on a 200 with mangled body (proxy
+      // injection, truncated response). Default to
+      // ``{restart_required: true}`` on success-with-garbage so the
+      // user still gets the restart banner; surface "save returned
+      // non-JSON" on non-OK.
+      let data;
+      try {
+        data = await resp.json();
+      } catch (parseErr) {
+        console.error('saveAdvancedSettings JSON parse failed:', parseErr);
+        if (resp.ok) {
+          data = {restart_required: true};
+        } else {
+          _setAdvSaveDisabled(false);
+          _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`);
+          return;
+        }
+      }
+      if (!resp.ok) {
         _setAdvSaveDisabled(false);
-        _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`);
+        let msg = 'Save failed';
+        if (data && data.error) {
+          if (typeof data.error === 'string') msg = data.error;
+          else if (data.error.message) msg = data.error.message;
+        }
+        _setAdvSaveStatus(msg);
         return;
       }
     }
     _setAdvSaveDisabled(false);
-    if (!resp.ok) {
-      let msg = 'Save failed';
-      if (data && data.error) {
-        if (typeof data.error === 'string') msg = data.error;
-        else if (data.error.message) msg = data.error.message;
-      }
-      _setAdvSaveStatus(msg);
-      return;
-    }
     _setAdvSaveStatus('Saved.');
-    // Surface restart-required banner if any saved field requires it.
-    const needsRestart = Object.keys(_advancedDirty).some(f => ADVANCED_RESTART_REQUIRED.has(f));
+    const needsRestart = restartFields.some(
+      f => ADVANCED_RESTART_REQUIRED.has(f)
+    );
     if (needsRestart) {
       document.getElementById('restartNotice').classList.add('show');
       if (typeof restartChannel !== 'undefined' && restartChannel) {
@@ -4070,8 +4105,18 @@ def build_settings_handlers(
         # Reject attempts to flip env-pinned tools. DISABLED_TOOLS /
         # PINNED_TOOLS are operator-level constraints that cannot be
         # overridden via the UI; callers must unset the env var first.
+        # Accept no-op re-sends (state matches the env-pinned value)
+        # so the periodic save fired by ``saveConfig`` after every UI
+        # change doesn't 409 just because the GET payload echoed
+        # env-pinned rows back unchanged (#1164 follow-up — previously
+        # every save with DISABLED_TOOLS / PINNED_TOOLS non-empty
+        # failed because the JS POSTs the whole ``toolStates`` map).
         env_pinned = env_pinned_tools()
-        rejected = [name for name in states if name in env_pinned]
+        rejected = [
+            name
+            for name, state in states.items()
+            if name in env_pinned and env_pinned[name] != state
+        ]
         if rejected:
             return JSONResponse(
                 create_error_response(
@@ -4082,6 +4127,13 @@ def build_settings_handlers(
                 ),
                 status_code=409,
             )
+        # Drop env-pinned entries from the persisted file so the env
+        # vars stay the single source of truth — preserving them in
+        # tool_config.json would let a future env-var unset leave the
+        # old env-pinned values mis-applied as user-set state.
+        states = {
+            name: state for name, state in states.items() if name not in env_pinned
+        }
 
         config = load_tool_config()
         config["tools"] = states
@@ -4369,48 +4421,50 @@ def build_settings_handlers(
             )
 
         # Master beta-gate check (#1164): a sub-flag write is only valid
-        # when the master ``enable_beta_features`` is on AFTER the merge.
-        # Derive the post-merge master from the payload (if present),
-        # otherwise fall back to the live ``Settings`` value. Reject
-        # sub-flag writes that try to enable a beta when the resulting
-        # master state would still be off — the runtime gate would force
-        # them False anyway and the user should know the save was a
-        # no-op rather than learning at next startup.
+        # when the master ``enable_beta_features`` is on AFTER the
+        # merge. Derive the post-merge master from the payload (if
+        # present), otherwise fall back to the live ``Settings`` value.
+        # Reject sub-flag writes that try to enable a beta when the
+        # resulting master state would still be off — the runtime gate
+        # would force them False anyway and the user should know the
+        # save was a no-op rather than learning at next startup.
         #
-        # Skip in addon mode: ``start.py`` auto-writes
-        # ``ENABLE_BETA_FEATURES=true`` whenever any beta sub-flag key
-        # appears in ``/data/options.json``, so the master will be on
-        # after the next addon boot regardless of what the override
-        # file says. Applying the gate here would block the existing
-        # dev addon save flow for users whose master env var hasn't
-        # been written yet (first save after addon install).
-        from .config import BETA_FEATURE_FIELDS as _BETA_SUB
+        # Applied in BOTH standalone and addon mode (#1164 follow-up).
+        # The earlier "skip in addon mode" carve-out existed because
+        # start.py used to auto-write ENABLE_BETA_FEATURES=true from
+        # any beta sub-flag presence; now start.py writes the master
+        # env from its own options key, so the gate applies uniformly.
+        from .config import (
+            BETA_FEATURE_FIELDS as _BETA_SUB,
+        )
+        from .config import (
+            _read_feature_flag_override_file,
+        )
 
-        if not is_running_in_addon():
-            effective_master = bool(
-                raw_flags.get(
-                    "enable_beta_features",
-                    getattr(get_global_settings(), "enable_beta_features", False),
-                )
+        effective_master = bool(
+            raw_flags.get(
+                "enable_beta_features",
+                getattr(get_global_settings(), "enable_beta_features", False),
             )
-            beta_sub_writes = [
-                k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
-            ]
-            if beta_sub_writes and not effective_master:
-                return JSONResponse(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        (
-                            "Cannot enable beta sub-flag(s) "
-                            f"{', '.join(beta_sub_writes)} while the master "
-                            "'Enable beta features' toggle is off. Include "
-                            "enable_beta_features=true in the same save, or "
-                            "flip the master on first."
-                        ),
-                        context={"rejected": beta_sub_writes},
+        )
+        beta_sub_writes = [
+            k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
+        ]
+        if beta_sub_writes and not effective_master:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        "Cannot enable beta sub-flag(s) "
+                        f"{', '.join(beta_sub_writes)} while the master "
+                        "'Enable beta features' toggle is off. Include "
+                        "enable_beta_features=true in the same save, or "
+                        "flip the master on first."
                     ),
-                    status_code=409,
-                )
+                    context={"rejected": beta_sub_writes},
+                ),
+                status_code=409,
+            )
 
         # Build the validated override dict. Reject unknown fields and
         # env-locked fields up front so the user gets a precise error
@@ -4505,15 +4559,31 @@ def build_settings_handlers(
         # (or in addon options) and resume the prior state the moment
         # the master is flipped back on — the user would have to
         # uncheck each sub-flag individually to "really" disable the
-        # beta block. Cascade writes False to whichever sub-flags
-        # currently read as truthy (no need to overwrite ones already
-        # off).
+        # beta block.
+        #
+        # Read the persisted override file directly here (NOT
+        # get_global_settings() — the master gate in
+        # _apply_feature_flag_overrides already forced sub-flags to
+        # False on the resolved Settings object, so we'd miss stale-
+        # true override values). Cascade writes False for every
+        # sub-flag that's not already False at the persistence layer.
+        #
+        # ALSO force False even if the payload set the sub-flag to True
+        # — accepting an explicit ``{master: false, sub: true}`` would
+        # land an inconsistent persisted state that the runtime gate
+        # then ignores, leaving a "true-but-ignored" trap on the UI.
         if new_overrides.get("enable_beta_features") is False:
-            live = get_global_settings()
+            overrides_on_disk = _read_feature_flag_override_file()
             for sub in _BETA_SUB:
-                if sub in new_overrides:
-                    continue  # already set explicitly in this payload
-                if bool(getattr(live, sub, False)):
+                explicit = new_overrides.get(sub)
+                if explicit is False:
+                    continue  # already correctly False in this payload
+                # Persisted truthy OR payload-explicit-True both get
+                # force-cleared. Inspect both sources so the file
+                # cascade doesn't miss an override the user set
+                # earlier in standalone mode.
+                file_truthy = bool(overrides_on_disk.get(sub, False))
+                if explicit is True or file_truthy:
                     new_overrides[sub] = False
 
         # Addon-mode writes go to Supervisor instead of the override file:
@@ -4563,7 +4633,17 @@ def build_settings_handlers(
                 server.settings.verify_ssl, new_overrides
             )
             if not ok:
-                assert err is not None
+                if err is None:
+                    # ``ok=False`` with no error is a contract bug —
+                    # bail with INTERNAL_ERROR rather than letting an
+                    # AttributeError leak under ``python -O``.
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Supervisor helper returned ok=False with no error",
+                        ),
+                        status_code=500,
+                    )
                 logger.warning(
                     "Supervisor feature-flag update failed (%s): %s",
                     err.kind,
@@ -4892,14 +4972,14 @@ def build_settings_handlers(
         """Return advanced (non-feature-flag, non-backup) settings + per-field
         origin + editable flag (#1164).
 
-        Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for the
-        ``ADVANCED_SETTINGS_FIELDS`` registry. Advanced fields are never
-        addon-routed: even when an entry is in the addon ``config.yaml``
-        schema (e.g. ``backup_hint``, ``verify_ssl``), the addon-mode
-        env-var-wins check skips them server-side, so the UI surfaces them
-        as ``origin="env"`` (locked) in addon mode. Standalone-mode edits
-        write to ``feature_flags.json`` via the same shared override file
-        used by feature flags.
+        Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for
+        the ``ADVANCED_SETTINGS_FIELDS`` registry. Most advanced fields
+        write to ``feature_flags.json`` via the shared override file in
+        either deployment mode. ``ADDON_SYNCED_ADVANCED_FIELDS``
+        (currently ``backup_hint``, ``verify_ssl``) are an exception:
+        in addon mode they have ``origin="addon"`` (editable) and saves
+        route through Supervisor ``/addons/self/options`` so the addon
+        Configuration tab and the web UI share state (#1164 follow-up).
         """
         from .config import (
             _ADVANCED_SETTINGS_BOUNDS,
@@ -4994,22 +5074,32 @@ def build_settings_handlers(
         return "default"
 
     async def _save_advanced_settings(request: Request) -> JSONResponse:
-        """Persist UI-edited advanced settings to the shared override file.
+        """Persist UI-edited advanced settings (#1164).
+
+        Two persistence sinks depending on field origin:
+
+        - ``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``,
+          ``verify_ssl``) in addon mode → write goes through
+          Supervisor ``/addons/self/options`` so the addon
+          Configuration tab and this web UI share state.
+        - Everything else → atomic write to ``feature_flags.json``
+          (the shared override file used by feature flags), then
+          ``_reset_global_settings()`` so the next read picks up the
+          new value.
 
         Validation chain per field:
         - Unknown field → 400 ``VALIDATION_INVALID_PARAMETER``.
         - ``editable=False`` registry entry → 409 (display-only).
-        - Env-pinned (``origin=='env'``) → 409 with env var name.
+        - Env-pinned (``origin=='env'`` and NOT addon-synced) → 409
+          with env var name.
         - Type mismatch → 400.
         - Bounds violation → 400.
         - Choices violation → 400.
 
-        Successful writes merge into the override file via atomic write,
-        reset the global Settings cache, and respond with
-        ``restart_required=True`` so the UI shows the banner (most
-        advanced fields gate one-time startup paths — REST client
-        construction, logging setup, MCP handshake metadata, tool-module
-        filtering, etc.).
+        Either sink responds with ``restart_required=True`` so the UI
+        shows the banner — most advanced fields gate one-time startup
+        paths (REST client construction, logging setup, MCP handshake
+        metadata, tool-module filtering, etc.).
         """
         from .config import (
             _ADVANCED_SETTINGS_BOUNDS,
@@ -5192,7 +5282,28 @@ def build_settings_handlers(
                 server.settings.verify_ssl, new_overrides
             )
             if not ok:
-                assert sup_err is not None
+                if sup_err is None:
+                    # ``ok=False`` with no error is a contract bug in
+                    # the helper, not a user-actionable failure. Bail
+                    # with INTERNAL_ERROR instead of letting an
+                    # AttributeError leak under ``python -O`` (where
+                    # the previous ``assert`` was stripped).
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Supervisor helper returned ok=False with no error",
+                        ),
+                        status_code=500,
+                    )
+                # Mirror the sibling ``_save_feature_flags`` /
+                # ``_save_backup_config`` handlers: log loudly before
+                # returning so addon-log forensics survive the user
+                # closing the tab.
+                logger.warning(
+                    "Supervisor advanced-settings update failed (%s): %s",
+                    sup_err.kind,
+                    sup_err.message,
+                )
                 code = (
                     ErrorCode.CONNECTION_FAILED
                     if sup_err.kind == "transport"

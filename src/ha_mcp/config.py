@@ -577,13 +577,11 @@ def get_feature_flag_origin(env_name: str) -> str:
     Used by the web UI to label each feature-flag field with its
     source and decide whether the field is editable from the web UI:
 
-    - ``"addon"``: running inside the HA add-on. ``start.py`` always
-      writes these env vars from ``config.yaml`` on every addon
-      start; the override file is ignored. Web UI edits are routed
-      through Supervisor ``/addons/self/options`` so ``config.yaml``
-      stays authoritative. (The current PR exposes flags read-only
-      in addon mode; routing addon edits through Supervisor is
-      tracked separately.)
+    - ``"addon"``: running inside the HA add-on AND the env var is
+      currently set. ``start.py`` writes env vars from ``config.yaml``
+      on every addon start; the override file is ignored. Web UI
+      edits are routed through Supervisor ``/addons/self/options`` so
+      ``config.yaml`` stays authoritative.
     - ``"env"``: env var explicitly set in the process environment
       (includes values loaded from ``.env`` via ``load_dotenv`` at
       module import — those land in ``os.environ`` and are
@@ -598,16 +596,17 @@ def get_feature_flag_origin(env_name: str) -> str:
 
     Addon-mode handling for the master and beta sub-flags (#1164):
 
-    - ``ENABLE_BETA_FEATURES`` (master) is not in any addon schema,
-      so ``"addon"`` is never returned for it — it follows env / file
-      / default precedence regardless of mode.
-    - The five ``BETA_FEATURE_FIELDS`` (sub-flags) exist in the dev
-      addon schema but NOT the stable addon schema. In dev addon
-      mode, ``start.py`` writes the env var from ``/data/options.json``
-      so the env var is set at runtime; that signals "Supervisor
-      authoritative" and ``"addon"`` is returned. In stable addon
-      mode the env var is never written, so the sub-flag falls
-      through to file/default.
+    - ``ENABLE_BETA_FEATURES`` (master) is in the DEV addon schema
+      only (#1164 follow-up). In dev addon mode, ``start.py`` writes
+      the env var from ``/data/options.json`` when the key is present;
+      that signals "Supervisor authoritative" and ``"addon"`` is
+      returned here. In stable addon mode the key is absent from
+      schema, ``start.py`` doesn't write the env var, and the master
+      falls through to env / file / default precedence so the
+      standalone web UI master path remains the gate.
+    - The five ``BETA_FEATURE_FIELDS`` (sub-flags) follow the same
+      shape — present in dev addon schema, absent from stable. Same
+      env-var-presence signal distinguishes them at runtime.
     """
     field_name = next(
         (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
@@ -939,7 +938,12 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
             continue
         try:
             setattr(settings, fname, coerced)
-        except Exception:
+        except (ValueError, TypeError):
+            # Narrowed from bare ``Exception`` to match the parallel
+            # _apply_feature_flag_overrides handler (#1164 follow-up).
+            # Pydantic validation surfaces failures as ValueError; an
+            # attribute that doesn't exist on the model would be a
+            # programming bug we want to crash, not silently swallow.
             logger.warning(
                 "Advanced override for %r could not be applied; ignoring.",
                 fname,
