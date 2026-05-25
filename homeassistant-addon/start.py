@@ -196,19 +196,28 @@ _DEV_ADDON_BETA_KEYS = (
 
 def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     """Auto-write ``ENABLE_BETA_FEATURES=true`` when the dev-addon
-    options carry any of the 5 beta sub-flag keys (#1164).
+    options have at least one of the 5 beta sub-flag keys set to True
+    (#1164).
 
     The dev addon's ``config.yaml`` is the only addon schema that
     exposes those keys; the stable addon's ``options.json`` never
-    carries any of them, so this presence check distinguishes dev
-    from stable cleanly without needing a separate channel marker.
+    carries any of them, so this check distinguishes dev from stable
+    cleanly without needing a separate channel marker.
 
     With ``ENABLE_BETA_FEATURES=true`` set, the runtime master gate
     in ``config._apply_feature_flag_overrides`` becomes a no-op for
     dev-addon users — Supervisor options remain the authoritative
     source for the 5 sub-flags, exactly as before #1164.
+
+    Truthiness check (``config.get(key) is True``) is deliberate.
+    HA Supervisor persists every schema-declared option into
+    ``/data/options.json`` on first start with its default value, so a
+    bare presence check (``key in config``) fired immediately on any
+    fresh dev-addon install even when every sub-flag was False —
+    locking the master to "on" in the web UI with origin=env, which
+    the user could not unset from anywhere (#1164 follow-up bug).
     """
-    if any(key in config for key in _DEV_ADDON_BETA_KEYS):
+    if any(config.get(key) is True for key in _DEV_ADDON_BETA_KEYS):
         os.environ["ENABLE_BETA_FEATURES"] = "true"
 
 
@@ -252,6 +261,12 @@ def main() -> int:
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
     enable_lite_docstrings = False  # default
+    # Master beta toggle: present only in the dev addon's schema
+    # (#1164 follow-up). Default to False (stable behaviour); when
+    # the dev schema-default merges in, ``beta_master_in_config``
+    # flips to True and the actual value comes from the addon options.
+    beta_master_in_config = False
+    enable_beta_features = False
     enable_auto_backup = (
         True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
     )
@@ -306,6 +321,18 @@ def main() -> int:
             raw_lite_docstrings = config.get("enable_lite_docstrings", False)
             enable_lite_docstrings = (
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
+            )
+            # Master beta toggle is present in the dev-addon schema
+            # (#1164 follow-up). Track presence separately so stable
+            # add-on installs (where the key is absent from options.json)
+            # do NOT get an explicit ENABLE_BETA_FEATURES=false env var
+            # — that would force the web UI to render the master as
+            # ``origin=env, locked`` and the standalone user could not
+            # toggle it.
+            beta_master_in_config = "enable_beta_features" in config
+            raw_beta_master = config.get("enable_beta_features", False)
+            enable_beta_features = (
+                raw_beta_master if isinstance(raw_beta_master, bool) else False
             )
             raw_auto_backup = config.get("enable_auto_backup", True)
             enable_auto_backup = (
@@ -379,7 +406,20 @@ def main() -> int:
     ).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
-    maybe_auto_enable_beta_master(config)
+    # Master beta toggle: write env var only when the key exists in
+    # the addon's options.json. Dev addon's schema declares it (so
+    # the key is always present, value follows the user's toggle).
+    # Stable addon's schema does not declare it (so the key is absent
+    # and the standalone web-UI master path remains the gate).
+    if beta_master_in_config:
+        os.environ["ENABLE_BETA_FEATURES"] = str(enable_beta_features).lower()
+    else:
+        # Legacy safety net: dev-addon installs that pre-date the
+        # master-in-schema rollout don't carry the key yet, but their
+        # truthy sub-flag presence still implies the user wants beta
+        # tools on. Keep the auto-enable as a one-cycle bridge until
+        # Supervisor merges the new schema default into options.json.
+        maybe_auto_enable_beta_master(config)
     os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
     os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
     os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)

@@ -2579,3 +2579,100 @@ class TestBetaMasterGateInSave:
         assert resp.status_code == 409
         get_data_dir.cache_clear()
         _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_cascade_clears_subflags_when_master_off(
+        self, monkeypatch, tmp_path
+    ):
+        """Master-off cascade clear (#1164 follow-up).
+
+        Flipping the master OFF in isolation must also write False for
+        every beta sub-flag currently truthy. Without the cascade,
+        sub-flags stay True in the override file and resume the
+        moment the master is flipped back on — UX bug the user
+        reported as "having to turn off every toggle individually."
+        """
+        from ha_mcp.config import (
+            BETA_FEATURE_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: master on + every beta sub-flag on.
+        prior = {"enable_beta_features": True}
+        for sub in BETA_FEATURE_FIELDS:
+            prior[sub] = True
+        (tmp_path / "feature_flags.json").write_text(json.dumps(prior))
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        # User flips ONLY the master off — no sub-flag entries in payload.
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        # Verify the cascade landed in the override file: every beta
+        # sub-flag must now read False.
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_beta_features"] is False
+        for sub in BETA_FEATURE_FIELDS:
+            assert on_disk[sub] is False, (
+                f"cascade missed {sub} — stays {on_disk.get(sub)!r} after master-off save"
+            )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_off_does_not_clobber_already_false_subflags(
+        self, monkeypatch, tmp_path
+    ):
+        """Cascade only flips truthy sub-flags. False ones are left
+        alone (no redundant writes that would cause the response
+        ``applied`` dict to balloon).
+        """
+        from ha_mcp.config import (
+            BETA_FEATURE_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Master + one sub-flag on; rest at default (False).
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {"enable_beta_features": True, "enable_yaml_config_editing": True}
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        body = json.loads(resp.body)
+        applied = body.get("applied", {})
+        # Master flipped + one sub-flag cleared. No noise for already-
+        # False sub-flags.
+        assert applied.get("enable_beta_features") is False
+        assert applied.get("enable_yaml_config_editing") is False
+        for sub in BETA_FEATURE_FIELDS:
+            if sub != "enable_yaml_config_editing":
+                assert sub not in applied, (
+                    f"cascade clobbered already-False {sub} — wasted write"
+                )
+        get_data_dir.cache_clear()
+        _reset_global_settings()

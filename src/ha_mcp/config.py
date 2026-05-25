@@ -471,7 +471,13 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     ),
     AdvancedField("timeout", "HA_TIMEOUT", int, "connection", True),
     AdvancedField("max_retries", "HA_MAX_RETRIES", int, "connection", True),
-    AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "connection", True),
+    # verify_ssl was in the (now-removed) connection section and was
+    # always env-locked in addon mode. Moved to operations so it
+    # renders in the panel, and added to ADDON_SYNCED_ADVANCED_FIELDS
+    # below so saves in addon mode route through Supervisor (#1164
+    # follow-up — user wants the same sync behaviour the feature
+    # flags already get).
+    AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "operations", True),
     # Search & matching.
     AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
     AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
@@ -552,6 +558,19 @@ _ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Advanced fields that also live in the HA add-on's `config.yaml` schema
+# (#1164 follow-up). In addon mode, their env vars are written by
+# start.py from /data/options.json, so the override file would be
+# ignored at next boot anyway — writes must route through Supervisor
+# /addons/self/options instead. ``_origin_for_advanced_field`` returns
+# ``'addon'`` for these in addon mode; ``_save_advanced_settings``
+# batches addon-origin writes and POSTs them via Supervisor.
+ADDON_SYNCED_ADVANCED_FIELDS: tuple[str, ...] = (
+    "backup_hint",
+    "verify_ssl",
+)
+
+
 def get_feature_flag_origin(env_name: str) -> str:
     """Return where the live value for ``env_name`` is sourced from.
 
@@ -599,18 +618,17 @@ def get_feature_flag_origin(env_name: str) -> str:
     in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
 
     if in_addon:
-        if is_master:
-            # Master never has an addon schema entry — fall through to
-            # file/default chain.
-            pass
-        elif is_beta_sub:
-            # Dev addon: start.py wrote the env var → Supervisor is
-            # the source of truth, mark as addon-editable. Stable
-            # addon: env var never written → fall through to file
-            # so the UI master toggle path applies.
+        if is_master or is_beta_sub:
+            # Dev addon: start.py wrote the env var from options.json
+            # → Supervisor is the source of truth, mark addon-editable.
+            # Stable addon: env var never written → fall through to
+            # file/default. The master moved from "never schema-bound"
+            # to "schema-bound on dev only" in the #1164 follow-up; the
+            # same env-var-presence signal now distinguishes both for
+            # the master and the 5 sub-flags.
             if os.environ.get(env_name) is not None:
                 return "addon"
-            # else: stable, fall through.
+            # else: stable / legacy-dev-no-master-key, fall through.
         else:
             return "addon"
     if os.environ.get(env_name) is not None:

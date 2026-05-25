@@ -973,9 +973,14 @@ _SETTINGS_HTML = (
   </div>
   <div id="featuresBody"></div>
 
-  <!-- Advanced settings sections (#1164) -->
-  <h3 class="adv-section-title">Connection (display only)</h3>
-  <div id="advConnection" class="adv-section"></div>
+  <!-- Advanced settings sections (#1164). The "Connection
+       (display only)" section was removed per user feedback — it
+       just listed the read-only HOMEASSISTANT_URL / TOKEN /
+       SUPERVISOR_TOKEN fields, which the user can already see in the
+       addon's own logs and configuration. Registry entries for the
+       connection section remain in ADVANCED_SETTINGS_FIELDS so the
+       API still returns them (env-pin debugging, future surfaces),
+       but they are not rendered into a panel here. -->
   <h3 class="adv-section-title">Search &amp; matching</h3>
   <div id="advSearch" class="adv-section"></div>
   <h3 class="adv-section-title">Operations</h3>
@@ -2326,6 +2331,23 @@ function renderFeatureFlags(flags) {
               ..._lastFeatureFlags[fieldName],
               value: input.checked,
             };
+            // Master-off cascade clear (#1164 follow-up): also flip
+            // every beta sub-flag visually to False so the user sees
+            // the same state the server will land on after the save
+            // (the server-side cascade in _save_feature_flags writes
+            // False for every truthy sub-flag in the same call).
+            // Avoids the visual flicker where sub-rows stay
+            // "checked but dimmed" until the page reloads.
+            if (input.checked === false) {
+              BETA_SUB_FLAGS.forEach(sub => {
+                if (_lastFeatureFlags[sub]) {
+                  _lastFeatureFlags[sub] = {
+                    ..._lastFeatureFlags[sub],
+                    value: false,
+                  };
+                }
+              });
+            }
             renderFeatureFlags(_lastFeatureFlags);
           }
         }
@@ -3368,7 +3390,9 @@ async function loadAdvancedSettings() {
   // HTTP / parse failures in the first section container so the user
   // (and field debuggers reading the page) can see what went wrong.
   // Console-log too so devtools has a stack.
-  const errSlot = document.getElementById('advConnection');
+  // Connection section was removed (#1164 follow-up); fall back to
+  // advSearch — the first remaining section — for error display.
+  const errSlot = document.getElementById('advSearch');
   let resp;
   try {
     resp = await fetch('./api/settings/advanced');
@@ -3408,9 +3432,10 @@ async function loadAdvancedSettings() {
   // Render each section into its dedicated container. Sections from
   // ADVANCED_SETTINGS_FIELDS that are NOT in the Server Settings tab
   // (e.g. "beta_codemode" is rendered under the Beta master toggle by
-  // Chunk 3b, not here) are skipped at this surface — they have no
-  // container in panel-server.
-  renderAdvancedSection('advConnection', bySection.connection || []);
+  // Chunk 3b, not here, and "connection" was removed from the panel
+  // per user feedback) are skipped at this surface — they have no
+  // container in panel-server. renderAdvancedSection is a no-op when
+  // its target container is missing.
   renderAdvancedSection('advSearch', bySection.search || []);
   renderAdvancedSection('advOperations', bySection.operations || []);
   renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
@@ -4474,6 +4499,23 @@ def build_settings_handlers(
                     status_code=400,
                 )
 
+        # Master-off cascade clear (#1164 follow-up): flipping the master
+        # OFF also writes False for every beta sub-flag in the same
+        # save. Without this, sub-flags stay True in the override file
+        # (or in addon options) and resume the prior state the moment
+        # the master is flipped back on — the user would have to
+        # uncheck each sub-flag individually to "really" disable the
+        # beta block. Cascade writes False to whichever sub-flags
+        # currently read as truthy (no need to overwrite ones already
+        # off).
+        if new_overrides.get("enable_beta_features") is False:
+            live = get_global_settings()
+            for sub in _BETA_SUB:
+                if sub in new_overrides:
+                    continue  # already set explicitly in this payload
+                if bool(getattr(live, sub, False)):
+                    new_overrides[sub] = False
+
         # Addon-mode writes go to Supervisor instead of the override file:
         # ``start.py`` reads ``config.yaml`` options on every boot and
         # writes the env vars that Settings consumes, so the override
@@ -4915,26 +4957,38 @@ def build_settings_handlers(
     ) -> str:
         """Origin for an ADVANCED_SETTINGS_FIELDS entry.
 
-        Returns ``'env' | 'file' | 'default'`` — advanced fields are
-        never addon-routed (their POST writes land in the override
-        file in either deployment mode).
+        Returns ``'addon' | 'env' | 'file' | 'default'``.
+
+        ``'addon'`` is returned in addon mode for fields that live in
+        both the registry and the addon's config.yaml schema (the
+        ``ADDON_SYNCED_ADVANCED_FIELDS`` set). For those, writes route
+        through Supervisor instead of the override file so the addon
+        Configuration tab and this web UI share state (#1164
+        follow-up). Other env-pinned fields stay ``'env'`` (locked).
 
         Callers iterating ADVANCED_SETTINGS_FIELDS should pass a
         pre-read ``overrides`` dict so the override file isn't re-read
         N times per page render.
         """
         from .config import (
+            ADDON_SYNCED_ADVANCED_FIELDS,
             ADVANCED_SETTINGS_FIELDS,
             _read_feature_flag_override_file,
         )
 
+        fname = next(
+            (f for f, e, *_ in ADVANCED_SETTINGS_FIELDS if e == env_name), None
+        )
+        if (
+            is_running_in_addon()
+            and fname is not None
+            and fname in ADDON_SYNCED_ADVANCED_FIELDS
+        ):
+            return "addon"
         if os.environ.get(env_name) is not None:
             return "env"
         if overrides is None:
             overrides = _read_feature_flag_override_file()
-        fname = next(
-            (f for f, e, *_ in ADVANCED_SETTINGS_FIELDS if e == env_name), None
-        )
         if fname is not None and fname in overrides:
             return "file"
         return "default"
@@ -4984,8 +5038,12 @@ def build_settings_handlers(
                 status_code=400,
             )
 
+        from .config import ADDON_SYNCED_ADVANCED_FIELDS
+
         registry = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
         new_overrides: dict[str, Any] = {}
+        addon_writes_present = False
+        addon_mode = is_running_in_addon()
         for fname, raw in body.items():
             if fname not in registry:
                 return JSONResponse(
@@ -5005,7 +5063,15 @@ def build_settings_handlers(
                     ),
                     status_code=409,
                 )
-            if os.environ.get(env_name) is not None:
+            # Addon-synced fields (e.g. backup_hint, verify_ssl) are
+            # editable in addon mode even though their env vars are
+            # set — start.py rewrites them from /data/options.json on
+            # every boot, so we route the user's write through
+            # Supervisor instead of the override file (#1164 follow-up).
+            is_addon_synced = addon_mode and fname in ADDON_SYNCED_ADVANCED_FIELDS
+            if is_addon_synced:
+                addon_writes_present = True
+            elif os.environ.get(env_name) is not None:
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -5072,6 +5138,76 @@ def build_settings_handlers(
                     "applied": {},
                     "mode": "file",
                     "restart_required": False,
+                }
+            )
+
+        # Addon-route: at least one field is an addon-synced advanced
+        # field (backup_hint / verify_ssl in addon mode). Batch every
+        # write in this call into a single Supervisor options POST
+        # — same merge-then-replace pattern as the feature-flag
+        # addon-route, including the "single persistence path"
+        # invariant: we don't mix override-file writes and Supervisor
+        # writes from the same call. If a future caller submits both
+        # addon-synced and non-addon fields in one batch (none today
+        # are non-addon AND non-locked in addon mode), reject loudly
+        # instead of routing them through different sinks (#1164
+        # follow-up).
+        if addon_writes_present:
+            if not addon_mode:
+                # Defensive: addon_writes_present should imply addon_mode
+                # because is_addon_synced is gated on it above.
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Inconsistent addon-route classification",
+                    ),
+                    status_code=500,
+                )
+            file_only = {
+                k: v
+                for k, v in new_overrides.items()
+                if k not in ADDON_SYNCED_ADVANCED_FIELDS
+            }
+            if file_only:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        (
+                            "Mixed addon-synced and override-file advanced "
+                            "writes in one batch; the UI should split these "
+                            f"into separate POSTs ({sorted(file_only)})."
+                        ),
+                    ),
+                    status_code=500,
+                )
+            if server is None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Advanced settings POST requires a live MCP server",
+                    ),
+                    status_code=500,
+                )
+            ok, sup_err = await _supervisor_merge_and_post_options(
+                server.settings.verify_ssl, new_overrides
+            )
+            if not ok:
+                assert sup_err is not None
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if sup_err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
+                )
+                return JSONResponse(
+                    create_error_response(code, sup_err.message),
+                    status_code=sup_err.status_code,
+                )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": new_overrides,
+                    "mode": "addon",
+                    "restart_required": True,
                 }
             )
 

@@ -25,9 +25,19 @@ options:
   backup_hint: "normal"
   enable_tool_search: false
   enable_tool_security_policies: false
-  enable_yaml_config_editing: false
-  enable_code_mode: false
-  enable_lite_docstrings: false
+  # Master beta gate — also dev-only (stable's schema does not declare
+  # this key; the stable web UI master remains the gate there). Default
+  # ON in dev so a fresh install exposes the channel's beta tooling
+  # without an extra round-trip to the web UI.
+  enable_beta_features: true
+  # Beta sub-flags default to ON in the dev addon (#1164) — gated by
+  # the master above; flip master to false to disable the whole block
+  # without having to toggle each sub-flag individually.
+  enable_yaml_config_editing: true
+  enable_filesystem_tools: true
+  enable_custom_component_integration: true
+  enable_code_mode: true
+  enable_lite_docstrings: true
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
@@ -40,6 +50,7 @@ schema:
   secret_path: str?
   enable_tool_search: bool?
   enable_tool_security_policies: bool?
+  enable_beta_features: bool?
   enable_yaml_config_editing: bool?
   enable_code_mode: bool?
   enable_lite_docstrings: bool?

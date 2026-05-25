@@ -91,7 +91,8 @@ _TOP_LEVEL_ELEMENT_IDS = [
     "advSaveBtnTop",
     "advSaveStatusTop",
     "advSaveRowTop",
-    "advConnection",
+    # Connection section was removed from the panel (#1164 follow-up);
+    # advSearch is now the first rendered advanced section.
     "advSearch",
     "advOperations",
     "advToolsSurface",
@@ -896,7 +897,12 @@ class TestAdvancedSectionRender:
     def test_locked_field_shows_env_var_name_in_banner(
         self, settings_script: str
     ) -> None:
-        """Env-pinned advanced field renders with a banner naming the env var."""
+        """Env-pinned advanced field renders with a banner naming the env var.
+
+        Fixtures a search-section field — the connection section is
+        no longer rendered in the panel (#1164 follow-up), so a
+        section: "connection" field would be silently dropped.
+        """
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/advanced": {
@@ -904,15 +910,15 @@ class TestAdvancedSectionRender:
                 "json": {
                     "fields": [
                         {
-                            "field": "timeout",
-                            "env_var": "HA_TIMEOUT",
-                            "value": 60,
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
                             "type": "int",
-                            "section": "connection",
+                            "section": "search",
                             "origin": "env",
                             "editable": False,
                             "min": 1,
-                            "max": 600,
+                            "max": 100,
                         }
                     ]
                 },
@@ -925,7 +931,7 @@ class TestAdvancedSectionRender:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        assert "HA_TIMEOUT" in result.dom, (
+        assert "FUZZY_THRESHOLD" in result.dom, (
             f"expected env var name in locked-row banner; "
             f"dom tail: {result.dom[-2000:]}"
         )
@@ -982,6 +988,7 @@ class TestAdvancedSectionRender:
         assert "CRITICAL" in select_match.group(1)
 
     def test_int_field_emits_min_max_attrs(self, settings_script: str) -> None:
+        # Same connection-removed migration as test_locked_field above.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/advanced": {
@@ -989,15 +996,15 @@ class TestAdvancedSectionRender:
                 "json": {
                     "fields": [
                         {
-                            "field": "timeout",
-                            "env_var": "HA_TIMEOUT",
-                            "value": 30,
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
                             "type": "int",
-                            "section": "connection",
+                            "section": "search",
                             "origin": "default",
                             "editable": True,
                             "min": 1,
-                            "max": 600,
+                            "max": 100,
                         }
                     ]
                 },
@@ -1013,12 +1020,12 @@ class TestAdvancedSectionRender:
         import re
 
         m = re.search(
-            r'<input[^>]*data-adv-field="timeout"[^>]*>',
+            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
             result.dom,
         )
-        assert m is not None, "expected number input for timeout"
+        assert m is not None, "expected number input for fuzzy_threshold"
         assert 'min="1"' in m.group(0)
-        assert 'max="600"' in m.group(0)
+        assert 'max="100"' in m.group(0)
 
 
 class TestAddonModeLockedBannerCopy:
@@ -1085,6 +1092,11 @@ class TestAddonModeLockedBannerCopy:
         """Env-pinned advanced field in addon mode renders addon-runtime
         copy, not "unset env var".
         """
+        # Use a search-section field — the connection section is no
+        # longer rendered in the panel (#1164 follow-up), so a fixture
+        # with section: "connection" would be silently dropped by
+        # loadAdvancedSettings() and the assertion would fail with an
+        # empty body.
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/advanced": {
@@ -1092,11 +1104,11 @@ class TestAddonModeLockedBannerCopy:
                 "json": {
                     "fields": [
                         {
-                            "field": "homeassistant_url",
-                            "env_var": "HOMEASSISTANT_URL",
-                            "value": "http://supervisor/core",
-                            "type": "str",
-                            "section": "connection",
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
                             "origin": "env",
                             "editable": False,
                         }

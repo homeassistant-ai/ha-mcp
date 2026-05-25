@@ -552,8 +552,8 @@ class TestBetaMasterAutoEnableInDevAddon:
     def addon(self):
         self.addon = _load_addon_start()
 
-    def test_auto_enable_writes_true_when_any_beta_key_present(self, monkeypatch):
-        """Dev-addon options carrying ANY beta sub-flag key →
+    def test_auto_enable_writes_true_when_any_beta_key_truthy(self, monkeypatch):
+        """Dev-addon options with ANY beta sub-flag set to True →
         ENABLE_BETA_FEATURES=true written to env."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
@@ -561,16 +561,41 @@ class TestBetaMasterAutoEnableInDevAddon:
         )
         assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
 
-    def test_auto_enable_writes_true_even_when_sub_flag_value_is_false(
-        self, monkeypatch
-    ):
-        """Presence of the key (regardless of value) is the signal.
-        A dev-addon user who has the toggle in their schema but set
-        to false still gets the master on, so other future beta
-        sub-flags they might enable later work without re-saving."""
+    def test_auto_enable_skips_when_all_beta_keys_false(self, monkeypatch):
+        """HA Supervisor persists every schema-declared option to
+        options.json with its default value on first start, so all 5
+        beta keys land there with ``false`` immediately on a fresh
+        dev-addon install. The auto-enable must NOT fire in that case
+        — the master should follow the user's actual sub-flag choices,
+        not the bare presence of the schema keys. Previously this test
+        asserted the opposite (presence alone fires) and the user hit
+        the resulting "locked-on master, no sub-flags enabled" bug
+        (#1164 follow-up 2026-05-25)."""
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": False})
+        self.addon.maybe_auto_enable_beta_master(
+            dict.fromkeys(self._DEV_BETA_KEYS, False)
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_fires_when_one_of_many_truthy(self, monkeypatch):
+        """4 sub-flags False, 1 sub-flag True → still fires. Locks the
+        ``any(...)`` semantic so a future change to ``all(...)`` would
+        regress the single-feature-enabled case."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        cfg: dict[str, object] = dict.fromkeys(self._DEV_BETA_KEYS, False)
+        cfg["enable_code_mode"] = True
+        self.addon.maybe_auto_enable_beta_master(cfg)
         assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_skips_non_bool_truthy_values(self, monkeypatch):
+        """Defensive: only Python ``True`` triggers, not a truthy
+        non-bool. Supervisor's JSON parsing returns proper bools, but
+        if a future malformed options.json or test fixture passes a
+        truthy string, we want the gate to stay shut rather than
+        silently flip the master on."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": "true"})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
 
     def test_auto_enable_does_not_set_var_when_no_beta_key(self, monkeypatch):
         """Stable-addon options never carry any beta key → no auto-
