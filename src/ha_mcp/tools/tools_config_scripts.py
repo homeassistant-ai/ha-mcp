@@ -27,6 +27,9 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .best_practice_checker import (
+    BestPracticeCheckResult,
+)
+from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
 from .helpers import (
@@ -39,6 +42,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    build_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -48,6 +52,15 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Scripts share the automation skill mapping — both use
+# action / condition / trigger templates and benefit from the same
+# native-vs-template guidance.
+_SCRIPT_SKILL_FILES: tuple[str, ...] = (
+    "references/automation-patterns.md",
+    "references/template-guidelines.md",
+)
 
 
 def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
@@ -427,6 +440,22 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
+        include_skill: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When True (default), the response includes the canonical "
+                    "Home Assistant best-practice skill files for scripts "
+                    "(automation-patterns.md + template-guidelines.md) under a "
+                    "top-level 'skill_content' field. Set False on subsequent "
+                    "calls in the same session if you've already read them — "
+                    "best-practice warnings will still auto-embed their "
+                    "referenced files regardless of this setting, so you always "
+                    "get relevant guidance on errors."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant script.
@@ -555,7 +584,7 @@ class ConfigScriptTools:
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.
         """
-        bp_warnings: list[str] = []
+        bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
             # Strip BEFORE validate so a bare ``"script."`` (empty after
             # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
@@ -679,7 +708,14 @@ class ConfigScriptTools:
                     **{k: v for k, v in result.items() if k != "success"},
                 }
                 if bp_warnings:
-                    response["best_practice_warnings"] = bp_warnings
+                    response["best_practice_warnings"] = list(bp_warnings)
+                skill_content = build_skill_content(
+                    include_skill=include_skill,
+                    canonical_files=_SCRIPT_SKILL_FILES,
+                    referenced_files=bp_warnings.referenced_files,
+                )
+                if skill_content:
+                    response["skill_content"] = skill_content
                 return response
 
             if config is None:
@@ -747,9 +783,17 @@ class ConfigScriptTools:
                 )
 
             if bp_warnings:
-                result["best_practice_warnings"] = bp_warnings
+                result["best_practice_warnings"] = list(bp_warnings)
 
             merge_validation_meta(result, validation_meta)
+
+            skill_content = build_skill_content(
+                include_skill=include_skill,
+                canonical_files=_SCRIPT_SKILL_FILES,
+                referenced_files=bp_warnings.referenced_files,
+            )
+            if skill_content:
+                result["skill_content"] = skill_content
 
             return {
                 "success": True,
