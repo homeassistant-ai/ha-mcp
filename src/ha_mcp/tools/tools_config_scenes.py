@@ -39,6 +39,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    build_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -46,6 +47,12 @@ from .util_helpers import (
     wait_for_entity_registered,
     wait_for_entity_removed,
 )
+
+# No scene-specific reference file exists in home-assistant-best-practices;
+# SKILL.md is the top-level generic best-practice doc and points the agent
+# at the relevant references for action/condition design (scenes share
+# action syntax with automations/scripts).
+_SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -481,6 +488,21 @@ class ConfigSceneTools:
                 default=True,
             ),
         ] = True,
+        include_skill: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When True (default), the response includes the top-level "
+                    "Home Assistant best-practice SKILL.md under a "
+                    "'skill_content' field. There's no scene-specific reference "
+                    "file; SKILL.md links out to the relevant references for "
+                    "action/condition design (scenes share action syntax with "
+                    "automations/scripts). Set False to suppress on subsequent "
+                    "calls in the same session if you've already read it."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant scene.
@@ -871,6 +893,14 @@ class ConfigSceneTools:
                 )
 
             merge_validation_meta(result, validation_meta)
+
+            skill_content = build_skill_content(
+                include_skill=include_skill,
+                canonical_files=_SCENE_SKILL_FILES,
+                referenced_files=None,
+            )
+            if skill_content:
+                result["skill_content"] = skill_content
 
             # Issue #1168 R3 blocker 6: build response from ``resolved_id``
             # so the outer ``scene_id`` always matches the storage key.
