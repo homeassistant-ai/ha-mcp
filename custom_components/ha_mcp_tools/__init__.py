@@ -678,7 +678,11 @@ def _parse_and_validate_yaml_path(
                     "ha_config_set_automation/script/scene for storage-mode."
                 ),
             )
-        allowed = ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS if is_package else ALLOWED_YAML_KEYS
+        allowed = (
+            ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS
+            if is_package
+            else ALLOWED_YAML_KEYS
+        )
         return (
             "",
             (),

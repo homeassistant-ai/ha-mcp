@@ -365,7 +365,9 @@ class TestYamlConfigOperations:
                     "backup": False,
                 },
             )
-            assert data.get("success") is True, f"automation add to package should succeed: {data}"
+            assert data.get("success") is True, (
+                f"automation add to package should succeed: {data}"
+            )
             assert data.get("action") == "add"
             # automation has a native reload service in HA core.
             assert data.get("post_action") == "reload_available", (
