@@ -488,7 +488,7 @@ class AutomationConfigTools:
         """
         Create or update a Home Assistant automation.
 
-        PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this BEFORE writing any `{{ ... }}`):
+        PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and
         do not bypass HA's schema. Templates fail silently at runtime and obscure intent.
         - `condition: numeric_state` instead of `{{ states('x') | float > N }}`
@@ -505,10 +505,12 @@ class AutomationConfigTools:
         - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
         Templates are appropriate ONLY in `data.*` fields, notification message/title,
         `event_data`, and `variables`. The reactive best-practice checker on this tool
-        surfaces template misuse in the `best_practice_warnings` response field with the
-        relevant skill section auto-embedded under `skill_content` — fix before
-        re-submitting. The full `automation-patterns.md` + `template-guidelines.md`
-        references also ship under `skill_content` proactively (see `include_skill`).
+        will surface anything in a logic position that should be native; consult the
+        `best_practice_warnings` field on the response and fix before re-submitting.
+        The relevant skill section is auto-embedded under `skill_content` on warnings,
+        and the full `automation-patterns.md` + `template-guidelines.md` references
+        ship under `skill_content` proactively (see `include_skill`). For comprehensive
+        guidance beyond that, call `ha_get_skill_guide`.
 
         The returned `automation_id` is the resolved entity_id (canonical
         form, e.g. `automation.morning_routine`) when entity registration

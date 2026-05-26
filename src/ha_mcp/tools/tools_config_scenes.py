@@ -529,9 +529,8 @@ class ConfigSceneTools:
 
         SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
         ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
-        list. Scenes capture a snapshot of states as a dict — no triggers,
-        no conditions, no actions. Automations use a list of actions;
-        scenes do not.
+        list. Automations use a list of actions; scenes capture a snapshot
+        of states as a dict.
 
         EXAMPLE:
 

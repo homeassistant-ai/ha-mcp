@@ -460,7 +460,7 @@ class ConfigScriptTools:
         """
         Create or update a Home Assistant script.
 
-        PREFER NATIVE ACTIONS OVER TEMPLATES (read this BEFORE writing any `{{ ... }}`):
+        PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native actions are validated at config load, fail loudly, and do not bypass HA's
         schema. Templates in logic positions fail silently and obscure intent.
         - `choose` / `if/then/else` instead of template-based service names
@@ -469,13 +469,12 @@ class ConfigScriptTools:
         - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
         Templates are appropriate ONLY in `data.*` fields, notification message/title,
         `event_data`, and `variables`. The reactive best-practice checker on this tool
-        surfaces template misuse in the `best_practice_warnings` response field with
-        the relevant skill section auto-embedded under `skill_content` — fix before
-        re-submitting. The full `automation-patterns.md` + `template-guidelines.md`
-        references also ship under `skill_content` proactively (see `include_skill`).
-
-        SCRIPTS vs AUTOMATIONS: Scripts use 'sequence', NOT 'trigger' or 'action'.
-        If you need trigger-based execution, use ha_config_set_automation instead.
+        will surface anything in a logic position that should be native; consult the
+        `best_practice_warnings` field on the response and fix before re-submitting.
+        The relevant skill section is auto-embedded under `skill_content` on warnings,
+        and the full `automation-patterns.md` + `template-guidelines.md` references
+        ship under `skill_content` proactively (see `include_skill`). For comprehensive
+        guidance beyond that, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -490,6 +489,9 @@ class ConfigScriptTools:
         - Add step: python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
         - Remove last step: python_transform="config['sequence'].pop()"
 
+        Creates a new script or updates an existing one with the provided configuration.
+        Supports both regular scripts (with sequence) and blueprint-based scripts.
+
         Required config fields (choose one):
             - sequence: List of actions to execute (for regular scripts)
             - use_blueprint: Blueprint configuration (for blueprint-based scripts)
@@ -500,8 +502,10 @@ class ConfigScriptTools:
             - icon: Icon to display
             - mode: Execution mode ('single', 'restart', 'queued', 'parallel')
             - max: Maximum concurrent executions (for queued/parallel modes)
-            - fields: Input parameters for the script (each entry has name,
-              description, selector — see the parameterized example below)
+            - fields: Input parameters for the script
+
+        SCRIPTS vs AUTOMATIONS: Scripts use 'sequence', NOT 'trigger' or 'action'.
+        If you need trigger-based execution, use ha_config_set_automation instead.
 
         EXAMPLES:
 
@@ -523,7 +527,7 @@ class ConfigScriptTools:
             "mode": "single"
         })
 
-        Create script with parameters (uses `fields:` for caller-supplied input):
+        Create script with parameters:
         ha_config_set_script(script_id="backup_script", config={
             "alias": "Backup with Reference",
             "description": "Create backup with optional reference parameter",
