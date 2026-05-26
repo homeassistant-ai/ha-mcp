@@ -5,6 +5,10 @@ on:
     - cron: '0 9 * * *'  # Daily at 09:00 UTC
   workflow_dispatch: {}
 
+concurrency:
+  group: close-needs-info
+  cancel-in-progress: false
+
 permissions:
   issues: write
 

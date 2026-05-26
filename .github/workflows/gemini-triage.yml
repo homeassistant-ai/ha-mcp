@@ -70,7 +70,9 @@ jobs:
                   username: issue.user.login,
                 });
                 isMaintainer = true;
-              } catch (_) {}
+              } catch (err) {
+                if (err.status !== 404) core.warning(`Maintainer team check failed (HTTP ${err.status}) — treating as non-maintainer`);
+              }
               if (isMaintainer) {
                 core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
                 core.setOutput('should_run', 'false');
@@ -191,10 +193,11 @@ jobs:
               const fileContents = await Promise.all(
                 yamlFiles.map(f => github.rest.repos.getContent({
                   owner: TEMPLATE_OWNER, repo: TEMPLATE_REPO, path: f.path,
-                }))
+                }).catch(e => { core.warning(`Failed to fetch template ${f.name}: ${e.message}`); return null; }))
               );
 
               for (let i = 0; i < yamlFiles.length; i++) {
+                if (!fileContents[i]) continue;
                 const typeName = yamlFiles[i].name.replace(/\.ya?ml$/, '').replace(/_/g, '-');
                 const content = Buffer.from(fileContents[i].data.content, 'base64').toString('utf-8');
 
@@ -428,16 +431,20 @@ jobs:
                 const parsed = JSON.parse(
                   rawKeywords.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
                 );
-                if (Array.isArray(parsed) && parsed.length > 0) {
+                const validKeywords = Array.isArray(parsed)
+                  ? parsed.filter(k => k && typeof k.term === 'string')
+                  : [];
+                if (validKeywords.length > 0) {
                   usingKeywords = true;
-                  // Tokenize each keyword phrase; assign weight to each token
-                  for (const kw of parsed) {
+                  for (const kw of validKeywords) {
                     for (const tok of tokenize(kw.term)) {
                       termWeights[tok] = Math.max(termWeights[tok] || 0, kw.weight || 1.0);
                     }
                   }
                   queryTerms = Object.keys(termWeights);
-                  core.info(`Using ${parsed.length} extracted keywords → ${queryTerms.length} query tokens`);
+                  core.info(`Using ${validKeywords.length} extracted keywords → ${queryTerms.length} query tokens`);
+                } else {
+                  core.warning('Keyword schema invalid or empty; falling back to full-text BM25');
                 }
               } catch (e) {
                 core.info('Could not parse extracted keywords; falling back to full-text BM25');
