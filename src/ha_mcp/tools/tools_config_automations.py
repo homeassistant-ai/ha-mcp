@@ -30,7 +30,6 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
-from ..utils.skill_loader import get_skills_dir, resolve_skill_files
 from .auto_backup import automation_backup_target, with_auto_backup
 from .best_practice_checker import (
     BestPracticeCheckResult,
@@ -48,6 +47,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    build_skill_content,
     coerce_bool_param,
     coerce_to_list,
     fetch_entity_category,
@@ -68,38 +68,6 @@ _AUTOMATION_SKILL_FILES: tuple[str, ...] = (
     "references/automation-patterns.md",
     "references/template-guidelines.md",
 )
-_SKILL_NAME = "home-assistant-best-practices"
-
-
-def _build_skill_content(
-    include_skill: bool,
-    canonical_files: tuple[str, ...],
-    referenced_files: set[str] | None,
-) -> dict[str, str]:
-    """Resolve and dedupe skill files for the response's skill_content field.
-
-    Args:
-        include_skill: When True, attach the canonical files for this tool.
-        canonical_files: Tool's default skill file mapping (passed by the
-            caller so each write-tool module owns its mapping).
-        referenced_files: Files referenced by best-practice warnings — these
-            are always attached (the LLM needs them to fix the input it
-            just submitted), regardless of ``include_skill``. Pass ``None``
-            for tools without best-practice checker integration.
-
-    Returns:
-        ``{relative_path: file_body}`` for each file that resolves. Empty
-        dict when nothing to embed or the skills-vendor submodule isn't
-        present.
-    """
-    wanted: set[str] = set()
-    if include_skill:
-        wanted.update(canonical_files)
-    if referenced_files:
-        wanted.update(referenced_files)
-    if not wanted:
-        return {}
-    return resolve_skill_files(get_skills_dir(), _SKILL_NAME, sorted(wanted))
 
 
 # Distinctive prefix of the soft-failure warning emitted by
@@ -891,7 +859,7 @@ class AutomationConfigTools:
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
-        skill_content = _build_skill_content(
+        skill_content = build_skill_content(
             include_skill=include_skill,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
@@ -956,7 +924,7 @@ class AutomationConfigTools:
 
         merge_validation_meta(result, validation_meta)
 
-        skill_content = _build_skill_content(
+        skill_content = build_skill_content(
             include_skill=include_skill,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,

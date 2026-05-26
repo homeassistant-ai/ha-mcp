@@ -1793,3 +1793,53 @@ def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
         current = current[seg]
         walked.append(seg)
     return current, None
+
+
+# ---------------------------------------------------------------------------
+# Skill content assembly (write-tool include_skill parameter, issue #1182)
+# ---------------------------------------------------------------------------
+
+_HA_BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
+
+
+def build_skill_content(
+    include_skill: bool,
+    canonical_files: tuple[str, ...],
+    referenced_files: set[str] | None,
+) -> dict[str, str]:
+    """Resolve and dedupe skill files for a write-tool response.
+
+    Shared helper for every write tool that exposes ``include_skill``
+    (ha_config_set_automation / _script / _scene / _helper / _dashboard /
+    _yaml). Each tool owns its own ``canonical_files`` mapping and passes
+    it in; the helper dedupes against ``referenced_files`` from the
+    best-practice checker (where applicable) and reads the bodies via
+    :func:`ha_mcp.utils.skill_loader.resolve_skill_files`.
+
+    Args:
+        include_skill: When True, attach the canonical files for this tool.
+        canonical_files: Tool-specific default mapping. Paths are relative
+            to the home-assistant-best-practices skill directory
+            (e.g. ``"references/automation-patterns.md"``).
+        referenced_files: Files cited by best-practice warnings — always
+            attached, regardless of ``include_skill``. Pass ``None`` for
+            tools without best-practice checker integration.
+
+    Returns:
+        ``{relative_path: file_body}`` for each file that resolves. Empty
+        dict when nothing to embed or the skills-vendor submodule is
+        absent — callers should omit the ``skill_content`` field from the
+        response when the return is empty.
+    """
+    from ..utils.skill_loader import get_skills_dir, resolve_skill_files
+
+    wanted: set[str] = set()
+    if include_skill:
+        wanted.update(canonical_files)
+    if referenced_files:
+        wanted.update(referenced_files)
+    if not wanted:
+        return {}
+    return resolve_skill_files(
+        get_skills_dir(), _HA_BEST_PRACTICES_SKILL_NAME, sorted(wanted)
+    )
