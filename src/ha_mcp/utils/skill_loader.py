@@ -195,6 +195,19 @@ def resolve_skill_files(
                 section = extract_section(body, anchor)
                 if section is not None:
                     out[original_ref] = section
+                else:
+                    # Missing anchor usually means a checker emission site
+                    # references a heading that doesn't exist in the .md
+                    # (caller typo or vendor submodule reorganised the
+                    # heading). Either is a real bug — surface at WARNING,
+                    # not silently drop.
+                    logger.warning(
+                        "Skill anchor %r did not match any heading in %s/%s — "
+                        "either a checker typo or the vendor submodule changed.",
+                        anchor,
+                        skill,
+                        path,
+                    )
             else:
                 out[original_ref] = body
     return out
@@ -205,8 +218,13 @@ def _read_file_safely(
 ) -> str | None:
     """Read ``skill_dir / rel_path`` with symlink + traversal guards.
 
-    Returns ``None`` (with a debug log) for any failure mode — caller
-    accumulates a partial map rather than propagating the error.
+    Returns ``None`` for any failure mode — caller accumulates a partial
+    map rather than propagating the error.
+
+    Log levels are tuned for production visibility: write tools' silent-
+    degrade contract means the operator only ever learns about a missing
+    skill via the logs, so security events and missing files surface at
+    WARNING.
     """
     candidate = skill_dir / rel_path
     # Pre-resolve symlink check: ``resolve()`` returns the canonical
@@ -214,20 +232,32 @@ def _read_file_safely(
     # always be False. Matches the guard in
     # ``server.py::_handle_skill_guide_call``.
     if candidate.is_symlink():
-        logger.debug("Refusing symlink in skill: %s/%s", skill, rel_path)
+        logger.warning("Refusing symlink in skill (security): %s/%s", skill, rel_path)
         return None
     try:
         target = candidate.resolve()
     except OSError as e:
-        logger.debug("Could not resolve %s/%s: %s", skill, rel_path, e)
+        logger.warning("Could not resolve %s/%s: %s", skill, rel_path, e)
         return None
-    if not target.is_relative_to(skill_root) or not target.is_file():
-        logger.debug(
-            "Refusing %s/%s — outside skill dir or not a file", skill, rel_path
+    if not target.is_relative_to(skill_root):
+        logger.warning(
+            "Refusing %s/%s — escapes skill dir (path-traversal guard)",
+            skill,
+            rel_path,
+        )
+        return None
+    if not target.is_file():
+        # Missing file or non-regular file (directory, device, etc.).
+        # Either is caller bug or submodule-version drift — operator
+        # visibility matters for both.
+        logger.warning(
+            "Skill file %s/%s does not exist or is not a regular file",
+            skill,
+            rel_path,
         )
         return None
     try:
         return target.read_text(encoding="utf-8")
     except OSError as e:
-        logger.debug("Could not read %s/%s: %s", skill, rel_path, e)
+        logger.warning("Could not read %s/%s: %s", skill, rel_path, e)
         return None
