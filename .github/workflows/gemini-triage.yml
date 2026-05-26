@@ -20,7 +20,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
-  repository-projects: write
   models: read
 
 jobs:
@@ -730,15 +729,11 @@ jobs:
             const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
             const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
 
-            // Project board constants (homeassistant-ai, project #2)
-            const PROJECT_ID = 'PVT_kwDODdb5sM4BPM6N';
-            const STATUS_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rf-Q';
-            const PRIORITY_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rgC0';
-            const SIZE_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rgC4';
-            const STATUS_TO_TRIAGE = 'f971fb55';
-            const STATUS_BACKLOG = 'f75ad846';
-            const PRIORITY_OPTIONS = { P0: '79628723', P1: '0a877460', P2: 'da944a9c' };
-            const SIZE_OPTIONS = { S: '203d27bd', M: '3da4ca48', L: '8d0cdae9' };
+            // Native org issue fields (gh api /orgs/homeassistant-ai/issue-fields)
+            const PRIORITY_FIELD_ID = 36564402;
+            const EFFORT_FIELD_ID = 36564405;
+            const PRIORITY_OPTIONS = { P0: 63981585, P1: 63981586, P2: 63981587 };  // Urgent, High, Medium
+            const EFFORT_OPTIONS   = { S: 63981591, M: 63981590, L: 63981589 };     // Low, Medium, High
 
             const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
@@ -771,46 +766,17 @@ jobs:
               }
             };
 
-            // Set a project board single-select field. Silently skips if issue is not in the project.
-            const setProjectField = async (fieldId, optionId) => {
+            // Set native org issue fields via REST API (requires only issues: write)
+            const setIssueFields = async (fields) => {
               try {
-                const issueData = await github.rest.issues.get({
+                await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
+                  issue_field_values: fields,
                 });
-                const issueNodeId = issueData.data.node_id;
-
-                const result = await github.graphql(`
-                  query($id: ID!) {
-                    node(id: $id) {
-                      ... on Issue {
-                        projectItems(first: 10) {
-                          nodes { id project { id } }
-                        }
-                      }
-                    }
-                  }
-                `, { id: issueNodeId });
-
-                const item = result.node.projectItems.nodes.find(n => n.project.id === PROJECT_ID);
-                if (!item) {
-                  core.info('Issue not in project board — skipping field update');
-                  return;
-                }
-
-                await github.graphql(`
-                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                    updateProjectV2ItemFieldValue(input: {
-                      projectId: $projectId
-                      itemId: $itemId
-                      fieldId: $fieldId
-                      value: { singleSelectOptionId: $optionId }
-                    }) { projectV2Item { id } }
-                  }
-                `, { projectId: PROJECT_ID, itemId: item.id, fieldId: fieldId, optionId: optionId });
               } catch (err) {
-                core.warning('Failed to set project field (fieldId=' + fieldId + '): ' + err.message);
+                core.warning('Failed to set issue fields: ' + err.message);
               }
             };
 
@@ -874,7 +840,6 @@ jobs:
               if (classification) labels.push(classification);
               await addLabels(labels);
               await removeLabel('triage-failed');
-              await setProjectField(STATUS_FIELD_ID, STATUS_TO_TRIAGE);
               core.info('Issue flagged as likely duplicate of #' + duplicateNumber);
               return;
             }
@@ -887,15 +852,16 @@ jobs:
               await addLabels(labels);
               await removeLabel('triage-failed');
               await removeLabel('needs-info');
-              await setProjectField(STATUS_FIELD_ID, STATUS_BACKLOG);
+              const fieldUpdates = [];
               if (priority && PRIORITY_OPTIONS[priority]) {
-                await setProjectField(PRIORITY_FIELD_ID, PRIORITY_OPTIONS[priority]);
-                core.info('Set Priority = ' + priority);
+                fieldUpdates.push({ field_id: PRIORITY_FIELD_ID, value: PRIORITY_OPTIONS[priority] });
+                core.info('Setting Priority = ' + priority);
               }
-              if (issueSize && SIZE_OPTIONS[issueSize]) {
-                await setProjectField(SIZE_FIELD_ID, SIZE_OPTIONS[issueSize]);
-                core.info('Set Size = ' + issueSize);
+              if (issueSize && EFFORT_OPTIONS[issueSize]) {
+                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: EFFORT_OPTIONS[issueSize] });
+                core.info('Setting Effort = ' + issueSize);
               }
+              if (fieldUpdates.length) await setIssueFields(fieldUpdates);
               return;
             }
 
@@ -920,7 +886,6 @@ jobs:
             if (classification) await addLabels([classification]);
             await addLabels(['needs-info']);
             await removeLabel('triage-failed');
-            await setProjectField(STATUS_FIELD_ID, STATUS_TO_TRIAGE);
 
       - name: Fail job if evaluate step failed
         if: ${{ !cancelled() && steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped' }}
