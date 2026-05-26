@@ -21,10 +21,7 @@ GITHUB_PREFIX = "https://github.com/homeassistant-ai/skills/blob/main/skills/hom
 
 def _has_warning_containing(warnings: list[str], *fragments: str) -> bool:
     """Return True if any warning contains ALL of the given fragments."""
-    return any(
-        all(f in w for f in fragments)
-        for w in warnings
-    )
+    return any(all(f in w for f in fragments) for w in warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -38,17 +35,27 @@ class TestCleanConfigs:
     def test_clean_automation(self):
         config = {
             "trigger": [{"platform": "state", "entity_id": "light.bedroom"}],
-            "condition": [{"condition": "state", "entity_id": "light.bedroom", "state": "on"}],
-            "action": [{"service": "light.turn_off", "target": {"entity_id": "light.bedroom"}}],
+            "condition": [
+                {"condition": "state", "entity_id": "light.bedroom", "state": "on"}
+            ],
+            "action": [
+                {"service": "light.turn_off", "target": {"entity_id": "light.bedroom"}}
+            ],
         }
         assert check_automation_config(config) == []
 
     def test_clean_script(self):
         config = {
             "sequence": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "light.living_room"},
+                },
                 {"delay": {"seconds": 2}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}},
+                {
+                    "service": "light.turn_off",
+                    "target": {"entity_id": "light.living_room"},
+                },
             ]
         }
         assert check_script_config(config) == []
@@ -71,7 +78,12 @@ class TestBlueprintSkipping:
     def test_automation_blueprint_skipped(self):
         config = {
             "use_blueprint": {"path": "motion_light.yaml", "input": {}},
-            "trigger": [{"platform": "template", "value_template": "{{ states.sensor.x.state | float > 5 }}"}],
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ states.sensor.x.state | float > 5 }}",
+                }
+            ],
         }
         assert check_automation_config(config) == []
 
@@ -93,32 +105,42 @@ class TestConditionAntiPatterns:
 
     def test_numeric_comparison_pipe_float(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('sensor.temp') | float > 25 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 25 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
-        assert _has_warning_containing(warnings, "float/int comparison", "numeric_state")
+        assert _has_warning_containing(
+            warnings, "float/int comparison", "numeric_state"
+        )
 
     def test_numeric_comparison_int_pipe(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('sensor.count') | int >= 10 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.count') | int >= 10 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
-        assert _has_warning_containing(warnings, "float/int comparison", "numeric_state")
+        assert _has_warning_containing(
+            warnings, "float/int comparison", "numeric_state"
+        )
 
     def test_is_state_in_condition(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ is_state('light.bedroom', 'on') }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ is_state('light.bedroom', 'on') }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -126,10 +148,12 @@ class TestConditionAntiPatterns:
 
     def test_sun_entity_condition(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ is_state('sun.sun', 'below_horizon') }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ is_state('sun.sun', 'below_horizon') }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -139,10 +163,12 @@ class TestConditionAntiPatterns:
 
     def test_now_hour_condition(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().hour >= 22 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().hour >= 22 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -150,10 +176,12 @@ class TestConditionAntiPatterns:
 
     def test_now_minute_condition(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().minute == 30 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().minute == 30 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -161,10 +189,12 @@ class TestConditionAntiPatterns:
 
     def test_weekday_check_strftime(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().strftime('%A') == 'Monday' }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().strftime('%A') == 'Monday' }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -172,10 +202,12 @@ class TestConditionAntiPatterns:
 
     def test_weekday_check_weekday_method(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().weekday() == 0 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().weekday() == 0 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -183,10 +215,12 @@ class TestConditionAntiPatterns:
 
     def test_states_in_list(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('climate.living_room') in ['heat', 'cool'] }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('climate.living_room') in ['heat', 'cool'] }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -194,14 +228,18 @@ class TestConditionAntiPatterns:
 
     def test_direct_state_access(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states.sensor.temperature.state | float > 20 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.sensor.temperature.state | float > 20 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
-        assert _has_warning_containing(warnings, "states.domain.entity.state", "states('entity_id')")
+        assert _has_warning_containing(
+            warnings, "states.domain.entity.state", "states('entity_id')"
+        )
 
     def test_shorthand_template_condition(self):
         """Shorthand string conditions like '{{ is_state(...) }}' should be checked."""
@@ -215,13 +253,17 @@ class TestConditionAntiPatterns:
     def test_compound_and_condition(self):
         """Nested conditions inside and/or blocks should be recursed into."""
         config = {
-            "condition": [{
-                "condition": "and",
-                "conditions": [{
-                    "condition": "template",
-                    "value_template": "{{ is_state('light.x', 'on') }}",
-                }],
-            }],
+            "condition": [
+                {
+                    "condition": "and",
+                    "conditions": [
+                        {
+                            "condition": "template",
+                            "value_template": "{{ is_state('light.x', 'on') }}",
+                        }
+                    ],
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -238,7 +280,9 @@ class TestTriggerAntiPatterns:
 
     def test_device_trigger(self):
         config = {
-            "trigger": [{"platform": "device", "device_id": "abc123", "type": "turned_on"}],
+            "trigger": [
+                {"platform": "device", "device_id": "abc123", "type": "turned_on"}
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -246,21 +290,27 @@ class TestTriggerAntiPatterns:
 
     def test_template_trigger_numeric(self):
         config = {
-            "trigger": [{
-                "platform": "template",
-                "value_template": "{{ states('sensor.temp') | float > 30 }}",
-            }],
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 30 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
-        assert _has_warning_containing(warnings, "Trigger", "float/int", "numeric_state")
+        assert _has_warning_containing(
+            warnings, "Trigger", "float/int", "numeric_state"
+        )
 
     def test_template_trigger_is_state(self):
         config = {
-            "trigger": [{
-                "platform": "template",
-                "value_template": "{{ is_state('light.x', 'on') }}",
-            }],
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ is_state('light.x', 'on') }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -301,15 +351,21 @@ class TestActionAntiPatterns:
     def test_nested_condition_in_choose(self):
         """Anti-patterns inside choose option conditions should be detected."""
         config = {
-            "action": [{
-                "choose": [{
-                    "conditions": [{
-                        "condition": "template",
-                        "value_template": "{{ states('sensor.x') | float > 5 }}",
-                    }],
-                    "sequence": [],
-                }],
-            }],
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [
+                                {
+                                    "condition": "template",
+                                    "value_template": "{{ states('sensor.x') | float > 5 }}",
+                                }
+                            ],
+                            "sequence": [],
+                        }
+                    ],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "float/int comparison")
@@ -317,13 +373,17 @@ class TestActionAntiPatterns:
     def test_nested_condition_in_if(self):
         """Anti-patterns inside if conditions should be detected."""
         config = {
-            "action": [{
-                "if": [{
-                    "condition": "template",
-                    "value_template": "{{ is_state('light.x', 'on') }}",
-                }],
-                "then": [],
-            }],
+            "action": [
+                {
+                    "if": [
+                        {
+                            "condition": "template",
+                            "value_template": "{{ is_state('light.x', 'on') }}",
+                        }
+                    ],
+                    "then": [],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "is_state()")
@@ -331,10 +391,14 @@ class TestActionAntiPatterns:
     def test_nested_action_in_then_else(self):
         """wait_template inside then/else blocks should be detected."""
         config = {
-            "action": [{
-                "if": [{"condition": "state", "entity_id": "light.x", "state": "on"}],
-                "then": [{"wait_template": "{{ is_state('door.x', 'open') }}"}],
-            }],
+            "action": [
+                {
+                    "if": [
+                        {"condition": "state", "entity_id": "light.x", "state": "on"}
+                    ],
+                    "then": [{"wait_template": "{{ is_state('door.x', 'open') }}"}],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "wait_template")
@@ -342,15 +406,19 @@ class TestActionAntiPatterns:
     def test_nested_repeat_while(self):
         """Anti-patterns in repeat while conditions should be detected."""
         config = {
-            "action": [{
-                "repeat": {
-                    "while": [{
-                        "condition": "template",
-                        "value_template": "{{ states('sensor.x') | float > 0 }}",
-                    }],
-                    "sequence": [],
-                },
-            }],
+            "action": [
+                {
+                    "repeat": {
+                        "while": [
+                            {
+                                "condition": "template",
+                                "value_template": "{{ states('sensor.x') | float > 0 }}",
+                            }
+                        ],
+                        "sequence": [],
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "float/int comparison")
@@ -358,15 +426,19 @@ class TestActionAntiPatterns:
     def test_nested_repeat_until(self):
         """Anti-patterns in repeat until conditions should be detected."""
         config = {
-            "action": [{
-                "repeat": {
-                    "until": [{
-                        "condition": "template",
-                        "value_template": "{{ now().hour >= 6 }}",
-                    }],
-                    "sequence": [],
-                },
-            }],
+            "action": [
+                {
+                    "repeat": {
+                        "until": [
+                            {
+                                "condition": "template",
+                                "value_template": "{{ now().hour >= 6 }}",
+                            }
+                        ],
+                        "sequence": [],
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "now().hour/minute")
@@ -382,7 +454,13 @@ class TestModeMotionPattern:
 
     def test_motion_with_delay_default_mode(self):
         config = {
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.hallway_motion", "to": "on"}],
+            "trigger": [
+                {
+                    "platform": "state",
+                    "entity_id": "binary_sensor.hallway_motion",
+                    "to": "on",
+                }
+            ],
             "action": [
                 {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
                 {"delay": {"minutes": 5}},
@@ -395,7 +473,13 @@ class TestModeMotionPattern:
     def test_motion_with_explicit_restart_no_warning(self):
         config = {
             "mode": "restart",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.hallway_motion", "to": "on"}],
+            "trigger": [
+                {
+                    "platform": "state",
+                    "entity_id": "binary_sensor.hallway_motion",
+                    "to": "on",
+                }
+            ],
             "action": [
                 {"service": "light.turn_on", "target": {"entity_id": "light.hallway"}},
                 {"delay": {"minutes": 5}},
@@ -406,15 +490,32 @@ class TestModeMotionPattern:
 
     def test_motion_without_delay_no_warning(self):
         config = {
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.living_room_motion", "to": "on"}],
-            "action": [{"service": "light.turn_on", "target": {"entity_id": "light.living_room"}}],
+            "trigger": [
+                {
+                    "platform": "state",
+                    "entity_id": "binary_sensor.living_room_motion",
+                    "to": "on",
+                }
+            ],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "light.living_room"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert not _has_warning_containing(warnings, "motion")
 
     def test_non_motion_with_delay_no_warning(self):
         config = {
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.door_contact", "to": "on"}],
+            "trigger": [
+                {
+                    "platform": "state",
+                    "entity_id": "binary_sensor.door_contact",
+                    "to": "on",
+                }
+            ],
             "action": [{"delay": {"minutes": 5}}],
         }
         warnings = check_automation_config(config)
@@ -427,10 +528,12 @@ class TestModeMotionPattern:
 
 
 _SKILL_PREFIX_TEST_CONFIG = {
-    "condition": [{
-        "condition": "template",
-        "value_template": "{{ is_state('light.x', 'on') }}",
-    }],
+    "condition": [
+        {
+            "condition": "template",
+            "value_template": "{{ is_state('light.x', 'on') }}",
+        }
+    ],
     "action": [],
 }
 
@@ -443,7 +546,9 @@ class TestSkillPrefixModes:
         assert any("skill://" in w for w in warnings)
 
     def test_custom_skill_prefix(self):
-        warnings = check_automation_config(_SKILL_PREFIX_TEST_CONFIG, skill_prefix=GITHUB_PREFIX)
+        warnings = check_automation_config(
+            _SKILL_PREFIX_TEST_CONFIG, skill_prefix=GITHUB_PREFIX
+        )
         assert any("github.com" in w for w in warnings)
         assert not any("skill://" in w for w in warnings)
 
@@ -465,12 +570,14 @@ class TestFalsePositiveRejection:
     def test_template_in_service_data_not_flagged(self):
         config = {
             "trigger": [{"platform": "state", "entity_id": "sensor.temp"}],
-            "action": [{
-                "service": "notify.mobile_app",
-                "data": {
-                    "message": "Temperature is {{ states('sensor.temp') | float }} degrees",
-                },
-            }],
+            "action": [
+                {
+                    "service": "notify.mobile_app",
+                    "data": {
+                        "message": "Temperature is {{ states('sensor.temp') | float }} degrees",
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         # The template is in service data, not in a condition/trigger template
@@ -479,10 +586,12 @@ class TestFalsePositiveRejection:
     def test_template_in_condition_is_flagged(self):
         """Same template in a condition position SHOULD be flagged."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('sensor.temp') | float > 25 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 25 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -527,25 +636,31 @@ class TestDateBasedCondition:
     def test_now_date_isoformat(self):
         """The exact pattern from issue #1011: now().date().isoformat() == 'YYYY-MM-DD'."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().date().isoformat() == '2026-04-19' }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().date().isoformat() == '2026-04-19' }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "date")
         # Should suggest a native alternative inline
-        assert _has_warning_containing(warnings, "self-disable") or _has_warning_containing(
-            warnings, "one-shot"
-        ) or _has_warning_containing(warnings, "sensor.date")
+        assert (
+            _has_warning_containing(warnings, "self-disable")
+            or _has_warning_containing(warnings, "one-shot")
+            or _has_warning_containing(warnings, "sensor.date")
+        )
 
     def test_now_year(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().year == 2026 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().year == 2026 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -553,10 +668,12 @@ class TestDateBasedCondition:
 
     def test_now_month(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().month == 12 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().month == 12 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -564,10 +681,12 @@ class TestDateBasedCondition:
 
     def test_now_day(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().day == 1 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().day == 1 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -586,10 +705,12 @@ class TestTargetTemplate:
         """The exact pattern from issue #1011: {{ this.entity_id }} in target."""
         config = {
             "trigger": [{"platform": "time", "at": "00:01:00"}],
-            "action": [{
-                "service": "automation.turn_off",
-                "target": {"entity_id": "{{ this.entity_id }}"},
-            }],
+            "action": [
+                {
+                    "service": "automation.turn_off",
+                    "target": {"entity_id": "{{ this.entity_id }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
@@ -601,10 +722,12 @@ class TestTargetTemplate:
     def test_this_attributes_in_target(self):
         config = {
             "trigger": [{"platform": "time", "at": "00:01:00"}],
-            "action": [{
-                "service": "automation.turn_off",
-                "target": {"entity_id": "{{ this.attributes.id }}"},
-            }],
+            "action": [
+                {
+                    "service": "automation.turn_off",
+                    "target": {"entity_id": "{{ this.attributes.id }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
@@ -612,10 +735,12 @@ class TestTargetTemplate:
     def test_template_in_target_area_id(self):
         config = {
             "trigger": [{"platform": "state", "entity_id": "input_select.house_mode"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"area_id": "{{ states('input_select.house_mode') }}"},
-            }],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"area_id": "{{ states('input_select.house_mode') }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
@@ -623,10 +748,12 @@ class TestTargetTemplate:
     def test_target_list_with_template(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"entity_id": ["light.kitchen", "{{ this.entity_id }}"]},
-            }],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": ["light.kitchen", "{{ this.entity_id }}"]},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
@@ -634,10 +761,12 @@ class TestTargetTemplate:
     def test_clean_literal_target_no_warning(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"entity_id": "light.kitchen"},
-            }],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "light.kitchen"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert not _has_warning_containing(warnings, "target")
@@ -654,10 +783,12 @@ class TestGenericAnyTemplate:
     def test_unknown_template_in_condition(self):
         """Arbitrary template logic that doesn't match the 12 specific detectors."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ (states('sensor.a') | length) % 2 == 0 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ (states('sensor.a') | length) % 2 == 0 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -667,10 +798,12 @@ class TestGenericAnyTemplate:
 
     def test_unknown_template_in_trigger(self):
         config = {
-            "trigger": [{
-                "platform": "template",
-                "value_template": "{{ (now() - states.sensor.x.last_updated).total_seconds() > 300 }}",
-            }],
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ (now() - states.sensor.x.last_updated).total_seconds() > 300 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -680,10 +813,12 @@ class TestGenericAnyTemplate:
     def test_specific_pattern_does_not_double_flag(self):
         """When a specific detector fires, generic should NOT also fire for same template."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('sensor.temp') | float > 25 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 25 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -692,7 +827,8 @@ class TestGenericAnyTemplate:
         assert len(float_warnings) == 1
         # No additional generic-template warning for the same condition
         generic_warnings = [
-            w for w in warnings
+            w
+            for w in warnings
             if "template detected" in w.lower() and "float/int" not in w
         ]
         assert len(generic_warnings) == 0
@@ -710,25 +846,33 @@ class TestAllowlistLegitimatePositions:
         """Notification message templates are legitimate per template-guidelines.md."""
         config = {
             "trigger": [{"platform": "state", "entity_id": "binary_sensor.door"}],
-            "action": [{
-                "service": "notify.mobile_app",
-                "data": {
-                    "message": "Door {{ trigger.to_state.attributes.friendly_name }} opened",
-                    "title": "Alert: {{ now().strftime('%H:%M') }}",
-                },
-            }],
+            "action": [
+                {
+                    "service": "notify.mobile_app",
+                    "data": {
+                        "message": "Door {{ trigger.to_state.attributes.friendly_name }} opened",
+                        "title": "Alert: {{ now().strftime('%H:%M') }}",
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert warnings == []
 
     def test_template_in_brightness_data_clean(self):
         config = {
-            "trigger": [{"platform": "state", "entity_id": "input_number.target_brightness"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"entity_id": "light.x"},
-                "data": {"brightness": "{{ states('input_number.target_brightness') | int }}"},
-            }],
+            "trigger": [
+                {"platform": "state", "entity_id": "input_number.target_brightness"}
+            ],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "light.x"},
+                    "data": {
+                        "brightness": "{{ states('input_number.target_brightness') | int }}"
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert warnings == []
@@ -736,12 +880,14 @@ class TestAllowlistLegitimatePositions:
     def test_template_in_event_data_clean(self):
         config = {
             "trigger": [{"platform": "state", "entity_id": "sensor.x"}],
-            "action": [{
-                "event": "custom_event",
-                "event_data": {
-                    "value": "{{ states('sensor.x') | float * 2 }}",
-                },
-            }],
+            "action": [
+                {
+                    "event": "custom_event",
+                    "event_data": {
+                        "value": "{{ states('sensor.x') | float * 2 }}",
+                    },
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert warnings == []
@@ -750,7 +896,9 @@ class TestAllowlistLegitimatePositions:
         config = {
             "trigger": [{"platform": "state", "entity_id": "sensor.x"}],
             "variables": {"computed": "{{ states('sensor.x') | float + 10 }}"},
-            "action": [{"service": "light.turn_on", "target": {"entity_id": "light.x"}}],
+            "action": [
+                {"service": "light.turn_on", "target": {"entity_id": "light.x"}}
+            ],
         }
         warnings = check_automation_config(config)
         assert warnings == []
@@ -820,10 +968,12 @@ class TestActionServiceTemplate:
     def test_service_template_field_flagged(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service_template": "{{ 'light.turn_on' if is_state('x', 'on') else 'light.turn_off' }}",
-                "target": {"entity_id": "light.x"},
-            }],
+            "action": [
+                {
+                    "service_template": "{{ 'light.turn_on' if is_state('x', 'on') else 'light.turn_off' }}",
+                    "target": {"entity_id": "light.x"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert any("service" in w.lower() for w in warnings)
@@ -835,10 +985,12 @@ class TestActionServiceTemplate:
     def test_service_with_template_value_flagged(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "{{ states('input_select.service') }}",
-                "target": {"entity_id": "light.x"},
-            }],
+            "action": [
+                {
+                    "service": "{{ states('input_select.service') }}",
+                    "target": {"entity_id": "light.x"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert any("service" in w.lower() for w in warnings)
@@ -846,11 +998,13 @@ class TestActionServiceTemplate:
     def test_clean_literal_service_no_warning(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"entity_id": "light.x"},
-                "data": {"brightness": "{{ states('input_number.b') | int }}"},
-            }],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "light.x"},
+                    "data": {"brightness": "{{ states('input_number.b') | int }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         # No service-template warning; data templates are allowlisted
@@ -869,10 +1023,12 @@ class TestInlineGuidance:
 
     def test_numeric_warning_has_inline_alternative(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ states('sensor.temp') | float > 25 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 25 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -884,10 +1040,12 @@ class TestInlineGuidance:
 
     def test_is_state_warning_has_inline_alternative(self):
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ is_state('light.x', 'on') }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ is_state('light.x', 'on') }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -912,10 +1070,12 @@ class TestActionKeyStep:
     def test_action_key_with_template_flagged(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "action": "{{ states('input_select.service') }}",
-                "target": {"entity_id": "light.x"},
-            }],
+            "action": [
+                {
+                    "action": "{{ states('input_select.service') }}",
+                    "target": {"entity_id": "light.x"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert any("action:" in w.lower() and "choose" in w.lower() for w in warnings)
@@ -923,13 +1083,17 @@ class TestActionKeyStep:
     def test_action_key_clean_literal_no_warning(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "action": "light.turn_on",
-                "target": {"entity_id": "light.x"},
-            }],
+            "action": [
+                {
+                    "action": "light.turn_on",
+                    "target": {"entity_id": "light.x"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
-        assert not any("template" in w.lower() and "service" in w.lower() for w in warnings)
+        assert not any(
+            "template" in w.lower() and "service" in w.lower() for w in warnings
+        )
 
     def test_action_key_step_with_legacy_condition_filter_not_double_flagged(self):
         """A service-call step with an `action:` key plus a legacy `condition:`
@@ -938,11 +1102,13 @@ class TestActionKeyStep:
         service-key is present, regardless of which key (service/action)."""
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "action": "light.turn_on",
-                "target": {"entity_id": "light.x"},
-                "condition": "state",  # legacy run-if filter shorthand
-            }],
+            "action": [
+                {
+                    "action": "light.turn_on",
+                    "target": {"entity_id": "light.x"},
+                    "condition": "state",  # legacy run-if filter shorthand
+                }
+            ],
         }
         # We don't expect a condition-related warning here because this is a
         # service-call step, not a standalone condition step.
@@ -964,12 +1130,17 @@ class TestParallelContainer:
     def test_wait_template_inside_parallel(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "parallel": [
-                    {"wait_template": "{{ is_state('door.x', 'open') }}"},
-                    {"service": "light.turn_on", "target": {"entity_id": "light.x"}},
-                ],
-            }],
+            "action": [
+                {
+                    "parallel": [
+                        {"wait_template": "{{ is_state('door.x', 'open') }}"},
+                        {
+                            "service": "light.turn_on",
+                            "target": {"entity_id": "light.x"},
+                        },
+                    ],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "wait_template")
@@ -977,29 +1148,36 @@ class TestParallelContainer:
     def test_target_template_inside_parallel(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "parallel": [
-                    {
-                        "service": "automation.turn_off",
-                        "target": {"entity_id": "{{ this.entity_id }}"},
-                    },
-                ],
-            }],
+            "action": [
+                {
+                    "parallel": [
+                        {
+                            "service": "automation.turn_off",
+                            "target": {"entity_id": "{{ this.entity_id }}"},
+                        },
+                    ],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
 
     def test_inline_condition_step_inside_parallel(self):
         config = {
-            "sequence": [{
-                "parallel": [
-                    {
-                        "condition": "template",
-                        "value_template": "{{ is_state('light.x', 'on') }}",
-                    },
-                    {"service": "light.turn_off", "target": {"entity_id": "light.x"}},
-                ],
-            }],
+            "sequence": [
+                {
+                    "parallel": [
+                        {
+                            "condition": "template",
+                            "value_template": "{{ is_state('light.x', 'on') }}",
+                        },
+                        {
+                            "service": "light.turn_off",
+                            "target": {"entity_id": "light.x"},
+                        },
+                    ],
+                }
+            ],
         }
         warnings = check_script_config(config)
         assert _has_warning_containing(warnings, "is_state()")
@@ -1017,12 +1195,14 @@ class TestNumericStateValueTemplate:
 
     def test_value_template_on_numeric_state_flagged(self):
         config = {
-            "condition": [{
-                "condition": "numeric_state",
-                "entity_id": "sensor.temp",
-                "above": 25,
-                "value_template": "{{ states('sensor.raw_temp') | float * 1.8 + 32 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "numeric_state",
+                    "entity_id": "sensor.temp",
+                    "above": 25,
+                    "value_template": "{{ states('sensor.raw_temp') | float * 1.8 + 32 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -1032,12 +1212,14 @@ class TestNumericStateValueTemplate:
 
     def test_value_template_on_numeric_state_with_is_state_flagged(self):
         config = {
-            "condition": [{
-                "condition": "numeric_state",
-                "entity_id": "sensor.x",
-                "above": 0,
-                "value_template": "{{ 1 if is_state('switch.x', 'on') else 0 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "numeric_state",
+                    "entity_id": "sensor.x",
+                    "above": 0,
+                    "value_template": "{{ 1 if is_state('switch.x', 'on') else 0 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -1059,10 +1241,12 @@ class TestNewDetectorNegativeCases:
         """`now().day_of_week` is a real Jinja accessor on datetime; it must
         not collide with the now().day specific message."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().day_of_week == 0 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().day_of_week == 0 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -1074,10 +1258,12 @@ class TestNewDetectorNegativeCases:
         exist in HA's Jinja env — the negative lookahead in _RE_NOW_DATE
         should reject it."""
         config = {
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ now().day() == 1 }}",
-            }],
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().day() == 1 }}",
+                }
+            ],
             "action": [],
         }
         warnings = check_automation_config(config)
@@ -1088,10 +1274,12 @@ class TestNewDetectorNegativeCases:
         boundary in _RE_THIS_REFERENCE rejects it."""
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "light.turn_on",
-                "target": {"entity_id": "{{ this_house.entity_id }}"},
-            }],
+            "action": [
+                {
+                    "service": "light.turn_on",
+                    "target": {"entity_id": "{{ this_house.entity_id }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         # Still fires a target-template warning (any template in target is
@@ -1106,10 +1294,12 @@ class TestNewDetectorNegativeCases:
         flagged as templated service dispatch."""
         config = {
             "trigger": [{"platform": "state", "entity_id": "sensor.x"}],
-            "action": [{
-                "service": "notify.mobile",
-                "service_data": {"message": "{{ states('sensor.x') | float }}"},
-            }],
+            "action": [
+                {
+                    "service": "notify.mobile",
+                    "service_data": {"message": "{{ states('sensor.x') | float }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         # service_data is allowlisted (treated like data)
@@ -1129,15 +1319,23 @@ class TestNewDetectorRecursion:
     def test_target_template_inside_choose(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "choose": [{
-                    "conditions": [{"condition": "state", "entity_id": "x", "state": "on"}],
-                    "sequence": [{
-                        "service": "automation.turn_off",
-                        "target": {"entity_id": "{{ this.entity_id }}"},
-                    }],
-                }],
-            }],
+            "action": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [
+                                {"condition": "state", "entity_id": "x", "state": "on"}
+                            ],
+                            "sequence": [
+                                {
+                                    "service": "automation.turn_off",
+                                    "target": {"entity_id": "{{ this.entity_id }}"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "target")
@@ -1145,30 +1343,41 @@ class TestNewDetectorRecursion:
     def test_service_template_inside_then(self):
         config = {
             "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "if": [{"condition": "state", "entity_id": "x", "state": "on"}],
-                "then": [{
-                    "service_template": "{{ 'a.b' if x else 'c.d' }}",
-                }],
-            }],
+            "action": [
+                {
+                    "if": [{"condition": "state", "entity_id": "x", "state": "on"}],
+                    "then": [
+                        {
+                            "service_template": "{{ 'a.b' if x else 'c.d' }}",
+                        }
+                    ],
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert any("service_template" in w.lower() for w in warnings)
 
     def test_inline_date_condition_step_inside_repeat(self):
         config = {
-            "sequence": [{
-                "repeat": {
-                    "while": [{"condition": "state", "entity_id": "x", "state": "on"}],
-                    "sequence": [
-                        {
-                            "condition": "template",
-                            "value_template": "{{ now().date().isoformat() == '2026-01-01' }}",
-                        },
-                        {"service": "light.turn_on", "target": {"entity_id": "light.x"}},
-                    ],
-                },
-            }],
+            "sequence": [
+                {
+                    "repeat": {
+                        "while": [
+                            {"condition": "state", "entity_id": "x", "state": "on"}
+                        ],
+                        "sequence": [
+                            {
+                                "condition": "template",
+                                "value_template": "{{ now().date().isoformat() == '2026-01-01' }}",
+                            },
+                            {
+                                "service": "light.turn_on",
+                                "target": {"entity_id": "light.x"},
+                            },
+                        ],
+                    },
+                }
+            ],
         }
         warnings = check_script_config(config)
         assert _has_warning_containing(warnings, "date-based check")
@@ -1189,52 +1398,98 @@ class TestNoGenericDoubleFlag:
         assert not generic, f"Unexpected generic warning: {generic}"
 
     def test_is_state_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ is_state('x', 'on') }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ is_state('x', 'on') }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_sun_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ is_state('sun.sun', 'below_horizon') }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ is_state('sun.sun', 'below_horizon') }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_now_hour_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ now().hour > 9 }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {"condition": "template", "value_template": "{{ now().hour > 9 }}"}
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_weekday_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ now().weekday() == 0 }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ now().weekday() == 0 }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_now_date_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ now().date().isoformat() == '2026-04-19' }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ now().date().isoformat() == '2026-04-19' }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_states_in_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ states('x') in ['a', 'b'] }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('x') in ['a', 'b'] }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
     def test_direct_state_no_generic(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ states.sensor.x.state | float > 0 }}"}],
-            "action": [],
-        })
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states.sensor.x.state | float > 0 }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
         self._assert_no_generic(warnings)
 
 
@@ -1251,10 +1506,12 @@ class TestDataEntityIdAllowlist:
     def test_template_in_data_entity_id_not_flagged(self):
         config = {
             "trigger": [{"platform": "state", "entity_id": "sensor.x"}],
-            "action": [{
-                "service": "notify.mobile_app",
-                "data": {"entity_id": "{{ trigger.entity_id }}"},
-            }],
+            "action": [
+                {
+                    "service": "notify.mobile_app",
+                    "data": {"entity_id": "{{ trigger.entity_id }}"},
+                }
+            ],
         }
         warnings = check_automation_config(config)
         assert warnings == []
@@ -1279,35 +1536,200 @@ class TestSkillPrefixNoneNewDetectors:
             assert " See " not in w
 
     def test_date_detector(self):
-        warnings = check_automation_config({
-            "condition": [{"condition": "template", "value_template": "{{ now().date() == today }}"}],
-            "action": [],
-        }, skill_prefix=None)
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ now().date() == today }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=None,
+        )
         self._assert_clean(warnings)
 
     def test_target_self_reference(self):
-        warnings = check_automation_config({
-            "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{
-                "service": "automation.turn_off",
-                "target": {"entity_id": "{{ this.entity_id }}"},
-            }],
-        }, skill_prefix=None)
+        warnings = check_automation_config(
+            {
+                "trigger": [{"platform": "time", "at": "08:00:00"}],
+                "action": [
+                    {
+                        "service": "automation.turn_off",
+                        "target": {"entity_id": "{{ this.entity_id }}"},
+                    }
+                ],
+            },
+            skill_prefix=None,
+        )
         self._assert_clean(warnings)
 
     def test_service_template(self):
-        warnings = check_automation_config({
-            "trigger": [{"platform": "time", "at": "08:00:00"}],
-            "action": [{"service_template": "{{ x }}"}],
-        }, skill_prefix=None)
+        warnings = check_automation_config(
+            {
+                "trigger": [{"platform": "time", "at": "08:00:00"}],
+                "action": [{"service_template": "{{ x }}"}],
+            },
+            skill_prefix=None,
+        )
         self._assert_clean(warnings)
 
     def test_generic_catchall(self):
-        warnings = check_automation_config({
-            "condition": [{
-                "condition": "template",
-                "value_template": "{{ (states('sensor.a') | length) % 2 == 0 }}",
-            }],
-            "action": [],
-        }, skill_prefix=None)
+        warnings = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ (states('sensor.a') | length) % 2 == 0 }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=None,
+        )
         self._assert_clean(warnings)
+
+
+# ---------------------------------------------------------------------------
+# BestPracticeCheckResult shape + 3-route warning text (issue #1182)
+# ---------------------------------------------------------------------------
+
+
+class TestBestPracticeCheckResultShape:
+    """The return value behaves as a list[str] AND exposes referenced_files."""
+
+    def test_result_is_list_subclass(self):
+        """BestPracticeCheckResult IS a list[str] — existing callers don't break."""
+        from ha_mcp.tools.best_practice_checker import BestPracticeCheckResult
+
+        result = check_automation_config({})
+        assert isinstance(result, BestPracticeCheckResult)
+        assert isinstance(result, list)
+
+    def test_clean_config_returns_empty_list_and_empty_set(self):
+        result = check_automation_config(
+            {
+                "trigger": [],
+                "condition": [],
+                "action": [],
+            }
+        )
+        assert result == []  # list semantics
+        assert result.referenced_files == set()
+
+    def test_referenced_files_populated_on_warning(self):
+        """When a warning fires, the referenced skill file (with references/ prefix) is tracked."""
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
+        assert "references/automation-patterns.md" in result.referenced_files
+
+    def test_referenced_files_dedup_across_repeated_emissions(self):
+        """Multiple warnings against the same file collapse to one set entry."""
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.a') | float > 10 }}",
+                    },
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.b') | float > 20 }}",
+                    },
+                ],
+                "action": [],
+            }
+        )
+        assert result.referenced_files == {"references/automation-patterns.md"}
+
+    def test_referenced_files_tracked_even_when_skill_prefix_none(self):
+        """referenced_files is populated even when skill_prefix=None.
+
+        Skills feature being off doesn't change which files would be
+        relevant — the caller decides whether to attempt resolution.
+        """
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=None,
+        )
+        assert result.referenced_files == {"references/automation-patterns.md"}
+
+
+class TestThreeRouteWarningSuffix:
+    """Each warning names all 3 access routes for the referenced skill file
+    (issue #1182). Clients that can't resolve skill:// URIs still have the
+    ha_get_skill_guide tool route and the include_skill parameter route."""
+
+    @staticmethod
+    def _first_warning(prefix=None):
+        from ha_mcp.tools.best_practice_checker import (
+            _DEFAULT_SKILL_PREFIX,
+            check_automation_config,
+        )
+
+        skill_prefix = prefix if prefix is not None else _DEFAULT_SKILL_PREFIX
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=skill_prefix,
+        )
+        assert result, "expected at least one warning"
+        return result[0]
+
+    def test_default_warning_names_skill_uri_route(self):
+        msg = self._first_warning()
+        assert (
+            "skill://home-assistant-best-practices/references/automation-patterns.md"
+            in msg
+        )
+
+    def test_default_warning_names_ha_get_skill_guide_route(self):
+        msg = self._first_warning()
+        assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
+        assert "file='references/automation-patterns.md'" in msg
+
+    def test_default_warning_names_include_skill_route(self):
+        msg = self._first_warning()
+        assert "include_skill=True" in msg
+
+    def test_custom_prefix_replaces_skill_uri_keeps_other_routes(self):
+        msg = self._first_warning(prefix="https://example.com/refs")
+        assert "https://example.com/refs/automation-patterns.md" in msg
+        assert "skill://" not in msg
+        # Tool + param routes always present when skills are on
+        assert "ha_get_skill_guide" in msg
+        assert "include_skill" in msg
+
+    def test_anchor_preserved_in_uri_stripped_in_tool_route(self):
+        """The skill:// URI keeps the #anchor (links scroll to section);
+        the ha_get_skill_guide call uses bare file path (tool reads the whole file)."""
+        msg = self._first_warning()
+        # URI: anchor preserved
+        assert "automation-patterns.md#native-conditions" in msg
+        # Tool route: bare file path, no anchor
+        assert "file='references/automation-patterns.md'" in msg
