@@ -230,42 +230,18 @@ class ServiceTools:
         return_response: bool | str = False,
         wait: bool | str = True,
     ) -> dict[str, Any]:
-        """
-        Execute Home Assistant services to control entities and trigger automations.
+        """Call a Home Assistant service (the universal entity-control path).
 
-        This is the universal tool for controlling all Home Assistant entities. Services follow
-        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
+        Pattern: ``domain.service`` (e.g. ``light.turn_on``,
+        ``climate.set_temperature``). Omit ``entity_id`` to target the
+        whole domain (e.g. turn all lights off). ``data`` passes
+        service-specific parameters. ``return_response=True`` for
+        services that return data. ``wait=True`` (default) blocks on
+        state change for state-changing services on a single entity
+        before returning.
 
-        **Basic Usage:**
-        ```python
-        # Turn on a light
-        ha_call_service("light", "turn_on", entity_id="light.living_room")
-
-        # Set temperature with parameters
-        ha_call_service("climate", "set_temperature",
-                      entity_id="climate.thermostat", data={"temperature": 22})
-
-        # Trigger automation
-        ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
-
-        # Universal controls work with any entity
-        ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
-        ```
-
-        **Parameters:**
-        - **domain**: Service domain (light, climate, automation, etc.)
-        - **service**: Service name (turn_on, set_temperature, trigger, etc.)
-        - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
-        - **data**: Optional dict of service-specific parameters
-        - **return_response**: Set to True for services that return data
-        - **wait**: Wait for the entity state to change after the service call (default: True).
-          Only applies to state-changing services on a single entity. Set to False for
-          fire-and-forget calls, bulk operations, or services without observable state changes.
-
-        **For detailed service documentation, use ha_get_skill_guide.**
-
-        Common patterns: Use ha_get_state() to check current values before making changes.
-        Use ha_search_entities() to find correct entity IDs.
+        Use ha_search_entities to find correct entity_ids and
+        ha_get_state to inspect current values before calling.
         """
         try:
             service_data = self._parse_service_data(data, entity_id)
