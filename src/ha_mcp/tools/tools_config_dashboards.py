@@ -574,43 +574,22 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """
-        Get dashboard info - list all dashboards, get config, or search for cards.
+        """Get Home Assistant dashboard info — list / search / get.
 
-        MODE 1 — List: list_only=True
-          Lists all storage-mode dashboards with metadata (url_path, title, icon).
+        Three modes (auto-selected from the args):
 
-        MODE 2 — Search: any of entity_id / card_type / heading provided
-          Finds cards, badges, and header cards matching the criteria.
-          Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).
-          Multiple criteria are AND-ed. Always fetches fresh config (force=True).
-          Strategy dashboards are not searchable (no explicit cards).
+        - **list** — ``list_only=True``: returns all storage-mode
+          dashboards (YAML-mode dashboards are not included).
+        - **search** — pass any of ``entity_id``, ``card_type``, or
+          ``heading``: finds matching cards/badges/headers within the
+          named ``url_path``. Returns each match's ``jq_path`` for use
+          with ha_config_set_dashboard(python_transform=...). Multiple
+          criteria are AND-ed. Strategy dashboards are not searchable.
+        - **get** — no search args: returns the full Lovelace config for
+          ``url_path`` (default dashboard if omitted).
 
-        MODE 3 — Get: Active when list_only=False and no search parameters are provided.
-          Returns the full Lovelace dashboard config, defaulting to the
-          main dashboard if url_path is omitted.
-
-        Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
-
-        EXAMPLES:
-        - List all dashboards: ha_config_get_dashboard(list_only=True)
-        - Get default dashboard: ha_config_get_dashboard(url_path="default")
-        - Get custom dashboard: ha_config_get_dashboard(url_path="lovelace-mobile")
-        - Force reload: ha_config_get_dashboard(url_path="lovelace-home", force_reload=True)
-        - Find cards by entity: ha_config_get_dashboard(url_path="my-dash", entity_id="light.living_room")
-        - Find by wildcard: ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
-        - Find by type: ha_config_get_dashboard(url_path="my-dash", card_type="tile")
-        - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
-
-        SEARCH WORKFLOW EXAMPLE:
-        1. find = ha_config_get_dashboard(url_path="my-dash", entity_id="light.bedroom")
-        2. ha_config_set_dashboard(
-               url_path="my-dash",
-               config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
-           )
-
-        Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
+        Get and search modes return a stable ``config_hash`` for
+        optimistic locking on set_dashboard; list mode does not.
         """
         search_mode = (
             entity_id is not None or card_type is not None or heading is not None
