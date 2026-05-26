@@ -255,6 +255,48 @@ def test_extract_section_empty_anchor_returns_whole_body() -> None:
     assert skill_loader.extract_section(body, "") == body
 
 
+def test_extract_section_tolerates_trailing_whitespace_in_anchor() -> None:
+    """Anchor is slugified before comparison — trailing whitespace doesn't miss."""
+    body = "## Native Conditions\n\nbody\n## Next\n"
+    assert skill_loader.extract_section(body, "native-conditions ") is not None
+    assert skill_loader.extract_section(body, " native-conditions") is not None
+
+
+def test_extract_section_tolerates_mixed_case_anchor() -> None:
+    """Anchor case doesn't matter — slugifier lowercases both sides."""
+    body = "## Native Conditions\n\nbody\n"
+    assert skill_loader.extract_section(body, "Native-Conditions") is not None
+
+
+def test_extract_section_tolerates_double_hash_typo() -> None:
+    """A leading extra ``#`` on the anchor doesn't silently miss."""
+    body = "## Native Conditions\n\nbody\n"
+    # _slugify strips leading punctuation, so "#native-conditions" → "native-conditions"
+    assert skill_loader.extract_section(body, "#native-conditions") is not None
+
+
+def test_extract_section_section_runs_to_eof() -> None:
+    """Match on the last heading in the file → section runs to EOF."""
+    body = "## First\n\nintro\n\n## Last\n\nfinal section body\n"
+    result = skill_loader.extract_section(body, "last")
+    assert result is not None
+    assert result.startswith("## Last")
+    assert "final section body" in result
+
+
+def test_extract_section_first_match_wins_on_collision() -> None:
+    """If two headings slugify to the same anchor, the FIRST wins.
+
+    Deterministic behaviour pinned by this test — a future refactor
+    that tries to scan-all-matches would have to update it deliberately.
+    """
+    body = "## Same\n\nfirst body\n\n## Same\n\nsecond body\n"
+    result = skill_loader.extract_section(body, "same")
+    assert result is not None
+    assert "first body" in result
+    assert "second body" not in result
+
+
 def test_get_skills_dir_returns_bundled_path_or_none() -> None:
     """get_skills_dir returns the real bundled path when the submodule is present.
 

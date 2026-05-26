@@ -71,6 +71,15 @@ def extract_section(body: str, anchor: str) -> str | None:
     if not anchor:
         return body  # No anchor → whole file (convenience for callers).
 
+    # Slugify the caller-provided anchor too — otherwise asymmetric
+    # comparison silently misses on trailing whitespace, double-hash
+    # typos (``"file.md##x"`` → anchor=``"#x"``), or mixed-case anchors.
+    # Current ``_emit`` sites all pre-slugify, but normalising here makes
+    # the contract robust to future typos.
+    target = _slugify(anchor)
+    if not target:
+        return None  # Anchor that slugifies to empty (e.g. all punctuation).
+
     lines = body.splitlines(keepends=True)
     section_start: int | None = None
     section_level: int | None = None
@@ -91,7 +100,7 @@ def extract_section(body: str, anchor: str) -> str | None:
         level = len(m.group(1))
         heading = m.group(2)
         if section_start is None:
-            if _slugify(heading) == anchor:
+            if _slugify(heading) == target:
                 section_start = i
                 section_level = level
         elif section_level is not None and level <= section_level:
