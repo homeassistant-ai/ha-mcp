@@ -2369,70 +2369,29 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update Home Assistant helper entities and config subentries
-        (28 types, unified interface).
+        """Create or update a Home Assistant helper (28 types, unified interface).
 
-        SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
-        requires `helper_id`. Config subentry create requires `entry_id` and
-        `subentry_type`; config subentry update also requires `subentry_id`.
+        Required params by mode:
+        - SIMPLE/FLOW create: ``name``
+        - SIMPLE/FLOW update: ``helper_id`` (pass existing entry_id for flow types)
+        - config_subentry create: ``entry_id`` + ``subentry_type``
+        - config_subentry update: also ``subentry_id``
 
-        SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
-        input_select, input_number, input_text, input_datetime, counter, timer, schedule,
-        zone, person, tag.
+        Pass ``action='create'``/``'update'`` to disambiguate; otherwise the
+        implicit discriminator is presence of ``helper_id`` (or
+        ``subentry_id`` for subentries). Update preserves type-specific
+        fields not re-passed (rename never wipes initial/icon/etc.). Flow
+        helpers reject ``name`` on update — to rename, delete and recreate.
 
-        FLOW types (pass `config` dict, Config Entry Flow API): template, group,
-        utility_meter, derivative, min_max, threshold, integration, statistics, trend,
-        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.
-        Note: `tod` is the purpose-built "is-current-time-in-range" indicator
-        (supports cross-midnight ranges, unlike `schedule`).
+        First-call schema discovery: flow-helper validation errors return
+        the ``data_schema`` (and ``menu_options`` for menu-rooted types
+        like ``template``/``group``) in the response context, so a second
+        call can self-correct without a separate round-trip.
 
-        CONFIG_SUBENTRY type (Config Subentry Flow API): config_subentry.
-        Pass `entry_id`, `subentry_type`, and `config`. Pass `subentry_id` to
-        reconfigure an existing subentry; omit it to create a new subentry.
-
-        For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
-        reject the `name` key on update — to rename a flow helper, delete and recreate.
-
-        Behavior notes:
-        - UPDATE preserves type-specific fields not re-passed (rename never wipes
-          initial/icon/etc. for any simple helper).
-        - Pass `action="create"` or `action="update"` to disambiguate intent.
-          For SIMPLE/FLOW helpers, omitted action falls back to the implicit
-          `helper_id`-presence discriminator. For config subentries, omitted
-          action falls back to the `subentry_id`-presence discriminator.
-        - For flow-based helpers, config keys not declared by any step's
-          data_schema are silently ignored by HA; submit once and the
-          validation error returns the `data_schema` for that helper so
-          subsequent calls use the correct field names.
-        - Validation errors raised by this tool carry the helper's
-          `data_schema` in the response context (and `menu_options` for
-          menu-rooted helpers like `template`/`group` when no sub-type is
-          chosen yet) so a follow-up call can self-correct without a
-          separate schema-discovery round-trip.
-
-        EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
-        - template sensor:
-            ha_config_set_helper(helper_type="template", name="Room Temp",
-                config={"next_step_id": "sensor",
-                        "state": "{{ states('sensor.x')|float }}",
-                        "unit_of_measurement": "°C"})
-        - group (light):
-            ha_config_set_helper(helper_type="group", name="Kitchen Lights",
-                config={"group_type": "light",
-                        "entities": ["light.a", "light.b"]})
-        - tod (time-of-day indicator, cross-midnight OK):
-            ha_config_set_helper(helper_type="tod", name="Quiet Hours",
-                config={"after_time": "22:00:00", "before_time": "07:00:00"})
-        - config subentry (create under an existing integration):
-            ha_config_set_helper(helper_type="config_subentry",
-                entry_id="01HXYZ...", subentry_type="conversation",
-                config={"name": "Local agent", "model": "gemma3:27b"})
-
-        For helper-design guidance (when to pick which helper type, YAML
-        examples, per-type field tables), use ha_get_skill_guide — the
-        skill's `helper-selection.md` reference covers helper types
-        with worked examples and a decision matrix.
+        ``helper-selection.md`` ships in this response under
+        ``skill_content`` by default (see ``include_skill``) — decision
+        matrix for picking the right helper type plus worked examples
+        for menu-based and subentry types.
         """
         try:
             if helper_type == "config_subentry":
