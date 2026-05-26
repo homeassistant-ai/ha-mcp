@@ -135,9 +135,6 @@ jobs:
     if: needs.should_run.outputs.should_run == 'true'
     timeout-minutes: 8
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
       - name: Get issue number
         id: issue_number
         uses: actions/github-script@v9
@@ -169,14 +166,82 @@ jobs:
             const issueBody = issue.data.body || '';
             const labels = issue.data.labels.map(l => l.name);
 
-            // Detect issue type from labels or body markers
+            // Build type detection maps from actual issue templates (prod repo, always up-to-date)
+            const TEMPLATE_OWNER = 'homeassistant-ai';
+            const TEMPLATE_REPO = 'ha-mcp';
+            const labelToTypes = {};  // label → [typeName, ...]  (may be shared across templates)
+            const headerToType = {};  // "### label text" → typeName
+
+            try {
+              const dirResp = await github.rest.repos.getContent({
+                owner: TEMPLATE_OWNER, repo: TEMPLATE_REPO,
+                path: '.github/ISSUE_TEMPLATE',
+              });
+              const yamlFiles = dirResp.data.filter(f => f.type === 'file' && /\.ya?ml$/.test(f.name));
+
+              const fileContents = await Promise.all(
+                yamlFiles.map(f => github.rest.repos.getContent({
+                  owner: TEMPLATE_OWNER, repo: TEMPLATE_REPO, path: f.path,
+                }))
+              );
+
+              for (let i = 0; i < yamlFiles.length; i++) {
+                const typeName = yamlFiles[i].name.replace(/\.ya?ml$/, '').replace(/_/g, '-');
+                const content = Buffer.from(fileContents[i].data.content, 'base64').toString('utf-8');
+
+                // Parse template labels (inline array or block list)
+                let templateLabels = [];
+                const inlineMatch = content.match(/^labels:\s*\[([^\]]*)\]/m);
+                if (inlineMatch) {
+                  templateLabels = inlineMatch[1].split(',')
+                    .map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+                } else {
+                  const blockMatch = content.match(/^labels:\s*\n((?:[ \t]+-[ \t]+.+\n?)+)/m);
+                  if (blockMatch) {
+                    templateLabels = blockMatch[1].split('\n')
+                      .map(s => s.replace(/^\s*-\s*/, '').trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+                  }
+                }
+                for (const label of templateLabels) {
+                  if (!labelToTypes[label]) labelToTypes[label] = [];
+                  if (!labelToTypes[label].includes(typeName)) labelToTypes[label].push(typeName);
+                }
+
+                // Find the first textarea/input label — this is what appears as "### <label>" in submitted bodies
+                let inBody = false, inTextarea = false, firstHeader = null;
+                for (const line of content.split('\n')) {
+                  if (line.trim() === 'body:') { inBody = true; continue; }
+                  if (!inBody) continue;
+                  if (/^\s+-\s+type:\s+(textarea|input)\s*$/.test(line)) { inTextarea = true; continue; }
+                  if (/^\s+-\s+type:/.test(line)) { inTextarea = false; continue; }
+                  if (inTextarea && /^\s+label:\s+/.test(line)) {
+                    firstHeader = line.replace(/^\s+label:\s+/, '').trim().replace(/^["']|["']$/g, '');
+                    break;
+                  }
+                }
+                if (firstHeader) headerToType[firstHeader] = typeName;
+              }
+              core.info('Template maps: ' + JSON.stringify({ labelToType: labelToTypes, headerToType }));
+            } catch (e) {
+              core.warning('Template fetch failed — type detection may be degraded: ' + e.message);
+            }
+
+            // Labels shared across multiple templates are ambiguous — drop them from the map
+            const labelToType = Object.fromEntries(
+              Object.entries(labelToTypes)
+                .filter(([, types]) => types.length === 1)
+                .map(([label, types]) => [label, types[0]])
+            );
+
+            // Detect issue type: specific label first, then body section header fallback
             let issueType = 'unknown';
-            if (labels.includes('runtime-bug') || issueBody.includes('### 🐛 Runtime Bug')) {
-              issueType = 'runtime-bug';
-            } else if (labels.includes('startup-bug') || issueBody.includes('### 🚀 Startup/Installation Bug')) {
-              issueType = 'startup-bug';
-            } else if (labels.includes('agent-behavior') || issueBody.includes('### 🤖 AI Agent Behavior')) {
-              issueType = 'agent-behavior';
+            for (const label of labels) {
+              if (labelToType[label]) { issueType = labelToType[label]; break; }
+            }
+            if (issueType === 'unknown') {
+              for (const [header, type] of Object.entries(headerToType)) {
+                if (issueBody.includes('### ' + header)) { issueType = type; break; }
+              }
             }
 
             // Format author comments for prompt
@@ -393,9 +458,15 @@ jobs:
               return;
             }
 
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
-              (c.issue.body || '').substring(0, 600)
+              cleanBody(c.issue.body).substring(0, 600)
             ).join('\n\n---\n\n');
 
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
@@ -454,11 +525,38 @@ jobs:
             const issueNumber = ${{ steps.issue_number.outputs.number }};
             const issueType = process.env.ISSUE_TYPE || 'unknown';
             const issueTitle = process.env.ISSUE_TITLE || '';
-            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 1500);
+            const rawBody = process.env.ISSUE_BODY || '';
             const authorComments = process.env.ISSUE_AUTHOR_COMMENTS || '';
             const bm25Candidates = process.env.BM25_CANDIDATES || '';
             const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
             const toolList = process.env.TOOL_LIST || '';
+
+            // Strip template boilerplate: ### section headers, _No response_, blank collapse
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
+            // Summarise which template sections were filled — preserves completeness signal
+            // without sending the header text to the model
+            const sectionSummary = (() => {
+              const parts = rawBody.split(/^###\s+/m).slice(1);
+              if (parts.length === 0) return '';
+              const filled = [], empty = [];
+              for (const part of parts) {
+                const nl = part.indexOf('\n');
+                const name = part.substring(0, nl).trim().replace(/[^\w\s()]/g, '').trim();
+                const content = cleanBody(part.substring(nl));
+                (content.length > 10 ? filled : empty).push(name);
+              }
+              const parts2 = [];
+              if (filled.length) parts2.push(`Filled: ${filled.join(', ')}`);
+              if (empty.length)  parts2.push(`Empty: ${empty.join(', ')}`);
+              return parts2.length ? `Template sections — ${parts2.join(' | ')}\n` : '';
+            })();
+
+            const issueBody = cleanBody(rawBody).substring(0, 1500);
 
             // Parse extracted keywords for context (show top-5 by weight in prompt)
             let keywordSummary = '';
@@ -497,6 +595,7 @@ jobs:
               '',
               '## Issue #' + issueNumber + ': ' + issueTitle,
               'Type: ' + issueType,
+              sectionSummary,
               keywordSummary,
               'Body:',
               issueBody,
