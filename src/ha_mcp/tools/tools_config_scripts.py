@@ -457,132 +457,23 @@ class ConfigScriptTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant script.
+        """Create or update a Home Assistant script.
 
-        PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
-        Native actions are validated at config load, fail loudly, and do not bypass HA's
-        schema. Templates in logic positions fail silently and obscure intent.
-        - `choose` / `if/then/else` instead of template-based service names
-        - `wait_for_trigger` instead of `wait_template`
-        - `repeat` with `for_each` instead of template loops
-        - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
-        Templates are appropriate ONLY in `data.*` fields, notification message/title,
-        `event_data`, and `variables`. The reactive best-practice checker on this tool
-        will surface anything in a logic position that should be native; consult the
-        `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_guide`.
+        When NOT to use: if the work needs trigger-based execution (state
+        change, time-of-day, etc.), use ha_config_set_automation —
+        scripts only have a ``sequence``, never ``trigger``.
 
-        Supports two modes: full config replacement OR Python transformation.
+        Two modes: full ``config`` replacement, or surgical
+        ``python_transform`` on an existing script (requires
+        ``config_hash`` from ha_config_get_script). Config requires either
+        ``sequence`` (regular) or ``use_blueprint`` (blueprint-based).
 
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits to existing scripts. Surgical updates.
-        - config: Use for creating new scripts or full restructures.
-
-        IMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().
-
-        PYTHON TRANSFORM EXAMPLES:
-        - Update step: python_transform="config['sequence'][0]['data']['message'] = 'Hello'"
-        - Add step: python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
-        - Remove last step: python_transform="config['sequence'].pop()"
-
-        Creates a new script or updates an existing one with the provided configuration.
-        Supports both regular scripts (with sequence) and blueprint-based scripts.
-
-        Required config fields (choose one):
-            - sequence: List of actions to execute (for regular scripts)
-            - use_blueprint: Blueprint configuration (for blueprint-based scripts)
-
-        Optional config fields:
-            - alias: Display name (defaults to script_id)
-            - description: Script description
-            - icon: Icon to display
-            - mode: Execution mode ('single', 'restart', 'queued', 'parallel')
-            - max: Maximum concurrent executions (for queued/parallel modes)
-            - fields: Input parameters for the script
-
-        SCRIPTS vs AUTOMATIONS: Scripts use 'sequence', NOT 'trigger' or 'action'.
-        If you need trigger-based execution, use ha_config_set_automation instead.
-
-        EXAMPLES:
-
-        Create basic delay script:
-        ha_config_set_script(script_id="wait_script", config={
-            "sequence": [{"delay": {"seconds": 5}}],
-            "alias": "Wait 5 Seconds",
-            "description": "Simple delay script"
-        })
-
-        Create service call script:
-        ha_config_set_script(script_id="blink_light", config={
-            "sequence": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
-                {"delay": {"seconds": 2}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}}
-            ],
-            "alias": "Light Blink",
-            "mode": "single"
-        })
-
-        Create script with parameters:
-        ha_config_set_script(script_id="backup_script", config={
-            "alias": "Backup with Reference",
-            "description": "Create backup with optional reference parameter",
-            "fields": {
-                "reference": {
-                    "name": "Reference",
-                    "description": "Optional reference for backup identification",
-                    "selector": {"text": None}
-                }
-            },
-            "sequence": [
-                {
-                    "action": "hassio.backup_partial",
-                    "data": {
-                        "compressed": False,
-                        "homeassistant": True,
-                        "homeassistant_exclude_database": True,
-                        "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}"
-                    }
-                }
-            ]
-        })
-
-        Update script:
-        ha_config_set_script(script_id="morning_routine", config={
-            "sequence": [
-                {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-            ],
-            "alias": "Updated Morning Routine"
-        })
-
-        Create blueprint-based script:
-        ha_config_set_script(script_id="notification_script", config={
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Hello World",
-                    "title": "Test Notification"
-                }
-            }
-        })
-
-        Update blueprint script inputs:
-        ha_config_set_script(script_id="notification_script", config={
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Updated message",
-                    "title": "Updated Title"
-                }
-            }
-        })
-
-        Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
-        features like conditions, variables, parallel execution, and service call options.
+        Native > template in logic positions. ``automation-patterns.md``
+        and ``template-guidelines.md`` ship in this response under
+        ``skill_content`` by default (see ``include_skill``). The reactive
+        best-practice checker also surfaces template misuse in
+        ``best_practice_warnings`` with the relevant skill section
+        auto-embedded — fix before re-submitting.
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
