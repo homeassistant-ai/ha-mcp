@@ -2032,9 +2032,16 @@ _SKILLS_VENDOR_MISSING_WARNING = (
 # how it learns the param exists — only after content has been
 # delivered, so the default-on behaviour can't be pre-emptively
 # disabled by a model that reflexively turns optional flags off.
+#
+# Wording is imperative (not conditional "if ... then") and the hint
+# is placed as the FIRST key in the response by attach_skill_content
+# below. BAT on PR #1448 showed even Opus needed five tries to find
+# the conditional hint when it trailed a ~25KB skill_content payload;
+# smaller models never found it. Top-of-response + imperative voice
+# is the cheap fix before falling back to a visible-but-obscure name.
 _SKILL_CONTENT_OPTOUT_HINT = (
-    "If this content was already provided earlier in this session, "
-    "pass include_skill=false on the next call to this tool to skip it."
+    "Pass `include_skill=false` on subsequent calls to this tool in "
+    "this session to skip this content."
 )
 
 
@@ -2073,8 +2080,19 @@ def attach_skill_content(
         referenced_files=referenced_files,
     )
     if content:
-        response["skill_content"] = content
+        # Reorder so the hint is the FIRST key in the response and the
+        # bulky skill_content is the LAST. LLMs (especially smaller
+        # models) process responses top-down and BAT showed the
+        # trailing-hint placement was getting buried under ~25KB of
+        # markdown — Opus needed five tries to find it, Sonnet/Haiku
+        # never found it. The mutation is in place because callers
+        # pass the dict by reference and expect their handle to keep
+        # pointing at the same response object.
+        existing_items = list(response.items())
+        response.clear()
         response["skill_content_hint"] = _SKILL_CONTENT_OPTOUT_HINT
+        response.update(existing_items)
+        response["skill_content"] = content
         return
 
     # Empty content has two distinct causes:

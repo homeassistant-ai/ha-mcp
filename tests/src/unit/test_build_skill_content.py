@@ -268,6 +268,37 @@ class TestAttachSkillContent:
         assert response.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
         assert "warnings" not in response
 
+    def test_hint_appears_first_and_content_last(self, patched_get_skills_dir):
+        """Response key order matters for small models that process
+        top-down. The opt-out hint goes FIRST so it isn't buried under
+        the ~25KB skill_content body; skill_content goes LAST so the
+        operation result fields stay near the hint. BAT on PR #1448
+        showed even Opus needed five tries to find a tail-positioned
+        conditional hint; smaller models never did."""
+        response: dict = {"success": True, "data": {"id": "x"}, "entity_id": "y"}
+        attach_skill_content(
+            response,
+            include_skill=True,
+            canonical_files=("references/automation-patterns.md",),
+            referenced_files=None,
+        )
+        keys = list(response.keys())
+        assert keys[0] == "skill_content_hint", (
+            f"hint must be first key for top-down model parsing, got {keys}"
+        )
+        assert keys[-1] == "skill_content", (
+            f"bulky content must be last so it doesn't push the hint out "
+            f"of the model's top-of-response attention window, got {keys}"
+        )
+        # The original response fields are preserved between hint and content.
+        assert set(keys) == {
+            "skill_content_hint",
+            "success",
+            "data",
+            "entity_id",
+            "skill_content",
+        }
+
     def test_nothing_requested_is_silent(self, patched_get_skills_dir):
         """include_skill=False + no referenced_files → silent (user opted out)."""
         response: dict = {"success": True}
