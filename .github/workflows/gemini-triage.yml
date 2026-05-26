@@ -284,7 +284,12 @@ jobs:
         with:
           script: |
             const issueTitle = process.env.ISSUE_TITLE || '';
-            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 1200);
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 1200);
             const toolList = process.env.TOOL_LIST || '';
             const token = process.env.GH_TOKEN;
 
@@ -356,7 +361,17 @@ jobs:
           script: |
             const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
             const issueTitle = process.env.ISSUE_TITLE || '';
-            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 2000);
+
+            // Strip template boilerplate before tokenizing — section headers like
+            // "### 💬 What Happened?" appear in nearly every bug report, making them
+            // high-frequency tokens that inflate false-similarity scores.
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 2000);
 
             // Fetch up to 500 recent issues (open + closed), excluding PRs and current issue
             const allIssues = [];
@@ -389,7 +404,7 @@ jobs:
                 .filter(t => t.length > 2);
             }
 
-            const corpus = allIssues.map(i => tokenize(i.title + ' ' + (i.body || '')));
+            const corpus = allIssues.map(i => tokenize(i.title + ' ' + cleanBody(i.body)));
             const N = corpus.length;
             const avgDocLen = corpus.reduce((s, d) => s + d.length, 0) / N;
 
