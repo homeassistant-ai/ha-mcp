@@ -841,7 +841,11 @@ jobs:
               ? '\n\n🔗 **Related issues**: ' + relatedNumbers.map(n => '#' + n).join(', ')
               : '';
 
-            const body = '## ℹ️ Information Needed\n\n' + visibleText + relatedText +
+            const isBug = ['bug'].includes(classification);
+            const reportIssueTip = isBug
+              ? '\n\n> 💡 **Quick tip**: If you have the ha-mcp agent running, use the `ha_report_issue` tool — it auto-collects the diagnostic info above in one step.'
+              : '';
+            const body = '## ℹ️ Information Needed\n\n' + visibleText + relatedText + reportIssueTip +
               '\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n' +
               '*🤖 Automated triage by Issue Bot*';
             await postComment(body);
