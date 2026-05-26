@@ -31,7 +31,16 @@ from .tools_filesystem import (
     MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
 )
-from .util_helpers import coerce_bool_param, unwrap_service_response
+from .util_helpers import (
+    build_skill_content,
+    coerce_bool_param,
+    unwrap_service_response,
+)
+
+# YAML packages frequently include template sensors, command_line entities,
+# and mqtt templates — exactly where template misuse causes the most
+# subtle bugs. template-guidelines.md is the relevant default.
+_YAML_SKILL_FILES: tuple[str, ...] = ("references/template-guidelines.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +163,21 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
+        include_skill: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When True (default), the response includes the Home "
+                    "Assistant template-guidelines.md reference under a "
+                    "'skill_content' field. YAML packages frequently include "
+                    "template sensors, command_line entities, and mqtt "
+                    "templates, which is exactly where template misuse "
+                    "causes the most subtle bugs. Set False on subsequent "
+                    "calls in the same session if you've already read it."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 
@@ -243,6 +267,13 @@ class YamlConfigTools:
                 result = unwrap_service_response(result)
                 if not result.get("success", True):
                     raise_tool_error(result)
+                skill_content = build_skill_content(
+                    include_skill=include_skill,
+                    canonical_files=_YAML_SKILL_FILES,
+                    referenced_files=None,
+                )
+                if skill_content:
+                    result["skill_content"] = skill_content
                 return result
 
             raise_tool_error(
