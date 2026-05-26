@@ -179,31 +179,26 @@ class YamlConfigTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
+        """Update raw YAML in configuration.yaml or packages/*.yaml (LAST RESORT).
 
-        **WARNING:** Destructive, disabled by default. Dedicated tools exist for
-        almost every use case and should be preferred:
+        **WARNING: destructive, disabled by default.** Use a dedicated
+        tool first wherever possible — ha_config_set_automation,
+        _script, _scene, _helper (all 27 helper types incl. template
+        sensors). Only reach for this tool for YAML-only integrations
+        with no config-flow or API path (``command_line``, ``rest``,
+        ``shell_command``, ``notify`` platforms, ``knx`` entities in
+        packages) and for registering YAML-mode dashboards via
+        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*``).
 
-        - Template sensors (state-based or trigger-based) ->
-          ha_config_set_helper(helper_type='template')
-        - Automations -> ha_config_set_automation
-        - Scripts -> ha_config_set_script
-        - Scenes -> ha_config_set_scene
-        - All 27 helper types (input_*, counter, timer, schedule, zone, person,
-          tag, group, min_max, threshold, derivative, statistics, utility_meter,
-          trend, filter, switch_as_x, etc.) -> ha_config_set_helper
+        Preserves YAML comments and HA tags (``!include``, ``!secret``)
+        on round-trip; ``replace`` swaps the subtree as-is. Check
+        ``post_action`` in the response — most keys need a full HA
+        restart; ``template`` / ``mqtt`` / ``group`` support reload.
 
-        Intended for YAML-only integrations with no config-flow or API
-        equivalent (command_line, rest, shell_command, notify platforms),
-        for integrations with significant YAML-only configuration (knx
-        entities in package files), and for registering YAML-mode dashboards via
-        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
-        Check ``post_action`` in the response: most keys need a full HA
-        restart; template, mqtt, and group support reload. Preserves YAML
-        comments and HA tags (``!include``, ``!secret``) on round-trip;
-        ``replace`` swaps the subtree as-is.
-
-        For detailed routing guidance, use ha_get_skill_guide.
+        ``template-guidelines.md`` ships in this response under
+        ``skill_content`` by default (see ``include_skill``) — YAML
+        packages are exactly where template misuse causes the subtlest
+        bugs.
         """
         try:
             # Validate action
