@@ -395,7 +395,7 @@ jobs:
 
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
-              (c.issue.body || '').substring(0, 300)
+              (c.issue.body || '').substring(0, 600)
             ).join('\n\n---\n\n');
 
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
