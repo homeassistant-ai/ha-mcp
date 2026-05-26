@@ -21,6 +21,7 @@ permissions:
   issues: write
   pull-requests: read
   repository-projects: write
+  models: read
 
 jobs:
   should_run:
@@ -132,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: should_run
     if: needs.should_run.outputs.should_run == 'true'
-    timeout-minutes: 6
+    timeout-minutes: 8
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -191,6 +192,93 @@ jobs:
             core.setOutput('issue_type', issueType);
             core.setOutput('author_comments', authorComments || '');
 
+      - name: Fetch tool list
+        id: tool_list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOOLS=$(gh api "repos/homeassistant-ai/ha-mcp/contents/site/src/data/tools.json" \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | \
+            python3 -c "import json,sys; tools=json.load(sys.stdin); print('\n'.join(t['name']+': '+(t.get('description') or '')[:80].rstrip() for t in tools))" \
+            2>/dev/null || echo "")
+          {
+            echo "tools<<EOF"
+            echo "$TOOLS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract discriminative keywords
+        id: keywords
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          TOOL_LIST: ${{ steps.tool_list.outputs.tools }}
+        with:
+          script: |
+            const issueTitle = process.env.ISSUE_TITLE || '';
+            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 1200);
+            const toolList = process.env.TOOL_LIST || '';
+            const token = process.env.GH_TOKEN;
+
+            const systemPrompt = [
+              'You extract specific discriminative search keywords from GitHub issues for ha-mcp (Home Assistant MCP Server).',
+              'The project exposes these tools to AI assistants:',
+              toolList,
+              '',
+              'Rules:',
+              '- INCLUDE: exact tool names from the list above, HTTP/Python error codes, specific entity domain names (light, switch, sensor, climate, media_player), operation types, verbatim error message fragments',
+              '- EXCLUDE all generic/ubiquitous terms: home assistant, ha, mcp, entity, automation, integration, service, tool, error, bug, issue, problem, not working, broken, fail, update, version, server, client, response, request, returns, getting, using',
+              '- Add synonyms and alternate phrasings as additional entries with lower weight',
+            ].join('\n');
+
+            const userPrompt = [
+              'Issue title: ' + issueTitle,
+              '',
+              'Issue body:',
+              issueBody,
+              '',
+              'Extract 8-14 discriminative keywords ordered by specificity (most unique first).',
+              'Include synonyms and alternate phrasings.',
+              'Return ONLY a JSON array: [{"term":"ha_call_service","weight":1.0},{"term":"service call","weight":0.7}]',
+            ].join('\n');
+
+            try {
+              const resp = await fetch('https://models.github.ai/inference/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  model: 'openai/gpt-4.1-nano',
+                  messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                  ],
+                  max_tokens: 400,
+                  temperature: 0.1,
+                }),
+              });
+
+              if (!resp.ok) {
+                const text = await resp.text();
+                core.warning(`GitHub Models API error: ${resp.status} — ${text.substring(0, 200)}`);
+                core.setOutput('response', '');
+                return;
+              }
+
+              const data = await resp.json();
+              const content = data.choices?.[0]?.message?.content || '';
+              core.info('Extracted keywords: ' + content.substring(0, 300));
+              core.setOutput('response', content);
+            } catch (e) {
+              core.warning('Keyword extraction failed: ' + e.message);
+              core.setOutput('response', '');
+            }
+
       - name: BM25 candidate retrieval
         id: bm25
         uses: actions/github-script@v9
@@ -198,6 +286,7 @@ jobs:
           ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
           ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
         with:
           script: |
             const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
@@ -238,8 +327,37 @@ jobs:
             const corpus = allIssues.map(i => tokenize(i.title + ' ' + (i.body || '')));
             const N = corpus.length;
             const avgDocLen = corpus.reduce((s, d) => s + d.length, 0) / N;
-            const queryTokens = tokenize(issueTitle + ' ' + issueBody);
-            const queryTerms = [...new Set(queryTokens)];
+
+            // Use LLM-extracted discriminative keywords when available; fall back to full-text.
+            // Keywords are ordered by weight (1.0 = most specific/unique).
+            let queryTerms;
+            const termWeights = {};
+            const rawKeywords = process.env.EXTRACTED_KEYWORDS || '';
+            let usingKeywords = false;
+            if (rawKeywords) {
+              try {
+                const parsed = JSON.parse(
+                  rawKeywords.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+                );
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  usingKeywords = true;
+                  // Tokenize each keyword phrase; assign weight to each token
+                  for (const kw of parsed) {
+                    for (const tok of tokenize(kw.term)) {
+                      termWeights[tok] = Math.max(termWeights[tok] || 0, kw.weight || 1.0);
+                    }
+                  }
+                  queryTerms = Object.keys(termWeights);
+                  core.info(`Using ${parsed.length} extracted keywords → ${queryTerms.length} query tokens`);
+                }
+              } catch (e) {
+                core.info('Could not parse extracted keywords; falling back to full-text BM25');
+              }
+            }
+            if (!usingKeywords) {
+              queryTerms = [...new Set(tokenize(issueTitle + ' ' + issueBody))];
+              core.info(`Full-text BM25 fallback: ${queryTerms.length} query tokens`);
+            }
 
             const idfMap = {};
             for (const term of queryTerms) {
@@ -255,15 +373,15 @@ jobs:
                 const tf = doc.filter(t => t === term).length;
                 if (tf === 0) continue;
                 const idf = idfMap[term] || 0;
-                score += idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc.length / avgDocLen));
+                const weight = usingKeywords ? (termWeights[term] || 0.5) : 1.0;
+                score += weight * idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc.length / avgDocLen));
               }
               return { issue, score };
             });
 
-            // Threshold=60: at corpus size ~500 the 8th-ranked non-duplicate scores
-            // 9–93 (median ~69), so 60 filters ~55% of non-duplicate queries while
-            // keeping all lexically-similar duplicates (which score 90+).
-            const THRESHOLD = 60;
+            // With extracted keywords: use a low threshold — keywords are already specific, so any
+            // match above noise is meaningful. Full-text fallback keeps the original threshold=60.
+            const THRESHOLD = usingKeywords ? 1.0 : 60;
             const candidates = scored
               .sort((a, b) => b.score - a.score)
               .slice(0, 8)
@@ -329,6 +447,8 @@ jobs:
           ISSUE_AUTHOR_COMMENTS: ${{ steps.issue_data.outputs.author_comments }}
           BM25_CANDIDATES: ${{ steps.bm25.outputs.candidates }}
           CHANGELOG_CONTEXT: ${{ steps.changelogs.outputs.changelog_context }}
+          TOOL_LIST: ${{ steps.tool_list.outputs.tools }}
+          EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
         with:
           script: |
             const issueNumber = ${{ steps.issue_number.outputs.number }};
@@ -338,6 +458,19 @@ jobs:
             const authorComments = process.env.ISSUE_AUTHOR_COMMENTS || '';
             const bm25Candidates = process.env.BM25_CANDIDATES || '';
             const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
+            const toolList = process.env.TOOL_LIST || '';
+
+            // Parse extracted keywords for context (show top-5 by weight in prompt)
+            let keywordSummary = '';
+            try {
+              const kws = JSON.parse(
+                (process.env.EXTRACTED_KEYWORDS || '').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+              );
+              if (Array.isArray(kws) && kws.length > 0) {
+                const top = kws.slice(0, 5).map(k => k.term).join(', ');
+                keywordSummary = `\nSearch keywords extracted from this issue: ${top}\n`;
+              }
+            } catch (e) {}
 
             const authorSection = authorComments
               ? `\nAuthor follow-up comments:\n${authorComments}\n`
@@ -345,6 +478,10 @@ jobs:
 
             const duplicateSection = bm25Candidates
               ? `\n## Possible Duplicate Candidates (BM25 pre-filtered)\nCheck each candidate — mark DUPLICATE only if high confidence.\n\n${bm25Candidates}\n`
+              : '';
+
+            const toolSection = toolList
+              ? `\n## Available ha-mcp Tools (for priority/size assessment)\n${toolList}\n`
               : '';
 
             const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
@@ -356,15 +493,16 @@ jobs:
               'assistants to control Home Assistant smart homes: entity control, automations, scripts, dashboards,',
               'templates, and more).',
               '',
-              'Do NOT use any tools. Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose,',
-              'no markdown, no code block.',
+              'Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose, no markdown, no code block.',
               '',
               '## Issue #' + issueNumber + ': ' + issueTitle,
               'Type: ' + issueType,
+              keywordSummary,
               'Body:',
               issueBody,
               authorSection,
               duplicateSection,
+              toolSection,
               '## Recent Release Context (for regression detection)',
               changelog,
               '',
@@ -422,6 +560,10 @@ jobs:
 
             core.setOutput('prompt', prompt);
 
+      # Approach A (active): project context pre-injected into prompt (tool list + changelog).
+      # Tools are disabled — 1 model call, deterministic output.
+      # Approach B (tested, not used): file tools enabled ("core": ["read_file", "read_many_files", "glob"]),
+      # no pre-injected context. Result: same quality, 2-3x slower (55s vs 22s), unpredictable cost.
       - name: Evaluate
         id: evaluate
         uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
@@ -435,7 +577,7 @@ jobs:
           settings: |
             {
               "model": {
-                "maxSessionTurns": 1,
+                "maxSessionTurns": -1,
                 "temperature": 0
               },
               "tools": {
