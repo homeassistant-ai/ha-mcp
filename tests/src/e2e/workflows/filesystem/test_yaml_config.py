@@ -339,6 +339,74 @@ class TestYamlConfigOperations:
             )
             logger.info("Successfully added knx to package file")
 
+    async def test_add_automation_to_package_file(self, mcp_client_with_yaml_config):
+        """automation is allowed in packages/*.yaml only (PACKAGES_ONLY_YAML_KEYS)."""
+
+        content = (
+            "- id: e2e_yaml_packages_only_test\n"
+            "  alias: E2E YAML Packages-Only Test\n"
+            "  trigger:\n"
+            "    - platform: sun\n"
+            "      event: sunset\n"
+            "  action:\n"
+            "    - service: persistent_notification.create\n"
+            "      data:\n"
+            "        message: hi\n"
+        )
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "automation",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_test_automation.yaml",
+                    "backup": False,
+                },
+            )
+            assert data.get("success") is True, f"automation add to package should succeed: {data}"
+            assert data.get("action") == "add"
+            # automation has a native reload service in HA core.
+            assert data.get("post_action") == "reload_available", (
+                f"automation should be reload_available: {data}"
+            )
+            assert data.get("reload_service") == "automation.reload", (
+                f"reload_service should be automation.reload: {data}"
+            )
+            logger.info("Successfully added automation to package file")
+
+    async def test_packages_only_keys_rejected_in_configuration_yaml(
+        self, mcp_client_with_yaml_config
+    ):
+        """automation/script/scene must be rejected in configuration.yaml.
+
+        Storage-mode collections live in .storage/; allowing these keys in
+        configuration.yaml would let them collide. Package files are the
+        opt-in surface.
+        """
+
+        for key in ("automation", "script", "scene"):
+            data = await safe_call_tool(
+                mcp_client_with_yaml_config,
+                TOOL_NAME,
+                {
+                    "yaml_path": key,
+                    "action": "add",
+                    "content": "- id: x\n  alias: x\n",
+                    "file": "configuration.yaml",
+                    "backup": False,
+                },
+            )
+            assert data.get("success") is False, (
+                f"{key} in configuration.yaml should be rejected: {data}"
+            )
+            msg = extract_error_message(data).lower()
+            assert "packages" in msg, (
+                f"{key} error message should mention packages/: {data}"
+            )
+        logger.info("automation/script/scene correctly rejected in configuration.yaml")
+
     async def test_replace_key(self, mcp_client_with_yaml_config):
         """Replace overwrites the key content."""
 

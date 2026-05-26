@@ -36,6 +36,7 @@ from .const import (
     ALLOWED_YAML_KEYS,
     DASHBOARD_URL_PATH_PATTERN,
     DOMAIN,
+    PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
@@ -347,7 +348,9 @@ def _build_edit_yaml_config_handler(hass):
             }
 
         # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
-        kind, path_parts, path_err = _parse_and_validate_yaml_path(yaml_path)
+        kind, path_parts, path_err = _parse_and_validate_yaml_path(
+            yaml_path, is_package=is_package
+        )
         if path_err is not None:
             return {"success": False, "error": path_err}
 
@@ -635,11 +638,15 @@ def _build_edit_yaml_config_handler(hass):
 
 def _parse_and_validate_yaml_path(
     yaml_path: str,
+    *,
+    is_package: bool = False,
 ) -> tuple[str, tuple[str, ...], str | None]:
     """Parse and validate a yaml_path argument.
 
     Two accepted shapes:
     1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
+       When ``is_package=True``, single segments in PACKAGES_ONLY_YAML_KEYS
+       (automation, script, scene) are also accepted.
     2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
 
     Returns (kind, parts, error). On error, kind is '' and parts is ().
@@ -654,12 +661,30 @@ def _parse_and_validate_yaml_path(
         key = parts[0]
         if key in ALLOWED_YAML_KEYS:
             return "single", parts, None
+        if is_package and key in PACKAGES_ONLY_YAML_KEYS:
+            return "single", parts, None
+        # Build a context-appropriate error message: in a package file the
+        # caller can use the union of both sets; in configuration.yaml only
+        # ALLOWED_YAML_KEYS is in scope, and PACKAGES_ONLY_YAML_KEYS keys
+        # need to be moved to a package file.
+        if key in PACKAGES_ONLY_YAML_KEYS:
+            return (
+                "",
+                (),
+                (
+                    f"Key '{yaml_path}' is only allowed in packages/*.yaml "
+                    "files, not in configuration.yaml. Move the edit to a "
+                    "package file (e.g., packages/automations.yaml) or use "
+                    "ha_config_set_automation/script/scene for storage-mode."
+                ),
+            )
+        allowed = ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS if is_package else ALLOWED_YAML_KEYS
         return (
             "",
             (),
             (
                 f"Key '{yaml_path}' is not in the allowed list. "
-                f"Allowed keys: {', '.join(sorted(ALLOWED_YAML_KEYS))}. "
+                f"Allowed keys: {', '.join(sorted(allowed))}. "
                 "For YAML-mode dashboards use 'lovelace.dashboards.<url_path>'."
             ),
         )

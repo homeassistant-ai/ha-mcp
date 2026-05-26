@@ -12,10 +12,11 @@ ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # Also allows packages/*.yaml via pattern matching
 
-# Top-level YAML keys allowed for editing.
+# Top-level YAML keys allowed for editing in any allowed file
+# (configuration.yaml or packages/*.yaml).
 # ONLY keys that have no UI/API alternative belong here.
 # Keys manageable via ha_config_set_helper (input_*, counter, timer, schedule)
-# or ha_config_set_automation/script/scene are intentionally excluded.
+# are intentionally excluded.
 ALLOWED_YAML_KEYS = frozenset(
     {
         "template",
@@ -37,10 +38,27 @@ ALLOWED_YAML_KEYS = frozenset(
     }
 )
 
+# Top-level YAML keys allowed ONLY inside packages/*.yaml files, never in
+# configuration.yaml. Storage-mode UI/API equivalents already exist
+# (ha_config_set_automation/script/scene), so these are exposed here only
+# for the YAML-packages workflow used by git-managed configs — where users
+# expect to keep automations/scripts/scenes alongside templates and other
+# YAML-defined items. Writes to configuration.yaml for these keys remain
+# rejected so storage-mode and YAML-mode collections don't collide.
+PACKAGES_ONLY_YAML_KEYS = frozenset(
+    {
+        "automation",
+        "script",
+        "scene",
+    }
+)
+
 # Post-edit action required for each YAML key.
-# Only template, mqtt, and group have YAML reload services in HA core
-# (verified against homeassistant/components/homeassistant/__init__.py,
-# async_handle_reload_all). All others require a full HA restart.
+# template, mqtt, group, automation, script, and scene have first-party
+# reload services in HA core (verified against
+# homeassistant/components/{automation,script,scene}/services.yaml and
+# homeassistant/components/homeassistant/__init__.py async_handle_reload_all).
+# All others require a full HA restart.
 YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
     "template": {
         "post_action": "reload_available",
@@ -53,6 +71,18 @@ YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
     "group": {
         "post_action": "reload_available",
         "reload_service": "group.reload",
+    },
+    "automation": {
+        "post_action": "reload_available",
+        "reload_service": "automation.reload",
+    },
+    "script": {
+        "post_action": "reload_available",
+        "reload_service": "script.reload",
+    },
+    "scene": {
+        "post_action": "reload_available",
+        "reload_service": "scene.reload",
     },
 }
 # Default for keys not in YAML_KEY_POST_ACTIONS:

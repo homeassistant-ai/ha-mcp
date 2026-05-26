@@ -108,9 +108,12 @@ class YamlConfigTools:
                     "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
-                    "route. No other dotted paths are supported. Not for template "
-                    "sensors (use ha_config_set_helper), automations, scripts, "
-                    "scenes, or input_* helpers — those have dedicated tools."
+                    "route. No other dotted paths are supported. "
+                    "'automation', 'script', and 'scene' are accepted only when "
+                    "file is under packages/*.yaml; in configuration.yaml use "
+                    "the dedicated ha_config_set_automation/script/scene tools "
+                    "(storage-mode). Not for template sensors or input_* "
+                    "helpers — those have dedicated tools."
                 ),
             ),
         ],
@@ -162,9 +165,9 @@ class YamlConfigTools:
 
         - Template sensors (state-based or trigger-based) ->
           ha_config_set_helper(helper_type='template')
-        - Automations -> ha_config_set_automation
-        - Scripts -> ha_config_set_script
-        - Scenes -> ha_config_set_scene
+        - Automations (storage-mode) -> ha_config_set_automation
+        - Scripts (storage-mode) -> ha_config_set_script
+        - Scenes (storage-mode) -> ha_config_set_scene
         - All 27 helper types (input_*, counter, timer, schedule, zone, person,
           tag, group, min_max, threshold, derivative, statistics, utility_meter,
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
@@ -174,10 +177,16 @@ class YamlConfigTools:
         for integrations with significant YAML-only configuration (knx
         entities in package files), and for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
+        Also accepts ``automation``, ``script``, and ``scene`` keys when
+        ``file`` is a ``packages/*.yaml`` — for git-managed YAML configs
+        that track these alongside templates and other YAML items. Writes
+        to ``configuration.yaml`` for those three keys remain rejected so
+        storage-mode and YAML-mode collections don't collide; use the
+        dedicated storage-mode tools instead.
         Check ``post_action`` in the response: most keys need a full HA
-        restart; template, mqtt, and group support reload. Preserves YAML
-        comments and HA tags (``!include``, ``!secret``) on round-trip;
-        ``replace`` swaps the subtree as-is.
+        restart; template, mqtt, group, automation, script, and scene
+        support reload. Preserves YAML comments and HA tags (``!include``,
+        ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
         For detailed routing guidance, use ha_get_skill_guide.
         """
