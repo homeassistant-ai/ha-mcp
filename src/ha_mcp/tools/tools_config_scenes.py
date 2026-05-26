@@ -760,6 +760,13 @@ class ConfigSceneTools:
                     "python_expression": python_transform,
                     "message": f"Scene {resolved_id} updated via Python transform",
                 }
+                skill_content = build_skill_content(
+                    include_skill=include_skill,
+                    canonical_files=_SCENE_SKILL_FILES,
+                    referenced_files=None,
+                )
+                if skill_content:
+                    response["skill_content"] = skill_content
                 return response
 
             if config is None:
