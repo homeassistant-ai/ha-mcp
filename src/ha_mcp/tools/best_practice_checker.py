@@ -70,6 +70,12 @@ class BestPracticeCheckResult(list[str]):
 
     Mutating the list directly (``append``, ``extend``) does NOT update
     ``referenced_files`` — use :func:`_emit` to keep both in sync.
+
+    Slicing (``result[:]``) returns a plain ``list[str]`` per CPython's
+    default ``list.__getitem__`` semantics — the ``referenced_files``
+    attribute is dropped. No current caller slices the result, but
+    consumers that need to copy should use ``copy.copy(result)`` or
+    construct a fresh ``BestPracticeCheckResult`` explicitly.
     """
 
     referenced_files: set[str]
@@ -77,6 +83,30 @@ class BestPracticeCheckResult(list[str]):
     def __init__(self, items: list[str] | None = None) -> None:
         super().__init__(items or [])
         self.referenced_files = set()
+
+    def __copy__(self) -> BestPracticeCheckResult:
+        """Preserve ``referenced_files`` on ``copy.copy()``.
+
+        Without this override, the default copy protocol re-enters
+        ``__init__`` and resets ``referenced_files`` to an empty set —
+        silently dropping the auto-embed payload on any caller that
+        copies the result.
+        """
+        new = BestPracticeCheckResult(list(self))
+        new.referenced_files = set(self.referenced_files)
+        return new
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> BestPracticeCheckResult:
+        """Preserve ``referenced_files`` on ``copy.deepcopy()``.
+
+        Mirrors ``__copy__``; entries are immutable ``str`` so a shallow
+        copy of the set is sufficient even under deepcopy semantics.
+        """
+        from copy import deepcopy
+
+        new = BestPracticeCheckResult(deepcopy(list(self), memo))
+        new.referenced_files = deepcopy(self.referenced_files, memo)
+        return new
 
 
 # ---------------------------------------------------------------------------
