@@ -2,7 +2,7 @@ name: '🤖 Issue Triage'
 
 on:
   issues:
-    types: [opened, closed]
+    types: [opened]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -33,12 +33,6 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            // Issues closed event — handled by mark_done job, not triage
-            if (context.eventName === 'issues' && context.payload.action === 'closed') {
-              core.setOutput('should_run', 'false');
-              return;
-            }
-
             let issue;
             let comment;
             let issueNumber;
@@ -110,22 +104,9 @@ jobs:
               return;
             }
 
-            // Get all comments NOW to avoid race condition
-            const allComments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber
-            });
-
-            // Count non-bot comments from issue author
-            const authorComments = allComments.data.filter(c =>
-              c.user.login === issue.user.login &&
-              c.user.type !== 'Bot'
-            );
-
             // For manual dispatch, always run
             if (context.eventName === 'workflow_dispatch') {
-              core.info('Manual trigger: Running completeness check');
+              core.info('Manual trigger: Running triage');
               core.setOutput('should_run', 'true');
               return;
             }
@@ -139,7 +120,7 @@ jobs:
 
             // For comments, only run if from issue author
             if (comment && comment.user.login === issue.user.login) {
-              core.info('Running: Comment from issue author — re-checking completeness');
+              core.info('Running: Comment from issue author — re-checking');
               core.setOutput('should_run', 'true');
               return;
             }
@@ -151,7 +132,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: should_run
     if: needs.should_run.outputs.should_run == 'true'
-    timeout-minutes: 10
+    timeout-minutes: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -187,7 +168,7 @@ jobs:
             const issueBody = issue.data.body || '';
             const labels = issue.data.labels.map(l => l.name);
 
-            // Detect issue type
+            // Detect issue type from labels or body markers
             let issueType = 'unknown';
             if (labels.includes('runtime-bug') || issueBody.includes('### 🐛 Runtime Bug')) {
               issueType = 'runtime-bug';
@@ -207,130 +188,8 @@ jobs:
             core.setOutput('issue_title', issueTitle);
             core.setOutput('issue_body', issueBody);
             core.setOutput('issue_author', issueAuthor);
-            core.setOutput('issue_labels', labels.join(','));
             core.setOutput('issue_type', issueType);
-            core.setOutput('comment_count', comments.data.length);
-            core.setOutput('author_comments', authorComments || 'No additional comments from author');
-
-      - name: Build completeness check prompt
-        id: build_prompt
-        uses: actions/github-script@v9
-        env:
-          ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
-          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
-          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
-        with:
-          script: |
-            const issueType = process.env.ISSUE_TYPE;
-            const issueTitle = process.env.ISSUE_TITLE;
-            const issueBody = process.env.ISSUE_BODY;
-
-            let requirements = '';
-            if (issueType === 'runtime-bug') {
-              requirements = `**For Runtime Bugs**:
-            1. Exact error message with stack trace (copy-pasted, not just "doesn't work")
-            2. ha-mcp version number (from \`ha-mcp --version\`)
-            3. Installation method (uvx/pip/docker/addon/git)
-            4. What tool or action was being used when the error occurred
-            5. Home Assistant version (if relevant)`;
-            } else if (issueType === 'startup-bug') {
-              requirements = `**For Startup/Installation Bugs**:
-            1. Exact error message or connection failure details
-            2. ha-mcp version number
-            3. Installation method (uvx/pip/docker/addon)
-            4. Client application (Claude Desktop/Code/Continue/etc)
-            5. Operating system
-            6. Config file content (sanitized, no tokens)`;
-            } else if (issueType === 'agent-behavior') {
-              requirements = `**For Agent Behavior Issues**:
-            1. Which tool exhibited the unexpected behavior
-            2. What input was provided to the tool
-            3. What output was received (include ha_report_issue output if available)
-            4. What output was expected instead
-            5. Context about what the agent was trying to accomplish`;
-            } else {
-              requirements = `**General Requirements** (issue type unknown):
-            1. Exact error message or clear description of the problem
-            2. ha-mcp version number
-            3. Installation method (uvx/pip/docker/addon)
-            4. What was being done when the issue occurred`;
-            }
-
-            const prompt = `You are doing a QUICK evaluation of a GitHub issue. Do NOT search files, do NOT read code, do NOT use any tools.
-            Base your evaluation ONLY on the issue text provided below.
-
-            **Project**: Home Assistant MCP Server (ha-mcp)
-            - MCP server with 92+ tools for AI assistants to control Home Assistant
-            - Supports: Claude Desktop, Claude Code, Cursor, Gemini CLI, Continue, etc.
-            - Installation: uvx, pip, docker, Home Assistant add-on
-            - Users can run \`ha_report_issue\` tool to auto-collect diagnostic info
-
-            **Issue Title**: "${issueTitle}"
-            **Issue Type**: ${issueType}
-            **Issue Body**: "${issueBody}"
-
-            **Common Issue Types**:
-            - Runtime bugs: Tool errors, API failures
-            - Startup issues: Connection failures, Docker problems
-            - Agent behavior: Tools returning unexpected results
-            - Support questions: "How do I...", "Can I..."
-
-            **Question**: Is there enough information to provide helpful diagnostic guidance?
-
-            ${requirements}
-
-            **Classification** — pick exactly one:
-            - \`bug\` — reports broken/incorrect behavior (error, crash, wrong output)
-            - \`enhancement\` — requests a new feature or improvement that doesn't exist yet
-            - \`question\` — asking how to do something; no clear bug or feature request
-            - \`invalid\` — off-topic, spam, or not actionable
-
-            **Decision Criteria**:
-            - If this is a support/docs question (not a bug): treat as COMPLETE (guidance is still possible)
-            - If 70%+ of required items present: COMPLETE
-            - If there's a clear, specific error message (even if other details missing): COMPLETE
-            - If issue provides diagnostic value (stack trace, logs, specific symptoms): COMPLETE
-            - If the issue is too vague: output the missing info list
-
-            **Your response format**:
-
-            If complete enough:
-              Output exactly one line: \`COMPLETE:<classification>\`
-              Examples: \`COMPLETE:bug\` / \`COMPLETE:enhancement\` / \`COMPLETE:question\` / \`COMPLETE:invalid\`
-
-            If missing info:
-              Output a bulleted list of what's missing with instructions:
-                * **[Missing item]** - [How to get it]
-              Then on the very last line: \`<!-- CLASSIFY:<classification> -->\`
-              Example last line: \`<!-- CLASSIFY:bug -->\`
-
-            Be concise. Focus only on what's actually missing.
-
-            **CRITICAL**: Do NOT use tools. Do NOT search files. Evaluate based ONLY on the issue text above.`;
-
-            core.setOutput('prompt', prompt);
-
-      - name: Evaluate completeness
-        id: evaluate
-        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ''
-          GEMINI_CLI_TRUST_WORKSPACE: 'true'
-        with:
-          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
-          gemini_model: 'gemini-3.5-flash'
-          settings: |
-            {
-              "model": {
-                "maxSessionTurns": 2,
-                "temperature": 0.3
-              },
-              "tools": {
-                "core": []
-              }
-            }
-          prompt: '${{ steps.build_prompt.outputs.prompt }}'
+            core.setOutput('author_comments', authorComments || '');
 
       - name: BM25 candidate retrieval
         id: bm25
@@ -401,7 +260,10 @@ jobs:
               return { issue, score };
             });
 
-            const THRESHOLD = 1.5;
+            // Threshold=60: at corpus size ~500 the 8th-ranked non-duplicate scores
+            // 9–93 (median ~69), so 60 filters ~55% of non-duplicate queries while
+            // keeping all lexically-similar duplicates (which score 90+).
+            const THRESHOLD = 60;
             const candidates = scored
               .sort((a, b) => b.score - a.score)
               .slice(0, 8)
@@ -421,46 +283,8 @@ jobs:
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
             core.setOutput('candidates', formatted);
 
-      - name: Gemini duplicate verification
-        id: check_duplicate
-        if: steps.bm25.outputs.candidates != ''
-        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ''
-          GEMINI_CLI_TRUST_WORKSPACE: 'true'
-        with:
-          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
-          gemini_model: 'gemini-3.5-flash'
-          settings: |
-            {
-              "model": {
-                "maxSessionTurns": 2,
-                "temperature": 0
-              },
-              "tools": {
-                "core": []
-              }
-            }
-          prompt: |
-            You are checking if a GitHub issue is a duplicate of existing issues.
-            Do NOT use any tools. Base your evaluation ONLY on the text below.
-
-            Current issue #${{ steps.issue_number.outputs.number }}: ${{ steps.issue_data.outputs.issue_title }}
-            ${{ steps.issue_data.outputs.issue_body }}
-
-            Candidate issues (BM25 search results):
-            ${{ steps.bm25.outputs.candidates }}
-
-            For each candidate decide: DUPLICATE, RELATED, or UNRELATED.
-            Stop as soon as you find a DUPLICATE with high confidence.
-
-            Respond with ONLY this JSON (no prose, no markdown code block):
-            {"duplicate_of": <issue number or null>, "confidence": "high|medium|low", "related": [<numbers>], "reasoning": "<one sentence>"}
-
       - name: Fetch changelogs
         id: changelogs
-        if: steps.evaluate.outcome == 'success' && !cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -468,15 +292,20 @@ jobs:
 
           # Get the 3 most recent stable tags (vX.Y.Z pattern)
           TAGS=$(gh api "repos/${PROD_REPO}/tags" --jq '[.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[0:3][]' 2>/dev/null || true)
+          LATEST_TAG=$(echo "$TAGS" | head -1)
 
           CHANGELOG_CONTEXT=""
 
-          # Unreleased changes (main/master)
-          UNRELEASED=$(gh api "repos/${PROD_REPO}/contents/CHANGELOG.md?ref=master" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -60 || true)
-          if [ -n "$UNRELEASED" ]; then
-            CHANGELOG_CONTEXT="## Unreleased (main)\n${UNRELEASED}\n\n"
+          # Unreleased changes: commits on master since the latest stable tag
+          if [ -n "$LATEST_TAG" ]; then
+            UNRELEASED=$(gh api "repos/${PROD_REPO}/compare/${LATEST_TAG}...master" \
+              --jq '[.commits[] | .commit.message | split("\n")[0] | select(test("^(feat|fix)"))] | .[0:20] | join("\n")' 2>/dev/null || true)
+            if [ -n "$UNRELEASED" ]; then
+              CHANGELOG_CONTEXT="## Unreleased (since ${LATEST_TAG})\n${UNRELEASED}\n\n"
+            fi
           fi
 
+          # Last 3 stable releases from CHANGELOG.md at each tag
           for TAG in $TAGS; do
             SECTION=$(gh api "repos/${PROD_REPO}/contents/CHANGELOG.md?ref=${TAG}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -50 || true)
             if [ -n "$SECTION" ]; then
@@ -490,87 +319,100 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build priority/size prompt
-        id: build_priority_prompt
-        if: steps.evaluate.outcome == 'success' && !cancelled()
+      - name: Build unified triage prompt
+        id: build_prompt
         uses: actions/github-script@v9
         env:
-          COMPLETENESS_RESULT: ${{ steps.evaluate.outputs.summary }}
-          DUPLICATE_RESULT: ${{ steps.check_duplicate.outputs.summary }}
+          ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
           ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
           ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          ISSUE_AUTHOR_COMMENTS: ${{ steps.issue_data.outputs.author_comments }}
+          BM25_CANDIDATES: ${{ steps.bm25.outputs.candidates }}
           CHANGELOG_CONTEXT: ${{ steps.changelogs.outputs.changelog_context }}
         with:
           script: |
-            const completenessResult = (process.env.COMPLETENESS_RESULT || '').trim();
-            const isComplete = completenessResult.toUpperCase().startsWith('COMPLETE');
-
-            // Parse classification from completeness result
-            const classMatch = completenessResult.match(/^COMPLETE:(\w+)$/i);
-            const classification = classMatch ? classMatch[1].toLowerCase() : 'unknown';
-
-            // Check if high-confidence duplicate detected
-            let isDuplicate = false;
-            const dupRaw = process.env.DUPLICATE_RESULT || '';
-            if (dupRaw) {
-              try {
-                const cleanJson = dupRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                const dup = JSON.parse(cleanJson);
-                isDuplicate = dup.duplicate_of !== null && dup.confidence === 'high';
-              } catch (e) {
-                core.warning('Could not parse duplicate result: ' + e.message);
-              }
-            }
-
-            // Only run priority/size for complete, non-duplicate bugs and enhancements
-            if (!isComplete || isDuplicate || !['bug', 'enhancement'].includes(classification)) {
-              core.setOutput('skip', 'true');
-              return;
-            }
-
             const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const issueType = process.env.ISSUE_TYPE || 'unknown';
             const issueTitle = process.env.ISSUE_TITLE || '';
-            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 800);
+            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 1500);
+            const authorComments = process.env.ISSUE_AUTHOR_COMMENTS || '';
+            const bm25Candidates = process.env.BM25_CANDIDATES || '';
             const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
 
-            const P0_FEATURES = 'P0 main features (if a bug blocks any of these, it is at minimum P1; if a regression, P0):\n' +
-              '- HA connection / authentication (server fails to start, token rejected, cannot connect)\n' +
-              '- Service calls / device control (ha_call_service, ha_bulk_control, lights/switches/covers)\n' +
-              '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)\n' +
-              '- Automation management (create/edit/delete/enable/disable automations)\n' +
-              '- Script management (create/execute scripts)\n' +
-              '- Dashboard management (create/modify Lovelace dashboards)\n' +
-              '- Template evaluation (ha_eval_template)\n' +
-              '- Automation / script tracing (ha_get_automation_traces)';
+            const authorSection = authorComments
+              ? `\nAuthor follow-up comments:\n${authorComments}\n`
+              : '';
 
-            const bugRules = 'Priority rules for bugs:\n' +
-              P0_FEATURES + '\n\n' +
-              'P0: Regression (introduced in a recent release per changelog) AND blocks a P0 main feature, OR affects multiple P0 features simultaneously\n' +
-              'P1: Partial outage — one tool broken but workaround exists, or affects a subset of users (specific install method or HA version)\n' +
-              'P2: Small bug — cosmetic issue, minor edge case, wrong error message, rarely-hit path';
+            const duplicateSection = bm25Candidates
+              ? `\n## Possible Duplicate Candidates (BM25 pre-filtered)\nCheck each candidate — mark DUPLICATE only if high confidence.\n\n${bm25Candidates}\n`
+              : '';
 
-            const enhancementRules = 'Size rules for enhancements:\n' +
-              'S: Clearly scoped to one tool, one parameter, or one setting — likely touches 1 file\n' +
-              'M: New tool or significant change to existing tool, touches multiple files\n' +
-              'L: New subsystem, new integration pattern, or architectural change';
+            const prompt = `You are triaging a GitHub issue for ha-mcp (Home Assistant MCP Server — 92+ tools enabling AI assistants to control Home Assistant smart homes: entity control, automations, scripts, dashboards, templates, and more).
 
-            const prompt = 'You are classifying a GitHub issue for the ha-mcp project (Home Assistant MCP Server — 92+ tools for AI assistants to control Home Assistant).\n\n' +
-              'Issue #' + issueNumber + ' [' + classification + ']: ' + issueTitle + '\n\n' +
-              'Issue body:\n' + issueBody + '\n\n' +
-              'Recent changelog context:\n' + changelog + '\n\n' +
-              (classification === 'bug' ? bugRules : enhancementRules) + '\n\n' +
-              'good_first_issue: set to true if P2 bug OR S enhancement (well-scoped, good for new contributors)\n\n' +
-              'Respond with ONLY this JSON (no prose, no markdown code block):\n' +
-              '{"priority": ' + (classification === 'bug' ? '"P0"|"P1"|"P2"' : 'null') + ', ' +
-              '"size": ' + (classification === 'enhancement' ? '"S"|"M"|"L"' : 'null') + ', ' +
-              '"reasoning": "<one sentence>", "good_first_issue": true|false, "regression_likely": true|false}';
+Do NOT use any tools. Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose, no markdown, no code block.
 
-            core.setOutput('skip', 'false');
+## Issue #${issueNumber}: ${issueTitle}
+Type: ${issueType}
+Body:
+${issueBody}
+${authorSection}${duplicateSection}
+## Recent Release Context (for regression detection)
+${changelog}
+
+## Evaluation Tasks
+
+### 1. Completeness
+Is there enough information to take action? Be lenient:
+- question or enhancement: always complete (no info requirements)
+- 70%+ of requirements present, or clear error/stack trace: complete
+Requirements:
+- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool
+- startup-bug: error details, ha-mcp version, install method, client app, OS
+- agent-behavior: which tool, what input, actual output, expected output
+
+### 2. Classification (pick one)
+- bug: broken or incorrect behavior (error, crash, wrong output)
+- enhancement: new feature or improvement that doesn't exist yet
+- question: asking how to do something; no clear bug or feature request
+- invalid: off-topic, spam, not actionable
+
+### 3. Missing info (only if incomplete)
+Array of strings — each item: "What is missing: how the reporter can get it"
+Keep each item concise. Empty array if complete.
+
+### 4. Duplicate detection (only if candidates provided above; otherwise leave null)
+Compare the issue against each candidate. Set duplicate_of to the candidate's number if you are confident it is a duplicate. related = candidates that touch the same area but are not duplicates.
+
+### 5. Priority (bugs only; null for all others)
+P0 features (regression blocking any = P0; partial outage = P1):
+- HA connection / authentication
+- Service calls / device control (ha_call_service, ha_bulk_control)
+- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)
+- Automation management (create/edit/delete/enable/disable)
+- Script management (create/execute)
+- Dashboard management (create/modify Lovelace)
+- Template evaluation (ha_eval_template)
+- Automation / script tracing (ha_get_automation_traces)
+
+P0: regression in recent release AND blocks a P0 feature, OR affects multiple P0 features
+P1: one tool broken but workaround exists, or affects subset (specific install method / HA version)
+P2: cosmetic, minor edge case, wrong error message, rarely-hit path
+
+### 6. Size (enhancements only; null for all others)
+S: one tool/parameter/setting, ~1 file
+M: new tool or significant change to existing tool, multiple files
+L: new subsystem, new integration pattern, architectural change
+
+### 7. good_first_issue
+true if P2 bug OR S enhancement (well-scoped, good for new contributors)
+
+Respond with ONLY this JSON (fill all fields; use null where not applicable):
+{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid","missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],"priority":null,"size":null,"good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}`;
+
             core.setOutput('prompt', prompt);
 
-      - name: Evaluate priority/size
-        id: evaluate_priority
-        if: steps.build_priority_prompt.outputs.skip == 'false' && !cancelled()
+      - name: Evaluate
+        id: evaluate
         uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
         continue-on-error: true
         env:
@@ -582,14 +424,14 @@ jobs:
           settings: |
             {
               "model": {
-                "maxSessionTurns": 2,
-                "temperature": 0.2
+                "maxSessionTurns": 1,
+                "temperature": 0
               },
               "tools": {
                 "core": []
               }
             }
-          prompt: '${{ steps.build_priority_prompt.outputs.prompt }}'
+          prompt: '${{ steps.build_prompt.outputs.prompt }}'
 
       # Skip on cancellation — superseded runs from concurrency.cancel-in-progress
       # should not post stale results.
@@ -599,8 +441,6 @@ jobs:
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
           EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
-          DUPLICATE_RESULT: ${{ steps.check_duplicate.outputs.summary }}
-          PRIORITY_RESULT: ${{ steps.evaluate_priority.outputs.summary }}
           ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
         with:
           script: |
@@ -701,56 +541,47 @@ jobs:
               return;
             }
 
-            const trimmed = evaluateResult.trim();
+            // --- Parse unified JSON output ---
+            let result;
+            try {
+              const cleaned = evaluateResult
+                .replace(/```json\n?/g, '')
+                .replace(/```\n?/g, '')
+                .trim();
+              result = JSON.parse(cleaned);
+            } catch (e) {
+              core.error('Could not parse evaluate output as JSON: ' + e.message);
+              core.error('Raw output: ' + evaluateResult.substring(0, 500));
+              await postComment(GENERIC_FAILURE_BODY);
+              await addLabels(['triage-failed']);
+              core.setFailed('Evaluate output was not valid JSON.');
+              return;
+            }
 
             const VALID_CLASSIFICATIONS = ['bug', 'enhancement', 'question', 'invalid'];
-            const parseClassification = (text) => {
-              const m = text.match(/^COMPLETE:(\w+)$/i) || text.match(/<!--\s*CLASSIFY:(\w+)\s*-->/i);
-              const label = m ? m[1].toLowerCase() : null;
-              return VALID_CLASSIFICATIONS.includes(label) ? label : null;
-            };
+            const classification = VALID_CLASSIFICATIONS.includes(result.classification)
+              ? result.classification
+              : null;
+            const completeness = result.completeness || 'incomplete';
+            const isDuplicate = result.duplicate_of !== null &&
+              result.duplicate_of !== undefined &&
+              result.duplicate_confidence === 'high';
+            const duplicateNumber = result.duplicate_of;
+            const relatedNumbers = Array.isArray(result.related) ? result.related : [];
+            const missingInfo = Array.isArray(result.missing_info) ? result.missing_info : [];
+            const priority = result.priority || null;
+            const issueSize = result.size || null;
+            const goodFirstIssue = result.good_first_issue || false;
 
-            // --- Parse duplicate result ---
-            let isDuplicate = false;
-            let duplicateNumber = null;
-            let relatedNumbers = [];
-            const dupRaw = process.env.DUPLICATE_RESULT || '';
-            if (dupRaw) {
-              try {
-                const cleanJson = dupRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                const dup = JSON.parse(cleanJson);
-                if (dup.duplicate_of !== null && dup.confidence === 'high') {
-                  isDuplicate = true;
-                  duplicateNumber = dup.duplicate_of;
-                }
-                relatedNumbers = Array.isArray(dup.related) ? dup.related : [];
-              } catch (e) {
-                core.warning('Could not parse duplicate result: ' + e.message);
-              }
-            }
-
-            // --- Parse priority/size result ---
-            let priority = null;
-            let issueSize = null;
-            let goodFirstIssue = false;
-            const priorityRaw = process.env.PRIORITY_RESULT || '';
-            if (priorityRaw) {
-              try {
-                const cleanJson = priorityRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                const ps = JSON.parse(cleanJson);
-                priority = ps.priority || null;
-                issueSize = ps.size || null;
-                goodFirstIssue = ps.good_first_issue || false;
-              } catch (e) {
-                core.warning('Could not parse priority/size result: ' + e.message);
-              }
-            }
+            core.info('Triage result: ' + JSON.stringify({
+              completeness, classification, isDuplicate,
+              duplicateNumber, priority, issueSize, goodFirstIssue
+            }));
 
             // === FLOW DECISION ===
 
             // (A) High-confidence duplicate — flag for maintainer review
             if (isDuplicate) {
-              const classification = parseClassification(trimmed);
               const body = '## 🔄 Possible Duplicate\n\n' +
                 'This issue looks like a duplicate of #' + duplicateNumber + '.\n\n' +
                 'A maintainer will verify and close if confirmed. If this is **not** a duplicate, ' +
@@ -767,8 +598,7 @@ jobs:
             }
 
             // (B) Complete — issue has enough info
-            if (trimmed.toUpperCase().startsWith('COMPLETE')) {
-              const classification = parseClassification(trimmed);
+            if (completeness === 'complete') {
               const labels = ['triaged', ...(classification ? [classification] : [])];
               if (goodFirstIssue) labels.push('good first issue');
               core.info('Issue is complete; adding labels: ' + labels.join(', '));
@@ -787,66 +617,22 @@ jobs:
               return;
             }
 
-            // Empty output guard
-            if (!trimmed) {
-              core.error('Evaluate produced empty output; posting generic notice.');
-              await postComment(GENERIC_FAILURE_BODY);
-              await addLabels(['triage-failed']);
-              core.setFailed('Evaluate produced empty output.');
-              return;
-            }
-
-            // Refusal / too-long guard — divert to generic notice.
-            // Anchored patterns so legitimate missing-info prose like
-            // "I cannot find the version" doesn't false-positive.
-            const REFUSAL_PATTERNS = [
-              /^(unfortunately|sorry|i'?m sorry|i apologize|my apologies|error:)/i,
-              /^as an? (ai|language model|assistant|llm)\b/i,
-              /^i (cannot|can'?t|won'?t)\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|provide that|provide this|provide assistance|continue|process this)/i,
-              /^i am (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
-              /^i'?m (unable|not able)\s+to\s+(help|assist|comply|do that|do this|fulfill|answer that|answer this|continue|process)/i,
-              /^we (cannot|can'?t|are unable)\s+(help|assist|comply|fulfill)/i,
-              /^i refuse to\b/i,
-              /^i('?m| am) afraid (i )?(cannot|can'?t|won'?t)/i,
-              /^unable to (help|assist|comply)/i,
-              /\b(safety policy|content policy|won'?t help)\b/i,
-              /\bviolates? (my|our|the) (guidelines|policies|terms)\b/i,
-            ];
-            const looksLikeRefusal = REFUSAL_PATTERNS.some(re => re.test(trimmed));
-            const tooLong = trimmed.length > 4000;
-
-            if (looksLikeRefusal || tooLong) {
-              core.error(`Evaluate output diverted to generic notice (refusal=${looksLikeRefusal}, length=${trimmed.length}).`);
-              await postComment(GENERIC_FAILURE_BODY);
-              await addLabels(['triage-failed']);
-              core.setFailed('Evaluate output was a refusal or too long.');
-              return;
-            }
-
-            // (C) Missing info — post Information Needed comment
-            const classification = parseClassification(trimmed);
-            const visibleText = trimmed.replace(/\n?<!--\s*CLASSIFY:\w+\s*-->\s*$/i, '').trimEnd();
-
-            const matchesMissingInfoShape = visibleText.split('\n').some(line => {
-              const l = line.trimStart();
-              return l.startsWith('* ') || l.startsWith('- ') || l.startsWith('• ') ||
-                     l.startsWith('**') || /^\d+\.\s/.test(l);
-            });
-            if (!matchesMissingInfoShape) {
-              core.warning(`Evaluate output didn't match expected list shape (length=${visibleText.length}); posting verbatim.`);
-            }
-
-            // Append related issues if found
+            // (C) Incomplete — post Information Needed comment
             const relatedText = relatedNumbers.length > 0
               ? '\n\n🔗 **Related issues**: ' + relatedNumbers.map(n => '#' + n).join(', ')
               : '';
 
-            const isBug = ['bug'].includes(classification);
+            const missingText = missingInfo.length > 0
+              ? missingInfo.map(item => `* ${item}`).join('\n')
+              : '* Please provide more details about your issue.';
+
+            const isBug = classification === 'bug';
             const reportIssueTip = isBug
-              ? '\n\n> 💡 **Quick tip**: If you have the ha-mcp agent running, use the `ha_report_issue` tool — it auto-collects the diagnostic info above in one step.'
+              ? '\n\n> 💡 **Two ways to provide this**: either run the `ha_report_issue` tool in the ha-mcp agent and paste its output here, **or** reply manually with the details above.'
               : '';
-            const body = '## ℹ️ Information Needed\n\n' + visibleText + relatedText + reportIssueTip +
-              '\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n' +
+
+            const body = '## ℹ️ Information Needed\n\n' + missingText + relatedText + reportIssueTip +
+              '\n\n---\n\n💬 **Please reply to this issue** with the requested information.\n\n' +
               '*🤖 Automated triage by Issue Bot*';
             await postComment(body);
             if (classification) await addLabels([classification]);
@@ -859,58 +645,3 @@ jobs:
         run: |
           echo "::error::Evaluate step did not succeed (outcome=${{ steps.evaluate.outcome }}). Check the step logs above for the underlying CLI error."
           exit 1
-
-  mark_done:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issues' && github.event.action == 'closed' && !github.event.issue.pull_request
-    steps:
-      - name: Set project Status to Done
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const PROJECT_ID = 'PVT_kwDODdb5sM4BPM6N';
-            const STATUS_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rf-Q';
-            const STATUS_DONE_ID = '98236657';
-
-            const issueNodeId = context.payload.issue.node_id;
-            const issueNumber = context.payload.issue.number;
-
-            try {
-              const result = await github.graphql(`
-                query($id: ID!) {
-                  node(id: $id) {
-                    ... on Issue {
-                      projectItems(first: 10) {
-                        nodes { id project { id } }
-                      }
-                    }
-                  }
-                }
-              `, { id: issueNodeId });
-
-              const item = result.node.projectItems.nodes.find(n => n.project.id === PROJECT_ID);
-              if (!item) {
-                core.info('Issue #' + issueNumber + ' not found in project board — skipping.');
-                return;
-              }
-
-              await github.graphql(`
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                  updateProjectV2ItemFieldValue(input: {
-                    projectId: $projectId
-                    itemId: $itemId
-                    fieldId: $fieldId
-                    value: { singleSelectOptionId: $optionId }
-                  }) { projectV2Item { id } }
-                }
-              `, {
-                projectId: PROJECT_ID,
-                itemId: item.id,
-                fieldId: STATUS_FIELD_ID,
-                optionId: STATUS_DONE_ID,
-              });
-
-              core.info('Set issue #' + issueNumber + ' project Status = Done');
-            } catch (err) {
-              core.warning('Failed to set project Status to Done: ' + err.message);
-            }
