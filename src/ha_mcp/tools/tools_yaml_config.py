@@ -183,8 +183,9 @@ class YamlConfigTools:
 
         **WARNING: destructive, disabled by default.** Use a dedicated
         tool first wherever possible — ha_config_set_automation,
-        _script, _scene, _helper (all 27 helper types incl. template
-        sensors). Only reach for this tool for YAML-only integrations
+        _script, _scene, _helper (every input_/counter/timer/template/
+        group/utility_meter/etc. helper). Only reach for this tool for
+        YAML-only integrations
         with no config-flow or API path (``command_line``, ``rest``,
         ``shell_command``, ``notify`` platforms, ``knx`` entities in
         packages) and for registering YAML-mode dashboards via
