@@ -85,9 +85,7 @@ def _count_attach_calls(tree: ast.AST) -> int:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             target = node.func
-            if isinstance(target, ast.Name) and target.id in _ATTACH_CALL_NAMES:
-                count += 1
-            elif (
+            if (isinstance(target, ast.Name) and target.id in _ATTACH_CALL_NAMES) or (
                 isinstance(target, ast.Attribute) and target.attr in _ATTACH_CALL_NAMES
             ):
                 count += 1
@@ -195,9 +193,11 @@ def _canonical_files_mappings() -> list[tuple[str, str]]:
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
                 name = node.target.id
                 if name in mapping_names and isinstance(node.value, ast.Tuple):
-                    for elt in node.value.elts:
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                            out.append((name, elt.value))
+                    out.extend(
+                        (name, elt.value)
+                        for elt in node.value.elts
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                    )
     return out
 
 
