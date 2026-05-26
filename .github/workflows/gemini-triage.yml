@@ -347,67 +347,78 @@ jobs:
               ? `\n## Possible Duplicate Candidates (BM25 pre-filtered)\nCheck each candidate — mark DUPLICATE only if high confidence.\n\n${bm25Candidates}\n`
               : '';
 
-            const prompt = `You are triaging a GitHub issue for ha-mcp (Home Assistant MCP Server — 92+ tools enabling AI assistants to control Home Assistant smart homes: entity control, automations, scripts, dashboards, templates, and more).
+            const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
+              + '"missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],'
+              + '"priority":null,"size":null,"good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
 
-Do NOT use any tools. Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose, no markdown, no code block.
-
-## Issue #${issueNumber}: ${issueTitle}
-Type: ${issueType}
-Body:
-${issueBody}
-${authorSection}${duplicateSection}
-## Recent Release Context (for regression detection)
-${changelog}
-
-## Evaluation Tasks
-
-### 1. Completeness
-Is there enough information to take action? Be lenient:
-- question or enhancement: always complete (no info requirements)
-- 70%+ of requirements present, or clear error/stack trace: complete
-Requirements:
-- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool
-- startup-bug: error details, ha-mcp version, install method, client app, OS
-- agent-behavior: which tool, what input, actual output, expected output
-
-### 2. Classification (pick one)
-- bug: broken or incorrect behavior (error, crash, wrong output)
-- enhancement: new feature or improvement that doesn't exist yet
-- question: asking how to do something; no clear bug or feature request
-- invalid: off-topic, spam, not actionable
-
-### 3. Missing info (only if incomplete)
-Array of strings — each item: "What is missing: how the reporter can get it"
-Keep each item concise. Empty array if complete.
-
-### 4. Duplicate detection (only if candidates provided above; otherwise leave null)
-Compare the issue against each candidate. Set duplicate_of to the candidate's number if you are confident it is a duplicate. related = candidates that touch the same area but are not duplicates.
-
-### 5. Priority (bugs only; null for all others)
-P0 features (regression blocking any = P0; partial outage = P1):
-- HA connection / authentication
-- Service calls / device control (ha_call_service, ha_bulk_control)
-- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)
-- Automation management (create/edit/delete/enable/disable)
-- Script management (create/execute)
-- Dashboard management (create/modify Lovelace)
-- Template evaluation (ha_eval_template)
-- Automation / script tracing (ha_get_automation_traces)
-
-P0: regression in recent release AND blocks a P0 feature, OR affects multiple P0 features
-P1: one tool broken but workaround exists, or affects subset (specific install method / HA version)
-P2: cosmetic, minor edge case, wrong error message, rarely-hit path
-
-### 6. Size (enhancements only; null for all others)
-S: one tool/parameter/setting, ~1 file
-M: new tool or significant change to existing tool, multiple files
-L: new subsystem, new integration pattern, architectural change
-
-### 7. good_first_issue
-true if P2 bug OR S enhancement (well-scoped, good for new contributors)
-
-Respond with ONLY this JSON (fill all fields; use null where not applicable):
-{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid","missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],"priority":null,"size":null,"good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}`;
+            const prompt = [
+              'You are triaging a GitHub issue for ha-mcp (Home Assistant MCP Server — 92+ tools enabling AI',
+              'assistants to control Home Assistant smart homes: entity control, automations, scripts, dashboards,',
+              'templates, and more).',
+              '',
+              'Do NOT use any tools. Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose,',
+              'no markdown, no code block.',
+              '',
+              '## Issue #' + issueNumber + ': ' + issueTitle,
+              'Type: ' + issueType,
+              'Body:',
+              issueBody,
+              authorSection,
+              duplicateSection,
+              '## Recent Release Context (for regression detection)',
+              changelog,
+              '',
+              '## Evaluation Tasks',
+              '',
+              '### 1. Completeness',
+              'Is there enough information to take action? Be lenient:',
+              '- question or enhancement: always complete (no info requirements)',
+              '- 70%+ of requirements present, or clear error/stack trace: complete',
+              'Requirements:',
+              '- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool',
+              '- startup-bug: error details, ha-mcp version, install method, client app, OS',
+              '- agent-behavior: which tool, what input, actual output, expected output',
+              '',
+              '### 2. Classification (pick one)',
+              '- bug: broken or incorrect behavior (error, crash, wrong output)',
+              '- enhancement: new feature or improvement that does not exist yet',
+              '- question: asking how to do something; no clear bug or feature request',
+              '- invalid: off-topic, spam, not actionable',
+              '',
+              '### 3. Missing info (only if incomplete)',
+              'Array of strings — each item: "What is missing: how the reporter can get it"',
+              'Keep each item concise. Empty array if complete.',
+              '',
+              '### 4. Duplicate detection (only check candidates if provided; otherwise leave null)',
+              'Compare the issue against each candidate. Set duplicate_of to the candidate number if confident',
+              'it is a duplicate. related = candidates that touch the same area but are not duplicates.',
+              '',
+              '### 5. Priority (bugs only; null for all others)',
+              'P0 features (regression blocking any = P0; partial outage of one = P1):',
+              '- HA connection / authentication',
+              '- Service calls / device control (ha_call_service, ha_bulk_control)',
+              '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)',
+              '- Automation management (create/edit/delete/enable/disable)',
+              '- Script management (create/execute)',
+              '- Dashboard management (create/modify Lovelace)',
+              '- Template evaluation (ha_eval_template)',
+              '- Automation / script tracing (ha_get_automation_traces)',
+              '',
+              'P0: regression in recent release AND blocks a P0 feature, OR affects multiple P0 features',
+              'P1: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
+              'P2: cosmetic, minor edge case, wrong error message, rarely-hit path',
+              '',
+              '### 6. Size (enhancements only; null for all others)',
+              'S: one tool/parameter/setting, ~1 file',
+              'M: new tool or significant change to existing tool, multiple files',
+              'L: new subsystem, new integration pattern, architectural change',
+              '',
+              '### 7. good_first_issue',
+              'true if P2 bug OR S enhancement (well-scoped, good for new contributors)',
+              '',
+              'Respond with ONLY this JSON (fill all fields; use null where not applicable):',
+              jsonSchema,
+            ].join('\n');
 
             core.setOutput('prompt', prompt);
 
