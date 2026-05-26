@@ -42,7 +42,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
-    build_skill_content,
+    attach_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -595,13 +595,12 @@ class ConfigScriptTools:
                 }
                 if bp_warnings:
                     response["best_practice_warnings"] = list(bp_warnings)
-                skill_content = build_skill_content(
+                attach_skill_content(
+                    response,
                     include_skill=include_skill,
                     canonical_files=_SCRIPT_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
-                if skill_content:
-                    response["skill_content"] = skill_content
                 return response
 
             if config is None:
@@ -673,13 +672,12 @@ class ConfigScriptTools:
 
             merge_validation_meta(result, validation_meta)
 
-            skill_content = build_skill_content(
+            attach_skill_content(
+                result,
                 include_skill=include_skill,
                 canonical_files=_SCRIPT_SKILL_FILES,
                 referenced_files=bp_warnings.referenced_files,
             )
-            if skill_content:
-                result["skill_content"] = skill_content
 
             return {
                 "success": True,

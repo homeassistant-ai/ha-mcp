@@ -29,7 +29,7 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import build_skill_content, parse_json_param
+from .util_helpers import attach_skill_content, parse_json_param
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +43,17 @@ _DASHBOARD_SKILL_FILES: tuple[str, ...] = (
 
 
 def _attach_dashboard_skill(response: dict[str, Any], include_skill: bool) -> None:
-    """In-place attach skill_content to a dashboard response when applicable."""
-    content = build_skill_content(
+    """In-place attach skill_content to a dashboard response when applicable.
+
+    Delegates to the shared :func:`attach_skill_content` so the
+    missing-vendor-warning path is consistent across every write tool.
+    """
+    attach_skill_content(
+        response,
         include_skill=include_skill,
         canonical_files=_DASHBOARD_SKILL_FILES,
         referenced_files=None,
     )
-    if content:
-        response["skill_content"] = content
 
 
 async def _get_dashboard_config_internal(

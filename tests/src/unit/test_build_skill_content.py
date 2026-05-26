@@ -12,7 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
-from ha_mcp.tools.util_helpers import build_skill_content
+from ha_mcp.tools.util_helpers import (
+    _SKILLS_VENDOR_MISSING_WARNING,
+    attach_skill_content,
+    build_skill_content,
+)
 
 
 @pytest.fixture
@@ -233,6 +237,98 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_yaml_config import _YAML_SKILL_FILES
 
         assert _YAML_SKILL_FILES == ("references/template-guidelines.md",)
+
+
+# ---------------------------------------------------------------------------
+# attach_skill_content — happy + degraded paths
+# ---------------------------------------------------------------------------
+
+
+class TestAttachSkillContent:
+    """The shared in-place helper that every write tool uses.
+
+    Mirrors the read-side ha_get_skill_guide ``degraded: True`` contract:
+    when the bundled skills-vendor submodule is missing and the caller
+    requested skill content, the response carries a top-level warning so
+    the operator notices instead of getting a silently degraded server.
+    """
+
+    def test_happy_path_attaches_skill_content(self, patched_get_skills_dir):
+        response: dict = {"success": True}
+        attach_skill_content(
+            response,
+            include_skill=True,
+            canonical_files=("references/automation-patterns.md",),
+            referenced_files=None,
+        )
+        assert "skill_content" in response
+        assert "warnings" not in response
+
+    def test_nothing_requested_is_silent(self, patched_get_skills_dir):
+        """include_skill=False + no referenced_files → silent (user opted out)."""
+        response: dict = {"success": True}
+        attach_skill_content(
+            response,
+            include_skill=False,
+            canonical_files=("references/automation-patterns.md",),
+            referenced_files=None,
+        )
+        assert "skill_content" not in response
+        assert "warnings" not in response
+
+    def test_vendor_missing_with_include_skill_warns(self):
+        """Asymmetry fix vs ha_get_skill_guide: write tools used to silently
+        omit skill_content when the submodule was absent. Now they warn."""
+        with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
+            response: dict = {"success": True}
+            attach_skill_content(
+                response,
+                include_skill=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+        assert "skill_content" not in response
+        assert response.get("warnings") == [_SKILLS_VENDOR_MISSING_WARNING]
+
+    def test_vendor_missing_with_opt_out_is_silent(self):
+        """Caller explicitly opted out with include_skill=False — don't nag."""
+        with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
+            response: dict = {"success": True}
+            attach_skill_content(
+                response,
+                include_skill=False,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+        assert "skill_content" not in response
+        assert "warnings" not in response
+
+    def test_vendor_missing_with_referenced_files_warns(self):
+        """BP-warning auto-embed path is also degraded when vendor missing."""
+        with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
+            response: dict = {"success": True}
+            attach_skill_content(
+                response,
+                include_skill=False,
+                canonical_files=(),
+                referenced_files={
+                    "references/automation-patterns.md#native-conditions"
+                },
+            )
+        assert "skill_content" not in response
+        assert _SKILLS_VENDOR_MISSING_WARNING in response.get("warnings", [])
+
+    def test_warning_appended_not_overwritten(self):
+        """If the response already has a warnings list, we append, not overwrite."""
+        with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
+            response: dict = {"success": True, "warnings": ["pre-existing"]}
+            attach_skill_content(
+                response,
+                include_skill=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+        assert response["warnings"] == ["pre-existing", _SKILLS_VENDOR_MISSING_WARNING]
 
 
 # ---------------------------------------------------------------------------

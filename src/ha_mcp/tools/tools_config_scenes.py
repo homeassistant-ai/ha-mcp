@@ -39,7 +39,7 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
-    build_skill_content,
+    attach_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -769,13 +769,12 @@ class ConfigSceneTools:
                     "python_expression": python_transform,
                     "message": f"Scene {resolved_id} updated via Python transform",
                 }
-                skill_content = build_skill_content(
+                attach_skill_content(
+                    response,
                     include_skill=include_skill,
                     canonical_files=_SCENE_SKILL_FILES,
                     referenced_files=None,
                 )
-                if skill_content:
-                    response["skill_content"] = skill_content
                 return response
 
             if config is None:
@@ -882,13 +881,12 @@ class ConfigSceneTools:
 
             merge_validation_meta(result, validation_meta)
 
-            skill_content = build_skill_content(
+            attach_skill_content(
+                result,
                 include_skill=include_skill,
                 canonical_files=_SCENE_SKILL_FILES,
                 referenced_files=None,
             )
-            if skill_content:
-                result["skill_content"] = skill_content
 
             # Issue #1168 R3 blocker 6: build response from ``resolved_id``
             # so the outer ``scene_id`` always matches the storage key.

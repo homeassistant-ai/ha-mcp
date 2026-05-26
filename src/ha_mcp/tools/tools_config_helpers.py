@@ -33,7 +33,7 @@ from .tools_config_entry_flow import (
 )
 from .util_helpers import (
     apply_entity_category,
-    build_skill_content,
+    attach_skill_content,
     coerce_bool_param,
     parse_json_param,
     parse_string_list_param,
@@ -50,15 +50,16 @@ def _attach_helper_skill(response: dict[str, Any], include_skill: bool) -> None:
 
     Helper tool has no best-practice checker integration, so
     ``referenced_files`` is always None — embedding is driven purely by
-    the ``include_skill`` flag.
+    the ``include_skill`` flag. Delegates to the shared
+    :func:`attach_skill_content` so the missing-vendor-warning path is
+    consistent across every write tool.
     """
-    content = build_skill_content(
+    attach_skill_content(
+        response,
         include_skill=include_skill,
         canonical_files=_HELPER_SKILL_FILES,
         referenced_files=None,
     )
-    if content:
-        response["skill_content"] = content
 
 
 # Simple helper types — managed via {type}/create and {type}/update WebSocket APIs

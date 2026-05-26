@@ -32,7 +32,7 @@ from .tools_filesystem import (
     _assert_mcp_tools_available,
 )
 from .util_helpers import (
-    build_skill_content,
+    attach_skill_content,
     coerce_bool_param,
     unwrap_service_response,
 )
@@ -263,13 +263,12 @@ class YamlConfigTools:
                 result = unwrap_service_response(result)
                 if not result.get("success", True):
                     raise_tool_error(result)
-                skill_content = build_skill_content(
+                attach_skill_content(
+                    result,
                     include_skill=include_skill,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )
-                if skill_content:
-                    result["skill_content"] = skill_content
                 return result
 
             raise_tool_error(

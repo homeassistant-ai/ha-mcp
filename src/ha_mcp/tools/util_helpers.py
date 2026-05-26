@@ -1860,3 +1860,59 @@ def build_skill_content(
     return resolve_skill_files(
         get_skills_dir(), _HA_BEST_PRACTICES_SKILL_NAME, sorted(wanted)
     )
+
+
+_SKILLS_VENDOR_MISSING_WARNING = (
+    "skill_content unavailable — the home-assistant-best-practices "
+    "skills-vendor submodule is not initialised. The agent will not "
+    "receive the relevant best-practice guidance for this write. "
+    "Run `git submodule update --init` on the server install."
+)
+
+
+def attach_skill_content(
+    response: dict[str, Any],
+    include_skill: bool,
+    canonical_files: tuple[str, ...],
+    referenced_files: set[str] | None,
+) -> None:
+    """In-place attach skill_content to a response, warn on degraded vendor.
+
+    Resolves ``canonical_files`` and/or ``referenced_files`` via
+    :func:`build_skill_content` and attaches the result under
+    ``response["skill_content"]`` when non-empty.
+
+    Asymmetry vs the read-side ``ha_get_skill_guide`` tool: when the
+    bundled skills-vendor submodule is missing, the read tool returns a
+    structured ``degraded: True`` payload, but the write tools previously
+    just omitted ``skill_content`` silently — the operator never sees
+    that the LLM is missing the proactive guidance the docstring
+    promised. This helper appends a top-level ``warnings[]`` entry in
+    that case so the omission is observable rather than silent.
+
+    Args:
+        response: The dict to mutate. ``skill_content`` and/or ``warnings``
+            may be added.
+        include_skill: When True, attach the canonical files for this tool.
+        canonical_files: Tool-specific default mapping.
+        referenced_files: Files cited by best-practice warnings.
+    """
+    from ..utils.skill_loader import get_skills_dir
+
+    content = build_skill_content(
+        include_skill=include_skill,
+        canonical_files=canonical_files,
+        referenced_files=referenced_files,
+    )
+    if content:
+        response["skill_content"] = content
+        return
+
+    # Empty content has two distinct causes:
+    # 1. Nothing was requested (include_skill=False AND no referenced_files).
+    #    Benign — return silently.
+    # 2. Something was requested but the vendor submodule is missing.
+    #    Degraded — append a warning so operators notice.
+    requested_anything = include_skill or referenced_files
+    if requested_anything and get_skills_dir() is None:
+        response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)
