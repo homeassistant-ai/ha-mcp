@@ -1618,8 +1618,12 @@ class TestBestPracticeCheckResultShape:
         assert result == []  # list semantics
         assert result.referenced_files == set()
 
-    def test_referenced_files_populated_on_warning(self):
-        """When a warning fires, the referenced skill file (with references/ prefix) is tracked."""
+    def test_referenced_files_preserves_anchor(self):
+        """When a warning fires, the referenced skill file (with #anchor) is tracked.
+
+        The anchor is what makes the auto-embed path ship only the
+        relevant markdown section instead of the whole 20 KB file.
+        """
         result = check_automation_config(
             {
                 "condition": [
@@ -1631,10 +1635,13 @@ class TestBestPracticeCheckResultShape:
                 "action": [],
             }
         )
-        assert "references/automation-patterns.md" in result.referenced_files
+        assert (
+            "references/automation-patterns.md#native-conditions"
+            in result.referenced_files
+        )
 
-    def test_referenced_files_dedup_across_repeated_emissions(self):
-        """Multiple warnings against the same file collapse to one set entry."""
+    def test_referenced_files_dedup_same_anchor_across_emissions(self):
+        """Repeated warnings hitting the same anchor collapse to one set entry."""
         result = check_automation_config(
             {
                 "condition": [
@@ -1650,7 +1657,9 @@ class TestBestPracticeCheckResultShape:
                 "action": [],
             }
         )
-        assert result.referenced_files == {"references/automation-patterns.md"}
+        assert result.referenced_files == {
+            "references/automation-patterns.md#native-conditions"
+        }
 
     def test_referenced_files_tracked_even_when_skill_prefix_none(self):
         """referenced_files is populated even when skill_prefix=None.
@@ -1670,7 +1679,9 @@ class TestBestPracticeCheckResultShape:
             },
             skill_prefix=None,
         )
-        assert result.referenced_files == {"references/automation-patterns.md"}
+        assert result.referenced_files == {
+            "references/automation-patterns.md#native-conditions"
+        }
 
 
 class TestThreeRouteWarningSuffix:

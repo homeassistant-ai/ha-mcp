@@ -17,12 +17,25 @@ from ha_mcp.tools.util_helpers import build_skill_content
 
 @pytest.fixture
 def fake_skills_dir(tmp_path: Path) -> Path:
-    """Build a fake home-assistant-best-practices skill with two reference files."""
+    """Build a fake home-assistant-best-practices skill with reference files
+    structured so section-extraction tests have anchors to target."""
     skill = tmp_path / "home-assistant-best-practices"
     refs = skill / "references"
     refs.mkdir(parents=True)
     (skill / "SKILL.md").write_text("# best practices\n")
-    (refs / "automation-patterns.md").write_text("# patterns\n")
+    (refs / "automation-patterns.md").write_text(
+        "# Automation Patterns\n"
+        "\n"
+        "Top intro prose.\n"
+        "\n"
+        "## Native Conditions\n"
+        "\n"
+        "Native conditions are validated at config load.\n"
+        "\n"
+        "## Trigger Types\n"
+        "\n"
+        "Trigger types are event-driven.\n"
+    )
     (refs / "template-guidelines.md").write_text("# templates\n")
     (refs / "helper-selection.md").write_text("# helpers\n")
     return tmp_path
@@ -49,7 +62,10 @@ class TestIncludeSkillCanonical:
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
-        assert result == {"references/automation-patterns.md": "# patterns\n"}
+        body = result["references/automation-patterns.md"]
+        # Full file: every H2 section present, no slicing applied.
+        assert "Native Conditions" in body
+        assert "Trigger Types" in body
 
     def test_multiple_canonical_files(self, patched_get_skills_dir):
         result = build_skill_content(
@@ -98,7 +114,8 @@ class TestIncludeSkillOff:
             canonical_files=("references/automation-patterns.md",),
             referenced_files={"references/template-guidelines.md"},
         )
-        assert result == {"references/template-guidelines.md": "# templates\n"}
+        # Only the referenced file is attached; canonical is suppressed.
+        assert set(result.keys()) == {"references/template-guidelines.md"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,3 +233,64 @@ class TestPerToolCanonicalMappings:
         from ha_mcp.tools.tools_yaml_config import _YAML_SKILL_FILES
 
         assert _YAML_SKILL_FILES == ("references/template-guidelines.md",)
+
+
+# ---------------------------------------------------------------------------
+# Anchor extraction (reactive section-slicing, issue #1182 Q3)
+# ---------------------------------------------------------------------------
+
+
+class TestAnchorExtraction:
+    """Reactive auto-embed ships just the markdown section pointed to by
+    the warning's #anchor, not the whole reference file."""
+
+    def test_anchored_ref_returns_section(self, patched_get_skills_dir):
+        """An anchored referenced_file returns only that section's text."""
+        result = build_skill_content(
+            include_skill=False,
+            canonical_files=(),
+            referenced_files={"references/automation-patterns.md#native-conditions"},
+        )
+        # Section content, not the whole file:
+        body = result["references/automation-patterns.md#native-conditions"]
+        assert body.startswith("## Native Conditions")
+        assert "Native conditions are validated" in body
+        # Stops before the next H2 — does not bleed into Trigger Types.
+        assert "Trigger Types" not in body
+
+    def test_bare_supersedes_anchored_for_same_file(self, patched_get_skills_dir):
+        """If canonical already ships the whole file, the section ref is dropped.
+
+        Otherwise we'd ship the same content twice in different shapes —
+        once whole, once sliced. Wasted bytes for the LLM.
+        """
+        result = build_skill_content(
+            include_skill=True,
+            canonical_files=("references/automation-patterns.md",),
+            referenced_files={"references/automation-patterns.md#native-conditions"},
+        )
+        assert "references/automation-patterns.md" in result
+        assert "references/automation-patterns.md#native-conditions" not in result
+
+    def test_bare_does_not_supersede_anchored_for_different_file(
+        self, patched_get_skills_dir
+    ):
+        """Dedup only collapses bare-vs-section for the SAME file. Cross-file
+        refs are independent."""
+        result = build_skill_content(
+            include_skill=True,
+            canonical_files=("references/template-guidelines.md",),
+            referenced_files={"references/automation-patterns.md#native-conditions"},
+        )
+        assert "references/template-guidelines.md" in result
+        assert "references/automation-patterns.md#native-conditions" in result
+
+    def test_missing_anchor_silently_skipped(self, patched_get_skills_dir):
+        """An anchor that doesn't match any heading is silently omitted —
+        same contract as missing files."""
+        result = build_skill_content(
+            include_skill=False,
+            canonical_files=(),
+            referenced_files={"references/automation-patterns.md#does-not-exist"},
+        )
+        assert result == {}

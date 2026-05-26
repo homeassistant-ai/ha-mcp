@@ -218,12 +218,13 @@ def _emit(
             the home-assistant-best-practices skill, optionally with a
             ``#anchor`` suffix
             (e.g. ``"automation-patterns.md#native-conditions"``). The
-            anchor is preserved in the ``skill://`` URI but stripped for
-            the tool-call route and for the ``referenced_files`` set.
+            anchor is preserved end-to-end: in the ``skill://`` URI for
+            display, and in ``referenced_files`` so the auto-embed path
+            ships only the matching markdown section instead of the
+            whole 10-20 KB reference file.
     """
     warnings.append(message + _three_route_suffix(skill_prefix, file_ref))
-    bare_file = f"references/{file_ref.split('#', 1)[0]}"
-    warnings.referenced_files.add(bare_file)
+    warnings.referenced_files.add(f"references/{file_ref}")
 
 
 def _three_route_suffix(skill_prefix: str | None, file_ref: str) -> str:

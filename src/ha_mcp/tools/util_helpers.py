@@ -1807,29 +1807,40 @@ def build_skill_content(
     canonical_files: tuple[str, ...],
     referenced_files: set[str] | None,
 ) -> dict[str, str]:
-    """Resolve and dedupe skill files for a write-tool response.
+    """Resolve and dedupe skill files (or sections) for a write-tool response.
 
     Shared helper for every write tool that exposes ``include_skill``
     (ha_config_set_automation / _script / _scene / _helper / _dashboard /
     _yaml). Each tool owns its own ``canonical_files`` mapping and passes
-    it in; the helper dedupes against ``referenced_files`` from the
+    it in; the helper unions against ``referenced_files`` from the
     best-practice checker (where applicable) and reads the bodies via
     :func:`ha_mcp.utils.skill_loader.resolve_skill_files`.
+
+    ``referenced_files`` may carry ``#anchor`` suffixes
+    (``"references/automation-patterns.md#native-conditions"``); those
+    resolve to just the matching markdown section. ``canonical_files``
+    entries are bare paths and resolve to whole files.
+
+    Dedup: if ``canonical_files`` already requests a bare path that some
+    anchored entry in ``referenced_files`` points at, the anchored entry
+    is dropped — the full file supersedes the section, no point shipping
+    the same content twice in different shapes.
 
     Args:
         include_skill: When True, attach the canonical files for this tool.
         canonical_files: Tool-specific default mapping. Paths are relative
             to the home-assistant-best-practices skill directory
             (e.g. ``"references/automation-patterns.md"``).
-        referenced_files: Files cited by best-practice warnings — always
-            attached, regardless of ``include_skill``. Pass ``None`` for
-            tools without best-practice checker integration.
+        referenced_files: Files (optionally with ``#anchor``) cited by
+            best-practice warnings — always attached, regardless of
+            ``include_skill``. Pass ``None`` for tools without
+            best-practice checker integration.
 
     Returns:
-        ``{relative_path: file_body}`` for each file that resolves. Empty
-        dict when nothing to embed or the skills-vendor submodule is
-        absent — callers should omit the ``skill_content`` field from the
-        response when the return is empty.
+        ``{ref: body_or_section}`` for each ref that resolves. Empty dict
+        when nothing to embed or the skills-vendor submodule is absent —
+        callers should omit the ``skill_content`` field from the response
+        when the return is empty.
     """
     from ..utils.skill_loader import get_skills_dir, resolve_skill_files
 
@@ -1840,6 +1851,12 @@ def build_skill_content(
         wanted.update(referenced_files)
     if not wanted:
         return {}
+
+    # Bare-file canonical supersedes anchored section refs for the same
+    # file (no point shipping the whole file AND a section from it).
+    bare_paths = {w for w in wanted if "#" not in w}
+    wanted = {w for w in wanted if "#" not in w or w.split("#", 1)[0] not in bare_paths}
+
     return resolve_skill_files(
         get_skills_dir(), _HA_BEST_PRACTICES_SKILL_NAME, sorted(wanted)
     )

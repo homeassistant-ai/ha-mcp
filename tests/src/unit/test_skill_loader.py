@@ -142,6 +142,119 @@ def test_resolve_skill_files_skips_empty_path(fake_skills_dir: Path) -> None:
     assert result == {"SKILL.md": "# top level\n"}
 
 
+def test_resolve_skill_files_anchored_returns_section(
+    fake_skills_dir: Path,
+) -> None:
+    """Path#anchor refs return only the matching markdown section."""
+    skill = fake_skills_dir / "home-assistant-best-practices"
+    (skill / "references" / "automation-patterns.md").write_text(
+        "# Automation Patterns\n"
+        "\n"
+        "## Native Conditions\n"
+        "\n"
+        "Use these.\n"
+        "\n"
+        "## Trigger Types\n"
+        "\n"
+        "Use these too.\n"
+    )
+    result = skill_loader.resolve_skill_files(
+        fake_skills_dir,
+        "home-assistant-best-practices",
+        ["references/automation-patterns.md#native-conditions"],
+    )
+    body = result["references/automation-patterns.md#native-conditions"]
+    assert body.startswith("## Native Conditions")
+    assert "Use these." in body
+    assert "Trigger Types" not in body
+
+
+def test_resolve_skill_files_unknown_anchor_silently_skipped(
+    fake_skills_dir: Path,
+) -> None:
+    """An anchor that matches no heading drops out of the result map."""
+    skill = fake_skills_dir / "home-assistant-best-practices"
+    (skill / "references" / "automation-patterns.md").write_text(
+        "# Automation Patterns\n\n## Native Conditions\n\nbody\n"
+    )
+    result = skill_loader.resolve_skill_files(
+        fake_skills_dir,
+        "home-assistant-best-practices",
+        ["references/automation-patterns.md#does-not-exist"],
+    )
+    assert result == {}
+
+
+def test_resolve_skill_files_reads_file_once_for_multiple_sections(
+    fake_skills_dir: Path,
+) -> None:
+    """Multiple anchored refs from the same file share one read."""
+    skill = fake_skills_dir / "home-assistant-best-practices"
+    (skill / "references" / "automation-patterns.md").write_text(
+        "# Patterns\n\n## Native Conditions\n\nA\n\n## Wait Actions\n\nB\n"
+    )
+    result = skill_loader.resolve_skill_files(
+        fake_skills_dir,
+        "home-assistant-best-practices",
+        [
+            "references/automation-patterns.md#native-conditions",
+            "references/automation-patterns.md#wait-actions",
+        ],
+    )
+    assert set(result.keys()) == {
+        "references/automation-patterns.md#native-conditions",
+        "references/automation-patterns.md#wait-actions",
+    }
+
+
+def test_extract_section_handles_fenced_code_blocks() -> None:
+    """A # comment inside a ```yaml ... ``` block is NOT a markdown heading.
+
+    Regression: bare ``# Single state`` inside a yaml example would
+    otherwise close the surrounding section after its first code block.
+    """
+    body = (
+        "## Native Conditions\n"
+        "\n"
+        "Use these.\n"
+        "\n"
+        "```yaml\n"
+        "# Single state\n"
+        "condition: state\n"
+        "```\n"
+        "\n"
+        "More prose after the code block.\n"
+        "\n"
+        "## Trigger Types\n"
+        "\n"
+        "Different section.\n"
+    )
+    result = skill_loader.extract_section(body, "native-conditions")
+    assert result is not None
+    assert "More prose after the code block" in result
+    assert "Trigger Types" not in result
+
+
+def test_extract_section_handles_ifthen_style_anchor() -> None:
+    """Slashes in headings get stripped: '## if/then vs choose' → 'ifthen-vs-choose'."""
+    body = "## if/then vs choose\n\nbody\n\n## Other\n"
+    result = skill_loader.extract_section(body, "ifthen-vs-choose")
+    assert result is not None
+    assert result.startswith("## if/then vs choose")
+    assert "Other" not in result
+
+
+def test_extract_section_returns_none_when_anchor_unknown() -> None:
+    body = "## A\nbody\n## B\nbody\n"
+    assert skill_loader.extract_section(body, "c") is None
+
+
+def test_extract_section_empty_anchor_returns_whole_body() -> None:
+    """Convenience: empty anchor means caller wants the full file."""
+    body = "# Some doc\n\nfull body\n"
+    assert skill_loader.extract_section(body, "") == body
+
+
 def test_get_skills_dir_returns_bundled_path_or_none() -> None:
     """get_skills_dir returns the real bundled path when the submodule is present.
 
