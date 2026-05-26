@@ -485,175 +485,25 @@ class AutomationConfigTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant automation.
+        """Create or update a Home Assistant automation.
 
-        The returned `automation_id` is the resolved entity_id (canonical
-        form, e.g. `automation.morning_routine`) when entity registration
-        succeeds, falling back to the input `identifier` (update path) or
-        the generated `unique_id` from the upsert response (fresh create
-        when no identifier was passed).
+        When NOT to use — pick the dedicated tool instead:
+        - State snapshot (no trigger needed) → ha_config_set_scene
+        - State-derived value that recomputes from its inputs (template
+          sensor / binary sensor / number / select) →
+          ha_config_set_helper(helper_type='template')
+        - Stateful counter / timer / schedule / boolean →
+          ha_config_set_helper(helper_type='counter' | 'timer' | ...)
 
-        Before reaching for ``ha_config_set_automation``, consider whether a
-        dedicated tool fits the use case better:
+        Two modes: full ``config`` replacement, or surgical ``python_transform``
+        on an existing automation (requires ``identifier`` + ``config_hash``
+        from ha_config_get_automation). Omit ``identifier`` to create.
 
-        - State snapshot of one or more entities (capture-then-replay,
-          no trigger needed) -> ha_config_set_scene
-        - State-derived value that recomputes when its inputs change
-          (template sensor / binary sensor / number / select)
-          -> ha_config_set_helper(helper_type='template')
-        - Stateful counter / timer / schedule / boolean / etc.
-          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
-
-        PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
-        Native triggers/conditions/actions are validated at config load, fail loudly, and
-        do not bypass HA's schema. Templates fail silently at runtime and obscure intent.
-        - `condition: numeric_state` instead of `{{ states('x') | float > N }}`
-        - `condition: state` (with `state:` list) instead of `{{ is_state(...) }}` /
-          `{{ states(x) in [...] }}`
-        - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
-        - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
-        - Native `for:` field on `state`/`numeric_state` triggers and conditions over
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
-        - `wait_for_trigger` instead of `wait_template`
-        - `choose` action instead of template-based service names
-        - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a
-          hardcoded entity_id — not `{{ now().date() ... }}`.
-        - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
-        Templates are appropriate ONLY in `data.*` fields, notification message/title,
-        `event_data`, and `variables`. The reactive best-practice checker on this tool
-        will surface anything in a logic position that should be native; consult the
-        `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_guide`.
-
-        Supports two modes: full config replacement OR Python transformation.
-
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits to existing automations. Surgical updates.
-        - config: Use for creating new automations or full restructures.
-
-        IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
-
-        PYTHON TRANSFORM EXAMPLES:
-        - Update action: python_transform="config['action'][0]['data']['brightness'] = 255"
-        - Add trigger: python_transform="config['trigger'].append({'platform': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
-        - Remove last action: python_transform="config['action'].pop()"
-
-        Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
-
-        AUTOMATION TYPES:
-
-        1. Regular Automations - Define triggers and actions directly
-        2. Blueprint Automations - Use pre-built templates with customizable inputs
-
-        REQUIRED FIELDS (Regular Automations):
-        - alias: Human-readable automation name
-        - trigger: List of trigger conditions (time, state, event, etc.)
-        - action: List of actions to execute
-
-        REQUIRED FIELDS (Blueprint Automations):
-        - alias: Human-readable automation name
-        - use_blueprint: Blueprint configuration
-          - path: Blueprint file path (e.g., "motion_light.yaml")
-          - input: Dictionary of input values for the blueprint
-
-        OPTIONAL CONFIG FIELDS (Regular Automations):
-        - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
-        - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
-        - condition: Additional conditions that must be met
-        - mode: 'single' (default), 'restart', 'queued', 'parallel'
-        - max: Maximum concurrent executions (for queued/parallel modes)
-        - initial_state: Whether automation starts enabled (true/false)
-        - variables: Variables for use in automation
-
-        BASIC EXAMPLES:
-
-        Simple time-based automation:
-        ha_config_set_automation(config={
-            "alias": "Morning Lights",
-            "description": "Turn on bedroom lights at 7 AM to help wake up",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
-        })
-
-        Motion-activated lighting — `for:` on the off-transition replaces action-delay:
-        ha_config_set_automation(config={
-            "alias": "Motion Light",
-            "trigger": [
-                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
-                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "off",
-                 "for": {"minutes": 5}, "id": "motion_off"}
-            ],
-            "action": [
-                {"choose": [
-                    {"conditions": [
-                        {"condition": "trigger", "id": "motion_on"},
-                        {"condition": "sun", "after": "sunset"}
-                    ],
-                     "sequence": [{"service": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
-                    {"conditions": [{"condition": "trigger", "id": "motion_off"}],
-                     "sequence": [{"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
-                ]}
-            ]
-        })
-
-        Update existing automation:
-        ha_config_set_automation(
-            identifier="automation.morning_routine",
-            config={
-                "alias": "Updated Morning Routine",
-                "trigger": [{"platform": "time", "at": "06:30:00"}],
-                "action": [
-                    {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                    {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-                ]
-            }
-        )
-
-        BLUEPRINT AUTOMATION EXAMPLES:
-
-        Create automation from blueprint:
-        ha_config_set_automation(config={
-            "alias": "Motion Light Kitchen",
-            "use_blueprint": {
-                "path": "homeassistant/motion_light.yaml",
-                "input": {
-                    "motion_entity": "binary_sensor.kitchen_motion",
-                    "light_target": {"entity_id": "light.kitchen"},
-                    "no_motion_wait": 120
-                }
-            }
-        })
-
-        Update blueprint automation inputs:
-        ha_config_set_automation(
-            identifier="automation.motion_light_kitchen",
-            config={
-                "alias": "Motion Light Kitchen",
-                "use_blueprint": {
-                    "path": "homeassistant/motion_light.yaml",
-                    "input": {
-                        "motion_entity": "binary_sensor.kitchen_motion",
-                        "light_target": {"entity_id": "light.kitchen"},
-                        "no_motion_wait": 300
-                    }
-                }
-            }
-        )
-
-        TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
-        CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
-        ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
-
-        For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: ha_get_skill_guide
-        - Or visit: https://www.home-assistant.io/docs/automation/
-
-        TROUBLESHOOTING:
-        - Use ha_get_state() to verify entity_ids exist
-        - Use ha_search_entities() to find correct entity_ids
-        - Use ha_eval_template() to test Jinja2 templates before using in automations
-        - Use ha_search_entities(domain_filter='automation') to find existing automations
+        Native > template in logic positions. ``automation-patterns.md`` and
+        ``template-guidelines.md`` ship in this response under ``skill_content``
+        by default (see ``include_skill``). The reactive best-practice checker
+        also surfaces template misuse in ``best_practice_warnings`` with the
+        relevant skill section auto-embedded — fix before re-submitting.
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
