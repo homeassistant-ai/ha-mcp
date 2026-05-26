@@ -866,6 +866,7 @@ jobs:
                 core.info('Setting Effort = ' + issueSize);
               }
               if (fieldUpdates.length) await setIssueFields(fieldUpdates);
+              await postComment('✅ Thanks for the report — this issue has enough information and has been added to the backlog.\n\n*🤖 Automated triage by Issue Bot*');
               return;
             }
 
